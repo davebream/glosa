@@ -1297,6 +1297,7 @@ chat creation/change/draft/send/decision. Repeating the same ID with changed inp
 | `/w/:slug/chats/:id` | Snapshot or CAS configuration update. GET `before` pages 100 logical messages with stable cursor. |
 | `.../:id/{draft,move-draft,turns,feedback,decisions,stop,resume,delete,attachments,mcp}` | Durable draft/send/answer; explicit feedback preview/send; stop/resume; stopped deletion; bounded upload; foreground native MCP status. Draft transfer durably copies the target before CAS-clearing an unchanged source. |
 | `.../:id/{events,export}` | SSE snapshot plus sequenced events; complete Markdown export. |
+| `.../:id/transfer` | Read-only frozen transcript preview: title, included turn count, UTF-8 byte count and text. Includes only user prompts and assistant text; excludes tool output, reasoning and control/approval events. Opening the preview never sends content to another account. |
 
 Chat stream IDs are `<chat UUID>:1:<journal sequence>`. Snapshot and listener installation do not
 yield. Reconnect replaces local projection from a snapshot; it never replays a native send. Sequence

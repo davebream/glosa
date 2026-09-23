@@ -190,6 +190,18 @@ export function createDock(host, deps) {
         element.title = state.tooltip ?? id;
         element.setAttribute("data-missing", String(Boolean(state.missing)));
         badges.textContent = "";
+        if (state.kind === "chat" && (state.attentionCount || state.activityLabel)) {
+          const text = state.attentionCount
+            ? `${state.attentionCount} ${state.attentionCount === 1 ? "reply" : "replies"}`
+            : state.activityLabel;
+          badges.append(
+            el("span", {
+              className: "glosa-tab-count",
+              textContent: text,
+              "aria-label": state.attentionCount ? `${state.attentionCount} awaiting reply` : text,
+            }),
+          );
+        }
         // Every badge reuses the navigator tree's vocabulary rather than inventing a second one
         // (§12), and every one of them carries text as well as a shape — DESIGN.md §2's Status
         // Needs Shape Rule holds inside a 28px tab too.

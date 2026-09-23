@@ -99,7 +99,7 @@ test("a newer account choice wins over delayed model discovery and its stale err
     f.pane.destroy();
   }
 });
-function fixture() {
+function fixture(options: { sourceChatId?: string } = {}) {
   const state = {
     id: "chat",
     profileId: "a",
@@ -109,7 +109,9 @@ function fixture() {
     configRevision: 1,
     draftRevision: 0,
     draft: "",
-    draftAttachments: [],
+    draftAttachments: [] as { name: string; mime: string; hash: string; size: number }[],
+    runtime: undefined as { state: string } | undefined,
+    usage: undefined as Record<string, string | number | null> | undefined,
     archived: false,
     settings: { model: "model", effort: "high", permissionMode: "default" },
     turns: [] as any[],
@@ -143,6 +145,7 @@ function fixture() {
       saves.push(input);
       if (input.revision !== state.draftRevision) throw new Error("Draft changed in another browser");
       state.draft = input.text;
+      state.draftAttachments = input.attachments;
       state.draftRevision++;
       return structuredClone(state);
     },
@@ -160,6 +163,7 @@ function fixture() {
     dataAccess,
     slug: "ws",
     chatId: "chat",
+    ...options,
     onChange() {},
     onNewChat: (...args: any[]) => newChats.push(args),
     onSettings() {},
@@ -178,6 +182,252 @@ function fixture() {
     snapshot: () => stream.onEvent({ event: "chat_snapshot", data: structuredClone(state) }),
   };
 }
+
+test("usage separates conversation totals from account limits without inventing current context use", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  f.state.usage = {
+    source: "Codex",
+    scope: "native-thread",
+    asOf: "2026-09-24T10:00:00Z",
+    inputTokens: 250000,
+    totalTokens: 300000,
+    contextWindow: 200000,
+    primaryUsedPercent: 12,
+    primaryResetsAt: 1790244000,
+    quotaSource: "Codex account",
+    quotaAsOf: "2026-09-24T10:01:00Z",
+  };
+  f.state.revision++;
+  f.snapshot();
+  const usage = [...f.host.querySelectorAll("details")].find((row) => row.textContent!.includes("Usage & limits"))!;
+  expect(usage.textContent).toContain("conversation totals");
+  expect(usage.textContent).toContain("Context capacity (tokens): 200,000");
+  expect(usage.textContent).toContain("Current context use: Not reported");
+  expect(usage.textContent).toContain("Account limits");
+  expect(usage.textContent).toContain("Primary limit used (%): 12");
+  expect(usage.textContent).toContain("Source: Codex account");
+  expect(usage.textContent).not.toContain("150%");
+  expect(usage.textContent).not.toContain("primaryUsedPercent");
+  f.pane.destroy();
+});
+
+test("draft transfer refreshes rejected revisions but retains its receipt after an ambiguous failure", async () => {
+  for (const definitive of [true, false]) {
+    const f = fixture({ sourceChatId: "source" });
+    f.state.draft = "Occupied destination";
+    await f.pane.ready;
+    const getChat = f.dataAccess.getChat;
+    f.dataAccess.getChat = (_slug: string, id: string) => (id === "source" ? { draftRevision: 7 } : getChat());
+    const attempts: { requestId: string; targetRevision: number }[] = [];
+    f.dataAccess.moveChatDraft = (_slug: string, _id: string, intent: any) => {
+      attempts.push(structuredClone(intent));
+      if (attempts.length === 1)
+        throw Object.assign(new Error("Move failed"), {
+          problem: definitive ? { type: "https://glosa/errors/stale-draft" } : undefined,
+        });
+      return { sourceCleared: true };
+    };
+    const move = [...f.host.querySelectorAll("button")].find(
+      (button) => button.textContent === "Move previous draft here",
+    )!;
+    move.click();
+    await flush();
+    const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+    draft.value = "";
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    move.click();
+    await flush();
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]!.targetRevision).toBe(definitive ? 1 : 0);
+    expect(attempts[1]!.requestId === attempts[0]!.requestId).toBe(!definitive);
+    expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("Draft moved");
+    f.pane.destroy();
+  }
+});
+
+test("settings must finish saving before an ordinary or feedback turn can be sent", async () => {
+  for (const fails of [false, true]) {
+    const f = fixture();
+    await f.pane.ready;
+    let finish!: () => void;
+    f.dataAccess.changeChat = (_slug: string, _id: string, input: { settings: typeof f.state.settings }) =>
+      new Promise<void>((resolve, reject) => {
+        finish = () => {
+          if (fails) reject(new Error("Settings could not be saved"));
+          else {
+            f.state.settings = input.settings;
+            f.state.configRevision++;
+            resolve();
+          }
+        };
+      });
+    const mode = f.host.querySelector('[aria-label="Permissions"]') as HTMLSelectElement;
+    mode.value = "plan";
+    mode.dispatchEvent(new Event("change"));
+    const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+    draft.value = "Use the selected permissions";
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Send feedback")!.click();
+    await flush();
+    expect(f.sends).toHaveLength(0);
+    expect(f.feedbacks).toHaveLength(0);
+    expect((f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).disabled).toBe(true);
+    finish();
+    await flush();
+    expect(mode.value).toBe(fails ? "default" : "plan");
+    draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0].configRevision).toBe(fails ? 1 : 2);
+    f.pane.destroy();
+  }
+});
+
+test("uploads block sending and keep successful attachments when a later file fails", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  let finish!: () => void;
+  const uploaded = { name: "brief.md", mime: "text/markdown", hash: "a".repeat(64), size: 5 };
+  f.dataAccess.uploadChatAttachment = (_slug: string, _id: string, file: File) =>
+    file.name === "brief.md"
+      ? new Promise((resolve) => {
+          finish = () => resolve(uploaded);
+        })
+      : Promise.reject(new Error("Second file is not supported"));
+  const input = f.host.querySelector('[aria-label="Attach files"]') as HTMLInputElement;
+  Object.defineProperty(input, "files", { value: [new File(["brief"], "brief.md"), new File(["bad"], "bad.bin")] });
+  input.dispatchEvent(new Event("change"));
+  const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+  draft.value = "Read my attachment";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
+  expect(f.sends).toHaveLength(0);
+  expect((f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).disabled).toBe(true);
+  finish();
+  await flush();
+  expect(f.host.querySelector('[aria-label="Remove brief.md"]')).not.toBeNull();
+  expect(f.state.draftAttachments).toEqual([uploaded]);
+  expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("Second file");
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
+  expect(f.sends[0].attachments).toEqual([uploaded]);
+  f.pane.destroy();
+});
+
+test("a queued message can be cancelled without stopping the current turn", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  f.state.turns.push(
+    { id: "active", text: "First", status: "running" },
+    { id: "next", text: "Second", status: "queued" },
+  );
+  const stopped: string[] = [];
+  f.dataAccess.stopChat = (_slug: string, _id: string, turnId: string) => {
+    stopped.push(turnId);
+    f.state.turns.find((t) => t.id === turnId)!.status = "cancelled";
+  };
+  f.state.revision++;
+  f.snapshot();
+  expect(f.host.querySelector(".glosa-chat-queue-notice")!.textContent).toContain("apply after it");
+  expect((f.host.querySelector('[aria-label="Queue message"]') as HTMLButtonElement).disabled).toBe(true);
+  [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Cancel queued message")!.click();
+  await flush();
+  expect(stopped).toEqual(["next"]);
+  expect(f.state.turns[0].status).toBe("running");
+  expect((f.host.querySelector('[aria-label="Queue message"]') as HTMLButtonElement).disabled).toBe(false);
+  f.pane.destroy();
+});
+
+test("uncertain native cleanup retains Retry stop after the turn has ended", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  f.state.turns.push({ id: "ended", text: "First", status: "outcome_unknown" });
+  f.state.runtime = { state: "unknown" };
+  let stops = 0;
+  f.dataAccess.stopChat = () => {
+    stops++;
+    f.state.runtime = { state: "stopped" };
+  };
+  f.state.revision++;
+  f.snapshot();
+  const stop = [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Retry stop")!;
+  expect(stop.hidden).toBe(false);
+  stop.click();
+  await flush();
+  expect(stops).toBe(1);
+  expect(stop.hidden).toBe(true);
+  f.pane.destroy();
+});
+
+test("held messages require Continue and cancelled messages can restore a draft without sending", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  f.state.turns.push({ id: "held", text: "Review this again", status: "held", attachments: [] });
+  f.state.revision++;
+  const resumed: string[] = [];
+  f.dataAccess.resumeChatTurn = (_s: string, _c: string, id: string) => {
+    resumed.push(id);
+    f.state.turns[0].status = "running";
+    f.state.revision++;
+  };
+  f.snapshot();
+  expect(resumed).toHaveLength(0);
+  [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Continue held message")!.click();
+  await flush();
+  expect(resumed).toEqual(["held"]);
+  f.state.turns[0].status = "cancelled";
+  f.state.revision++;
+  f.snapshot();
+  [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Use message as draft")!.click();
+  await flush();
+  expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("Review this again");
+  expect(f.saves.at(-1).text).toBe("Review this again");
+  expect(f.sends).toHaveLength(0);
+  f.pane.destroy();
+});
+
+test("closing during an upload requires an explicit choice and keeping the tab preserves the attachment", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  let finish!: () => void;
+  const attachment = { name: "brief.md", mime: "text/markdown", hash: "a".repeat(64), size: 5 };
+  f.dataAccess.uploadChatAttachment = () =>
+    new Promise((resolve) => {
+      finish = () => resolve(attachment);
+    });
+  const input = f.host.querySelector('[aria-label="Attach files"]') as HTMLInputElement;
+  Object.defineProperty(input, "files", { value: [new File(["brief"], "brief.md")] });
+  input.dispatchEvent(new Event("change"));
+  const closing = f.pane.confirmClose();
+  await flush();
+  const dialog = document.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("unfinished changes");
+  [...dialog.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!.click();
+  expect(await closing).toBe(false);
+  finish();
+  await flush();
+  expect(f.state.draftAttachments).toEqual([attachment]);
+  f.pane.destroy();
+});
+
+test("a delayed transcript preview cannot open an orphan dialog after its pane closes", async () => {
+  const f = fixture({ sourceChatId: "source" });
+  await f.pane.ready;
+  let finish!: () => void;
+  f.dataAccess.previewChatTranscript = () =>
+    new Promise((resolve) => {
+      finish = () => resolve({ title: "Prior chat", turnCount: 1, text: "Public text" });
+    });
+  [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Attach previous conversation")!.click();
+  await flush();
+  f.pane.destroy();
+  finish();
+  await flush();
+  expect(document.querySelector('[aria-label="Preview conversation attachment"]')).toBeNull();
+});
 
 test("another browser's draft does not overwrite or authorize overwriting an unsaved local draft", async () => {
   const f = fixture();

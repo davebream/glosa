@@ -155,7 +155,13 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
                 ? "Connected"
                 : profile.auth.state === "expired"
                   ? "Sign-in expired"
-                  : "Not connected",
+                  : profile.auth.state === "probe_failed"
+                    ? "Could not verify"
+                    : profile.auth.state === "identity_mismatch"
+                      ? "Different account detected"
+                      : profile.auth.state === "unknown"
+                        ? "Not checked"
+                        : "Not connected",
         });
         const summary = el("div", { className: "glosa-agent-account-summary" }, [
           name,
@@ -270,7 +276,16 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
         details.append(mcp);
         const accountMenu = actionMenu(`Actions for ${profile.label}`);
         const [enable, defaultButton, check, signIn, models, signOut, remove] = [...actions.children];
-        const primary = !connected ? signIn : !state.capabilities?.[profile.id]?.models?.length ? models : check;
+        const verify = ["probe_failed", "unknown"].includes(profile.auth.state);
+        if (verify) check.textContent = "Retry verification";
+        if (profile.auth.state === "identity_mismatch") signIn.textContent = "Sign in to original account";
+        const primary = verify
+          ? check
+          : !connected
+            ? signIn
+            : !state.capabilities?.[profile.id]?.models?.length
+              ? models
+              : check;
         if (!connected) primary.classList.add("glosa-agent-primary");
         enable.textContent = profile.enabled ? "Enabled" : "Disabled";
         enable.setAttribute("aria-label", `${profile.enabled ? "Disable" : "Enable"} ${profile.label}`);
@@ -280,7 +295,18 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
           ...[defaultButton, check, signIn, models, signOut, remove].filter((item) => item !== primary),
         );
         actions.replaceChildren(enable, primary, accountMenu.element);
-        card.append(el("div", { className: "glosa-agent-account-heading" }, [summary, actions]), details);
+        card.append(el("div", { className: "glosa-agent-account-heading" }, [summary, actions]));
+        if (verify || profile.auth.state === "identity_mismatch")
+          card.append(
+            el("p", {
+              className: "glosa-agent-recovery",
+              textContent:
+                profile.auth.state === "identity_mismatch"
+                  ? "This login belongs to a different account. Sign in to the original account to continue its chats, or add a separate account below."
+                  : "Glosa could not confirm this account’s current sign-in. Retry verification before signing in again; this does not mean you are signed out.",
+            }),
+          );
+        card.append(details);
         section.append(card);
       }
       const label = el("input", {

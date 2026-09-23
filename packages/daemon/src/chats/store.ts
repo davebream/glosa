@@ -308,7 +308,12 @@ export const chatEventSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z
-    .object({ type: z.literal("turn"), turn, consumedDraftRevision: z.number().int().nonnegative().optional() })
+    .object({
+      type: z.literal("turn"),
+      turn,
+      title: z.string().trim().min(1).max(120).optional(),
+      consumedDraftRevision: z.number().int().nonnegative().optional(),
+    })
     .strict(),
   z
     .object({ type: z.literal("turn_status"), turnId: id, status: turnStatus, error: z.string().max(500).optional() })
@@ -343,6 +348,7 @@ export const chatEventSchema = z.discriminatedUnion("type", [
 ]);
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 export interface ChatState extends z.infer<typeof created> {
+  titleEdited?: boolean;
   revision: number;
   configRevision: number;
   draftRevision: number;
@@ -397,6 +403,7 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
         throw new Error("started chat identity cannot change");
       const { type: _type, ...changes } = event;
       Object.assign(state, changes);
+      if (event.title !== undefined) state.titleEdited = true;
       state.configRevision++;
       break;
     }
@@ -408,6 +415,8 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
       break;
     case "turn":
       if (state.turns.some((t) => t.id === event.turn.id)) throw new Error("duplicate turn");
+      if (event.title && !state.titleEdited && state.title === "New chat" && !state.turns.length)
+        state.title = event.title;
       if (event.consumedDraftRevision !== undefined) {
         if (state.draftRevision !== event.consumedDraftRevision) throw new Error("draft changed before send");
         state.draftRevision++;

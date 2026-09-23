@@ -90,3 +90,40 @@ test("runtime install disables HTTP idle expiry before awaiting the bounded inst
     expect(await (await response).json()).toEqual({ installed: true });
   }
 });
+
+test("conversation transfer freezes only visible user and assistant text with exact preview metadata", async () => {
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const path = `/w/test/chats/${chatId}/transfer`;
+  const route = chatRoutes(
+    {
+      workspaceIndex: {
+        getBySlug: () => ({ registration_id: "a".repeat(64), first_seen: "epoch", canonical_path: "/tmp/fixture" }),
+      },
+      service: {
+        bindAuthorization() {},
+        snapshot: () => ({
+          title: "Résumé",
+          turns: [{ id: "first", text: "Visible question" }],
+          content: [
+            { turnId: "first", kind: "text", role: "assistant", text: "Visible answer" },
+            { turnId: "first", kind: "reasoning", role: "assistant", text: "PRIVATE REASONING" },
+            { turnId: "first", kind: "tool", role: "tool", text: "PRIVATE TOOL RESULT" },
+            { turnId: "first", kind: "status", role: "system", text: "PRIVATE CONTROL" },
+          ],
+        }),
+      },
+    } as unknown as Parameters<typeof chatRoutes>[0],
+    "GET",
+    path,
+  )!;
+  const response = await route.handle(request(path));
+  expect(response.status).toBe(200);
+  const preview = (await response.json()) as { title: string; turnCount: number; bytes: number; text: string };
+  expect(preview.title).toBe("Résumé");
+  expect(preview.turnCount).toBe(1);
+  expect(preview.text).toContain("Visible question");
+  expect(preview.text).toContain("Visible answer");
+  expect(preview.text).not.toContain("PRIVATE");
+  expect(preview.bytes).toBe(Buffer.byteLength(preview.text));
+  expect(response.headers.get("Cache-Control")).toBe("no-store");
+});

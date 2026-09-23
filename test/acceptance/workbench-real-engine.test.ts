@@ -927,16 +927,19 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         settings:{model:'model',effort:'high',permissionMode:'default'},
         turns:[{id:'first',text:'Review my outline',status:'completed'}],
         content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:'A **clear opening**. <img src=x onerror=alert(1)>'}], decisions:[] };
-      window.chatFixture = { state, sends:[], answers:[] };
+      window.chatFixture = { state, sends:[], answers:[], uploads:[], moves:[] };
       const access = {
         getAgentStatus: async () => ({available:true,profiles:[{id:'a',provider:'claude-code',label:'Personal',enabled:true}],capabilities:{a:{models:[{id:'model',name:'Model',efforts:['high']}]}}}),
-        getChat: async () => structuredClone(state),
+        getChat: async (_s,id) => structuredClone(id==='source' ? {...state, id:'source',draft:'Source draft',draftRevision:3} : state),
         openChatStream: (_slug,_id,callbacks) => { window.chatFixture.stream=callbacks; return () => {}; },
-        saveChatDraft: async (_s,_i,input) => { state.draft=input.text; state.draftRevision++; return structuredClone(state); },
+        saveChatDraft: async (_s,_i,input) => { state.draft=input.text; state.draftAttachments=input.attachments; state.draftRevision++; return structuredClone(state); },
         sendChatTurn: async (_s,_i,input) => { window.chatFixture.sends.push(input); state.turns.push({id:input.turnId,text:input.text,status:'completed'}); state.draft=''; state.draftRevision++; state.revision++; return {}; },
         answerChatDecision: async (_s,_i,input) => { window.chatFixture.answers.push(input); state.decisions[0].status='answered'; state.revision++; },
+        previewChatTranscript: async () => ({title:'Previous outline',turnCount:2,text:'# Previous outline\\n\\nA public answer.'}),
+        uploadChatAttachment: async (_s,_i,file) => { chatFixture.uploads.push({name:file.name,text:await file.text()});return {name:file.name,mime:file.type,size:file.size,hash:'a'.repeat(64)}; },
+        moveChatDraft: async (_s,_i,input) => {chatFixture.moves.push(input);state.draft='Source draft';state.draftRevision++;state.revision++;return {sourceCleared:true};},
       };
-      window.chatFixture.pane=createChatPane(host,{dataAccess:access,slug:'fixture',chatId:'fixture',onChange(){},onSettings(){}});
+      window.chatFixture.pane=createChatPane(host,{dataAccess:access,slug:'fixture',chatId:'fixture',sourceChatId:'source',onChange(){},onSettings(){}});
       await window.chatFixture.pane.ready;
       await new Promise(resolve => requestAnimationFrame(resolve));
     })()`);
@@ -972,6 +975,38 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       const submitted = await tab.evaluate<string>(`new Promise((resolve,reject) => { const deadline=Date.now()+3000;
       const check=()=>{if(chatFixture.sends.length) resolve(chatFixture.sends[0].text); else if(Date.now()>deadline) reject(new Error('keyboard send not observed')); else requestAnimationFrame(check)}; check(); })`);
       expect(submitted).toBe("Please expand this section");
+      await tab.evaluate(`(async()=>{
+        document.querySelector('[aria-label="Chat actions"]').click();
+        [...document.querySelectorAll('.glosa-agent-menu button')].find(b=>b.textContent==='Move previous draft here').click();
+        const deadline=Date.now()+3000;
+        while(document.querySelector('[aria-label="Message"]').value!=='Source draft') {
+          if(Date.now()>deadline) throw new Error('Moved draft did not reach composer');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        document.querySelector('[aria-label="Chat actions"]').click();
+        [...document.querySelectorAll('.glosa-agent-menu button')].find(b=>b.textContent==='Attach previous conversation').click();
+        while(!document.querySelector('dialog[open]')) {
+          if(Date.now()>deadline) throw new Error('Transcript preview did not open');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      const preview = await tab.evaluate<string>("document.querySelector('dialog[open]').textContent");
+      expect(preview).toContain("Previous outline");
+      expect(preview).toContain("2 turns");
+      expect(preview).toContain("bytes");
+      expect(preview).toContain("Claude Code · Personal");
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(1);
+      await tab.evaluate(`(async()=>{
+        [...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Attach transcript').click();
+        const deadline=Date.now()+3000;
+        while(!document.querySelector('[aria-label="Remove previous-conversation.md"]')) {
+          if(Date.now()>deadline) throw new Error('Frozen transcript not attached');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      expect(await tab.evaluate<string>("chatFixture.uploads[0].text")).toBe("# Previous outline\n\nA public answer.");
+      expect(await tab.evaluate<number>("chatFixture.moves[0].sourceRevision")).toBe(3);
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(1);
       await tab.send("Emulation.setDeviceMetricsOverride", {
         width: 480,
         height: 900,
@@ -1004,11 +1039,13 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         chatFixture.pane.destroy();
         const { mountAgentSettings } = await import('/app/agent-settings.js');
         const profiles = Array.from({length:4}, (_,i)=>({id:'p'+i,provider:'claude-code',label:'Account '+(i+1),enabled:true,revision:1,isDefault:i===0,auth:{state:'authenticated',plan:'Max',observedAt:new Date().toISOString()},mcpServers:[]}));
-        window.accountFixture={updates:[]};
+        profiles[0].auth.state='probe_failed';profiles[0].isDefault=false;profiles[1].auth.state='identity_mismatch';
+        window.accountFixture={updates:[],probes:[]};
         const capabilities=Object.fromEntries(profiles.map(p=>[p.id,{models:[{id:'model',name:'Model',efforts:['high']}]}]));
         accountFixture.pane=mountAgentSettings(document.querySelector('main'), {dataAccess:{
           getAgentStatus:async()=>structuredClone({available:true,providers:[{id:'claude-code',name:'Claude Code',installed:true,qualified:true},{id:'codex',name:'Codex',installed:true,qualified:true}],profiles,capabilities}),
           updateAgentProfile:async(id,input)=>{accountFixture.updates.push({id,...input});const profile=profiles.find(p=>p.id===id);Object.assign(profile,input,{revision:profile.revision+1});}
+          ,probeAgent:async(id)=>{accountFixture.probes.push(id);profiles.find(p=>p.id===id).auth.state='authenticated';}
         }});
         await accountFixture.pane.ready;
         const last=document.querySelector('[data-profile-id="p3"]');
@@ -1021,6 +1058,12 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       );
       expect(menuBounds.top).toBeGreaterThanOrEqual(0);
       expect(menuBounds.bottom).toBeLessThanOrEqual(menuBounds.height);
+      expect(
+        await tab.evaluate<string>("document.querySelector('[data-profile-id=p0] .glosa-agent-state').textContent"),
+      ).toBe("Could not verify");
+      expect(
+        await tab.evaluate<string>("document.querySelector('[data-profile-id=p1] .glosa-agent-recovery').textContent"),
+      ).toContain("different account");
       await tab.evaluate("document.querySelector('.glosa-agent-menu:popover-open button').focus()");
       await tab.send("Input.dispatchKeyEvent", {
         type: "keyDown",
@@ -1048,6 +1091,15 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
           "({id:accountFixture.updates[0].id,revision:accountFixture.updates[0].revision,isDefault:accountFixture.updates[0].isDefault})",
         ),
       ).toEqual({ id: "p3", revision: 1, isDefault: true });
+      await tab.evaluate(`(async()=>{
+        [...document.querySelectorAll('[data-profile-id=p0] button')].find(b=>b.textContent==='Retry verification').click();
+        const deadline=Date.now()+3000;
+        while(document.querySelector('[data-profile-id=p0] .glosa-agent-state').textContent!=='Connected') {
+          if(Date.now()>deadline) throw new Error('Account verification did not recover');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      expect(await tab.evaluate<string[]>("accountFixture.probes")).toEqual(["p0"]);
       await tab.evaluate(
         `{ [...document.querySelectorAll('.glosa-agent-tabs button')].find(b=>b.textContent==='Codex').click(); }`,
       );

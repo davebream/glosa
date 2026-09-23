@@ -108,7 +108,7 @@ async function bounded<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 const settingsSchema = z
   .object({
-    model: z.string().min(1).max(160),
+    model: z.string().max(160),
     effort: z.string().max(40),
     permissionMode: z.enum(["default", "plan"]),
   })
@@ -478,10 +478,14 @@ export class ManagedChatService {
       throw new ManagedAgentError("stale-chat", "The chat list changed. Refresh it to continue.");
     const page = matches.slice(index, index + 50);
     return {
-      chats: page.map(({ content: _content, turns, decisions: _decisions, ...chat }) => ({
+      chats: page.map(({ content: _content, turns, decisions, ...chat }) => ({
         ...chat,
         turnCount: turns.length,
-        status: turns.at(-1)?.status ?? "draft",
+        pendingDecisions: decisions.filter((decision) => decision.status === "pending").length,
+        status:
+          turns.findLast((turn) => ["running", "waiting", "dispatching", "stopping"].includes(turn.status))?.status ??
+          turns.at(-1)?.status ??
+          "draft",
       })),
       next: index + page.length < matches.length ? page.at(-1)?.id : undefined,
     };
@@ -1267,6 +1271,7 @@ export class ManagedChatService {
     if (receipt.found) return receipt.result as { turnId: string };
     const state = log.state,
       profile = this.eligible(state);
+    if (!state.settings.model) throw new ManagedAgentError("unsupported-model", "Choose a model before sending.", 422);
     if (state.configRevision !== input.configRevision || state.draftRevision !== input.draftRevision)
       throw new ManagedAgentError("stale-chat", "Chat settings or the draft changed. Refresh before sending.");
     if (state.turns.some((t) => ["accepted", "queued", "held"].includes(t.status)))
@@ -1287,7 +1292,24 @@ export class ManagedChatService {
       ...(feedbackIds ? { feedbackIds } : {}),
     };
     log.append(
-      { type: "turn", turn, ...(input.origin === "user" ? { consumedDraftRevision: input.draftRevision } : {}) },
+      {
+        type: "turn",
+        turn,
+        ...(input.origin === "user"
+          ? {
+              consumedDraftRevision: input.draftRevision,
+              ...(!state.turns.length && state.title === "New chat" && !state.titleEdited
+                ? {
+                    title: input.text
+                      .replace(/\s+/gu, " ")
+                      .trim()
+                      .slice(0, 100)
+                      .replace(/[\uD800-\uDBFF]$/u, ""),
+                  }
+                : {}),
+            }
+          : {}),
+      },
       { id: input.requestId, input: request, result: { turnId: turn.id } },
     );
     log.append({ type: "turn_status", turnId: turn.id, status: "queued" });
@@ -1815,6 +1837,15 @@ export class ManagedChatService {
         run.cancelling = false;
       }
       await this.finishRun(log, run);
+    } else if (!run && !turnId && log.state.runtime && ["unknown", "stopping"].includes(log.state.runtime.state)) {
+      if (this.options.ownershipUnknown?.() !== false)
+        throw new ManagedAgentError(
+          "ownership-unknown",
+          "The earlier process exit is still unconfirmed. Check Agents & accounts for recovery guidance. Glosa will not signal a saved process ID.",
+        );
+      // The supervisor has independently reconciled every recovered owner. Never infer this
+      // from an empty in-memory run map after restart, or signal a PID read from the journal.
+      log.append({ ...log.state.runtime, state: "stopped" });
     }
   }
   private async stopProfile(profileId: string, workspace?: ChatWorkspace): Promise<void> {

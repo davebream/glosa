@@ -574,6 +574,8 @@ export function createDataAccess(deps = {}) {
     resumeChatTurn: (slug, id, turnId) => postJson(chatPath(slug, id, "resume"), { turnId }),
     /** @param {string} slug @param {string} id */
     exportChat: async (slug, id) => (await request(chatPath(slug, id, "export"))).text(),
+    /** @param {string} slug @param {string} id */
+    previewChatTranscript: (slug, id) => requestJson(chatPath(slug, id, "transfer")),
     /** @param {string} slug @param {string} id @param {File} file */
     uploadChatAttachment: (slug, id, file) =>
       requestJson(chatPath(slug, id, "attachments"), {

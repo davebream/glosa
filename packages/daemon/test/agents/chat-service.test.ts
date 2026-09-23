@@ -348,6 +348,73 @@ function setup(options: Partial<ChatServiceOptions> = {}) {
   };
 }
 
+test("the first accepted prompt names a chat locally without overwriting an explicit title", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id, "Review\n   the opening paragraph");
+  expect(h.store.chat(chat.id).state.title).toBe("Review the opening paragraph");
+  expect(h.store.chat(chat.id).state.configRevision).toBe(1);
+  const renamed = h.chat();
+  h.service.change(h.workspace, renamed.id, { requestId: randomUUID(), revision: 1, title: "New chat" });
+  h.send(renamed.id, "Leave the chosen title alone");
+  expect(h.store.chat(renamed.id).state.title).toBe("New chat");
+  const emoji = h.chat();
+  h.send(emoji.id, "a" + "🙂".repeat(100));
+  expect(h.store.chat(emoji.id).state.title.length).toBeLessThanOrEqual(100);
+  expect(h.store.chat(emoji.id).state.title).not.toMatch(/[\uD800-\uDBFF]$/u);
+});
+
+test("a draft with no model stays local and cannot dispatch until a model is selected", async () => {
+  const h = setup();
+  const chat = h.service.create(h.workspace, {
+    id: randomUUID(),
+    requestId: randomUUID(),
+    provider: "fixture",
+    profileId: h.profile.id,
+    settings: { model: "", effort: "", permissionMode: "default" },
+  });
+  expect(h.spawns()).toBe(0);
+  expect(() => h.send(chat.id)).toThrow("Choose a model");
+  expect(h.store.chat(chat.id).state.turns).toHaveLength(0);
+  expect(h.spawns()).toBe(0);
+  h.service.change(h.workspace, chat.id, {
+    requestId: randomUUID(),
+    revision: 1,
+    settings: { model: "model-a", effort: "high", permissionMode: "default" },
+  });
+  h.send(chat.id);
+  await eventually(() => h.inputs.length === 1);
+});
+
+test("Retry stop after restart requires independent recovered-ownership proof", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.store.chat(chat.id).append({ type: "runtime", runId: randomUUID(), generation: 1, state: "connected" });
+  await h.service.close();
+  let unknown = true;
+  const recoveredStore = new AgentStore(h.root);
+  const restarted = new ManagedChatService({
+    store: recoveredStore,
+    registry: new ManagedAgentRegistry(),
+    launcher: {
+      async spawn() {
+        throw new Error("Recovery must not launch or signal a process");
+      },
+    },
+    workspace: () => h.workspace,
+    manifest: () => undefined,
+    ownershipUnknown: () => unknown,
+  });
+  h.replace(restarted);
+  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("unknown");
+  await expect(restarted.stop(h.workspace, chat.id)).rejects.toThrow("exit is still unconfirmed");
+  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("unknown");
+  unknown = false;
+  await restarted.stop(h.workspace, chat.id);
+  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("stopped");
+  expect(h.spawns()).toBe(0);
+});
+
 test("durable duplicate Send never calls the native adapter twice and freezes turn settings", async () => {
   const h = setup(),
     chat = h.chat(),

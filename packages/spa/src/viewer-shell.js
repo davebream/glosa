@@ -122,14 +122,26 @@ export function createViewerShell(
   });
   starToggle.innerHTML = STAR_SVG;
   const artifactList = el("ul", { className: "glosa-artifact-list" });
+  const artifactToggle = el("button", {
+    className: "glosa-artifact-list-toggle",
+    type: "button",
+    textContent: "Artifacts",
+    "aria-expanded": "true",
+    "aria-controls": "glosa-artifacts-body",
+  });
   const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [
-    el("h2", { textContent: "Artifacts" }),
+    el("h2", {}, [artifactToggle]),
     starToggle,
   ]);
   const artifactListEmpty = el("p", {
     className: "glosa-sidebar-empty",
     textContent: "Markdown, HTML, and text files in this workspace appear here.",
     hidden: true,
+  });
+  const artifactsBody = el("div", { id: "glosa-artifacts-body" }, [artifactList, artifactListEmpty]);
+  artifactToggle.addEventListener("click", () => {
+    artifactsBody.hidden = !artifactsBody.hidden;
+    artifactToggle.setAttribute("aria-expanded", String(!artifactsBody.hidden));
   });
   // The writer's starred folders sit at the navigator's foot, collapsible, out of the tree's way:
   // the tree is what the navigator is for, and a list you come back to is not what you read.
@@ -163,10 +175,7 @@ export function createViewerShell(
   const sidebarEl = el(
     "nav",
     { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" },
-    [
-      el("div", { className: "glosa-sidebar-scroll" }, [artifactHeading, artifactList, artifactListEmpty]),
-      starredSection,
-    ],
+    [el("div", { className: "glosa-sidebar-scroll" }, [artifactHeading, artifactsBody]), starredSection],
   );
   const agentFeedbackHost = el("div", { className: "glosa-agent-feedback" });
   const agentFeedback = mountAgentFeedback(agentFeedbackHost, { overlayHost: topbarOverlays });

@@ -6,6 +6,53 @@ import { describe, expect, test } from "bun:test";
 import { describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH, pruneGrid } from "../src/dock.js";
 import { artifactPanelId, chatPanelId, migratePanelLayout } from "../src/panel-identity.js";
 
+test("chat tab attention takes precedence over activity and clears when the reply is resolved", async () => {
+  const { installDom } = await import("./dom-env.ts");
+  const dom = installDom();
+  const { createDock } = await import("../src/dock.js");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const state = {
+    kind: "chat",
+    provider: "claude-code",
+    label: "Review",
+    attentionCount: 2,
+    activityLabel: "Working…",
+  };
+  const dock = createDock(host, {
+    slug: "fixture",
+    emptyState: () => document.createElement("div"),
+    storage: {
+      getItem() {
+        return null;
+      },
+      setItem() {},
+      removeItem() {},
+    },
+    createPane() {
+      return {};
+    },
+    destroyPane() {},
+    getTabState: () => state,
+  });
+  try {
+    dock.api.addPanel({ id: chatPanelId("a"), component: "pane", tabComponent: "pane" });
+    dock.refreshTabs();
+    expect(host.querySelector('[aria-label="2 awaiting reply"]')?.textContent).toBe("2 replies");
+    state.attentionCount = 0;
+    state.activityLabel = "Stop not confirmed";
+    dock.refreshTabs();
+    expect(host.querySelector('[aria-label="2 awaiting reply"]')).toBeNull();
+    expect(host.querySelector(".glosa-tab-count")?.textContent).toBe("Stop not confirmed");
+    state.activityLabel = "";
+    dock.refreshTabs();
+    expect(host.querySelector(".glosa-tab-count")).toBeNull();
+  } finally {
+    dock.destroy();
+    dom.teardown();
+  }
+});
+
 describe("disambiguateLabels — the shortest distinguishing parent segment (§5)", () => {
   test("a unique filename is just the filename", () => {
     const labels = disambiguateLabels(["docs/notes.md", "drafts/outline.md"]);

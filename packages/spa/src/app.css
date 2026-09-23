@@ -6724,6 +6724,34 @@ input,
   max-width: 36rem;
   margin: 0;
 }
+.glosa-agent-recovery,
+.glosa-chat-queue-notice {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.glosa-sidebar-heading .glosa-chat-list-toggle,
+.glosa-sidebar-heading .glosa-artifact-list-toggle {
+  border: 0;
+  background: transparent;
+  padding: 4px 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.glosa-chat-list-toggle::before,
+.glosa-artifact-list-toggle::before {
+  content: "⌄";
+  display: inline-block;
+  margin-right: 6px;
+}
+.glosa-chat-list-toggle[aria-expanded="false"]::before,
+.glosa-artifact-list-toggle[aria-expanded="false"]::before {
+  content: "›";
+}
 .glosa-agent-login-host:not(:empty) {
   padding: 16px;
   margin-block: 20px;

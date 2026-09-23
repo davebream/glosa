@@ -41,7 +41,16 @@ export function applyChatEvent(state, record) {
 
 export function createChatPane(
   host,
-  { dataAccess, slug, chatId, sourceChatId = undefined, onChange, onNewChat, onSettings, onDeleted = () => {} },
+  {
+    dataAccess,
+    slug,
+    chatId,
+    sourceChatId = /** @type {string | undefined} */ (undefined),
+    onChange,
+    onNewChat,
+    onSettings,
+    onDeleted = () => {},
+  },
 ) {
   let state,
     catalog,
@@ -64,11 +73,15 @@ export function createChatPane(
     nativeLogin,
     lastContentSignature = "",
     accountGeneration = 0,
-    changingAccount = false;
+    changingAccount = false,
+    changingSettings = false,
+    uploading = false,
+    stopping = false;
   const lifetime = new AbortController();
   const rows = new Map(),
     decisionRows = new Map(),
-    decisionIntents = new Map();
+    decisionIntents = new Map(),
+    dialogs = new Set();
   const root = el("section", { className: "glosa-chat-pane" });
   const status = el("p", { className: "glosa-chat-status", role: "status" });
   const title = el("input", { className: "glosa-chat-title", "aria-label": "Chat title", maxLength: 120 });
@@ -166,7 +179,15 @@ export function createChatPane(
     type: "button",
     textContent: "Stop",
     className: "glosa-chat-stop",
-    onClick: () => void act(() => dataAccess.stopChat(slug, chatId)),
+    onClick: () => {
+      if (stopping) return;
+      stopping = true;
+      render();
+      void act(() => dataAccess.stopChat(slug, chatId)).finally(() => {
+        stopping = false;
+        render();
+      });
+    },
   });
   const jump = el("button", {
     className: "glosa-chat-jump",
@@ -202,7 +223,7 @@ export function createChatPane(
     textContent: "Send feedback",
     onClick: () =>
       void act(async () => {
-        if (changingAccount) return;
+        if (changingAccount || changingSettings || uploading) return;
         feedbackIntent ??= {
           requestId: crypto.randomUUID(),
           turnId: crypto.randomUUID(),
@@ -224,7 +245,10 @@ export function createChatPane(
       el("button", {
         type: "button",
         textContent: "Move previous draft here",
-        onClick: () =>
+        onClick: () => {
+          if (uploading || changingAccount || changingSettings || pending || sendIntent) return;
+          uploading = true;
+          render();
           void act(async () => {
             await save();
             const source = await dataAccess.getChat(slug, sourceChatId);
@@ -234,30 +258,55 @@ export function createChatPane(
               sourceRevision: source.draftRevision,
               targetRevision: state.draftRevision,
             };
-            const result = await dataAccess.moveChatDraft(slug, chatId, moveIntent);
+            let result;
+            try {
+              result = await dataAccess.moveChatDraft(slug, chatId, moveIntent);
+            } catch (error) {
+              // This refusal happens before either journal is written. A lost response may
+              // follow a durable copy, so every other failure retains its original receipt.
+              if (error.problem?.type?.endsWith("/stale-draft")) moveIntent = null;
+              throw error;
+            }
             moveIntent = null;
             status.textContent = result.sourceCleared
               ? "Draft moved. Nothing has been sent."
               : "Draft copied. A newer draft remains in the previous chat.";
-          }),
+          }).finally(() => {
+            uploading = false;
+            renderControls();
+            render();
+          });
+        },
       }),
     );
     transfer.append(
       el("button", {
         type: "button",
         textContent: "Attach previous conversation",
-        onClick: () =>
+        onClick: () => {
+          if (uploading || changingAccount || changingSettings || pending || sendIntent) return;
+          uploading = true;
+          render();
           void act(async () => {
-            const text = await dataAccess.exportChat(slug, sourceChatId);
+            const destination = catalog.profiles.find((profile) => profile.id === state.profileId);
+            const preview = await dataAccess.previewChatTranscript(slug, sourceChatId);
+            if (disposed) return;
+            const { text } = preview;
             const file = new File([text], "previous-conversation.md", { type: "text/markdown" });
             if (file.size > 10 * 1024 * 1024)
               throw new Error("The transcript exceeds 10 MiB. Export it and attach a shorter excerpt.");
             const accepted = await new Promise((resolve) => {
               const previous = document.activeElement,
                 dialog = el("dialog", { className: "glosa-dialog", "aria-label": "Preview conversation attachment" });
+              dialogs.add(dialog);
               dialog.append(
                 el("h2", { textContent: "Attach this frozen transcript?" }),
-                el("p", { textContent: "The selected agent receives this copy only when you send your next message." }),
+                el("p", {
+                  textContent: `From “${preview.title}” · ${preview.turnCount} ${preview.turnCount === 1 ? "turn" : "turns"} · ${file.size.toLocaleString()} bytes`,
+                }),
+                el("p", {
+                  textContent: `To ${agentName(destination.provider)} · ${destination.label}. This account receives the copy only when you send. Tool output, reasoning and approvals are excluded.`,
+                }),
                 el("textarea", { readOnly: true, value: text, rows: 12, "aria-label": "Transcript preview" }),
                 el("button", {
                   type: "button",
@@ -273,6 +322,7 @@ export function createChatPane(
                 "close",
                 () => {
                   resolve(dialog.accepted);
+                  dialogs.delete(dialog);
                   dialog.remove();
                   previous?.focus();
                 },
@@ -282,11 +332,20 @@ export function createChatPane(
               dialog.showModal();
             });
             if (!accepted || disposed) return;
-            attachments.push(await dataAccess.uploadChatAttachment(slug, chatId, file));
+            if (state.profileId !== destination.id)
+              throw new Error("The destination account changed. Preview the transcript again.");
+            const attachment = await dataAccess.uploadChatAttachment(slug, chatId, file);
+            if (disposed) return;
+            attachments = [...attachments, attachment];
             dirty = true;
             renderAttachments();
             await save();
-          }),
+          }).finally(() => {
+            uploading = false;
+            renderControls();
+            render();
+          });
+        },
       }),
     );
   }
@@ -498,18 +557,21 @@ export function createChatPane(
         }),
     }),
   );
+  const queueNotice = el("p", { className: "glosa-chat-queue-notice", hidden: true });
+  const attach = el("button", {
+    type: "button",
+    className: "glosa-chat-attach",
+    textContent: "+ Attach",
+    title: "Attach documents or images",
+    onClick: () => files.click(),
+  });
   const composer = el("div", { className: "glosa-chat-composer" }, [
     draft,
     attachmentList,
     controls,
+    queueNotice,
     el("div", { className: "glosa-chat-compose-actions" }, [
-      el("button", {
-        type: "button",
-        className: "glosa-chat-attach",
-        textContent: "+ Attach",
-        title: "Attach documents or images",
-        onClick: () => files.click(),
-      }),
+      attach,
       files,
       field("Permissions", mode),
       el("span", { className: "glosa-chat-action-spacer" }),
@@ -554,15 +616,23 @@ export function createChatPane(
       clearTimeout(timer);
       stopStream?.();
       document.removeEventListener("selectionchange", selectionChanged);
+      for (const dialog of dialogs) {
+        dialog.close();
+        dialog.remove();
+      }
+      dialogs.clear();
       root.remove();
     },
     async confirmClose() {
       await save();
       return (
-        !dirty ||
+        (!dirty && !uploading && !changingSettings) ||
         (await confirmDialog({
-          title: "Close with an unsaved draft?",
-          body: "Copy the draft first if you want to keep it. The agent keeps running when its tab closes.",
+          title: uploading || changingSettings ? "Close with unfinished changes?" : "Close with an unsaved draft?",
+          body:
+            uploading || changingSettings
+              ? "An attachment or setting is still being saved. Keep this tab open to finish. Closing now may leave the change unfinished."
+              : "Copy the draft first if you want to keep it. The agent keeps running when its tab closes.",
           confirmLabel: "Close tab",
           danger: true,
         }))
@@ -585,7 +655,7 @@ export function createChatPane(
   function pick(select, values, selected) {
     const entries = values.some((v) => v.id === selected)
       ? values
-      : [{ id: selected, name: selected || "Default" }, ...values];
+      : [{ id: selected, name: selected || "Choose…" }, ...values];
     const options = [...select.options];
     if (
       options.length !== entries.length ||
@@ -619,9 +689,10 @@ export function createChatPane(
       accountReady &&
       !!selectedModel &&
       (!state.settings.effort || selectedModel.efforts.includes(state.settings.effort));
-    model.disabled = changingAccount || !models.length;
-    effort.disabled = changingAccount || !selectedModel?.efforts.length;
-    mode.disabled = changingAccount;
+    account.disabled = changingSettings || uploading || pending || !!sendIntent;
+    model.disabled = changingAccount || changingSettings || !models.length;
+    effort.disabled = changingAccount || changingSettings || !selectedModel?.efforts.length;
+    mode.disabled = changingAccount || changingSettings;
     readiness.hidden = readyToSend || !catalog?.available || state.archived;
     readinessText.textContent = !accountReady
       ? "This account needs attention before it can send."
@@ -748,25 +819,66 @@ export function createChatPane(
         );
       if (turn.error && (typeof turn.text === "string" || state.content.some((item) => item.turnId === turn.id)))
         textRow(`error:${turn.id}`, "Needs attention", turn.error);
-      if (turn.status === "held") wantedRows.add(`held:${turn.id}`);
-      if (turn.status === "held" && !rows.has(`held:${turn.id}`)) {
+      const waiting = ["accepted", "queued", "held"].includes(turn.status);
+      const waitingKey = `pending:${turn.id}`;
+      if (waiting) wantedRows.add(waitingKey);
+      if (waiting && !rows.has(waitingKey)) {
         const node = el("div", { className: "glosa-chat-actions" }, [
           el("button", {
             textContent: "Continue held message",
+            "data-continue-turn": "true",
             type: "button",
             onClick: () => void act(() => dataAccess.resumeChatTurn(slug, chatId, turn.id)),
           }),
           el("button", {
-            textContent: "Cancel message",
+            textContent: "Cancel queued message",
             type: "button",
             onClick: () => void act(() => dataAccess.stopChat(slug, chatId, turn.id)),
           }),
         ]);
         history.append(node);
-        rows.set(`held:${turn.id}`, { node });
-      } else if (turn.status !== "held") {
-        rows.get(`held:${turn.id}`)?.node.remove();
-        rows.delete(`held:${turn.id}`);
+        rows.set(waitingKey, { node });
+      }
+      if (waiting) {
+        rows.get(waitingKey).node.querySelector("[data-continue-turn]").hidden = turn.status !== "held";
+      } else {
+        rows.get(waitingKey)?.node.remove();
+        rows.delete(waitingKey);
+      }
+      const reuseKey = `reuse:${turn.id}`;
+      if (turn.status === "cancelled" && typeof turn.text === "string" && turn.origin !== "feedback") {
+        wantedRows.add(reuseKey);
+        if (!rows.has(reuseKey)) {
+          const node = el("div", { className: "glosa-chat-actions" }, [
+            el("button", {
+              type: "button",
+              textContent: "Use message as draft",
+              onClick: () =>
+                void act(async () => {
+                  if (pending || sendIntent || uploading || changingAccount || changingSettings) return;
+                  if (
+                    (draft.value.trim() || attachments.length) &&
+                    !(await confirmDialog({
+                      title: "Replace this draft?",
+                      body: "The cancelled message will replace the current unsent draft and its attachments.",
+                      confirmLabel: "Replace draft",
+                      danger: true,
+                    }))
+                  )
+                    return;
+                  if (disposed) return;
+                  draft.value = turn.text;
+                  attachments = [...(turn.attachments ?? [])];
+                  dirty = true;
+                  renderAttachments();
+                  await save();
+                  draft.focus();
+                }),
+            }),
+          ]);
+          history.append(node);
+          rows.set(reuseKey, { node });
+        }
       }
     }
     for (const decision of state.decisions) {
@@ -876,33 +988,117 @@ export function createChatPane(
       card.hidden = decision.status !== "pending";
       card.expiryLabel.textContent = `Expires in ${Math.max(0, Math.ceil((Date.parse(decision.expiresAt) - Date.now()) / 60000))} min`;
     }
-    stop.disabled = !state.turns.some((t) =>
-      ["accepted", "queued", "held", "dispatching", "running", "waiting"].includes(t.status),
+    const unconfirmedStop = ["unknown", "stopping"].includes(state.runtime?.state);
+    const hasWork = state.turns.some((t) =>
+      ["accepted", "queued", "held", "dispatching", "running", "waiting", "stopping"].includes(t.status),
     );
-    stop.hidden = stop.disabled;
+    stop.disabled = stopping || (!hasWork && !unconfirmedStop);
+    stop.hidden = !hasWork && !unconfirmedStop && !stopping;
+    stop.textContent = stopping ? "Stopping…" : unconfirmedStop ? "Retry stop" : "Stop";
     const active = state.turns.findLast((t) => ["dispatching", "running", "waiting"].includes(t.status));
     activity.textContent = state.archived
       ? "Archived"
-      : active
-        ? active.status === "waiting"
-          ? "Needs your reply"
-          : "Working…"
-        : "";
+      : unconfirmedStop
+        ? "Stop not confirmed"
+        : active
+          ? active.status === "waiting"
+            ? "Needs your reply"
+            : "Working…"
+          : "";
     activity.dataset.working = String(!!active);
-    feedback.disabled = pending || changingAccount || !catalog?.available || state.archived;
+    handle.attentionCount = state.decisions.filter((decision) => decision.status === "pending").length;
+    handle.activityLabel = activity.textContent;
+    const editing = changingAccount || changingSettings || uploading;
+    const queued = state.turns.some((turn) => ["accepted", "queued", "held"].includes(turn.status));
+    queueNotice.hidden = !queued;
+    queueNotice.textContent = "A message is waiting. Model, effort and permission changes apply after it.";
+    feedback.disabled = pending || editing || !catalog?.available || state.archived || queued;
     send.disabled =
-      pending || changingAccount || (!sendIntent && (!catalog?.available || state.archived || !readyToSend));
-    send.textContent = pending ? "Sending…" : sendIntent ? "Retry ↑" : active ? "Queue ↑" : "Send ↑";
+      pending || editing || (!sendIntent && (!catalog?.available || state.archived || !readyToSend || queued));
+    send.textContent = pending
+      ? "Sending…"
+      : uploading
+        ? "Attaching…"
+        : changingSettings
+          ? "Saving…"
+          : sendIntent
+            ? "Retry ↑"
+            : active
+              ? "Queue ↑"
+              : "Send ↑";
     send.setAttribute("aria-label", active ? "Queue message" : "Send message");
     draft.disabled = !!state.archived;
     draft.placeholder = state.archived ? "Restore this chat to send a message." : "What would you like to work on?";
-    files.disabled = pending || !!sendIntent;
+    files.disabled = pending || !!sendIntent || editing || !!state.archived;
+    attach.disabled = files.disabled;
+    account.disabled = changingSettings || uploading || pending || !!sendIntent;
     for (const button of attachmentList.querySelectorAll("button")) button.disabled = pending || !!sendIntent;
     if (state.usage) {
-      const usage = Object.entries(state.usage)
-        .map(([key, value]) => `${key}: ${value ?? "unavailable"}`)
-        .join(" · ");
-      textRow("usage", "Usage · reported by the agent · cost estimates are not invoices", usage, true);
+      const value = state.usage;
+      const labels = {
+        input_tokens: "Input tokens",
+        inputTokens: "Input tokens",
+        output_tokens: "Output tokens",
+        outputTokens: "Output tokens",
+        totalTokens: "Total tokens",
+        cachedInputTokens: "Cached input tokens",
+        reasoningOutputTokens: "Reasoning output tokens",
+        cache_read_input_tokens: "Cache-read tokens",
+        cache_creation_input_tokens: "Cache-write tokens",
+        contextWindow: "Context capacity (tokens)",
+        estimatedCostUsd: "Estimated cost (USD)",
+        primaryUsedPercent: "Primary limit used (%)",
+        secondaryUsedPercent: "Secondary limit used (%)",
+        primaryResetsAt: "Primary limit resets",
+        secondaryResetsAt: "Secondary limit resets",
+        quota_status: "Status",
+        quota_resetsAt: "Resets",
+        quota_utilization: "Reported utilization",
+        quota_rateLimitType: "Limit type",
+      };
+      const observedAt = (date) => {
+        const parsed = new Date(typeof date === "number" ? date * 1000 : date);
+        return Number.isNaN(parsed.getTime()) ? String(date) : parsed.toLocaleString();
+      };
+      const metrics = [];
+      const limits = [];
+      for (const [key, item] of Object.entries(value)) {
+        if (["source", "scope", "asOf", "quotaSource", "quotaAsOf"].includes(key)) continue;
+        const label = labels[key] ?? key.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("_", " ");
+        const formatted =
+          item == null
+            ? "Not reported"
+            : /resetsAt$/i.test(key)
+              ? observedAt(item)
+              : typeof item === "number"
+                ? item.toLocaleString(undefined, { maximumFractionDigits: 6 })
+                : String(item);
+        const target = key.startsWith("quota_") || /^(primary|secondary)/.test(key) ? limits : metrics;
+        target.push(`${label}: ${formatted}`);
+      }
+      const profile = catalog?.profiles.find((item) => item.id === state.profileId);
+      const sections = [`Account: ${profile?.label ?? agentName(state.provider)}`];
+      if (metrics.length)
+        sections.push(
+          [
+            `Token usage · ${value.scope === "native-thread" ? "conversation totals" : "agent-reported totals"}`,
+            `Source: ${value.source ?? agentName(state.provider)}`,
+            `Observed: ${value.asOf ? observedAt(value.asOf) : "Not reported"}`,
+            ...metrics,
+            "Current context use: Not reported",
+          ].join("\n"),
+        );
+      if (limits.length)
+        sections.push(
+          [
+            "Account limits",
+            `Source: ${value.quotaSource ?? agentName(state.provider)}`,
+            `Observed: ${value.quotaAsOf ? observedAt(value.quotaAsOf) : "Not reported"}`,
+            ...limits,
+          ].join("\n"),
+        );
+      if (value.estimatedCostUsd != null) sections.push("Cost estimates are not subscription charges or invoices.");
+      textRow("usage", "Usage & limits", sections.join("\n\n"), true);
     }
     const selection = window.getSelection?.();
     for (const [key, row] of rows)
@@ -991,8 +1187,14 @@ export function createChatPane(
     if (
       pending ||
       changingAccount ||
+      changingSettings ||
+      uploading ||
       !state ||
-      (!sendIntent && (!catalog?.available || state.archived || !readyToSend)) ||
+      (!sendIntent &&
+        (!catalog?.available ||
+          state.archived ||
+          !readyToSend ||
+          state.turns.some((turn) => ["accepted", "queued", "held"].includes(turn.status)))) ||
       !draft.value.trim()
     )
       return;
@@ -1080,17 +1282,27 @@ export function createChatPane(
       void submit();
     }
   });
-  files.addEventListener(
-    "change",
-    () =>
-      void act(async () => {
-        for (const file of files.files) attachments.push(await dataAccess.uploadChatAttachment(slug, chatId, file));
-        files.value = "";
+  files.addEventListener("change", () => {
+    if (uploading || pending || sendIntent || changingAccount || changingSettings) return;
+    const selectedFiles = [...files.files];
+    uploading = true;
+    render();
+    void act(async () => {
+      files.value = "";
+      for (const file of selectedFiles) {
+        const attachment = await dataAccess.uploadChatAttachment(slug, chatId, file);
+        if (disposed) return;
+        attachments = [...attachments, attachment];
         dirty = true;
         renderAttachments();
         await save();
-      }),
-  );
+      }
+    }).finally(() => {
+      uploading = false;
+      renderControls();
+      render();
+    });
+  });
   title.addEventListener(
     "change",
     () =>
@@ -1103,26 +1315,39 @@ export function createChatPane(
       ),
   );
   for (const select of [model, effort, mode])
-    select.addEventListener(
-      "change",
-      () =>
-        void act(() =>
-          dataAccess.changeChat(slug, chatId, {
-            requestId: crypto.randomUUID(),
-            revision: state.configRevision,
-            settings: {
-              model: model.value,
-              effort:
-                select === model
-                  ? (catalog?.capabilities?.[state.profileId]?.models.find((m) => m.id === model.value)?.efforts[0] ??
-                    "")
-                  : effort.value,
-              permissionMode: mode.value,
-            },
-          }),
-        ),
-    );
+    select.addEventListener("change", () => {
+      if (changingAccount || changingSettings || pending || sendIntent) {
+        renderControls();
+        return;
+      }
+      changingSettings = true;
+      const settings = {
+        model: model.value,
+        effort:
+          select === model
+            ? (catalog?.capabilities?.[state.profileId]?.models.find((m) => m.id === model.value)?.efforts[0] ?? "")
+            : effort.value,
+        permissionMode: mode.value,
+      };
+      for (const control of [account, model, effort, mode]) control.disabled = true;
+      render();
+      void act(() =>
+        dataAccess.changeChat(slug, chatId, {
+          requestId: crypto.randomUUID(),
+          revision: state.configRevision,
+          settings,
+        }),
+      ).finally(() => {
+        changingSettings = false;
+        renderControls();
+        render();
+      });
+    });
   account.addEventListener("change", () => {
+    if (changingSettings || uploading || pending || sendIntent) {
+      renderControls();
+      return;
+    }
     const generation = ++accountGeneration;
     changingAccount = true;
     for (const control of [model, effort, mode]) control.disabled = true;

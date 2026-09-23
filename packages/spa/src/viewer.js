@@ -19,7 +19,6 @@ import { createArtifactPane, MODES } from "./artifact-pane.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAttentionTray } from "./attention-tray.js";
 import { createDataAccess } from "./data-access.js";
-import { confirmDialog, noticeDialog } from "./dialog.js";
 import { createDictationController } from "./dictation.js";
 import { createDiffPane } from "./diff-pane.js";
 import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH } from "./dock.js";
@@ -224,9 +223,26 @@ export function mountApp(
       }),
   });
   const listMenu = actionMenu("Chat list options");
+  const chatsBody = el("div", { id: `chat-list-${crypto.randomUUID()}` }, [
+    chatSearch,
+    chatsRows,
+    moreChats,
+    chatNotice,
+  ]);
+  const chatToggle = el("button", {
+    type: "button",
+    className: "glosa-chat-list-toggle",
+    textContent: "Chats",
+    "aria-expanded": "true",
+    "aria-controls": chatsBody.id,
+    onClick: () => {
+      chatsBody.hidden = !chatsBody.hidden;
+      chatToggle.setAttribute("aria-expanded", String(!chatsBody.hidden));
+    },
+  });
   chatsHost.append(
     el("div", { className: "glosa-sidebar-heading" }, [
-      el("h2", { textContent: "Chats" }),
+      el("h2", {}, [chatToggle]),
       listMenu.element,
       el("button", {
         type: "button",
@@ -238,10 +254,7 @@ export function mountApp(
           }),
       }),
     ]),
-    chatSearch,
-    chatsRows,
-    moreChats,
-    chatNotice,
+    chatsBody,
     el("button", { type: "button", textContent: "Agents & accounts", onClick: openAgentSettings }),
   );
   sidebarEl.querySelector(".glosa-sidebar-scroll").append(chatsHost);
@@ -261,6 +274,7 @@ export function mountApp(
     }),
   );
   function renderChats() {
+    chatToggle.textContent = `Chats${chatList.length ? ` · ${chatList.length}${nextChatsPage ? "+" : ""}` : ""}`;
     const focusedId = chatsRows.contains(document.activeElement) ? document.activeElement.dataset.panelId : null;
     const query = chatSearch.value.toLowerCase();
     const item = ({ id, provider, title, detail, pinned, archived, onClick }) =>
@@ -294,7 +308,7 @@ export function mountApp(
             id: chatPanelId(chat.id),
             provider: chat.provider,
             title: chat.title,
-            detail: `${agentStatus?.profiles.find((p) => p.id === chat.profileId)?.label ?? "Account unavailable"} · ${chat.status.replaceAll("_", " ")}`,
+            detail: `${agentStatus?.profiles.find((p) => p.id === chat.profileId)?.label ?? "Account unavailable"} · ${chat.pendingDecisions ? `${chat.pendingDecisions} awaiting reply` : chat.status.replaceAll("_", " ")}`,
             pinned: chat.pinned,
             archived: chat.archived,
             onClick: () => openChat(chat.id),
@@ -466,25 +480,13 @@ export function mountApp(
       }
       if (slug !== currentSlug || unmounted) return;
       writeStored(layoutStorage, providerKey, chosen.provider);
-      let model = agentStatus.capabilities?.[chosen.id]?.models[0];
-      if (!settings && !model && dataAccess.discoverAgentModels) {
-        chatNotice.textContent = `Loading ${agentName(chosen.provider)} models…`;
-        await dataAccess.discoverAgentModels(chosen.id);
-        agentStatus = await dataAccess.getAgentStatus();
-        model = agentStatus.capabilities?.[chosen.id]?.models[0];
-        if (slug !== currentSlug || unmounted) return;
-      }
-      if (!settings && !model) {
-        openAgentSettings();
-        chatNotice.textContent = "Load this account's models to start a chat.";
-        return;
-      }
+      const model = agentStatus.capabilities?.[chosen.id]?.models[0];
       const chat = await dataAccess.createChat(slug, {
         requestId: crypto.randomUUID(),
         id: crypto.randomUUID(),
         provider: chosen.provider,
         profileId: chosen.id,
-        settings: settings ?? { model: model.id, effort: model.efforts[0] ?? "", permissionMode: "default" },
+        settings: settings ?? { model: model?.id ?? "", effort: model?.efforts[0] ?? "", permissionMode: "default" },
       });
       if (slug !== currentSlug || unmounted) return;
       await refreshChats();
@@ -864,7 +866,16 @@ export function mountApp(
     const pane = panes.get(id);
     if (!pane) return { label: id, tooltip: id };
     if (["chat", "external-chat", "agent-settings"].includes(pane.kind))
-      return { kind: pane.kind, provider: pane.provider, label: pane.title, tooltip: pane.title };
+      return {
+        kind: pane.kind,
+        provider: pane.provider,
+        label: pane.title,
+        tooltip: [pane.title, pane.attentionCount ? `${pane.attentionCount} awaiting reply` : pane.activityLabel]
+          .filter(Boolean)
+          .join(" · "),
+        attentionCount: pane.attentionCount,
+        activityLabel: pane.activityLabel,
+      };
     if (!isArtifactPanel(id)) {
       const [, path, from, to] = splitDiffId(id);
       const filename = path.split("/").pop();

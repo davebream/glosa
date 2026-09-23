@@ -1167,6 +1167,81 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.activeElement).toBe(heading);
   });
 
+  test("new chat stays local without a model catalog and Chats collapses independently", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const created: { settings: { model: string } }[] = [];
+    let discoveries = 0;
+    const da = fakeDataAccess({
+      getChats: async () => ({ chats: [], external: [] }),
+      getAgentStatus: async () => ({
+        available: true,
+        profiles: [
+          {
+            id: "a",
+            provider: "claude-code",
+            label: "Personal",
+            enabled: true,
+            isDefault: true,
+            auth: { state: "authenticated" },
+          },
+        ],
+        capabilities: {},
+      }),
+      getStatus: async () => ({ workspaces: [], sessions: [] }),
+      discoverAgentModels: async () => {
+        discoveries++;
+      },
+      createChat: async (_slug: string, input: { settings: { model: string } }) => {
+        created.push(input);
+        return { id: "fresh" };
+      },
+      getChat: async () => ({
+        id: "fresh",
+        title: "New chat",
+        provider: "claude-code",
+        profileId: "a",
+        revision: 1,
+        configRevision: 1,
+        draftRevision: 0,
+        draft: "",
+        draftAttachments: [],
+        settings: { model: "", effort: "", permissionMode: "default" },
+        turns: [],
+        content: [],
+        decisions: [],
+      }),
+      openChatStream: () => () => {},
+    });
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    try {
+      for (let i = 0; i < 30; i++) await Promise.resolve();
+      (root.querySelector('[aria-label="New chat"]') as unknown as HTMLButtonElement).click();
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+      expect(created).toHaveLength(1);
+      expect(created[0]!.settings.model).toBe("");
+      expect(discoveries).toBe(0);
+      const toggle = root.querySelector(".glosa-chat-list-toggle") as unknown as HTMLButtonElement;
+      toggle.click();
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(
+        (dom.document.getElementById(toggle.getAttribute("aria-controls")!) as unknown as HTMLElement).hidden,
+      ).toBe(true);
+      expect(root.querySelector(".glosa-artifact-list")!.closest("[hidden]")).toBeNull();
+      toggle.click();
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      const artifactsToggle = root.querySelector(".glosa-artifact-list-toggle") as unknown as HTMLButtonElement;
+      artifactsToggle.click();
+      expect(artifactsToggle.getAttribute("aria-expanded")).toBe("false");
+      expect(root.querySelector(".glosa-artifact-list")!.closest("[hidden]")).not.toBeNull();
+      expect(dom.document.getElementById(toggle.getAttribute("aria-controls")!)!.closest("[hidden]")).toBeNull();
+      artifactsToggle.click();
+      expect(root.querySelector(".glosa-artifact-list")!.closest("[hidden]")).toBeNull();
+    } finally {
+      unmount();
+    }
+  });
+
   test("existing chat sidebar resolves account labels on initial load and refresh after renaming", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
@@ -1180,6 +1255,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
             provider: "claude-code",
             profileId: "profile-a",
             status: "completed",
+            pendingDecisions: 2,
             updatedAt: "2026-09-23T00:00:00Z",
           },
         ],
@@ -1197,6 +1273,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     }
     try {
       await waitForLabel(label);
+      expect(root.querySelector(".glosa-chat-list-item")?.textContent).toContain("2 awaiting reply");
       label = "Work subscription";
       const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh sessions");
       (refresh as unknown as HTMLButtonElement).click();

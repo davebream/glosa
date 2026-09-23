@@ -244,6 +244,23 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
             server?.timeout(req, 0);
             return chatStream(service, workspace, id, req, combinedSignal(deps.shutdownSignal, authSignal));
           }
+          if (id && action === "transfer" && method === "GET") {
+            const state = service.snapshot(workspace, id, undefined, true);
+            const text = [
+              `# ${state.title}`,
+              ...state.turns.flatMap((turn) => [
+                "## You",
+                turn.text,
+                ...state.content
+                  .filter((item) => item.turnId === turn.id && item.kind === "text" && item.role === "assistant")
+                  .flatMap((item) => ["## Assistant", item.text]),
+              ]),
+            ].join("\n\n");
+            return Response.json(
+              { title: state.title, turnCount: state.turns.length, bytes: Buffer.byteLength(text), text },
+              { headers: { "Cache-Control": "no-store" } },
+            );
+          }
           if (id && action === "export" && method === "GET") {
             const state = service.snapshot(workspace, id, undefined, true);
             const markdown = [
