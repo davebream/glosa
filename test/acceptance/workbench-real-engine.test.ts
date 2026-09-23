@@ -979,17 +979,84 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         mobile: false,
       });
       await tab.evaluate(`new Promise(resolve => requestAnimationFrame(resolve))`);
-      const layout = await tab.evaluate<{ viewport: number; width: number; buttons: number }>(
-        `({viewport:innerWidth,width:document.body.scrollWidth,buttons:[...document.querySelectorAll('.glosa-chat-pane button')].filter(b=>b.getBoundingClientRect().width>0).length})`,
+      const layout = await tab.evaluate<{
+        viewport: number;
+        width: number;
+        buttons: number;
+        history: number;
+        height: number;
+        composerRight: number;
+      }>(
+        `({viewport:innerWidth,width:document.body.scrollWidth,buttons:[...document.querySelectorAll('.glosa-chat-pane button')].filter(b=>b.getBoundingClientRect().width>0).length,history:document.querySelector('.glosa-chat-history').clientHeight,height:innerHeight,composerRight:document.querySelector('.glosa-chat-composer').getBoundingClientRect().right})`,
       );
       expect(layout.width).toBeLessThanOrEqual(layout.viewport);
       expect(layout.buttons).toBeGreaterThan(5);
+      expect(layout.history).toBeGreaterThan(layout.height * 0.4);
+      expect(layout.composerRight).toBeLessThanOrEqual(layout.viewport);
       const screenshot = await tab.send("Page.captureScreenshot", { format: "png" });
       mkdirSync(".context/test-results", { recursive: true });
       writeFileSync(
         `.context/test-results/managed-chat-browser-${Date.now()}.png`,
         Buffer.from(screenshot.result.data, "base64"),
       );
+      // Account controls use the same real browser: test the low-on-screen menu, not a DOM shim.
+      await tab.evaluate(`(async () => {
+        chatFixture.pane.destroy();
+        const { mountAgentSettings } = await import('/app/agent-settings.js');
+        const profiles = Array.from({length:4}, (_,i)=>({id:'p'+i,provider:'claude-code',label:'Account '+(i+1),enabled:true,revision:1,isDefault:i===0,auth:{state:'authenticated',plan:'Max',observedAt:new Date().toISOString()},mcpServers:[]}));
+        window.accountFixture={updates:[]};
+        const capabilities=Object.fromEntries(profiles.map(p=>[p.id,{models:[{id:'model',name:'Model',efforts:['high']}]}]));
+        accountFixture.pane=mountAgentSettings(document.querySelector('main'), {dataAccess:{
+          getAgentStatus:async()=>structuredClone({available:true,providers:[{id:'claude-code',name:'Claude Code',installed:true,qualified:true},{id:'codex',name:'Codex',installed:true,qualified:true}],profiles,capabilities}),
+          updateAgentProfile:async(id,input)=>{accountFixture.updates.push({id,...input});const profile=profiles.find(p=>p.id===id);Object.assign(profile,input,{revision:profile.revision+1});}
+        }});
+        await accountFixture.pane.ready;
+        const last=document.querySelector('[data-profile-id="p3"]');
+        last.scrollIntoView({block:'end'});
+        last.querySelector('.glosa-agent-menu-trigger').click();
+        await new Promise(resolve=>requestAnimationFrame(resolve));
+      })()`);
+      const menuBounds = await tab.evaluate<{ top: number; bottom: number; height: number }>(
+        `(()=>{const rect=document.querySelector('.glosa-agent-menu:popover-open').getBoundingClientRect();return {top:rect.top,bottom:rect.bottom,height:innerHeight}})()`,
+      );
+      expect(menuBounds.top).toBeGreaterThanOrEqual(0);
+      expect(menuBounds.bottom).toBeLessThanOrEqual(menuBounds.height);
+      await tab.evaluate("document.querySelector('.glosa-agent-menu:popover-open button').focus()");
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+      expect(
+        await tab.evaluate<boolean>(
+          "document.activeElement === document.querySelector('[data-profile-id=\"p3\"] .glosa-agent-menu-trigger')",
+        ),
+      ).toBe(true);
+      expect(await tab.evaluate<number>("document.querySelectorAll('.glosa-agent-menu:popover-open').length")).toBe(0);
+      await tab.evaluate(`(async()=>{
+        const card=document.querySelector('[data-profile-id="p3"]');card.querySelector('.glosa-agent-menu-trigger').click();
+        [...card.querySelectorAll('.glosa-agent-menu button')].find(b=>b.textContent==='Make default').click();
+        const deadline=Date.now()+3000;
+        while(!document.querySelector('[data-profile-id="p3"] .glosa-agent-default')) {
+          if(Date.now()>deadline) throw new Error('Default account did not update');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      expect(
+        await tab.evaluate<{ id: string; revision: number; isDefault: boolean }>(
+          "({id:accountFixture.updates[0].id,revision:accountFixture.updates[0].revision,isDefault:accountFixture.updates[0].isDefault})",
+        ),
+      ).toEqual({ id: "p3", revision: 1, isDefault: true });
+      await tab.evaluate(
+        `{ [...document.querySelectorAll('.glosa-agent-tabs button')].find(b=>b.textContent==='Codex').click(); }`,
+      );
+      expect(
+        await tab.evaluate<string>(
+          "document.querySelector('[data-provider-panel]:not([hidden])').dataset.providerPanel",
+        ),
+      ).toBe("codex");
+      await tab.evaluate("accountFixture.pane.destroy()");
     },
     TEST_TIMEOUT_MS,
   );

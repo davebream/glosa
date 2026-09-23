@@ -26,6 +26,7 @@ import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_
 import { artifactPanelId, chatPanelId, externalPanelId, settingsPanelId, decodePanelId } from "./panel-identity.js";
 import { createChatPane } from "./chat-pane.js";
 import { mountAgentSettings } from "./agent-settings.js";
+import { agentIcon, agentName, actionMenu } from "./agent-ui.js";
 import { createFaceStore } from "./face.js";
 import { createCommandPalette } from "./palette.js";
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
@@ -207,7 +208,8 @@ export function mountApp(
     agentStatus,
     chatsRefreshTimer,
     stopChatsStream,
-    nextChatsPage;
+    nextChatsPage,
+    creatingChat = false;
   const chatsHost = el("section", { className: "glosa-sidebar-chats", hidden: singlePane || !dataAccess.getChats });
   const chatsRows = el("div", { className: "glosa-chat-list" });
   const chatSearch = el("input", { type: "search", placeholder: "Find chats", "aria-label": "Find workspace chats" });
@@ -221,9 +223,11 @@ export function mountApp(
         chatNotice.textContent = error.message;
       }),
   });
+  const listMenu = actionMenu("Chat list options");
   chatsHost.append(
     el("div", { className: "glosa-sidebar-heading" }, [
       el("h2", { textContent: "Chats" }),
+      listMenu.element,
       el("button", {
         type: "button",
         textContent: "+",
@@ -245,7 +249,7 @@ export function mountApp(
   chatSearch.addEventListener("input", scheduleChatsRefresh);
   const archivedChats = el("input", { type: "checkbox", "aria-label": "Include archived chats" });
   archivedChats.addEventListener("change", scheduleChatsRefresh);
-  chatsHost.append(
+  listMenu.popup.append(
     el("label", {}, [archivedChats, document.createTextNode(" Include archived chats")]),
     el("button", {
       type: "button",
@@ -257,34 +261,72 @@ export function mountApp(
     }),
   );
   function renderChats() {
+    const focusedId = chatsRows.contains(document.activeElement) ? document.activeElement.dataset.panelId : null;
     const query = chatSearch.value.toLowerCase();
+    const item = ({ id, provider, title, detail, pinned, archived, onClick }) =>
+      el(
+        "button",
+        {
+          type: "button",
+          className: "glosa-chat-list-item",
+          "data-panel-id": id,
+          "aria-current": activePanelId === id ? "page" : "false",
+          title: `${title} · ${agentName(provider)} · ${detail}${pinned ? " · Pinned" : ""}${archived ? " · Archived" : ""}`,
+          onClick,
+        },
+        [
+          agentIcon(provider),
+          el("span", { className: "glosa-chat-list-copy" }, [
+            el("span", { className: "glosa-chat-list-title", textContent: title }),
+            el("span", { className: "glosa-chat-list-meta", textContent: `${detail}${archived ? " · Archived" : ""}` }),
+          ]),
+          ...(pinned
+            ? [el("span", { className: "glosa-chat-list-pin", textContent: "◆", "aria-label": "Pinned" })]
+            : []),
+        ],
+      );
     chatsRows.replaceChildren(
       ...chatList
         .filter((chat) => !chat.archived || archivedChats.checked)
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt))
         .map((chat) =>
-          el("button", {
-            type: "button",
-            className: "glosa-chat-list-item",
-            textContent: `${chat.title} · ${chat.provider} · ${agentStatus?.profiles.find((p) => p.id === chat.profileId)?.label ?? "Account unavailable"} · ${chat.status.replaceAll("_", " ")}`,
+          item({
+            id: chatPanelId(chat.id),
+            provider: chat.provider,
+            title: chat.title,
+            detail: `${agentStatus?.profiles.find((p) => p.id === chat.profileId)?.label ?? "Account unavailable"} · ${chat.status.replaceAll("_", " ")}`,
+            pinned: chat.pinned,
+            archived: chat.archived,
             onClick: () => openChat(chat.id),
           }),
         ),
     );
-    for (const session of externalSessions.filter((session) =>
+    const visibleExternal = externalSessions.filter((session) =>
       `${session.provider} ${session.session_id}`.toLowerCase().includes(query),
-    ))
+    );
+    if (visibleExternal.length)
+      chatsRows.append(el("p", { className: "glosa-chat-list-group", textContent: "Terminal sessions" }));
+    for (const session of visibleExternal)
       chatsRows.append(
-        el("button", {
-          type: "button",
-          className: "glosa-chat-list-item",
-          textContent: `${session.provider} · external · ${session.session_id.slice(-8)} · ${session.liveness}`,
+        item({
+          id: externalPanelId(session.session_id),
+          provider: session.provider,
+          title: `${agentName(session.provider)} · ${session.session_id.slice(-8)}`,
+          detail: `External · ${session.liveness}`,
           onClick: () =>
             void openExternalChat(session.session_id).catch((error) => {
               chatNotice.textContent = error.message;
             }),
         }),
       );
+    if (!chatsRows.children.length)
+      chatsRows.append(
+        el("p", {
+          className: "glosa-chat-list-empty",
+          textContent: query ? "No chats match your search." : "Start a chat to work with an agent.",
+        }),
+      );
+    if (focusedId) [...chatsRows.querySelectorAll("button")].find((row) => row.dataset.panelId === focusedId)?.focus();
   }
   function scheduleChatsRefresh() {
     clearTimeout(chatsRefreshTimer);
@@ -375,67 +417,82 @@ export function mountApp(
     });
   }
   async function newChat(profile, settings, sourceChatId) {
-    agentStatus = await dataAccess.getAgentStatus();
-    const slug = currentSlug;
-    const providerKey = `glosa.chat-provider:${slug}`;
-    const lastProvider = readStored(layoutStorage, providerKey);
-    const eligible = agentStatus.profiles.filter((p) => p.enabled && !p.removed && p.auth?.state === "authenticated");
-    let chosen = profile ?? eligible.find((p) => p.isDefault && p.provider === lastProvider);
-    if (!chosen && !lastProvider && eligible.filter((p) => p.isDefault).length === 1)
-      chosen = eligible.find((p) => p.isDefault);
-    if (!chosen && eligible.length) {
-      chosen = await new Promise((resolve) => {
-        const previous = document.activeElement;
-        const dialog = el("dialog", { className: "glosa-dialog", "aria-label": "Choose agent account" });
-        dialog.append(el("h2", { textContent: "Choose an account for this chat" }));
-        for (const account of eligible)
-          dialog.append(
-            el("button", {
-              type: "button",
-              textContent: `${account.provider} · ${account.label}`,
-              onClick: () => {
-                dialog.choice = account;
-                dialog.close();
-              },
-            }),
+    if (creatingChat) return;
+    creatingChat = true;
+    try {
+      agentStatus = await dataAccess.getAgentStatus();
+      const slug = currentSlug;
+      const providerKey = `glosa.chat-provider:${slug}`;
+      const lastProvider = readStored(layoutStorage, providerKey);
+      const eligible = agentStatus.profiles.filter((p) => p.enabled && !p.removed && p.auth?.state === "authenticated");
+      let chosen = profile ?? eligible.find((p) => p.isDefault && p.provider === lastProvider);
+      if (!chosen && !lastProvider && eligible.filter((p) => p.isDefault).length === 1)
+        chosen = eligible.find((p) => p.isDefault);
+      if (!chosen && eligible.length) {
+        chosen = await new Promise((resolve) => {
+          const previous = document.activeElement;
+          const dialog = el("dialog", { className: "glosa-dialog", "aria-label": "Choose agent account" });
+          dialog.append(el("h2", { textContent: "Choose an account for this chat" }));
+          for (const account of eligible)
+            dialog.append(
+              el("button", {
+                type: "button",
+                textContent: `${agentName(account.provider)} · ${account.label}`,
+                onClick: () => {
+                  dialog.choice = account;
+                  dialog.close();
+                },
+              }),
+            );
+          dialog.append(el("button", { type: "button", textContent: "Cancel", onClick: () => dialog.close() }));
+          dialog.addEventListener(
+            "close",
+            () => {
+              resolve(dialog.choice);
+              dialog.remove();
+              previous?.focus();
+            },
+            { once: true },
           );
-        dialog.append(el("button", { type: "button", textContent: "Cancel", onClick: () => dialog.close() }));
-        dialog.addEventListener(
-          "close",
-          () => {
-            resolve(dialog.choice);
-            dialog.remove();
-            previous?.focus();
-          },
-          { once: true },
-        );
-        document.body.append(dialog);
-        dialog.showModal();
+          document.body.append(dialog);
+          dialog.showModal();
+        });
+        if (!chosen) return;
+      }
+      if (!chosen) {
+        openAgentSettings();
+        chatNotice.textContent = "Choose an account and make it the default to start a chat.";
+        return;
+      }
+      if (slug !== currentSlug || unmounted) return;
+      writeStored(layoutStorage, providerKey, chosen.provider);
+      let model = agentStatus.capabilities?.[chosen.id]?.models[0];
+      if (!settings && !model && dataAccess.discoverAgentModels) {
+        chatNotice.textContent = `Loading ${agentName(chosen.provider)} models…`;
+        await dataAccess.discoverAgentModels(chosen.id);
+        agentStatus = await dataAccess.getAgentStatus();
+        model = agentStatus.capabilities?.[chosen.id]?.models[0];
+        if (slug !== currentSlug || unmounted) return;
+      }
+      if (!settings && !model) {
+        openAgentSettings();
+        chatNotice.textContent = "Load this account's models to start a chat.";
+        return;
+      }
+      const chat = await dataAccess.createChat(slug, {
+        requestId: crypto.randomUUID(),
+        id: crypto.randomUUID(),
+        provider: chosen.provider,
+        profileId: chosen.id,
+        settings: settings ?? { model: model.id, effort: model.efforts[0] ?? "", permissionMode: "default" },
       });
-      if (!chosen) return;
+      if (slug !== currentSlug || unmounted) return;
+      await refreshChats();
+      if (slug !== currentSlug || unmounted) return;
+      openChat(chat.id, sourceChatId);
+    } finally {
+      creatingChat = false;
     }
-    if (!chosen) {
-      openAgentSettings();
-      chatNotice.textContent = "Choose an account and make it the default to start a chat.";
-      return;
-    }
-    if (slug !== currentSlug || unmounted) return;
-    writeStored(layoutStorage, providerKey, chosen.provider);
-    const model = agentStatus.capabilities?.[chosen.id]?.models[0];
-    if (!settings && !model) {
-      openAgentSettings();
-      chatNotice.textContent = "Load this account's models to start a chat.";
-      return;
-    }
-    const chat = await dataAccess.createChat(currentSlug, {
-      requestId: crypto.randomUUID(),
-      id: crypto.randomUUID(),
-      provider: chosen.provider,
-      profileId: chosen.id,
-      settings: settings ?? { model: model.id, effort: model.efforts[0] ?? "", permissionMode: "default" },
-    });
-    await refreshChats();
-    openChat(chat.id, sourceChatId);
   }
 
   const toolControls = () =>
@@ -771,6 +828,8 @@ export function mountApp(
    * mode control, the shortcuts, and the address bar are all talking about. The active tab's
    * olive edge says it in the strip; this says it in the pane, by letting the others go quiet. */
   function markActivePane() {
+    for (const row of chatsRows.querySelectorAll("[data-panel-id]"))
+      row.setAttribute("aria-current", row.dataset.panelId === activePanelId ? "page" : "false");
     for (const [id, pane] of panes) {
       pane.element?.setAttribute("data-active", String(id === activePanelId));
       // Only the active pane offers questions about artifacts nobody has open, and the set of open
@@ -805,7 +864,7 @@ export function mountApp(
     const pane = panes.get(id);
     if (!pane) return { label: id, tooltip: id };
     if (["chat", "external-chat", "agent-settings"].includes(pane.kind))
-      return { kind: pane.kind, label: pane.title, tooltip: pane.title };
+      return { kind: pane.kind, provider: pane.provider, label: pane.title, tooltip: pane.title };
     if (!isArtifactPanel(id)) {
       const [, path, from, to] = splitDiffId(id);
       const filename = path.split("/").pop();

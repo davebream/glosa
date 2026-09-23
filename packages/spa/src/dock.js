@@ -15,6 +15,7 @@
 import { createDockview } from "./vendor/dockview.js";
 import { createElement as el } from "./viewer-shell.js";
 import { comparisonPanelId, migratePanelLayout } from "./panel-identity.js";
+import { agentIcon } from "./agent-ui.js";
 
 /** A pane cannot be dragged narrower than this. It is where the compact annotation tray ladder
  * bottoms out, and it is the whole constraint on nesting: a physical floor on usable width
@@ -176,6 +177,12 @@ export function createDock(host, deps) {
       function refresh() {
         const state = getTabState(id) ?? {};
         glyph.innerHTML = state.kind === "diff" ? DIFF_GLYPH : (CLASS_GLYPHS[state.artifactClass] ?? CLASS_GLYPHS.R);
+        if (state.kind === "chat" && state.provider) glyph.replaceChildren(agentIcon(state.provider));
+        else if (state.kind === "chat" || state.kind === "external-chat")
+          glyph.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h10v8H7l-4 3z"/></svg>';
+        else if (state.kind === "agent-settings")
+          glyph.innerHTML =
+            '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12M5 2v4M11 6v4M6 10v4"/></svg>';
         label.textContent = state.label ?? id;
         // The label reserves its bold width at rest (see `.glosa-tab-label::after`), so
         // activating a tab changes its weight without changing its size.

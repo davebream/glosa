@@ -60,3 +60,16 @@ The full license text for both families is in `packages/spa/src/fonts/OFL.txt`.
 
 - **xterm.js 6.0.0** (`@xterm/xterm`, MIT): unmodified published browser module and stylesheet in `packages/spa/src/vendor/`; license in `xterm-license.txt`. Used only for explicitly opened native login terminals. Source: https://github.com/xtermjs/xterm.js.
 - **markdown-it 14.3.1** (MIT): unmodified published browser distribution in `packages/spa/src/vendor/markdown-it.js`; license in `markdown-it-license.txt`. Chat rendering disables raw HTML and remote images. Source: https://github.com/markdown-it/markdown-it.
+
+## Agent identity marks
+
+The locally embedded monochrome marks in `packages/spa/src/agent-ui.js` identify the selected
+coding agent. They are third-party trademarks, not Glosa branding or an endorsement.
+
+- Claude Code mark: Simple Icons (CC0), commit `b86d5c9a0bdd4f3f5c30898a63654dd32f39fd76`,
+  [claudecode.svg](https://github.com/simple-icons/simple-icons/blob/b86d5c9a0bdd4f3f5c30898a63654dd32f39fd76/icons/claudecode.svg).
+  The upstream source is [Claude Code](https://code.claude.com); the mark belongs to Anthropic.
+- OpenAI Blossom: [OpenAI Cookbook artwork](https://github.com/openai/openai-cookbook/blob/5986832a554169dc87285b1b0b396941f235a62e/examples/agents_sdk/deployment_manager/frontend/src/openai-logomark.svg),
+  commit `5986832a554169dc87285b1b0b396941f235a62e`. Geometry and viewBox are unchanged;
+  monochrome fill follows the interface's light/dark foreground. The mark belongs to OpenAI and
+  is subject to [OpenAI's brand guidelines and Marks usage terms](https://openai.com/brand/).

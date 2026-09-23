@@ -4,6 +4,7 @@ import { loadChatMarkdown } from "./chat-markdown.js";
 import { confirmDialog } from "./dialog.js";
 import { mountMcpSettings } from "./agent-mcp-settings.js";
 import { mountAgentLogin } from "./agent-login.js";
+import { agentIcon, agentName, actionMenu } from "./agent-ui.js";
 
 /** Pure stream projection. Durable snapshots restore prompt/blob content; delta frames never start work. */
 export function applyChatEvent(state, record) {
@@ -49,7 +50,8 @@ export function createChatPane(
     timer,
     saving = Promise.resolve(),
     sendIntent,
-    pending = false;
+    pending = false,
+    readyToSend = false;
   let attachments = [],
     lastDraft = "",
     baseDraftRevision = 0,
@@ -59,7 +61,10 @@ export function createChatPane(
     pageBefore,
     wantedRows = new Set(),
     paging = false,
-    nativeLogin;
+    nativeLogin,
+    lastContentSignature = "",
+    accountGeneration = 0,
+    changingAccount = false;
   const lifetime = new AbortController();
   const rows = new Map(),
     decisionRows = new Map(),
@@ -68,6 +73,36 @@ export function createChatPane(
   const status = el("p", { className: "glosa-chat-status", role: "status" });
   const title = el("input", { className: "glosa-chat-title", "aria-label": "Chat title", maxLength: 120 });
   const controls = el("div", { className: "glosa-chat-controls" });
+  const identity = el("div", { className: "glosa-chat-identity" });
+  const activity = el("span", { className: "glosa-chat-activity", role: "status" });
+  const menu = actionMenu("Chat actions");
+  const transfer = el("div", { className: "glosa-chat-transfer", hidden: !sourceChatId });
+  const empty = el("div", { className: "glosa-chat-empty" }, [
+    el("h2", { textContent: "What would you like to work on?" }),
+    el("p", { textContent: "Ask a question, work on a document, or give your agent a task in this workspace." }),
+  ]);
+  const readiness = el("div", { className: "glosa-chat-readiness", hidden: true });
+  const readinessText = el("span");
+  const loadModels = el("button", {
+    type: "button",
+    textContent: "Load models",
+    onClick: () =>
+      void act(async () => {
+        loadModels.disabled = true;
+        status.textContent = "Loading this account’s models…";
+        try {
+          await dataAccess.discoverAgentModels(state.profileId);
+          catalog = await dataAccess.getAgentStatus();
+          status.textContent = "Models refreshed.";
+        } finally {
+          loadModels.disabled = false;
+        }
+      }),
+  });
+  const manageAccount = el("button", { type: "button", textContent: "Manage account", onClick: onSettings });
+  readiness.append(readinessText, loadModels, manageAccount);
+  const field = (label, input) =>
+    el("label", { className: "glosa-chat-field" }, [el("span", { textContent: label }), input]);
   const account = el("select", { "aria-label": "Agent account" });
   const model = el("select", { "aria-label": "Model" });
   const effort = el("select", { "aria-label": "Effort" });
@@ -97,35 +132,40 @@ export function createChatPane(
       history.scrollTop = 0;
     } catch (error) {
       failure(error);
+      renderControls();
     } finally {
       paging = false;
       if (!disposed) connectStream();
     }
   }
+  history.append(empty);
   const decisions = el("div", { className: "glosa-chat-decisions" });
   const draft = el("textarea", {
     className: "glosa-chat-draft",
     placeholder: "What would you like to work on?",
     "aria-label": "Message",
     maxLength: 65536,
-    rows: 4,
+    rows: 3,
   });
   const files = el("input", {
     type: "file",
     multiple: true,
     accept: ".md,.txt,image/png,image/jpeg,image/webp",
     "aria-label": "Attach files",
+    hidden: true,
   });
   const attachmentList = el("div", { className: "glosa-chat-attachments" });
   const send = el("button", {
     type: "button",
-    textContent: "Send · ↵",
+    textContent: "Send ↑",
+    className: "glosa-agent-primary",
     "aria-label": "Send message",
     onClick: () => void submit(),
   });
   const stop = el("button", {
     type: "button",
     textContent: "Stop",
+    className: "glosa-chat-stop",
     onClick: () => void act(() => dataAccess.stopChat(slug, chatId)),
   });
   const jump = el("button", {
@@ -138,9 +178,12 @@ export function createChatPane(
       jump.hidden = true;
     },
   });
-  const header = el("header", { className: "glosa-chat-header" }, [
-    title,
-    el("button", { type: "button", textContent: "Agents", onClick: onSettings }),
+  history.addEventListener("scroll", () => {
+    if (history.scrollHeight - history.scrollTop - history.clientHeight < 64) jump.hidden = true;
+  });
+  const header = el("header", { className: "glosa-chat-header" }, [identity, title, activity, menu.element]);
+  menu.popup.append(
+    el("button", { type: "button", textContent: "Agents & accounts", onClick: onSettings }),
     el("button", {
       type: "button",
       textContent: "Export",
@@ -153,12 +196,13 @@ export function createChatPane(
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         }),
     }),
-  ]);
+  );
   const feedback = el("button", {
     type: "button",
     textContent: "Send feedback",
     onClick: () =>
       void act(async () => {
+        if (changingAccount) return;
         feedbackIntent ??= {
           requestId: crypto.randomUUID(),
           turnId: crypto.randomUUID(),
@@ -176,7 +220,7 @@ export function createChatPane(
   });
   if (sourceChatId) {
     let moveIntent;
-    header.append(
+    transfer.append(
       el("button", {
         type: "button",
         textContent: "Move previous draft here",
@@ -198,7 +242,7 @@ export function createChatPane(
           }),
       }),
     );
-    header.append(
+    transfer.append(
       el("button", {
         type: "button",
         textContent: "Attach previous conversation",
@@ -249,9 +293,12 @@ export function createChatPane(
   async function refreshFeedback() {
     if (!dataAccess.getChatFeedback) return;
     const value = await dataAccess.getChatFeedback(slug, chatId);
-    if (!disposed) feedback.textContent = `Send feedback · ${value.entryIds.length}${value.hasMore ? "+" : ""}`;
+    if (!disposed) {
+      feedback.textContent = `Send feedback · ${value.entryIds.length}${value.hasMore ? "+" : ""}`;
+      feedback.hidden = value.entryIds.length === 0;
+    }
   }
-  header.append(
+  menu.popup.append(
     el("button", {
       type: "button",
       textContent: "Delete chat",
@@ -274,8 +321,10 @@ export function createChatPane(
       },
     }),
   );
-  controls.append(feedback);
-  const mcp = el("details", { className: "glosa-chat-mcp" }, [el("summary", { textContent: "Workspace MCP servers" })]),
+
+  const mcp = el("details", { className: "glosa-chat-mcp" }, [
+      el("summary", { textContent: "Tools & workspace access" }),
+    ]),
     mcpHost = el("div");
   mcp.append(mcpHost);
   mcp.addEventListener("toggle", () => {
@@ -402,11 +451,8 @@ export function createChatPane(
         }),
     }),
   );
-  controls.append(
-    account,
-    model,
-    effort,
-    mode,
+  controls.append(field("Account", account), field("Model", model), field("Effort", effort));
+  menu.popup.append(
     el("button", {
       type: "button",
       textContent: "Refresh accounts",
@@ -416,10 +462,11 @@ export function createChatPane(
         }),
     }),
   );
-  header.append(
+  menu.popup.append(
     el("button", {
       type: "button",
-      textContent: "Pin / unpin",
+      textContent: "Pin chat",
+      "data-chat-action": "pin",
       onClick: () =>
         void act(() =>
           dataAccess.changeChat(slug, chatId, {
@@ -431,7 +478,8 @@ export function createChatPane(
     }),
     el("button", {
       type: "button",
-      textContent: "Archive / restore",
+      textContent: "Archive chat",
+      "data-chat-action": "archive",
       onClick: () =>
         void act(async () => {
           if (
@@ -450,18 +498,40 @@ export function createChatPane(
         }),
     }),
   );
+  const composer = el("div", { className: "glosa-chat-composer" }, [
+    draft,
+    attachmentList,
+    controls,
+    el("div", { className: "glosa-chat-compose-actions" }, [
+      el("button", {
+        type: "button",
+        className: "glosa-chat-attach",
+        textContent: "+ Attach",
+        title: "Attach documents or images",
+        onClick: () => files.click(),
+      }),
+      files,
+      field("Permissions", mode),
+      el("span", { className: "glosa-chat-action-spacer" }),
+      stop,
+      send,
+    ]),
+  ]);
+  const footer = el("div", { className: "glosa-chat-footer" }, [
+    status,
+    el("span", { className: "glosa-chat-key-hint", textContent: "Enter to send · Shift Enter for a new line" }),
+  ]);
   root.append(
     header,
+    transfer,
     pageControls,
     history,
     jump,
     decisions,
-    status,
-    controls,
-    mcp,
-    draft,
-    attachmentList,
-    el("div", { className: "glosa-chat-actions" }, [files, stop, send]),
+    readiness,
+    composer,
+    el("div", { className: "glosa-chat-utilities" }, [mcp, feedback]),
+    footer,
   );
   host.append(root);
   void loadChatMarkdown()
@@ -479,6 +549,7 @@ export function createChatPane(
     ready: null,
     destroy() {
       disposed = true;
+      accountGeneration++;
       lifetime.abort();
       clearTimeout(timer);
       stopStream?.();
@@ -501,18 +572,20 @@ export function createChatPane(
   function failure(error) {
     status.textContent = error.message || "The chat could not be updated.";
   }
-  async function act(fn) {
+  async function act(fn, current = () => !disposed) {
     try {
       await fn();
-      await refresh();
+      if (current()) await refresh();
     } catch (error) {
+      if (!current()) return;
       failure(error);
+      renderControls();
     }
   }
   function pick(select, values, selected) {
     const entries = values.some((v) => v.id === selected)
       ? values
-      : [{ id: selected, name: `${selected || "Unavailable"} · unavailable` }, ...values];
+      : [{ id: selected, name: selected || "Default" }, ...values];
     const options = [...select.options];
     if (
       options.length !== entries.length ||
@@ -527,7 +600,7 @@ export function createChatPane(
       account,
       (catalog?.profiles ?? [])
         .filter((p) => p.enabled && !p.removed)
-        .map((p) => ({ id: p.id, name: `${p.provider} · ${p.label}` })),
+        .map((p) => ({ id: p.id, name: `${agentName(p.provider)} · ${p.label}` })),
       state.profileId,
     );
     const models = catalog?.capabilities?.[state.profileId]?.models ?? [];
@@ -538,13 +611,53 @@ export function createChatPane(
       state.settings.effort,
     );
     mode.value = state.settings.permissionMode;
+    const profile = catalog?.profiles?.find((p) => p.id === state.profileId);
+    const accountReady =
+      !!profile?.enabled && !profile.removed && (!profile.auth || profile.auth.state === "authenticated");
+    const selectedModel = models.find((m) => m.id === state.settings.model);
+    readyToSend =
+      accountReady &&
+      !!selectedModel &&
+      (!state.settings.effort || selectedModel.efforts.includes(state.settings.effort));
+    model.disabled = changingAccount || !models.length;
+    effort.disabled = changingAccount || !selectedModel?.efforts.length;
+    mode.disabled = changingAccount;
+    readiness.hidden = readyToSend || !catalog?.available || state.archived;
+    readinessText.textContent = !accountReady
+      ? "This account needs attention before it can send."
+      : !models.length
+        ? "Load this account’s models to continue."
+        : "Choose an available model and effort to continue.";
+    loadModels.hidden = !accountReady;
+    manageAccount.hidden = accountReady;
+    identity.replaceChildren(agentIcon(state.provider));
+    identity.title = agentName(state.provider);
+    account.title = state.turns.length
+      ? "Changing account starts a fresh chat. You can move your draft there."
+      : "Choose the account for this chat";
+    model.title = "Applies to the next message";
+    effort.title = "How much time the agent spends reasoning; applies to the next message";
+    mode.title = "Ask for approval before actions, or plan without changing files";
+    menu.popup.querySelector('[data-chat-action="pin"]').textContent = state.pinned ? "Unpin chat" : "Pin chat";
+    menu.popup.querySelector('[data-chat-action="archive"]').textContent = state.archived
+      ? "Restore chat"
+      : "Archive chat";
     if (document.activeElement !== title) title.value = state.title;
   }
   function textRow(key, label, text, collapsible = false, markdown = false) {
     wantedRows.add(key);
     let row = rows.get(key);
     if (!row) {
-      const node = el(collapsible ? "details" : "article", { className: "glosa-chat-message" });
+      const node = el(collapsible ? "details" : "article", {
+        className: "glosa-chat-message",
+        "data-kind": key.startsWith("user:")
+          ? "human"
+          : key.startsWith("error:")
+            ? "error"
+            : collapsible
+              ? "detail"
+              : "agent",
+      });
       const heading = el(collapsible ? "summary" : "h3", { textContent: label });
       const content = el("div", { className: "glosa-chat-text" });
       const copy = el("button", {
@@ -552,9 +665,14 @@ export function createChatPane(
         textContent: "Copy",
         "aria-label": `Copy ${label}`,
         onClick: () => {
-          void navigator.clipboard.writeText(row.text).catch(() => {
-            status.textContent = "Copy failed. Select the message text to copy it.";
-          });
+          void navigator.clipboard
+            .writeText(row.text)
+            .then(() => {
+              status.textContent = "Message copied.";
+            })
+            .catch(() => {
+              status.textContent = "Copy failed. Select the message text to copy it.";
+            });
         },
       });
       node.append(heading, content, copy);
@@ -596,7 +714,14 @@ export function createChatPane(
     if (!state || disposed) return;
     const following = history.scrollHeight - history.scrollTop - history.clientHeight < 64;
     handle.title = state.title;
+    handle.provider = state.provider;
+    if (sourceChatId && state.turns.length && transfer.children.length) {
+      menu.popup.append(...transfer.children);
+      transfer.hidden = true;
+    }
     wantedRows = new Set();
+    empty.hidden = !!state.turns.length;
+    pageControls.hidden = !state.page?.hasEarlier && !state.page?.hasLater;
     older.disabled = !state.page?.hasEarlier || paging;
     recent.hidden = !state.page?.hasLater;
     for (const turn of state.turns) {
@@ -754,8 +879,23 @@ export function createChatPane(
     stop.disabled = !state.turns.some((t) =>
       ["accepted", "queued", "held", "dispatching", "running", "waiting"].includes(t.status),
     );
-    feedback.disabled = pending || !catalog?.available || state.archived;
-    send.disabled = pending || !catalog?.available || state.archived;
+    stop.hidden = stop.disabled;
+    const active = state.turns.findLast((t) => ["dispatching", "running", "waiting"].includes(t.status));
+    activity.textContent = state.archived
+      ? "Archived"
+      : active
+        ? active.status === "waiting"
+          ? "Needs your reply"
+          : "Working…"
+        : "";
+    activity.dataset.working = String(!!active);
+    feedback.disabled = pending || changingAccount || !catalog?.available || state.archived;
+    send.disabled =
+      pending || changingAccount || (!sendIntent && (!catalog?.available || state.archived || !readyToSend));
+    send.textContent = pending ? "Sending…" : sendIntent ? "Retry ↑" : active ? "Queue ↑" : "Send ↑";
+    send.setAttribute("aria-label", active ? "Queue message" : "Send message");
+    draft.disabled = !!state.archived;
+    draft.placeholder = state.archived ? "Restore this chat to send a message." : "What would you like to work on?";
     files.disabled = pending || !!sendIntent;
     for (const button of attachmentList.querySelectorAll("button")) button.disabled = pending || !!sendIntent;
     if (state.usage) {
@@ -779,8 +919,12 @@ export function createChatPane(
         rows.delete(key);
       }
     if (rows.size > 200 && !paging && selection?.isCollapsed !== false) void changePage(pageBefore);
-    if (following) history.scrollTop = history.scrollHeight;
-    else jump.hidden = false;
+    const signature = `${state.turns.length}:${state.content.map((item) => `${item.id}:${item.text.length}`).join(",")}`;
+    if (following) {
+      history.scrollTop = history.scrollHeight;
+      jump.hidden = true;
+    } else if (lastContentSignature && signature !== lastContentSignature) jump.hidden = false;
+    lastContentSignature = signature;
     onChange?.(state);
   }
   async function refresh() {
@@ -844,7 +988,14 @@ export function createChatPane(
     await saving;
   }
   async function submit() {
-    if (pending || !state || !draft.value.trim()) return;
+    if (
+      pending ||
+      changingAccount ||
+      !state ||
+      (!sendIntent && (!catalog?.available || state.archived || !readyToSend)) ||
+      !draft.value.trim()
+    )
+      return;
     pending = true;
     render();
     try {
@@ -971,13 +1122,28 @@ export function createChatPane(
           }),
         ),
     );
-  account.addEventListener(
-    "change",
-    () =>
-      void act(async () => {
+  account.addEventListener("change", () => {
+    const generation = ++accountGeneration;
+    changingAccount = true;
+    for (const control of [model, effort, mode]) control.disabled = true;
+    render();
+    void act(
+      async () => {
         const profile = catalog.profiles.find((p) => p.id === account.value);
-        const target = catalog.capabilities?.[profile.id]?.models[0];
-        if (!target) throw new Error("Load this account's models in Agents first.");
+        if (!profile || (profile.auth && profile.auth.state !== "authenticated"))
+          throw new Error("Sign in to this account in Agents & accounts first.");
+        let target = catalog.capabilities?.[profile.id]?.models[0];
+        if (!target && dataAccess.discoverAgentModels) {
+          status.textContent = `Loading ${agentName(profile.provider)} models…`;
+          await dataAccess.discoverAgentModels(profile.id);
+          if (disposed || generation !== accountGeneration) return;
+          const nextCatalog = await dataAccess.getAgentStatus();
+          if (disposed || generation !== accountGeneration) return;
+          catalog = nextCatalog;
+          target = catalog.capabilities?.[profile.id]?.models[0];
+        }
+        if (!target)
+          throw new Error("Load this account’s models in Agents & accounts first. Your current chat is unchanged.");
         const settings = {
           model: target.id,
           effort: target.efforts[0] ?? "",
@@ -985,6 +1151,7 @@ export function createChatPane(
         };
         if (state.turns.length) {
           await save();
+          if (disposed || generation !== accountGeneration) return;
           await onNewChat?.(profile, settings);
         } else
           await dataAccess.changeChat(slug, chatId, {
@@ -994,14 +1161,21 @@ export function createChatPane(
             profileId: profile.id,
             settings,
           });
-      }),
-  );
+      },
+      () => !disposed && generation === accountGeneration,
+    ).finally(() => {
+      if (disposed || generation !== accountGeneration) return;
+      changingAccount = false;
+      renderControls();
+      render();
+    });
+  });
   handle.ready = (async () => {
     catalog = await dataAccess.getAgentStatus();
     await refresh();
     await refreshFeedback();
     if (disposed) return;
-    status.textContent = catalog.reason ?? "Changes to model and effort apply to your next message.";
+    status.textContent = catalog.reason ?? "Drafts save automatically.";
     connectStream();
   })().catch(failure);
   function connectStream() {
@@ -1036,7 +1210,7 @@ export function createChatPane(
           const reconnecting = "Reconnecting · no messages are sent automatically";
           if (value === "down") status.textContent = reconnecting;
           else if (status.textContent === reconnecting)
-            status.textContent = catalog.reason ?? "Changes to model and effort apply to your next message.";
+            status.textContent = catalog.reason ?? "Drafts save automatically.";
         },
       },
       pageBefore,

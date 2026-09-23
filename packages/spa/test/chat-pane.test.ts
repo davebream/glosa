@@ -12,6 +12,93 @@ afterEach(() => dom.teardown());
 const flush = async () => {
   for (let i = 0; i < 30; i++) await Promise.resolve();
 };
+
+test("an unresolved send remains retryable after the selected account is disabled", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+  draft.value = "Preserve this request";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  const send = f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement;
+  send.click();
+  await flush();
+  f.catalog.profiles[0]!.enabled = false;
+  const refresh = [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!;
+  refresh.click();
+  await flush();
+  expect(send.disabled).toBe(false);
+  expect(send.textContent).toContain("Retry");
+  send.click();
+  await flush();
+  expect(f.sends).toHaveLength(2);
+  expect(f.sends[1]).toEqual(f.sends[0]);
+  expect(draft.value).toBe("Preserve this request");
+  f.pane.destroy();
+});
+
+test("missing model data blocks a fresh keyboard send and exposes local recovery", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  f.catalog.capabilities.a.models = [];
+  [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
+  await flush();
+  const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+  draft.value = "Not ready yet";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
+  expect(f.sends).toHaveLength(0);
+  expect((f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).disabled).toBe(true);
+  expect((f.host.querySelector(".glosa-chat-readiness") as HTMLElement).hidden).toBe(false);
+  expect(f.host.querySelector(".glosa-chat-readiness")!.textContent).toContain("Load models");
+  expect(draft.value).toBe("Not ready yet");
+  f.pane.destroy();
+});
+
+test("a newer account choice wins over delayed model discovery and its stale error", async () => {
+  for (const fails of [false, true]) {
+    const f = fixture();
+    await f.pane.ready;
+    f.state.turns.push({ id: "started", text: "Keep this chat", status: "completed" });
+    f.catalog.profiles.push({ id: "c", provider: "codex", enabled: true, label: "Third account" });
+    (f.catalog.capabilities as any).c = { models: [{ id: "c-model", name: "Third model", efforts: ["high"] }] };
+    f.catalog.capabilities.b.models = [];
+    let resolve!: () => void;
+    f.dataAccess.discoverAgentModels = () =>
+      new Promise<void>((done, reject) => {
+        resolve = () => {
+          if (fails) reject(new Error("Stale account failure"));
+          else {
+            f.catalog.capabilities.b.models = [{ id: "b-model", name: "Second model", efforts: ["medium"] }];
+            done();
+          }
+        };
+      });
+    [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
+    await flush();
+    const account = f.host.querySelector('[aria-label="Agent account"]') as HTMLSelectElement;
+    account.value = "b";
+    account.dispatchEvent(new Event("change"));
+    const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+    draft.value = "Wait for the chosen account";
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(f.sends).toHaveLength(0);
+    [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Send feedback")!.click();
+    await flush();
+    expect(f.feedbacks).toHaveLength(0);
+    account.value = "c";
+    account.dispatchEvent(new Event("change"));
+    await flush();
+    expect(f.newChats.map((args) => args[0].id)).toEqual(["c"]);
+    resolve();
+    await flush();
+    expect(f.newChats.map((args) => args[0].id)).toEqual(["c"]);
+    expect(f.host.querySelector(".glosa-chat-status")!.textContent).not.toContain("Stale account failure");
+    f.pane.destroy();
+  }
+});
 function fixture() {
   const state = {
     id: "chat",
@@ -32,6 +119,7 @@ function fixture() {
   let stream: any;
   const saves: any[] = [],
     sends: any[] = [],
+    feedbacks: any[] = [],
     newChats: any[] = [];
   const catalog = {
     available: true,
@@ -62,6 +150,9 @@ function fixture() {
       sends.push(input);
       throw new Error("Connection lost");
     },
+    sendChatFeedback: async (_s: string, _id: string, input: any) => {
+      feedbacks.push(input);
+    },
   };
   const host = document.createElement("div");
   document.body.append(host);
@@ -79,7 +170,10 @@ function fixture() {
     pane,
     saves,
     sends,
+    feedbacks,
     newChats,
+    catalog,
+    dataAccess,
     status: (value: string) => stream.onStatus(value),
     snapshot: () => stream.onEvent({ event: "chat_snapshot", data: structuredClone(state) }),
   };

@@ -150,6 +150,7 @@ const SPA_ASSETS: Record<string, string> = {
   // the dock engine and its stylesheet, one pane per artifact, and a comparison as a pane.
   "dock.js": "text/javascript; charset=utf-8",
   "agent-mcp-settings.js": "text/javascript; charset=utf-8",
+  "agent-ui.js": "text/javascript; charset=utf-8",
   "agent-settings.js": "text/javascript; charset=utf-8",
   "agent-login.js": "text/javascript; charset=utf-8",
   "chat-markdown.js": "text/javascript; charset=utf-8",
