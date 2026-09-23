@@ -51,7 +51,7 @@ import { shadowRoutes } from "../routes/shadow.ts";
 import type { BunServer, RouteMatch } from "../routes/types.ts";
 import { authorizeRequest, isForeignOrigin, principalOfRequest, type Transport } from "../security/auth.ts";
 import type { CapabilityStore } from "../security/capability.ts";
-import { confinePath } from "../security/confine-path.ts";
+import { confinePath, decodePathCapture } from "../security/confine-path.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
 import { CLASSF_HOSTNAME, isAllowedHost, SPA_HOSTNAMES } from "../security/hosts.ts";
 import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "../security/presentation-token.ts";
@@ -3195,9 +3195,12 @@ export function createClassFFetch(ctx: {
       const routeMatch = url.pathname.match(/^\/doc\/([^/]+)\/(.+)$/);
       if (!routeMatch) return withHeaders(new Response("not found", { status: 404 }), csp);
       const token = routeMatch[1] as string;
-      const path = routeMatch[2] as string;
+      // issue #337: decode exactly once before serveClassFDocument confines — a malformed
+      // escape is this listener's existing plain 404, never a thrown URIError.
+      const decoded = decodePathCapture(routeMatch[2] as string);
+      if (!decoded.ok) return withHeaders(new Response("not found", { status: 404 }), csp);
 
-      const res = serveClassFDocument(ctx.capabilityStore, token, path);
+      const res = serveClassFDocument(ctx.capabilityStore, token, decoded.path);
       if (!res) return withHeaders(new Response("not found", { status: 404 }), csp);
       return withHeaders(res, csp);
     } catch {

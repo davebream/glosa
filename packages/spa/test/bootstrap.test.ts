@@ -214,6 +214,19 @@ describe("readRoute — the CLI deep-link half of the fragment", () => {
     expect(route.slug).toBeNull();
     expect(route.artifact).toBeNull();
   });
+
+  // --- issue #337: the `+`/`%20` spellings of a space are the SAME character to
+  // URLSearchParams, and a literal `+` survives ONLY because it's separately escaped as `%2B` ---
+
+  test("#a=My+Folder%2Fa%2Bb.md (the `+`-for-space spelling `glosa_present` emits) reads as a space AND a literal `+`, not confused with each other", () => {
+    const route = readRoute({ hash: "#w=essays-abc&a=My+Folder%2Fa%2Bb.md" });
+    expect(route.artifact).toBe("My Folder/a+b.md");
+  });
+
+  test("#a=My%20Folder%2Fa%2Bb.md (the `%20`-for-space spelling) reads IDENTICALLY to the `+` spelling above", () => {
+    const route = readRoute({ hash: "#w=essays-abc&a=My%20Folder%2Fa%2Bb.md" });
+    expect(route.artifact).toBe("My Folder/a+b.md");
+  });
 });
 
 describe("focusHash — the inverse of readRoute slug/artifact", () => {
@@ -224,6 +237,16 @@ describe("focusHash — the inverse of readRoute slug/artifact", () => {
   test("round-trips through readRoute slug/artifact projection", () => {
     const focus = { slug: "essays-abc", artifact: "07/manuscript.md" };
     const route = readRoute({ hash: focusHash(focus) });
+    expect({ slug: route.slug, artifact: route.artifact }).toEqual(focus);
+  });
+
+  // issue #337: an artifact path containing BOTH a space and a literal `+` — the case that
+  // distinguishes "space" from "the character +" — stays lossless end to end.
+  test("round-trips an artifact path with both a space and a literal `+` (My Folder/a+b.md), losing neither", () => {
+    const focus = { slug: "essays-abc", artifact: "My Folder/a+b.md" };
+    const hash = focusHash(focus);
+    expect(hash).toBe("#w=essays-abc&a=My+Folder%2Fa%2Bb.md"); // space → `+`, literal `+` → `%2B`
+    const route = readRoute({ hash });
     expect({ slug: route.slug, artifact: route.artifact }).toEqual(focus);
   });
 
