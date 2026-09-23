@@ -508,18 +508,18 @@ Proposed new code areas are `packages/daemon/src/agents/` (control, profiles, su
 | A4/A5 | Chat/control authority and durability, dispatch uncertainty, lock ordering, workspace deletion/adoption, owned-process shutdown/recovery/replacement. |
 | A6/testing/T8 | Bun/runtime installation floor and distribution; compatibility manifests; selected regression/acceptance coverage and attended multi-account rehearsal. |
 
-[Issue #157](https://github.com/davebream/glosa/issues/157) currently asks for a decision record revisiting “glosa never launches an agent,” not simply a chat UI. The implementation must add its requested Launching sessions decision entry, preserve the old invariant verbatim for history, document prerequisites/security/roadmap placement, update the above contracts in the code PR, and cover pluginless registration/child environment lifecycle. Forward-reference assumptions in #151 and #160; do not silently broaden those issues. This specification alone does not close #157 or implement the feature. Whether a completed feature closes it must be checked against its then-current acceptance criteria.
+The historical, now closed [issue #157](https://github.com/davebream/glosa/issues/157) asked for a decision record revisiting “glosa never launches an agent,” not simply a chat UI. The implementation must add its requested Launching sessions decision entry, preserve the old invariant verbatim for history, document prerequisites/security/roadmap placement, update the above contracts in the code PR, and cover pluginless registration/child environment lifecycle. Forward-reference assumptions in #151 and #160; do not silently broaden those issues. This specification alone does not close #157 or implement the feature. Whether a completed feature closes it must be checked against its then-current acceptance criteria.
 
 ## 12. Delivery slices and acceptance contract
 
-Deliver vertical slices behind explicit provider availability gates. A hidden feature flag must not weaken existing document review. Each code PR updates the normative contracts it changes and has observable failure tests, with critical guards ablated to produce a named red per [testing convention](../testing.md).
+Build Claude first, then Codex parity; release both together. The maintainer confirmed this ordering after the original specification. The maintainer is not pursuing Anthropic confirmation at present: implementation and isolated synthetic tests continue, while public managed execution stays gated. No partial one-provider public rollout is authorized. Deliver vertical slices behind explicit provider availability gates. A hidden feature flag must not weaken existing document review. Each code PR updates the normative contracts it changes and has observable failure tests, with critical guards ablated to produce a named red per [testing convention](../testing.md).
 
 | Slice | Work and dependencies | Exit evidence |
 | --- | --- | --- |
 | S0: contracts and compatibility | G1 determination; pin a candidate tuple; native auth/isolation/SDK-supervision/PTy/process-group spike; choose exact Bun floor | Recorded attended evidence; no support claims from mocks. Failure may leave Claude gated while generic work proceeds. |
 | S1: persistence and ownership | Control/chat stores, validators, replay/idempotency, supervisor/guardian, environment resolver, scoped grants | Crash-window, journal corruption/disk-full, process ownership and cross-profile negative tests; no UI/native inference needed. |
-| S2: Codex vertical slice | Profile/login settings, app-server adapter, one managed chat panel, approval, stop, resume and usage | Two-profile attended compatibility plus deterministic fake-protocol suite and real browser flows. |
-| S3: Claude vertical slice | Approved SDK/native pair, login/relogin, streaming/permissions, effort restart/resume | G1 satisfied; G2/G3 passed for Claude; identical generic acceptance with Claude-specific fixtures. |
+| S2: Claude vertical slice | Profile/login settings, SDK process bridge, one managed chat panel, approval, stop, resume and usage. Prove Claude first internally. | Deterministic process/protocol/browser evidence first; attended native qualification and the offering gate remain required before public activation. |
+| S3: Codex parity | Isolated native login and app-server adapter on the same account, chat, decision and process-control contracts. | Identical generic acceptance with Codex-specific protocol fixtures and attended two-account qualification. |
 | S4: complete workspace UX | Sidebar/dock migration, external-session tabs, queue, attachments/export, MCP settings, disable/remove/adoption/forget, T8 | Legacy delivery preserved, all acceptance rows below, browser review and maintainer rehearsal. Remove old Conversation entry last. |
 
 ### 12.1 Accounts, execution and durability
@@ -575,3 +575,72 @@ No provider authentication, credential read/import, model call, dependency insta
 The feature is complete only when both provider paths intended for release satisfy their gates; a deliberately unavailable Claude path is a partial rollout, not completion of the requested two-provider experience. Accounts remain isolated across every login/run/resume/status operation, first-class chats replace the old navigation without losing external sessions, all AC rows have appropriate evidence, and normative docs/package metadata agree with the implementation.
 
 The maintainer can review document and chat side by side, run either native agent under an explicitly selected subscription account, answer genuine native decisions, stop it, recover from expired authentication, and switch provider into a fresh tab without surprising billing, hidden history transfer, credential crossover or false document provenance. That observable behavior is the acceptance target.
+
+## 15. Implementation evidence and remaining release qualification
+
+The implementation following this specification adds the managed provider boundary, supervised
+native processes, immutable intent journals, isolated account profiles, native authentication,
+first-class chat tabs, exact external-session migration, workspace feedback tools and MCP settings.
+It retains the vanilla-module UI and keeps provider imports in the CLI composition root.
+
+The public execution gate and both runtime qualification flags remain **false**. This records
+implemented, reviewable code; it does not claim the two-provider acceptance target in §14 is met.
+The maintainer instructed implementation to continue without obtaining Anthropic confirmation now.
+No live subscription sign-in, native model inference, user credential import, real manuscript run
+or T8 sign-off was performed during implementation.
+
+### Evidence obtained
+
+| Boundary | Observation | Limit |
+|---|---|---|
+| Complete repository gate | `bun run check`: 3,233 tests passed across 210 files; zero failures. Lint, typecheck, version consistency and formatting passed. Package smoke verified 230 packaged files; secret scan found no leaks. | Local candidate evidence; not native account qualification or maintainer release sign-off. |
+| Actual pinned installation | Claude CLI 2.1.280 / SDK 0.3.280 and Codex 0.156.1 installed in isolated private homes using frozen dependency locks; executable and dependency-tree integrity verified. Codex needed 398 seconds; install deadline is 600 seconds. | Installation is not authentication, account isolation or inference compatibility. macOS arm64 only was exercised. |
+| Native process supervision | Real synthetic processes prove owned-tree cleanup, native cleanup grace after wrapper exit, no-child recovery, capacity, large-frame serialization and revocation during a partial frame. | No claim about deliberately escaped descendants or either vendor runtime's full behavior. Unproved ownership blocks further managed execution. |
+| Local service and persistence | Durable retry receipts, disabled-profile admission, decision races, account-scoped cleanup, exact managed tools, queue holds, corrupt unrelated history, search/paging and draft transfer exercised with isolated state. | Synthetic adapters prove Glosa's boundary, not vendor compatibility. |
+| Browser | Real Chromium exercised keyboard send, streamed selection, inert hostile markup and narrow layout. Existing real-engine workbench regression tests remain required. | The chat stream in the new browser scenario is a deterministic adapter. |
+| Adversarial review | Independent review found sign-out deletion, suppressed interrupt, shortened cleanup grace, destructive forget ordering, stranded pending IDs, oversized write rejection and prelaunch ownership poisoning. Each was fixed; focused re-review found no remaining material defect in the reviewed fixes. | Review is not a native-provider qualification certificate. |
+| Guard ablation | Temporarily removing native admission, the bus mutex revocation check, sign-out preservation, per-chunk admission, process-group grace, effective-configuration audit, project-configuration preflight, shared-stream reuse and snapshot retry produced the corresponding named failures. Restored guards passed. | The named tests cover their explicit observation boundaries only. |
+
+### Implemented behavioral details clarified during review
+
+- Sign out invokes native logout and preserves native session history/configuration; Remove deletes
+  only that account namespace after confirmed shutdown and successful native cleanup.
+- Stop admits only the bounded native cancellation call chain after fencing normal input. Every
+  transport chunk rechecks authority; partial-frame revocation closes input and proceeds to owned
+  process termination instead of appending another protocol message.
+- Chat/workspace associations and purge member lists are durable control-journal records. All managed
+  roots are preflighted before destructive work; managed purge precedes workspace bus deletion.
+- A started chat's account/provider change opens a fresh tab. That tab offers explicit draft transfer
+  and a frozen, previewed transcript attachment. Neither operation submits a turn.
+- MCP status is read from an active native connection. MCP authentication uses a separate bounded,
+  workspace-bound native terminal: Claude's original `/mcp` manager or Codex's `mcp login` command.
+  Codex uses file storage for both account and MCP credentials in its private `CODEX_HOME`.
+  Provider login URLs retain a strict hostname allowlist; MCP login exposes an HTTPS destination
+  for the user to inspect and open. No authorization URL is persisted in Glosa's journals.
+- Native configuration is checked independently of account identity. Claude disables inherited
+  settings, unlisted MCP servers and account-connected web tools. Codex starts in a neutral
+  directory, disables apps/plugins/hooks/telemetry/update checks and login shells, and audits
+  `config/read` before account operations and each thread start/resume. Unexpected effective
+  settings or inherited MCP endpoints fail closed without rewriting user/organizational policy.
+  Project configuration is rejected at dispatch, including linked-worktree configuration and
+  dangling links; AGENTS instructions remain available. This is deliberately conservative:
+  unsupported custom or managed settings require qualification, not an automatic bypass.
+  The native startup egress and operating-system policy checks remain part of G2/G3.
+- Workspace, sidebar and managed-chat panes share one browser stream. Advisory chat invalidations
+  reload bounded durable snapshots; reconnect performs the same recovery. A real three-window
+  document regression exposed connection starvation from the first per-pane stream design,
+  prompting this change. Document-only surfaces do not subscribe to the chat list.
+- Requested turn settings remain separate from native-reported effective settings. Unreported effort
+  stays unknown. Codex refuses a reported model mismatch before submitting the prompt. Account
+  quota notifications display only reported values with observation time, not inferred balances.
+
+### Still required before activation
+
+G1 subscription-integration release determination, G2 real multi-account/config/keychain isolation,
+G3 actual native SDK/app-server/PTY/process-tree qualification, every remaining attended acceptance
+scenario (including native MCP OAuth), and the expanded T8 maintainer rehearsal remain open.
+The exact x64 runtime tuple also needs its own native evidence. Repository CI and package smoke
+cannot substitute for these gates. The Codex configuration fixture includes the pinned source’s
+typed serialization defaults; an actual unauthenticated native `config/read` wire observation
+is still required during G3. The earlier §13 observations describe the pre-implementation
+specification review; the observations in this section describe the subsequent implementation.

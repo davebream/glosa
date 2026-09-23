@@ -118,7 +118,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.17", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.18", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
@@ -1273,3 +1273,46 @@ repair under the ownership coordinator and shared bus mutex (A4 F21). Unknown sl
 body is 400. Inactive registrations, unsafe paths, leases, unavailable singleton proof, invalid HEAD,
 and already-healthy stores are named 409 refusals. Missing history is not recovered; a new baseline
 only permits future capture. These additive routes do not change the protocol version.
+
+
+## Managed agents and chats — contract 1.18
+
+These routes use the existing Host/Origin/Bearer, body-size, token-revocation and contract-version
+pipeline. No native credentials are returned. Mutations are POST; reads are GET. JSON responses are
+`no-store`. Invalid input returns 422; stale revisions/identity/idempotency conflicts return 409;
+unavailable runtime/state returns 503. A UUID request ID is required for profile creation/update,
+chat creation/change/draft/send/decision. Repeating the same ID with changed input is refused.
+
+| Route | Contract |
+|---|---|
+| `/api/agents/status` | Local profiles, cached model catalogs, install/qualification status, recovery state. No native probe. |
+| `/api/agents/profiles` and `/profiles/:id` | Create and CAS-update account metadata. One eligible default per provider. |
+| `/api/agents/profiles/:id/{login,logout,probe,models,consent,mcp,mcp-login}` | Explicit foreground operation. MCP policy uses workspace query, revision and exact servers. MCP login binds a workspace incarnation and optional server ID to a separately owned native terminal. |
+| `/api/agents/runtimes/:provider/install` | Explicit pinned install or verified repair, never an inference warm-up. |
+| `/api/agents/logins/:id` and `/{input,resize,finish}` | Memory operation grant in `X-Glosa-Operation`; bounded base64 terminal output with offset/reset. No grant in URL or storage. |
+| `/api/agents/quiesce` | Instance-ID-bound replacement fence; refuses while owned/unknown work exists. |
+| `/w/:slug/chats` | Local metadata list or create draft. GET `q` searches title and stored messages, `archived=true` includes archived rows, `after` pages 50 matches. Registration epoch scopes every lookup. |
+| `/w/:slug/chats/events` | Coalesced sidebar invalidations; closing chat tabs does not lose background status. |
+| `/w/:slug/chats/external` | Remember an already registered external session; never revive its native lease. |
+| `/w/:slug/chats/:id` | Snapshot or CAS configuration update. GET `before` pages 100 logical messages with stable cursor. |
+| `.../:id/{draft,move-draft,turns,feedback,decisions,stop,resume,delete,attachments,mcp}` | Durable draft/send/answer; explicit feedback preview/send; stop/resume; stopped deletion; bounded upload; foreground native MCP status. Draft transfer durably copies the target before CAS-clearing an unchanged source. |
+| `.../:id/{events,export}` | SSE snapshot plus sequenced events; complete Markdown export. |
+
+Chat stream IDs are `<chat UUID>:1:<journal sequence>`. Snapshot and listener installation do not
+yield. Reconnect replaces local projection from a snapshot; it never replays a native send. Sequence
+gaps trigger another snapshot. Slow readers are disconnected; output/history remain durable.
+The `before` cursor also applies to stream snapshots. Individual displayed message text is capped
+at 128 Ki characters and marked shortened; export retains original stored text.
+
+`POST /api/managed-mcp` is a separate native-only boundary: no browser Origin; an in-memory bearer
+grant selects one active run/workspace/session. Only initialize, ping and scoped tools are allowed.
+The grant cannot authenticate ordinary APIs. Revocation is rechecked before native writes and under
+the workspace mutex before bus mutations. Tool arguments never widen scope. `glosa_present` returns
+an already-paired workspace link after the ordinary tracked-artifact check; no browser is launched.
+
+Managed chat panes and the Chats list share the existing workspace SSE connection in the SPA.
+The advisory `chats_changed` frame has no journal cursor or transcript payload; notifications
+coalesce over 250 ms and each pane reloads its bounded durable snapshot. Reconnect also reloads
+snapshots. The direct per-chat event endpoint remains available, but opening more UI tabs does
+not allocate more long-lived browser connections. Document-only surfaces do not subscribe to the
+chat list. This prevents chat streams from starving document requests at the browser connection limit.

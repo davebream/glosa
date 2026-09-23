@@ -55,3 +55,8 @@ PERFORMANCE OF THIS SOFTWARE.
   "Source". Shipped complete and unmodified apart from WOFF2 compression.
 
 The full license text for both families is in `packages/spa/src/fonts/OFL.txt`.
+
+## Managed chat rendering and native login
+
+- **xterm.js 6.0.0** (`@xterm/xterm`, MIT): unmodified published browser module and stylesheet in `packages/spa/src/vendor/`; license in `xterm-license.txt`. Used only for explicitly opened native login terminals. Source: https://github.com/xtermjs/xterm.js.
+- **markdown-it 14.3.1** (MIT): unmodified published browser distribution in `packages/spa/src/vendor/markdown-it.js`; license in `markdown-it-license.txt`. Chat rendering disables raw HTML and remote images. Source: https://github.com/markdown-it/markdown-it.

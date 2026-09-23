@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Chats have their own workspace list and content tabs.** Existing terminal sessions open as
+  explicitly selected external chats; pending message IDs survive the navigation migration.
+- **Managed Claude and Codex integration is implemented behind a closed release gate.** It includes
+  private account profiles, pinned runtime installation, native login terminals, durable chat
+  history and drafts, tool decisions, workspace feedback and MCP configuration. Public managed
+  execution remains unavailable until both providers pass native account-isolation and lifecycle
+  qualification and the Claude subscription-integration release determination is recorded.
+
 ### Fixed
 
 - **An artifact whose name has a space, an accent, or a character such as `+`, `#` or `%` now

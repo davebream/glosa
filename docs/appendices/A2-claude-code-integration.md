@@ -243,7 +243,7 @@ Every provider implements the pure `connectPrompt({slug,path})` boundary and own
 discover the current provider session id. Claude Code guidance uses `CLAUDE_CODE_SESSION_ID`; other
 providers own their equivalent. The daemon and SPA wrap that instruction with generic workspace
 identity and `glosa session bind <current-session-id> --workspace <workspace-path>` fallback copy.
-The prompt asks the current agent session to bind itself; glosa never launches an agent, enumerates
+The companion connect prompt asks the current agent session to bind itself; in that topology glosa never launches an agent, enumerates
 agent CLI processes, selects between candidate sessions, or persists a binding for later restoration.
 
 ## F15 — hook registration (removed, #152)
@@ -285,3 +285,25 @@ artifact viewing, editing, annotation, and inbox delivery remain usable.
 The manual T8 report records the installed Claude Code version, actual session model, monitor line
 arrival, and the successful transport used. Monitor suppression or absence is reported separately
 from observed MCP fallback success.
+
+
+## Managed sessions (2026-09-23 amendment)
+
+The companion contracts above remain unchanged. Managed sessions use the separate
+`ManagedAgentAdapter` boundary. Claude uses the official SDK’s supervised process hook with a pinned,
+unmodified executable; Codex uses an owned app-server over stdio. Native account status and model
+capabilities are checked before inference. Login, logout, probe, discovery, new turn and resume all
+receive the same private profile root (`CLAUDE_CONFIG_DIR` or `CODEX_HOME`). Codex uses file credential
+storage in that root. Native identity mismatch blocks existing history from running under a different
+account. No API credential fallback is permitted.
+
+A logical chat session is registered as `managed-chat` without a plugin and held only while its run is
+owned. Native thread IDs and runtime generations do not replace that logical identity. The native
+runtime receives a memory-only run grant for Glosa MCP. It cannot manage accounts, alter workspace
+registration, or select another session. Native permissions/questions are normalized as explicit
+choices and question fields; cancellation invalidates their exact generation. No terminal scraping
+is used for chat output. xterm is restricted to the native authentication ceremony.
+
+The candidate versions are not support claims. Both public execution paths remain gated; native
+multi-account/keychain isolation, SDK supervision, resumability and process containment still require
+attended qualification on each supported architecture. See the implementation contract’s G1–G4.
