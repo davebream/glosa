@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Fresh managed accounts reach the sign-in state.** Claude's valid signed-out response is
+  recognized even when its CLI exits with status 1. Codex accepts the pinned runtime's exact
+  serialized defaults while rejecting changed endpoints and inherited configuration overrides.
 - **An artifact whose name has a space, an accent, or a character such as `+`, `#` or `%` now
   opens.** Clicking it in the tree, or opening the link glosa prints for it, answered "This
   artifact couldn't be opened", because the daemon never undid the escaping the app applied to the

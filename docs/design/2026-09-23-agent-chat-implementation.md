@@ -593,8 +593,9 @@ or T8 sign-off was performed during implementation.
 
 | Boundary | Observation | Limit |
 |---|---|---|
-| Complete repository gate | `bun run check`: 3,233 tests passed across 210 files; zero failures. Lint, typecheck, version consistency and formatting passed. Package smoke verified 230 packaged files; secret scan found no leaks. | Local candidate evidence; not native account qualification or maintainer release sign-off. |
+| Complete repository gate | `bun run check`: 3,234 tests passed across 210 files; zero failures. Lint, typecheck, version consistency and formatting passed. Package smoke verified 230 packaged files; secret scan found no leaks. | Local candidate evidence; not native account qualification or maintainer release sign-off. |
 | Actual pinned installation | Claude CLI 2.1.280 / SDK 0.3.280 and Codex 0.156.1 installed in isolated private homes using frozen dependency locks; executable and dependency-tree integrity verified. Codex needed 398 seconds; install deadline is 600 seconds. | Installation is not authentication, account isolation or inference compatibility. macOS arm64 only was exercised. |
+| Pinned native control probes | Fresh macOS arm64 profiles with networking blocked exercised actual Codex initialization, `config/read`, `account/read`, and Claude `auth status`. Captured Codex defaults exposed a clean-profile rejection; Claude's signed-out exit 1 exposed an incorrect error state. Both fixes passed native rechecks and named regression tests. The real Claude SDK also completed `supportedModels` and `accountInfo` through the supervised process bridge, then correctly rejected an unmatched identity. All owned process groups stopped. | The SDK bridge probe injected only the preliminary status to reach that transport without credentials; its native account check remained real. No prompt, live sign-in, billing, inference, unrestricted egress, or two-account isolation was tested. |
 | Native process supervision | Real synthetic processes prove owned-tree cleanup, native cleanup grace after wrapper exit, no-child recovery, capacity, large-frame serialization and revocation during a partial frame. | No claim about deliberately escaped descendants or either vendor runtime's full behavior. Unproved ownership blocks further managed execution. |
 | Local service and persistence | Durable retry receipts, disabled-profile admission, decision races, account-scoped cleanup, exact managed tools, queue holds, corrupt unrelated history, search/paging and draft transfer exercised with isolated state. | Synthetic adapters prove Glosa's boundary, not vendor compatibility. |
 | Browser | Real Chromium exercised keyboard send, streamed selection, inert hostile markup and narrow layout. Existing real-engine workbench regression tests remain required. | The chat stream in the new browser scenario is a deterministic adapter. |
@@ -640,7 +641,7 @@ G1 subscription-integration release determination, G2 real multi-account/config/
 G3 actual native SDK/app-server/PTY/process-tree qualification, every remaining attended acceptance
 scenario (including native MCP OAuth), and the expanded T8 maintainer rehearsal remain open.
 The exact x64 runtime tuple also needs its own native evidence. Repository CI and package smoke
-cannot substitute for these gates. The Codex configuration fixture includes the pinned source’s
-typed serialization defaults; an actual unauthenticated native `config/read` wire observation
-is still required during G3. The earlier §13 observations describe the pre-implementation
+cannot substitute for these gates. The Codex configuration fixture now records the pinned binary's
+actual response, and unauthenticated control probes cover both providers. Authenticated native
+decisions, streaming, cancellation and resume still need their attended evidence. The earlier §13 observations describe the pre-implementation
 specification review; the observations in this section describe the subsequent implementation.
