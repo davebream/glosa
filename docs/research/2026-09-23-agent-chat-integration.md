@@ -404,7 +404,7 @@ Keep one daemon and one SPA data-access module. Avoid importing provider-specifi
 
 | Record | Suggested fields / invariant |
 | --- | --- |
-| AgentProfile | Stable ID, provider, user label, canonical config-root reference, enabled/default state, verified principal/organization when exposed, auth state/freshness; no token fields |
+| AccountProfile | Stable ID, provider, user label, canonical config-root reference, enabled/default state, verified principal/organization when exposed, auth state/freshness; no token fields |
 | Chat | Stable ID, workspace ID, provider/profile binding, native session reference, origin (`managed` or `attached`), created/archived metadata |
 | RuntimeSession | Ownership kind, process-generation identity, pinned executable/adapter versions, negotiated capabilities, connection state |
 | Turn | User intent ID, requested/effective model and effort, permission policy snapshot, dispatch/acknowledgment/outcome, usage provenance |
