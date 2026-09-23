@@ -194,7 +194,9 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
       (await import(pathToFileURL(path).href)) as ClaudeSdk,
   ) {}
   loginArgs(): string[] {
-    return ["/login"];
+    // The auth subcommand goes directly to native subscription sign-in without
+    // starting the interactive session's theme/onboarding wizard.
+    return ["auth", "login", "--claudeai"];
   }
   mcpLoginArgs(servers: import("../../../daemon/src/agents/interface.ts").AgentMcpServer[]): string[] {
     const mcpServers = Object.fromEntries(
