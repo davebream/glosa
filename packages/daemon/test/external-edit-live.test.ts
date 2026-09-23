@@ -64,7 +64,8 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 15_000): Promise<
 
 /** Save, then keep re-saving identical bytes every 250 ms until `observed()` is true. A single
  * write issued right after a watch starts can be lost on macOS: the FSEvents stream behind it
- * comes up asynchronously and does not replay earlier events. The
+ * comes up asynchronously (and the start is not a clean cut the other way either; see
+ * `watch-helpers.ts`). The
  * "warns once and keeps watching" test below saw exactly that in CI, waiting the full 15 s for a
  * first save that had already happened. A real editor saves many times, so the product sees the
  * next one; this loop gives a single-save test the same property. See the twin helper in
@@ -358,7 +359,13 @@ describe("A6 — the cross-workspace watcher count is bounded, and that is a dif
 describe("A10 — the new cross-layer write reuses the existing safety primitive", () => {
   test("allocation preemption during an open quiet window cancels the timer: no capture fires afterwards", async () => {
     const root = workspace();
-    writeFile(root, "notes.md", "one\n");
+    // The tracked note is moved in with its directory, never written under `root`. A new watch can
+    // be handed a write made before it existed (#349), and that write would open a window of its
+    // own that a slow `armed()` lets fire before the eviction below. A directory moved in is
+    // reported as `docs` alone, which names no tracked file and opens no window.
+    const staging = workspace();
+    writeFile(staging, "docs/notes.md", "one\n");
+    renameSync(join(staging, "docs"), join(root, "docs"));
     const captures: string[] = [];
     const { watchFactory, armed } = armedWatchFactory();
     const registry = track(
@@ -371,11 +378,11 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
       }),
     );
     registry.ensureWatched(root);
-    // Armed first: a write that lands before the watch exists opens no window, and `captures`
-    // would then be empty for a reason that has nothing to do with eviction.
+    // Armed first: a write made before the watch is live can produce no event and open no window,
+    // and `captures` would then be empty for a reason that has nothing to do with eviction.
     await armed();
 
-    writeFileSync(join(root, "notes.md"), "one\ntwo\n");
+    writeFileSync(join(root, "docs", "notes.md"), "one\ntwo\n");
     // Wait long enough for the change to be observed and the window to be OPEN, but not to fire.
     await Bun.sleep(150);
     // The allocator demotes through the same safe close path as explicit lifecycle eviction.
