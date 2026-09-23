@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **An artifact whose name has a space, an accent, or a character such as `+`, `#` or `%` now
+  opens.** Clicking it in the tree, or opening the link glosa prints for it, answered "This
+  artifact couldn't be opened", because the daemon never undid the escaping the app applied to the
+  name. That covered every such path, including any non-ASCII name. A Markdown or text file with
+  one of these names now also saves from Edit mode, and a rendered HTML preview embeds.
+
 ## [0.1.0-alpha.31] — 2026-09-23
 
 ### Added

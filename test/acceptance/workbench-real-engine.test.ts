@@ -262,6 +262,8 @@ interface PaneState {
   liveModeBar: boolean;
   modeLabel: string;
   classFError: string;
+  text: string;
+  errorTitle: string;
 }
 
 interface PageState {
@@ -291,6 +293,10 @@ const pageStateExpression = (slug: string) => `(() => {
       liveModeBar: Boolean(bar) && bar.offsetParent !== null,
       modeLabel: pane.querySelector('.glosa-pane-mode-label')?.textContent ?? '',
       classFError: pane.querySelector('.glosa-classf-status[data-error="true"]')?.textContent ?? '',
+      // issue #337: what the pane actually rendered — the ONE observation that distinguishes
+      // "opened the right document" from "opened nothing" or "opened the wrong one".
+      text: pane.querySelector('.glosa-content')?.textContent ?? '',
+      errorTitle: pane.querySelector('.glosa-empty-title')?.textContent ?? '',
     };
   });
   let layout = null;
@@ -580,6 +586,20 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
     if (!found) throw new Error(`no navigator row for ${path}`);
   };
 
+  /** issue #337: a document under `My Folder/` starts with its ancestor collapsed (only the
+   * INITIALLY-open artifact's ancestors auto-expand) — click the folder row first, same
+   * synchronous DOM toggle `openFromNavigator` relies on for files. */
+  const expandFolderInTree = async (client: CdpClient, dirPath: string) => {
+    const found = await client.evaluate<boolean>(`(() => {
+      const item = document.querySelector('[data-node-id="d:' + ${JSON.stringify(dirPath)} + '"]');
+      const row = item?.querySelector('.glosa-tree-row');
+      if (!item || !row) return false;
+      if (item.getAttribute('aria-expanded') !== 'true') row.click();
+      return true;
+    })()`);
+    if (!found) throw new Error(`no navigator directory row for ${dirPath}`);
+  };
+
   /** Moves the ACTIVE tab into a tab group of its own, through the same single-pointer menu
    * command WCAG 2.2 SC 2.5.7 requires glosa to offer beside the drag (§9). */
   const moveActiveTabToNewGroup = async (client: CdpClient, path: string) => {
@@ -743,6 +763,81 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       // A second `load` is what `classf-viewer.js` reads as the document navigating itself; that
       // path ends in a torn-down frame and this message. Its absence is the reader-facing half.
       expect(paneFor(moved, PREVIEW)?.classFError).toBe("");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // issue #337's own path: an artifact whose name needs percent-encoding. Cost kept small — ONE
+  // browser process, THREE tabs total (one initial + two fragment-form navigations), and the
+  // non-ASCII document is exercised by tree click only: it has no space, so the `+`/`%20`
+  // distinction the OTHER two tabs exist to prove is not a distinct case for it (that decode path
+  // is already pinned by the GET name-table unit coverage in http-routes.test.ts).
+  test(
+    "issue #337: a document in a spaced folder, and a non-ASCII-named document, open and render — by tree click, and (the spaced one) by both the `+` and `%20` fragment forms",
+    async () => {
+      const FOLDER_PATH = "My Folder/doc.md";
+      const FOLDER_TEXT = "This document lives inside a folder whose name has a space.";
+      const NON_ASCII_PATH = "café.md";
+      const NON_ASCII_TEXT = "This document's own name is not ASCII.";
+      mkdirSync(join(workspaceRoot, "My Folder"), { recursive: true });
+      writeFileSync(join(workspaceRoot, "My Folder", "doc.md"), `# Folder doc\n\n${FOLDER_TEXT}\n`);
+      writeFileSync(join(workspaceRoot, "café.md"), `# Café\n\n${NON_ASCII_TEXT}\n`);
+
+      const { browser, cdpPort } = await launchBrowser();
+
+      // (a) tree click, both documents, one tab.
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "initial open");
+
+      await expandFolderInTree(tab, "My Folder");
+      await openFromNavigator(tab, FOLDER_PATH);
+      const folderByClick = await waitForState(
+        tab,
+        "folder doc opened by tree click",
+        // `active` flips synchronously on open, before the fetched content mounts — wait for the
+        // text itself so this doesn't pass on a still-empty pane.
+        (state) => paneFor(state, FOLDER_PATH)?.active === true && paneFor(state, FOLDER_PATH)!.text.length > 0,
+      );
+      expect(paneFor(folderByClick, FOLDER_PATH)?.text).toContain(FOLDER_TEXT);
+      expect(paneFor(folderByClick, FOLDER_PATH)?.errorTitle).toBe("");
+
+      await openFromNavigator(tab, NON_ASCII_PATH);
+      const nonAsciiByClick = await waitForState(
+        tab,
+        "non-ASCII doc opened by tree click",
+        (state) => paneFor(state, NON_ASCII_PATH)?.active === true && paneFor(state, NON_ASCII_PATH)!.text.length > 0,
+      );
+      expect(paneFor(nonAsciiByClick, NON_ASCII_PATH)?.text).toContain(NON_ASCII_TEXT);
+      expect(paneFor(nonAsciiByClick, NON_ASCII_PATH)?.errorTitle).toBe("");
+
+      // (b) the `+` form `glosa_present` emits (URLSearchParams' space spelling).
+      const plusUrl = `${origin()}/#t=${TOKEN}&w=${slug}&a=My+Folder%2Fdoc.md&surface=document&mode=review`;
+      const plusTab = await openTab(browser, cdpPort, plusUrl);
+      const afterPlus = await waitForState(
+        plusTab,
+        "`+`-form fragment open",
+        (state) => state.screens.includes("ready") && Boolean(paneFor(state, FOLDER_PATH)?.text.length),
+      );
+      expect(paneFor(afterPlus, FOLDER_PATH)?.text).toContain(FOLDER_TEXT);
+      expect(paneFor(afterPlus, FOLDER_PATH)?.errorTitle).toBe("");
+      // After the app rewrites its own fragment (scrubSecrets strips `t=`), the view is still
+      // this document — the rewrite is a hash replace, never a navigation away from it.
+      const plusHash = new URLSearchParams((await plusTab.evaluate<string>("location.hash")).slice(1));
+      expect(plusHash.get("a")).toBe(FOLDER_PATH);
+      expect(plusHash.has("t")).toBe(false);
+
+      // (c) the `%20` form — same artifact, the other space spelling.
+      const percentUrl = `${origin()}/#t=${TOKEN}&w=${slug}&a=My%20Folder%2Fdoc.md&surface=document&mode=review`;
+      const percentTab = await openTab(browser, cdpPort, percentUrl);
+      const afterPercent = await waitForState(
+        percentTab,
+        "`%20`-form fragment open",
+        (state) => state.screens.includes("ready") && Boolean(paneFor(state, FOLDER_PATH)?.text.length),
+      );
+      expect(paneFor(afterPercent, FOLDER_PATH)?.text).toContain(FOLDER_TEXT);
+      expect(paneFor(afterPercent, FOLDER_PATH)?.errorTitle).toBe("");
+      const percentHash = new URLSearchParams((await percentTab.evaluate<string>("location.hash")).slice(1));
+      expect(percentHash.get("a")).toBe(FOLDER_PATH);
     },
     TEST_TIMEOUT_MS,
   );

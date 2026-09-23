@@ -235,8 +235,8 @@ reorder, R7).
 - **404 not-found** — unknown `:slug`.
 
 ### 5.4 `GET /w/:slug/artifacts/:path`
-Bearer required. `:path` is workspace-relative (§6 confinement). Query param `?render=html`
-requests server-rendered HTML with `data-line` stamps for class R; omit for raw source.
+Bearer required. `:path` is workspace-relative and follows §6's encoding rule and confinement.
+Query param `?render=html` requests server-rendered HTML with `data-line` stamps for class R; omit for raw source.
 Class F artifacts return metadata only — actual HTML is never served through this route (§7).
 - **200** (class R, `?render=html`)
 ```json
@@ -256,15 +256,16 @@ offering Edit at all.
 { "source_path": "output/document/rendered-preview-2026-07-20.html", "source_sha256": "…",
   "class": "F", "manifest_path": "output/document/chunks-2026…/manifest.json" }
 ```
-- **400 invalid-path** — path escapes workspace root or fails the tracked-artifact rule.
-- **404 not-found** — path within workspace but no such artifact.
+- **400 invalid-path** — the path is malformed or escapes the workspace root (§6).
+- **404 not-found** — path within workspace but no such artifact (including a file the
+  tracked-artifact rule excludes).
 
 ### 5.4a `PUT /w/:slug/artifacts/:path`
-Bearer required, Origin-gated (state-changing route, per R5). `:path` is workspace-relative (§6
-confinement). Body is bare source text, or JSON `{"content": "<source>"}`; either form is accepted,
-and an empty body is rejected. Optional `If-Match: <source_sha256>` header requests optimistic
-concurrency: when present and it no longer matches what is on disk, the write is refused rather
-than applied — this is what the Edit-mode stale-save dialog keys on (R6). The comparison is over
+Bearer required, Origin-gated (state-changing route, per R5). `:path` is workspace-relative and
+follows §6's encoding rule and confinement. Body is bare source text, or JSON `{"content": "<source>"}`; either form is accepted, and an empty body is rejected. Optional
+`If-Match: <source_sha256>` header requests optimistic concurrency: when present and it no longer
+matches what is on disk, the write is refused rather than applied — this is what the Edit-mode
+stale-save dialog keys on (R6). The comparison is over
 `source_sha256`, which normalizes `\r\n`→`\n` before hashing, so a disk change that alters only a
 file's line endings does NOT refuse the write; the body is still written verbatim (A4 §F05, #251).
 - **200**
@@ -272,6 +273,7 @@ file's line endings does NOT refuse the write; the body is still written verbati
 { "source_path": "07_manuscript.md", "source_sha256": "…", "class": "R",
   "content": "<saved source>", "rendered_html": "<div data-line=\"1\">…</div>" }
 ```
+- **400 invalid-path** — the path is malformed or escapes the workspace root (§6).
 - **400 validation-failed** — request body is empty.
 - **404 not-found** — path within workspace but no such artifact.
 - **409 source-changed** — `If-Match`'s `source_sha256` no longer matches what is on disk; nothing
@@ -726,8 +728,12 @@ Cancellation, replacement, credential revocation, and daemon shutdown release it
 stops refreshes rather than immediately ending the session; existing lease expiry remains the truth.
 
 ### 5.13 `POST /w/:slug/capability/:artifactPath`
-Bearer required, Origin-gated. Issues a capability URL for a class-F artifact. Full mechanics in §7.
-- **200** `{ "url": "http://127.0.0.1:4647/doc/<token>/<artifactBasename>", "expires_in_s": 600 }`
+Bearer required, Origin-gated. `:artifactPath` follows §6's encoding rule and confinement. Issues
+a capability URL for a class-F artifact. Full mechanics in §7.
+- **200** `{ "url": "http://127.0.0.1:4647/doc/<token>/<artifactBasename>", "nonce": "…",
+  "expires_in_s": 600 }`. `<artifactBasename>` in `url` is percent-encoded, so a browser requesting
+  exactly that URL never mangles or truncates a space, `#` or `?` in the name. `nonce` is the
+  bridge handshake secret (A3 §2).
 - **400 invalid-path** — path confinement failure, or artifact is not class F.
 - **404 not-found** — no such artifact.
 
@@ -1085,14 +1091,22 @@ wire formats remain in provider packages.
   `503 dictation-credential-unavailable`, and `504 dictation-timeout`; details never forward provider
   response bodies or credentials. Retry is a new foreground user action.
 
-## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`)
+## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`/`<path...>`)
 
-1. Reject any path containing a literal `..` segment, a NUL byte, or a leading `/` (must be
-   workspace-relative) before touching the filesystem — `400 invalid-path`.
+**Encoding.** A path capture in a URL is percent-encoded per RFC 3986, one `/`-delimited segment at
+a time (what `encodeURIComponent` per segment produces). The daemon decodes it exactly once, before
+step 1. A malformed escape (a lone `%`, a truncated or invalid UTF-8 sequence) is a path refusal,
+never a 500: `400 invalid-path` on the main listener, the plain `404` of §7 on the class-F
+listener. Because decoding happens once, `%252e%252e` names the literal file `%2e%2e`, not `..`.
+
+1. Before touching the filesystem, reject an empty path, a path longer than 4096 characters or
+   with more than 64 segments, a leading `/` (must be workspace-relative), any ASCII control
+   character (C0, including NUL, or DEL), and any `..` segment — `400 invalid-path`.
 2. Resolve `path.resolve(workspaceRoot, requestedPath)`.
-3. `fs.realpath()` both the resolved path and `workspaceRoot`; the resolved realpath MUST start
-   with `workspaceRoot realpath + path.sep` — this is what catches a symlink inside the
-   workspace pointing outside it (realpath-confine, per F24). Fails → `400 invalid-path`.
+3. `fs.realpath()` `workspaceRoot` and the resolved path, or, when the leaf does not exist yet, its
+   nearest existing ancestor. The result MUST equal the root's realpath or start with it plus
+   `path.sep`. This is what catches a symlink inside the workspace pointing outside it
+   (realpath-confine, per F24). Fails → `400 invalid-path`.
 4. Re-apply the tracked-artifact rule (R1 include/exclude globs, size ≤2 MB) — a path that
    resolves fine but isn't a tracked artifact is `404 not-found`, not `400`, since path
    validity and artifact-membership are different failure classes worth distinguishing in logs.
@@ -1104,10 +1118,11 @@ Locked decisions (F02/F03) require: no Bearer token ever reaches the class-F ori
 from a **separate loopback port** with no ambient credential.
 
 - The daemon runs a second `Bun.serve` listener on a second port (`GLOSA_CLASSF_PORT`, default
-  `<GLOSA_PORT>+1`), bound `127.0.0.1` only, serving `GET /doc/:token/<path...>`.
+  `<GLOSA_PORT>+1`), bound `127.0.0.1` only, serving `GET /doc/:token/<path...>`. `<path...>` follows §6's
+  encoding rule.
 - `POST /w/:slug/capability/:artifactPath` (§5.13, main origin, Bearer-authed and Origin-gated) mints a token:
   256-bit random, stored server-side in an in-memory map
-  `token → {slug, artifactDirRealPath, artifactBasename, expiresAt}`. **TTL 600s (10 min).**
+  `token → {slug, artifactDirRealPath, artifactBasename, nonce, expiresAt}`. **TTL 600s (10 min).**
   Restart invalidates all tokens (in-memory only — acceptable for a local tool).
 - **The capability is directory-scoped and multi-request, NOT single-use.** This is required
   for correctness: a class-F document (e.g. rendered-preview HTML) loads sibling assets — its own
@@ -1129,7 +1144,7 @@ from a **separate loopback port** with no ambient credential.
   source changed), the SPA discards the old iframe and requests a fresh capability for a fresh
   iframe; the old token simply expires. No renewal, no cross-origin state sync beyond mint.
 - This mint route only ever serves class-F artifacts; a capability request for a class-R path is
-  `400 invalid-path` (§5.12) — class R is served in-band via §5.4, never through this listener.
+  `400 invalid-path` (§5.13) — class R is served in-band via §5.4, never through this listener.
 
 ## 8. SSE protocol & resync (F17)
 

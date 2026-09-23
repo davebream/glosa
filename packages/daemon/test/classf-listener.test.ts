@@ -178,6 +178,99 @@ describe("class-F listener — real socket", () => {
     expect(res.status).toBe(404);
   });
 
+  // --- issue #337: the class-F listener decodes `<path...>` exactly once, before confinement,
+  // AND mint percent-encodes the basename it writes into `url` — both sides of the same fix ---
+
+  const CLASSF_ENCODING_NAME_TABLE: Array<[label: string, name: string]> = [
+    ["space", "my page.html"],
+    ["hash", "a#b.html"],
+    ["question mark", "a?b.html"],
+    ["non-ASCII (NFC)", "café.html"],
+  ];
+
+  for (const [label, name] of CLASSF_ENCODING_NAME_TABLE) {
+    test(`class-F document whose basename needs percent-encoding (${label}): mint's url is fetchable AS-IS and serves the document WITH the bridge`, async () => {
+      writeFileSync(join(root, name), "<html><body><p>hi</p></body></html>");
+      const { url, nonce } = await mint(encodeURIComponent(name));
+      expect(url).not.toContain(" ");
+      const res = await fetch(url);
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).toContain("<p>hi</p>");
+      expect(body).toContain(JSON.stringify(nonce)); // bridge injected → isDocument saw the DECODED path
+    });
+  }
+
+  test("class-F sibling asset requested by its browser-encoded name (café.png) is served byte-identical, no bridge", async () => {
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body>doc</body></html>");
+    writeFileSync(join(root, "café.png"), "not-really-a-png");
+    const { url } = await mint("rendered-preview.html");
+    const siblingUrl = url.replace(/rendered-preview\.html$/, encodeURIComponent("café.png"));
+    const res = await fetch(siblingUrl);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("not-really-a-png");
+  });
+
+  test("mint's returned url percent-encodes a basename with a space, `#` and `?` — never a raw one", async () => {
+    writeFileSync(join(root, "my page #1?.html"), "<html><body>hi</body></html>");
+    const { url } = await mint(encodeURIComponent("my page #1?.html"));
+    expect(url).not.toContain(" ");
+    expect(url).not.toContain("#");
+    expect(url).not.toContain("?");
+    expect(url).toMatch(/\/doc\/[0-9a-f]{64}\/my%20page%20%231%3F\.html$/);
+  });
+
+  test("[issue #337 adversarial] encoded NUL in the class-F path → 404, never 500", async () => {
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body>hi</body></html>");
+    const { url } = await mint("rendered-preview.html");
+    const token = url.split("/doc/")[1]!.split("/")[0];
+    const res = await fetch(classFUrl(`/doc/${token}/notes%00.html`));
+    expect(res.status).toBe(404);
+  });
+
+  test("[issue #337 adversarial] a malformed escape (lone %) in the class-F path → plain 404, never 500/thrown URIError", async () => {
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body>hi</body></html>");
+    const { url } = await mint("rendered-preview.html");
+    const token = url.split("/doc/")[1]!.split("/")[0];
+    const res = await fetch(classFUrl(`/doc/${token}/notes%.html`));
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Type")).not.toContain("application/problem+json");
+  });
+
+  test("[issue #337 adversarial] truncated/invalid UTF-8 escapes in the class-F path → plain 404, never 500", async () => {
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body>hi</body></html>");
+    const { url } = await mint("rendered-preview.html");
+    const token = url.split("/doc/")[1]!.split("/")[0];
+    const truncated = await fetch(classFUrl(`/doc/${token}/notes%E0%A4%A.html`));
+    expect(truncated.status).toBe(404);
+    const invalidByte = await fetch(classFUrl(`/doc/${token}/notes%FF.html`));
+    expect(invalidByte.status).toBe(404);
+  });
+
+  test("[issue #337 adversarial] double-encoded %252e%252e is decoded ONCE: it serves the sibling literally named `%2e%2e` (a second decode would ask for `..` and 404)", async () => {
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body>hi</body></html>");
+    writeFileSync(join(root, "%2e%2e"), "literal-sibling");
+    const { url } = await mint("rendered-preview.html");
+    const token = url.split("/doc/")[1]!.split("/")[0];
+    const res = await fetch(classFUrl(`/doc/${token}/%252e%252e`));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("literal-sibling");
+  });
+
+  test("[issue #337 adversarial] `..%2F` inside ONE segment decodes to `../` and is refused by confinement → 404, the file outside the minted directory is never served", async () => {
+    // Unlike `%2e%2e/` above, the URL parser leaves this segment alone, so decoding is what turns
+    // it into traversal. Before decoding existed it was a harmless literal name; now only the
+    // minted-directory confinement stands between it and `secret.txt`.
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, "docs", "rendered-preview.html"), "<html><body>hi</body></html>");
+    writeFileSync(join(root, "secret.txt"), "outside-the-minted-directory");
+    const { url } = await mint(`docs/rendered-preview.html`);
+    const token = url.split("/doc/")[1]!.split("/")[0];
+    const res = await fetch(classFUrl(`/doc/${token}/..%2Fsecret.txt`));
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("outside-the-minted-directory");
+  });
+
   test("[A3 §5 #4] a symlink inside the artifact dir pointing outside it → 404, contents never read", async () => {
     const outside = mkdtempSync(join(tmpdir(), "glosa-classf-outside-"));
     writeFileSync(join(outside, "secret.txt"), "top secret");

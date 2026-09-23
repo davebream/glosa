@@ -1552,7 +1552,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(742);
+    ).toBe(744);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1998,7 +1998,10 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // again — the heading's definition sits at the foot of the file, so it is a reference link:
   // `link reference definition inlined` 27 → 28, `ablated` 43 → 44, and nothing else moved.
   // `shipped` held at 1/1 and `missed` at 0.
-  const BLOCKS = 742;
+  // #337 reopens `## [Unreleased]` with a `### Fixed` heading and its list, the #333 shape: two
+  // blocks, one edit, 742 → 744 blocks / 674 → 675 edits. No release heading, no link definition,
+  // so the bookkeeping case: no numerator moved.
+  const BLOCKS = 744;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -2034,7 +2037,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 49 of 742 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 49 of 744 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2096,7 +2099,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // to 4.9-5.1s run alone, and the unpartitioned CI suite runs it about three times slower than that:
   // 15.3s on main at d3a3626, which timed out against 15s. The measurements did not change; only the
   // runner's time limit did, and every edit is still swept.
-  test("metrics 2 and 3 — 1 dishonest write of 674; the guard fires on it and, ablated, on 44", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 675; the guard fires on it and, ablated, on 44", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2178,7 +2181,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
       // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
       // restores. `edits` moved with BLOCKS each time documentation grew the corpus
-      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591 → 597 → 605 → 615 → 658 → 668 → 673 → 674) — bookkeeping, not drift, since `shipped` held steady across every
+      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591 → 597 → 605 → 615 → 658 → 668 → 673 → 674 → 675) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves. 488 → 500 is this PR's own CHANGELOG/README entries (see the BLOCKS
       // comment above). The last step is the #305/#311 + #310 merge, measured on the merged corpus
       // rather than summing the two branches' separate re-baselines (608 and 612), neither of which
@@ -2187,7 +2190,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // link definition, which the ablated path re-serializes and the shipped path restores, so
       // `shipped` held at 1/1 and metric 1's only per-cause move was the reference-link one.
     ).toEqual({
-      edits: 674,
+      edits: 675,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 44, fired: 44 },
     });
