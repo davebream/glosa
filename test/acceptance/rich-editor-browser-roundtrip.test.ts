@@ -32,6 +32,14 @@ const MAIN_PATH = new URL("../../packages/cli/src/main.ts", import.meta.url).pat
 const TOKEN = "rich-editor-browser-roundtrip-test-token-0123456789abcdef";
 const TEST_TIMEOUT_MS = 30_000;
 
+/** The narrowest viewport a launched page may report. The window is 1280px; anything under this
+ * means the client is attached to something other than the tab (see launchBrowser). */
+const VIEWPORT_FLOOR = 1000;
+
+/** The narrowest active pane that counts as laid out: the 1280px window less the 232px navigator
+ * leaves about 1048px, and dockview's unsized first frame is about 100px (see waitForLaidOutPane). */
+const LAID_OUT_PANE_FLOOR = 600;
+
 const CHROMIUM_CANDIDATES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -453,6 +461,9 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       executablePath,
       "--headless=new",
       `--remote-debugging-port=${cdpPort}`,
+      // A real window, as the other real-engine suites give theirs. The width is what every layout
+      // assertion below is measured in; see VIEWPORT_FLOOR for the check that it is actually used.
+      "--window-size=1280,900",
       "--disable-background-networking",
       "--disable-component-update",
       "--disable-default-apps",
@@ -491,18 +502,47 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       }
       if (!versionEndpoint) throw new Error("Chromium did not open its CDP endpoint before the deadline");
 
-      const targets: Array<{ webSocketDebuggerUrl: string }> = await (
+      const targets: Array<{ type?: string; url?: string; webSocketDebuggerUrl: string }> = await (
         await fetch(`http://127.0.0.1:${cdpPort}/json/list`, { signal: AbortSignal.timeout(targetFetchTimeoutMs) })
       ).json();
-      const target = targets[0];
-      if (!target) throw new Error("Chromium opened no CDP target");
+      // The TAB, by type, never by position. /json/list also lists Chromium's own browser-UI
+      // surfaces, and in current builds the first entry is one of them: the omnibox popup
+      // (`chrome://omnibox-popup.top-chrome/`). Taking `targets[0]` navigated that popup to the app,
+      // so every test in this file ran in a renderer whose viewport was 1px wide. The pane then sat
+      // at its 360px floor, or at 100px before the floor applied, and whichever of the two a test
+      // measured in decided whether it passed: a paragraph "moved" 145.78px (five extra lines at
+      // 100px), a scroll position "changed" when the page shrank from 13,227px to 3,612px, and an
+      // editor lost focus to the relayout. The other real-engine suites never hit this because they
+      // create their own tab with Target.createTarget and connect to it by id.
+      const target = targets.find((candidate) => candidate.type === "page");
+      if (!target) {
+        throw new Error(
+          `Chromium opened no page target: ${JSON.stringify(targets.map(({ type, url }) => ({ type, url })))}`,
+        );
+      }
 
       client = await CdpClient.connect(target.webSocketDebuggerUrl);
       await client.send("Page.enable");
       await client.send("Runtime.enable");
+      // The tab has to be the visible, focused page a reader would have. Headless Chromium reports
+      // this one `visibilityState: "hidden"`, and a hidden page never runs requestAnimationFrame, so
+      // every helper below that waits two frames for EditorView's MutationObserver to flush waited
+      // forever and died on the 20s evaluate timeout. And `:focus` does not match in a window that
+      // was never focused (`activeElement` set, `document.hasFocus()` false), so focus-drawn marks
+      // are never painted. The omnibox popup this harness used to drive was visible, which is why
+      // none of this showed until the tab was the target.
+      await client.send("Page.bringToFront");
+      await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
       // Module tests need only the origin. Route tests supply a complete deep link so the real
       // shell, bootstrap and viewer are composed instead of mounted independently in the test.
       await client.navigate(opts.initialUrl ?? `http://127.0.0.1:${port}/`);
+      // Loud, at launch, rather than a random red in whichever layout assertion runs first: if the
+      // client is not driving a real tab at the window size above, nothing measured here means
+      // anything. This is the check that goes red if the target selection above regresses.
+      const viewport = await client.evaluate<number>("(async () => innerWidth)()");
+      if (viewport < VIEWPORT_FLOOR) {
+        throw new Error(`the page under test is ${viewport}px wide, not a real window (floor ${VIEWPORT_FLOOR}px)`);
+      }
     } catch (error) {
       client?.close();
       const { out, err } = await terminateAndDrainChrome();
@@ -523,6 +563,37 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     })}`;
   }
 
+  /**
+   * Waits until the active pane is drawn at its real size, and returns only then.
+   *
+   * dockview renders each pane in an overlay that it attaches `visibility: hidden` and unsized, and
+   * positions on the NEXT animation frame (vendor/dockview.js, `attach`, then requestAnimationFrame,
+   * then left/top/width/height). Until that frame the pane lays its text out in a column about 100px
+   * wide and 64px tall. A reader never sees it, since the overlay is hidden, but a test that measures
+   * in it measures nonsense, and seeing the text is no signal because the text is there already.
+   *
+   * With a visible tab that frame comes almost at once, and ten runs of the three tests that call
+   * this passed without it. It was fatal while the tab was hidden (see launchBrowser), when no frame
+   * came at all. It stays as the ordering a layout assertion needs, stated rather than left to frame
+   * timing on a loaded runner.
+   */
+  async function waitForLaidOutPane(client: CdpClient) {
+    const state = await client.evaluate<{ laidOut: boolean; width: number }>(`(async () => {
+      const pane = () => document.querySelector('.glosa-pane[data-active="true"]') ?? document.querySelector(".glosa-pane");
+      const laidOut = () => {
+        const p = pane();
+        if (!p) return false;
+        const overlay = p.closest(".dv-render-overlay");
+        return (!overlay || overlay.style.visibility !== "hidden") && p.getBoundingClientRect().width >= ${LAID_OUT_PANE_FLOOR};
+      };
+      for (let i = 0; i < 400 && !laidOut(); i++) await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { laidOut: laidOut(), width: Math.round(pane()?.getBoundingClientRect().width ?? 0) };
+    })()`);
+    if (!state.laidOut)
+      throw new Error(`the active pane was never laid out at its real size: ${JSON.stringify(state)}`);
+  }
+
   async function waitForRoute(client: CdpClient, surface: string, text: string) {
     let state: any;
     for (let attempt = 0; attempt < 120; attempt++) {
@@ -539,7 +610,10 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
             readLocked: root?.getAttribute('data-preview-lock') === 'true',
             hash: location.hash, paired: localStorage.getItem('glosa_token') !== null };
         })()`);
-        if (state.surface === surface && state.text.includes(text)) return state;
+        if (state.surface === surface && state.text.includes(text)) {
+          await waitForLaidOutPane(client);
+          return state;
+        }
       } catch {
         // The previous execution context disappears during the guarded route reload.
       }
@@ -640,8 +714,13 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         let scroller = content;
         while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
         if (!scroller) return { ok: false, reason: "nothing on the page scrolls" };
+        // Focus first, without scrolling, then scroll. The other way round, focus() scrolled the page
+        // back to the link (the second block), so at any width that lays the page out properly the
+        // "scrolled" state under test was scrollTop 0. It only held while the harness measured a
+        // 360px-wide pane (see launchBrowser), where the link sat far enough down to leave some
+        // scroll behind.
+        link.focus({ preventScroll: true });
         scroller.scrollTop = 200;
-        link.focus();
         window.__morph = { kept, link, scroller, scrollTop: scroller.scrollTop };
         return { ok: true, scrollTop: scroller.scrollTop, focused: document.activeElement === link };
       })()`);
@@ -1117,6 +1196,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
 
         const { client } = await launchBrowser({ initialUrl: documentUrl("document", path, "edit") });
         cdp = client;
+        await waitForLaidOutPane(client);
 
         const moved: any = await client.evaluate(`(async () => {
       const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -1209,13 +1289,11 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         const path = "hand.md";
         writeFileSync(join(workspaceRoot, path), "A paragraph to put a caret in.\n");
 
+        // launchBrowser turns on focus emulation: without it `:focus` never matches in headless, the
+        // `:has(.ProseMirror:focus)` mark is never painted, and this reads a transparent ::before.
         const { client } = await launchBrowser({ initialUrl: documentUrl("document", path, "edit") });
         cdp = client;
-        // `:focus` does not match in a headless page whose window was never focused — `activeElement`
-        // is set, `document.hasFocus()` is false, and the `:has(.ProseMirror:focus)` mark is simply
-        // never painted. Without this the test reads a transparent ::before and fails for a reason
-        // that has nothing to do with the colour under test.
-        await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+        await waitForLaidOutPane(client);
 
         const mark: any = await client.evaluate(`(async () => {
       const content = () => document.querySelector(".glosa-content");
@@ -1927,7 +2005,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
             "    // the elapsed-time assertion below would never be REACHED and could not fail. Answering",
             "    // late is what makes the ablation land on the assertion instead.",
             "    await Bun.sleep(6000);",
-            "    return Response.json([{ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/fake` }]);",
+            "    return Response.json([{ type: 'page', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/fake` }]);",
             "  },",
             "});",
             "",
