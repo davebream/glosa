@@ -10,8 +10,8 @@
 // before the watch was reported in most trials, and under heavy file churn a fixture's creation
 // events arrived 2.3 s after the watch started, behind a probe written later. No barrier that waits
 // for a later write can rule that out. A case that asserts silence therefore makes no write naming a
-// tracked file under the watched root before it asserts; `artifact-watcher.test.ts` moves its
-// tracked fixture in by renaming the fixture's directory, which is reported as the directory alone.
+// tracked file under the watched root before it asserts. Such cases move their tracked fixture in by
+// renaming the fixture's directory, which is reported as the directory alone.
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
