@@ -197,7 +197,7 @@ export function selectArrivals(seenIds, entries, { firstLoad = false } = {}) {
 }
 
 /**
- * Folds a range's client rects into one box per rendered line.
+ * Folds a range's client rects into one box per rendered line. A tab sits level with the first.
  *
  * `Range.getClientRects()` returns a rect per inline box, so a sentence crossing a `<strong>`
  * yields three rects on one line, and some engines add a zero-width rect at a wrap. Lines are
@@ -225,35 +225,65 @@ export function lineBoxes(rects, tolerance = 6) {
 }
 
 /**
- * The outline of a passage, as an SVG path: the shape a text selection has.
+ * Folds the vertical spans of a session's marks into the brackets that draw them.
  *
- * One line is a rectangle around the words. Several lines make a stepped band — the first line
- * runs from the first word to the column's right edge, the middle lines span the column, the last
- * runs from the column's left edge to the last word. Spanning the column rather than each line's
- * ragged end is what makes it read as ONE band instead of a stack of boxes.
+ * A mark is drawn at the level of the block, in the gutter, because an outline around words that
+ * start and stop mid-line has only the line's leading to live in: it ran through the underline on
+ * the line above and its label sat on that line's words. The block is the unit the eye returns to.
+ * Two requests whose blocks overlap or touch share one bracket (a paragraph asked about twice is
+ * still one paragraph); each keeps its own tab. Spans come back top to bottom, each with the
+ * indexes of the requests it holds, in the order those were given.
  *
- * Returns `null` when there is nothing to draw, so a caller never paints an empty path.
- *
- * @param {Array<{left:number,right:number,top:number,bottom:number}>} lines from `lineBoxes`
- * @param {{left:number,right:number}} column the text column the passage sits in
+ * @param {Array<{top:number,bottom:number}>} spans one per request, in any order
+ * @returns {Array<{top:number,bottom:number,members:number[]}>}
  */
-export function bandPath(lines, column, { padX = 5, padY = 1 } = {}) {
-  if (!Array.isArray(lines) || lines.length === 0) return null;
-  const r = (n) => Math.round(n * 10) / 10;
-  const first = lines[0];
-  const last = lines[lines.length - 1];
-  const top = r(first.top - padY);
-  const bottom = r(last.bottom + padY);
-  if (lines.length === 1) {
-    return `M${r(first.left - padX)},${top}H${r(first.right + padX)}V${bottom}H${r(first.left - padX)}Z`;
+export function mergeSpans(spans) {
+  const order = (spans ?? [])
+    .map((span, index) => ({ ...span, index }))
+    .filter((span) => Number.isFinite(span.top) && Number.isFinite(span.bottom) && span.bottom > span.top)
+    .sort((a, b) => a.top - b.top || a.index - b.index);
+  const merged = [];
+  for (const span of order) {
+    const last = merged[merged.length - 1];
+    if (last && span.top <= last.bottom) {
+      last.bottom = Math.max(last.bottom, span.bottom);
+      last.members.push(span.index);
+    } else {
+      merged.push({ top: span.top, bottom: span.bottom, members: [span.index] });
+    }
   }
-  const colLeft = r(Math.min(column?.left ?? first.left, ...lines.map((l) => l.left)) - padX);
-  const colRight = r(Math.max(column?.right ?? first.right, ...lines.map((l) => l.right)) + padX);
-  const startX = r(first.left - padX);
-  const endX = r(last.right + padX);
-  // Clockwise from the first word: across the top, down the right edge to the last line, in to
-  // the last word, along the bottom, up the left edge to the first line, in to the first word.
-  return `M${startX},${top}H${colRight}V${r(last.top)}H${endX}V${bottom}H${colLeft}V${r(first.bottom)}H${startX}Z`;
+  for (const span of merged) span.members.sort((a, b) => a - b);
+  return merged;
+}
+
+/**
+ * The bracket beside a block, as an SVG path: `[`, with the ticks turned toward the text, so it
+ * reads as a proofreader's mark in the margin rather than a stripe down the page.
+ *
+ * Returns `null` when there is no height to span, so a caller never paints an empty path.
+ */
+export function bracketPath(top, bottom, x, { tick = 6 } = {}) {
+  if (![top, bottom, x].every(Number.isFinite) || bottom <= top) return null;
+  const r = (n) => Math.round(n * 10) / 10;
+  return `M${r(x + tick)},${r(top)}H${r(x)}V${r(bottom)}H${r(x + tick)}`;
+}
+
+/**
+ * Where each tab goes on a bracket: level with the line its words start on, pushed down just far
+ * enough that two tabs never overlap. Two questions that start on the same line would otherwise
+ * stack into one tab the reader could not tell apart, or click past.
+ *
+ * @param {number[]} wanted each tab's preferred top, in any order
+ * @returns {number[]} the tops to use, in the same order
+ */
+export function stackTabs(wanted, { size = 20, gap = 4 } = {}) {
+  const out = new Array(wanted.length);
+  let floor = Number.NEGATIVE_INFINITY;
+  for (const { top, index } of wanted.map((top, index) => ({ top, index })).sort((a, b) => a.top - b.top)) {
+    out[index] = Math.max(top, floor);
+    floor = out[index] + size + gap;
+  }
+  return out;
 }
 
 /**

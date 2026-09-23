@@ -67,8 +67,8 @@
   --hand: oklch(0.52 0.16 42); /* burnt vermilion, #b03f00 — ~5.8:1 on paper */
   --hand-hover: oklch(0.46 0.15 42);
   --pencil: oklch(0.56 0.01 65); /* warm graphite — ~4.6:1 on paper */
-  /* Session ink: blue-black, a session's MARK on the page (#308) — the band, its tab and label,
-     the notice's glyph, the question card's top rule. Never a button, never a panel fill, and a
+  /* Session ink: blue-black, a session's MARK on the page (#308) — the bracket, its tab and label,
+     the wash on its words, the notice's glyph, the question card's top rule. Never a button, never a panel fill, and a
      session's words stay printed in ordinary ink. ~8.9:1 on paper, so the label's paper-on-ink
      text clears AA with room. */
   --session: oklch(0.42 0.11 255);
@@ -2826,9 +2826,10 @@ input,
   pointer-events: none;
 }
 
-/* A session's tab stands where a hovered block would show its address, and says the address in its
-   accessible name; two labels on one spot help nobody. */
-.glosa-pane[data-mode="review"] .glosa-content > [data-session-mark]:not(h1, h2, h3, h4, h5, h6)::before {
+/* A session's bracket and tab stand where a block would show its address, and the tab says the
+   address in its accessible name; two marks on one spot help nobody. Headings too: a heading's
+   address is always shown, so it would sit on the bracket rather than only on hover. */
+.glosa-pane[data-mode="review"] .glosa-content > [data-session-mark]::before {
   display: none;
 }
 
@@ -3407,8 +3408,8 @@ input,
    trying to read their own sentence.
 
    So the mark goes BESIDE the words, as a 2px rule down the block's left. (A session's attention
-   used to be drawn the same way; since #308 it is a band in session ink, so the rule in the gutter
-   now belongs to the writer alone.) An open block is the passage the writer's own hand is on,
+   used to be drawn the same way. It now stands in the gutter again as a bracket in session ink, but
+   only outside Edit, and this rule exists only inside it, so the two never share the gutter.) An open block is the passage the writer's own hand is on,
    so it takes the hand. Position carries it, which means it survives greyscale and costs the page
    no enclosed area at all. */
 .glosa-run-editor {
@@ -3421,7 +3422,7 @@ input,
 }
 
 /* The formatting actions, bound to the gesture that asks for them. Out of flow and translated clear
-   of the line above the selection, so showing it never moves a word — the same rule a session's band and
+   of the line above the selection, so showing it never moves a word — the same rule a session's mark and
    the margin follow. It is chrome, so it is the one thing on this page that wears the interface's
    sans face rather than the manuscript's serif: these are controls, not text. */
 .glosa-selection-toolbar {
@@ -3478,7 +3479,7 @@ input,
   text-decoration: line-through;
 }
 
-/* Drawn the way a session's band is drawn — out of flow, so the words do not move by a pixel when
+/* Drawn the way a session's mark is drawn — out of flow, so the words do not move by a pixel when
    it appears. It sits in the gutter the manuscript's measure already leaves, never over the text.
 
    `--focus`, which is the hand, not `--primary`, which is the ink. The comment above this block has
@@ -3762,19 +3763,26 @@ input,
   -webkit-line-clamp: 1;
 }
 
-/* ---------- a session's mark on the page (#308) ----------
-   A band AROUND the words, in session ink, in its own layer. The reader's marks colour the words
-   (wash + underline); a session's mark outlines them, so a sentence carrying both still reads, and
-   the difference survives greyscale: outline + printed label + gutter tab, against wash + rule.
-   It is meant to be seen at once. A question holds its session until it is answered, so a mark
-   the reader has to hunt for costs more than one that is plain. */
-.glosa-bands {
+/* ---------- a session's mark on the page ----------
+   A proofreader's bracket in the gutter beside the block, in session ink, in its own layer, with a
+   tab on it at the line each request's words start on. The words themselves are marked through the
+   highlight registry: washed for a question, a dotted rule for a pointer. The reader's marks colour
+   the words in the hand (wash + solid rule); a session's are its own ink, and only a session's mark
+   has a bracket and a tab, so the difference survives greyscale.
+
+   The mark used to be an outline around the exact words, which had only the line's leading to live
+   in: it ran through the underline on the line above and its label sat on that line's words. The
+   gutter is empty, and the highlight needs no room, so neither collides with anything.
+
+   It is meant to be seen at once. A question holds its session until it is answered, so a mark the
+   reader has to hunt for costs more than one that is plain. */
+.glosa-session-marks {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 
-.glosa-band-svg {
+.glosa-session-svg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -3782,31 +3790,20 @@ input,
   overflow: visible;
 }
 
-.glosa-band {
+.glosa-session-bracket {
   fill: none;
   stroke: var(--session);
   stroke-width: 1.5;
-  stroke-linejoin: round;
-  transition:
-    fill var(--dur-fast) var(--ease-out),
-    stroke-width var(--dur-fast) var(--ease-out);
+  stroke-linejoin: miter;
+  transition: stroke-width var(--dur-fast) var(--ease-out);
 }
 
-.glosa-band[data-kind="question"]:not([data-overlapped]) {
-  fill: var(--session-wash);
-}
-
-.glosa-band[data-focused="true"],
-.glosa-band[data-hover] {
+.glosa-session-bracket[data-focused="true"],
+.glosa-session-bracket[data-hover] {
   stroke-width: 2;
 }
 
-.glosa-band[data-kind="question"][data-focused="true"]:not([data-overlapped]),
-.glosa-band[data-kind="question"][data-hover]:not([data-overlapped]) {
-  fill: var(--session-wash-strong);
-}
-
-.glosa-band-tab {
+.glosa-session-tab {
   position: absolute;
   width: 20px;
   height: 20px;
@@ -3826,20 +3823,16 @@ input,
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
-.glosa-band-tab:hover {
+.glosa-session-tab:hover {
   transform: scale(1.1);
 }
 
-.glosa-band-label {
+/* A note in the page's margin, beside the tab, printed in the mark's ink: it names the author of
+   the mark, not the words. Hidden by the pane where there is no margin to print it in. */
+.glosa-session-by {
   position: absolute;
-  /* Rides the band's top edge, mostly above it: the line's own leading is only a few pixels, and a
-     label centred on the edge sat on the ascenders of the words it labels. */
-  transform: translateY(-62%);
-  margin-left: var(--space-2);
-  padding: 2px 6px;
-  border-radius: var(--radius-micro);
-  background: var(--session);
-  color: var(--bg);
+  transform: translate(-100%, -50%);
+  color: var(--session);
   font-family: var(--font-sans);
   font-size: var(--text-2xs);
   font-weight: 600;
@@ -3847,24 +3840,41 @@ input,
   white-space: nowrap;
 }
 
-.glosa-band-label[data-align="end"] {
-  transform: translate(-100%, -62%);
-  margin-left: calc(-1 * var(--space-2));
+.glosa-session-by[hidden] {
+  display: none;
 }
 
-/* The one draw-in an arrival gets. From an already-visible mark: the band is there from the first
-   frame and thickens once, so a reader who glances late still finds it. */
-@keyframes glosa-band-arrive {
+::highlight(glosa-session-asks) {
+  background-color: var(--session-wash);
+}
+
+/* Painted over the first wash rather than instead of it, so the two together are the strong wash
+   and the words of the request the reader is on stand out from the others without a third colour. */
+::highlight(glosa-session-lit) {
+  background-color: var(--session-wash);
+}
+
+/* A pointer says "look here" and holds nothing, so its words take a rule, not a fill. Dotted, and
+   in the session's ink, so it is never mistaken for the reader's solid vermilion underline. */
+::highlight(glosa-session-points) {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--session);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 4px;
+}
+
+/* The one draw-in an arrival gets. From an already-visible mark: the bracket is there from the
+   first frame and thickens once, so a reader who glances late still finds it. */
+@keyframes glosa-session-arrive {
   0% {
     stroke-width: 4;
-    fill: var(--session-wash-strong);
   }
   100% {
     stroke-width: 1.5;
   }
 }
 
-@keyframes glosa-band-tab-arrive {
+@keyframes glosa-session-tab-arrive {
   0% {
     transform: scale(1);
   }
@@ -3876,12 +3886,12 @@ input,
   }
 }
 
-.glosa-band[data-arrived] {
-  animation: glosa-band-arrive 1.2s var(--ease-out);
+.glosa-session-bracket[data-arrived] {
+  animation: glosa-session-arrive 1.2s var(--ease-out);
 }
 
-.glosa-band-tab[data-arrived] {
-  animation: glosa-band-tab-arrive 0.6s var(--ease-out);
+.glosa-session-tab[data-arrived] {
+  animation: glosa-session-tab-arrive 0.6s var(--ease-out);
 }
 
 /* ---------- the notice: a session is waiting on a passage the reader cannot see ---------- */
@@ -4025,7 +4035,7 @@ input,
 .glosa-agent-card {
   background: transparent;
   border: 0;
-  border-top: 1.5px solid var(--session); /* the same ink as its band: one object, two places */
+  border-top: 1.5px solid var(--session); /* the same ink as its bracket: one object, two places */
   border-radius: 0;
   padding: var(--space-2) 0 var(--space-3);
   display: grid;
@@ -4071,8 +4081,8 @@ input,
   overflow: hidden;
 }
 
-/* The quoted words carry their band's ink rather than the annotation wash: the same faint
-   session-ink ground the passage has in the manuscript, so the quote reads as "those words". */
+/* The quoted words carry their mark's wash rather than the annotation wash: the same faint
+   session-ink ground the words have in the manuscript, so the quote reads as "those words". */
 .glosa-agent-quote[role="button"] {
   cursor: pointer;
 }
@@ -6255,8 +6265,8 @@ input,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .glosa-band,
-  .glosa-band-tab,
+  .glosa-session-bracket,
+  .glosa-session-tab,
   .glosa-ask-layer .glosa-agent-card,
   .glosa-sidebar li button.glosa-starred-unstar,
   .glosa-starred-row,
@@ -6292,8 +6302,8 @@ input,
 
   .glosa-composer,
   .glosa-ask-layer .glosa-agent-card,
-  .glosa-band[data-arrived],
-  .glosa-band-tab[data-arrived] {
+  .glosa-session-bracket[data-arrived],
+  .glosa-session-tab[data-arrived] {
     animation: none;
   }
 
