@@ -15,8 +15,10 @@ import {
   type ProcessLauncher,
   type ProfileLaunchSpec,
   type SessionLaunchSpec,
+  type TurnSettings,
 } from "../../../daemon/src/agents/interface.ts";
 import { nativeProbe } from "../../../daemon/src/agents/probe.ts";
+import { managedToolsUnavailable, waitForManagedTools } from "../../../daemon/src/agents/managed-bootstrap.ts";
 
 // Structural boundary checked against the published 0.3.280 declarations. The optional commercial
 // SDK is loaded only from an explicitly installed/qualified runtime, never imported by core.
@@ -33,7 +35,7 @@ export interface ClaudeQuery extends AsyncIterable<unknown> {
     apiProvider?: string;
   }>;
   interrupt(): Promise<void>;
-  mcpServerStatus?(): Promise<{ name: string; status: string }[]>;
+  mcpServerStatus?(): Promise<{ name: string; status: string; tools?: { name: string }[] }[]>;
   close(): void;
 }
 interface SdkSpawnOptions {
@@ -71,6 +73,7 @@ export interface ClaudeSdk {
       strictMcpConfig: boolean;
       settings: { disableClaudeAiConnectors: boolean };
       persistSession: boolean;
+      systemPrompt?: { type: "preset"; preset: "claude_code"; append: string; snapshot: false };
       mcpServers?: Record<
         string,
         | { type: "http"; url: string; headers?: Record<string, string> }
@@ -296,6 +299,16 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         resume: spec.nativeId,
         includePartialMessages: true,
         persistSession: true,
+        ...(spec.mcp
+          ? {
+              systemPrompt: {
+                type: "preset" as const,
+                preset: "claude_code" as const,
+                append: spec.mcp.instructions,
+                snapshot: false,
+              },
+            }
+          : {}),
         // Project instructions are supplied by the native agent. User/global hooks, MCP and billing
         // configuration are not inherited. Additional sources require separate explicit consent.
         settingSources: [],
@@ -399,6 +412,30 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         );
       }
       const normalize = new ClaudeEventNormalizer(onEvent);
+      let prepared: string | undefined;
+      const prepareTurn = async (settings: TurnSettings) => {
+        if (active || closed) throw new ManagedAgentError("turn-active", "This runtime already accepted a turn.");
+        if (spec.mcp && !query.mcpServerStatus) throw managedToolsUnavailable();
+        if (spec.mcp)
+          await waitForManagedTools(
+            async () => {
+              const server = (await query.mcpServerStatus?.())?.find((item) => item.name === "glosa");
+              return {
+                state:
+                  !server || server.status === "pending"
+                    ? "pending"
+                    : server.status === "connected"
+                      ? "ready"
+                      : "failed",
+                tools: server?.tools?.map((tool) => tool.name) ?? [],
+              };
+            },
+            spec.mcp.requiredTools,
+            () => closed,
+          );
+        if (closed) throw new ManagedAgentError("run-fenced", "This run was stopped.");
+        prepared = JSON.stringify(settings);
+      };
       void (async () => {
         try {
           for await (const message of query) {
@@ -425,6 +462,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         }
       })();
       return {
+        prepareTurn,
         capabilities: {
           models: models.map((model) => ({
             id: model.value,
@@ -440,7 +478,9 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         },
         async startTurn(turn: AgentInput) {
           if (active || closed) throw new ManagedAgentError("turn-active", "This runtime already accepted a turn.");
+          if (prepared !== JSON.stringify(turn.settings)) await prepareTurn(turn.settings);
           active = true;
+          prepared = undefined;
           const content: unknown[] = [{ type: "text", text: turn.text }];
           for (const file of turn.attachments) {
             if (file.mime.startsWith("image/"))

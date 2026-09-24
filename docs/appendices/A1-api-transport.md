@@ -1317,6 +1317,11 @@ grant selects one active run/workspace/session. Only initialize, ping and scoped
 The grant cannot authenticate ordinary APIs. Revocation is rechecked before native writes and under
 the workspace mutex before bus mutations. Tool arguments never widen scope. `glosa_present` returns
 an already-paired workspace link after the ordinary tracked-artifact check; no browser is launched.
+Managed runs append Glosa workflow instructions through the native agent's instruction channel and
+verify that the native `glosa` MCP connection exposes the complete managed tool catalog before
+submitting the user's message. Startup failure records an unsent failed turn; retry requires a new
+explicit send. Stop cancels readiness before draining and verifying owned process exit. Native
+startup disconnects are not classified as uncertain submissions; uncertainty begins at dispatch.
 
 Managed chat panes and the Chats list share the existing workspace SSE connection in the SPA.
 The advisory `chats_changed` frame has no journal cursor or transcript payload; notifications

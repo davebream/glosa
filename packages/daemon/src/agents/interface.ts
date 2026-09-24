@@ -101,6 +101,8 @@ export interface AgentInput {
 }
 export interface ManagedConnection {
   capabilities: AgentCapabilities;
+  /** Configure the native thread and verify built-in tools before any user input is dispatched. */
+  prepareTurn?(settings: TurnSettings): Promise<void>;
   startTurn(input: AgentInput): Promise<void>;
   answer(id: string, choice: string, text?: string): Promise<void>;
   interrupt(): Promise<void>;
@@ -113,7 +115,7 @@ export interface SessionLaunchSpec extends ProfileLaunchSpec {
   generation: number;
   nativeId?: string;
   settings: TurnSettings;
-  mcp?: { url: string; grant: string };
+  mcp?: { url: string; grant: string; instructions: string; requiredTools: string[] };
   servers?: AgentMcpServer[];
 }
 export interface OwnedProcess {
@@ -196,6 +198,7 @@ export type ManagedAgentCode =
   | "runtime-install-timeout"
   | "runtime-unqualified"
   | "sdk-unavailable"
+  | "glosa-tools-unavailable"
   | "stale-chat"
   | "stale-decision"
   | "stale-draft"

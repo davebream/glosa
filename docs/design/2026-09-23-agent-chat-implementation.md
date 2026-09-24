@@ -367,6 +367,10 @@ Extend authorization at this new endpoint rather than passing a new grant into t
 
 For stdio MCP, launch a private bridge child under the same lifecycle owner. Give its grant through a private pipe/environment excluded from diagnostics, never in argv or model-visible tool metadata. Register only after the native runtime handshake is bound to the owned session. Revoke grants on stop, profile disable, token revocation, workspace lifecycle changes and daemon restart. No plugin installation into the user's main CLI configuration.
 
+Every foreground managed run supplies app-owned Glosa workflow guidance separately from the user's message. Claude appends it to the native `claude_code` preset with `snapshot: false`, so resumed conversations receive the current guidance; Codex supplies `developerInstructions` on both thread start and resume. The guidance covers presenting tracked documents, reading and acknowledging feedback, claims and fences, honest resolution, human-edit precedence, and the fact that Glosa MCP is already configured. This is behavioral guidance, not an authorization boundary; scoped grants and native permissions still enforce access.
+
+Before marking a turn as dispatched, prepare its native session and inspect the native MCP catalog. The built-in `glosa` server must be connected and expose every tool in the actual managed tool registry. Optional user servers do not determine built-in readiness. A bounded startup wait fails closed on an incomplete catalog, authentication failure or stalled status call. The turn records a readable **message not sent** error and can be sent again explicitly; Glosa does not replay it. Native startup disconnects are also unsent failures. Stop fences writers, closes the connection to cancel readiness, drains pending operations and proves owned process exit. A late readiness reply cannot submit a prompt.
+
 ### 7.3 Feedback routing and document changes
 
 Managed chat Send is a chat-journal turn, not an additional `conversation_message` inbox entry. That avoids double dispatch. Existing annotation/human-edit inbox entries remain authoritative in the workspace bus and route through the provider delivery interface to the exact managed runtime/session, using the existing reservation/ack protocol.
@@ -669,6 +673,12 @@ import, real manuscript run or T8 sign-off is claimed by the evidence below.
 - Requested turn settings remain separate from native-reported effective settings. Unreported effort
   stays unknown. Codex refuses a reported model mismatch before submitting the prompt. Account
   quota notifications display only reported values with observation time, not inferred balances.
+
+### Managed-tool startup verification (2026-09-24)
+
+The provider fixtures exercise native instruction fields, unchanged user messages, incomplete catalogs, native authentication failures, paginated catalogs and successful preparation before dispatch. Service tests cover unsent failure and explicit recovery, missing adapter readiness support, a stalled read, Stop/late-reply races, process release, and native startup disconnects. Negative controls temporarily removed catalog enforcement, adapter readiness enforcement and Claude prompt freshness, and restored the old drain-before-close ordering; each produced a named failing regression before source restoration.
+
+An additional offline witness used the installed Claude Code 2.1.280 / Agent SDK 0.3.280 and Codex 0.156.1 against a synthetic loopback MCP endpoint with the production tool schemas. Both reported all seven Glosa tools connected before any prompt. Separate empty profiles were used, external networking and reads of the main CLI/keychain directories were blocked, no model prompt or tool invocation was sent, and owned processes exited. This verifies native catalog wire behavior; it does not prove authenticated model behavior or satisfy the remaining release gates. An independent adversarial review found and rechecked the cancellation ordering, resumed Claude instruction freshness and native-error classification fixes.
 
 ### Still required before activation
 

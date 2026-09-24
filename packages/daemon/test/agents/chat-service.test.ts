@@ -9,6 +9,7 @@ import {
   type AgentInput,
   type ManagedAgentAdapter,
   ManagedAgentRegistry,
+  ManagedAgentError,
   type OwnedProcess,
   type ProcessLauncher,
 } from "../../src/agents/interface.ts";
@@ -16,6 +17,11 @@ import { ManagedChatService, type ChatServiceOptions } from "../../src/chats/ser
 import { WorkspaceBus } from "../../src/bus/bus.ts";
 import { KeyedMutex } from "../../src/bus/mutex.ts";
 import { workspaceRegistrationId } from "../../src/workspace.ts";
+import {
+  managedToolsUnavailable,
+  managedWorkflowInstructions,
+  waitForManagedTools,
+} from "../../src/agents/managed-bootstrap.ts";
 import { createManagedTools } from "../../src/agents/managed-tools.ts";
 import { AgentStore } from "../../src/chats/store.ts";
 
@@ -256,6 +262,7 @@ function setup(options: Partial<ChatServiceOptions> = {}) {
           questions: true,
           mcp: false,
         },
+        async prepareTurn() {},
         async startTurn(input) {
           inputs.push(input);
           if (holdStart) await holdStart;
@@ -741,6 +748,7 @@ test("managed MCP grants cannot administer accounts, accept browser origins, or 
   const chat = h.chat();
   h.send(chat.id);
   await eventually(() => h.inputs.length === 1);
+  expect(h.specs[0]!.mcp).toMatchObject({ instructions: managedWorkflowInstructions, requiredTools: ["fixture"] });
   const grant = h.specs[0]!.mcp!.grant;
   const request = (token: string, method: string, origin?: string) =>
     new Request("http://127.0.0.1:4646/api/managed-mcp", {
@@ -1144,4 +1152,212 @@ test("MCP sign-in retains workspace ownership without any chat and is fenced on 
   await h.service.fenceWorkspace(h.workspace);
   await expect(h.service.loginInput(operation.id, operation.secret, "late input")).rejects.toThrow();
   expect(h.writes).toEqual(["login input"]);
+});
+
+test("Glosa tool readiness bounds a stalled native read and rejects late or partial catalogs", async () => {
+  let resolve!: (status: { state: "ready"; tools: string[] }) => void;
+  let reads = 0;
+  const delayed = new Promise<{ state: "ready"; tools: string[] }>((done) => {
+    resolve = done;
+  });
+  // This witness must cross the actual deadline: a never-answering vendor control call is the failure boundary.
+  await expect(
+    waitForManagedTools(
+      async () => {
+        reads++;
+        return delayed;
+      },
+      ["glosa_present"],
+      () => false,
+      15,
+    ),
+  ).rejects.toThrow("Your message was not sent");
+  resolve({ state: "ready", tools: ["glosa_present"] });
+  await Promise.resolve();
+  expect(reads).toBe(1);
+  await expect(
+    waitForManagedTools(
+      async () => ({ state: "ready", tools: ["glosa_present"] }),
+      ["glosa_present", "glosa_claim"],
+      () => false,
+    ),
+  ).rejects.toThrow("Your message was not sent");
+  await expect(
+    waitForManagedTools(
+      async () => {
+        throw new Error("private-grant");
+      },
+      ["glosa_present"],
+      () => false,
+    ),
+  ).rejects.toThrow("Your message was not sent");
+  await expect(
+    waitForManagedTools(
+      async () => ({ state: "ready", tools: ["glosa_present"] }),
+      ["glosa_present"],
+      () => true,
+    ),
+  ).rejects.toThrow("Your message was not sent");
+});
+
+test("tool preparation failure is unsent and an explicit resend can recover", async () => {
+  const h = setup(),
+    chat = h.chat();
+  const adapter = h.registry.get("fixture"),
+    connect = adapter.connect.bind(adapter);
+  let fail = true,
+    release!: () => void,
+    entered = false;
+  const barrier = new Promise<void>((done) => {
+    release = done;
+  });
+  adapter.connect = async (...args) => {
+    const connection = await connect(...args);
+    connection.prepareTurn = async () => {
+      entered = true;
+      await barrier;
+      if (fail) throw managedToolsUnavailable();
+    };
+    return connection;
+  };
+  h.send(chat.id, "Review the draft");
+  await eventually(() => entered);
+  expect(() => h.send(chat.id, "Next request")).toThrow("already a waiting turn");
+  expect(h.inputs).toHaveLength(0);
+  release();
+  await eventually(() => !h.service.busy);
+  const state = h.store.chat(chat.id).state;
+  expect(state.turns.map((turn) => turn.status)).toEqual(["failed"]);
+  expect(state.turns[0]!.error).toContain("Your message was not sent");
+  expect(h.writes).toEqual([]);
+  fail = false;
+  h.send(chat.id, "Review the draft");
+  await eventually(() => h.inputs.length === 1);
+  expect(h.inputs[0]!.text).toBe("Review the draft");
+});
+
+test("Stop during tool preparation fences a late readiness reply without submitting a prompt", async () => {
+  const h = setup(),
+    chat = h.chat();
+  const adapter = h.registry.get("fixture"),
+    connect = adapter.connect.bind(adapter);
+  let release!: () => void,
+    entered = false;
+  const barrier = new Promise<void>((done) => {
+    release = done;
+  });
+  adapter.connect = async (...args) => {
+    const connection = await connect(...args);
+    connection.prepareTurn = async () => {
+      entered = true;
+      await barrier;
+    };
+    return connection;
+  };
+  h.send(chat.id);
+  await eventually(() => entered);
+  const stopping = h.service.stop(h.workspace, chat.id);
+  release();
+  await stopping;
+  await eventually(() => !h.service.busy);
+  expect(h.inputs).toEqual([]);
+  expect(h.writes).toEqual([]);
+  expect(h.store.chat(chat.id).state.turns[0]!.status).toBe("cancelled");
+});
+
+test("tool preparation preserves actionable native configuration failures", async () => {
+  const h = setup(),
+    chat = h.chat();
+  const adapter = h.registry.get("fixture"),
+    connect = adapter.connect.bind(adapter);
+  adapter.connect = async (...args) => {
+    const connection = await connect(...args);
+    connection.prepareTurn = async () => {
+      throw new ManagedAgentError("unsupported-model", "Choose an available model.");
+    };
+    return connection;
+  };
+  h.send(chat.id);
+  await eventually(() => h.store.chat(chat.id).state.turns[0]!.status === "failed");
+  expect(h.store.chat(chat.id).state.turns[0]!.error).toBe("Choose an available model.");
+  expect(h.inputs).toEqual([]);
+});
+
+test("Stop closes a stalled native readiness request and releases the chat for another turn", async () => {
+  const h = setup(),
+    chat = h.chat();
+  const adapter = h.registry.get("fixture"),
+    connect = adapter.connect.bind(adapter);
+  let entered = false;
+  adapter.connect = async (...args) => {
+    const connection = await connect(...args),
+      close = connection.close.bind(connection);
+    let closed = false;
+    connection.close = async () => {
+      closed = true;
+      await close();
+    };
+    connection.prepareTurn = () =>
+      waitForManagedTools(
+        async () => {
+          entered = true;
+          return new Promise(() => {});
+        },
+        ["glosa_present"],
+        () => closed,
+      );
+    return connection;
+  };
+  h.send(chat.id);
+  await eventually(() => entered);
+  await h.service.stop(h.workspace, chat.id);
+  expect(h.service.busy).toBe(false);
+  expect(h.store.chat(chat.id).state.runtime!.state).toBe("stopped");
+  expect(h.inputs).toEqual([]);
+  adapter.connect = connect;
+  h.send(chat.id, "Try again");
+  await eventually(() => h.inputs.length === 1);
+}, 10_000);
+
+test("a managed grant cannot dispatch through an adapter without readiness support", async () => {
+  const h = setup({ tools: { list: [{ name: "glosa_present" }], call: async () => ({}) } }),
+    chat = h.chat();
+  h.service.setMcpOrigin("http://127.0.0.1:4646");
+  const adapter = h.registry.get("fixture"),
+    connect = adapter.connect.bind(adapter);
+  adapter.connect = async (...args) => {
+    const connection = await connect(...args);
+    delete connection.prepareTurn;
+    return connection;
+  };
+  h.send(chat.id);
+  await eventually(() => h.store.chat(chat.id).state.turns[0]!.status === "failed");
+  expect(h.store.chat(chat.id).state.turns[0]!.error).toContain("Your message was not sent");
+  expect(h.inputs).toEqual([]);
+});
+
+test("native disconnect or completion during preparation records an unsent failure, never an uncertain send", async () => {
+  for (const event of [
+    { type: "failed", code: "native-disconnected", message: "Disconnected", outcomeUnknown: true },
+    { type: "completed" },
+  ] as const) {
+    const h = setup(),
+      chat = h.chat();
+    const adapter = h.registry.get("fixture"),
+      connect = adapter.connect.bind(adapter);
+    adapter.connect = async (...args) => {
+      const connection = await connect(...args);
+      connection.prepareTurn = async () => {
+        args[2](event);
+      };
+      return connection;
+    };
+    h.send(chat.id);
+    await eventually(() => h.store.chat(chat.id).state.turns[0]!.status === "failed");
+    await eventually(() => !h.service.busy);
+    expect(h.store.chat(chat.id).state.turns[0]!.status).toBe("failed");
+    expect(h.store.chat(chat.id).state.turns[0]!.error).toContain("Your message was not sent");
+    expect(h.inputs).toEqual([]);
+    expect(h.writes).toEqual([]);
+  }
 });

@@ -7,6 +7,7 @@ import { z } from "zod";
 import { profileLocations } from "../agents/environment.ts";
 import {
   type AgentEvent,
+  type AgentInput,
   type AgentCapabilities,
   type AgentProfile,
   type ManagedConnection,
@@ -18,6 +19,7 @@ import {
   type RuntimeManifest,
 } from "../agents/interface.ts";
 import type { ManagedTools } from "../agents/managed-tools.ts";
+import { managedToolsUnavailable, managedWorkflowInstructions } from "../agents/managed-bootstrap.ts";
 import { nativeProbe } from "../agents/probe.ts";
 import { RUNTIME_INSTALL_TIMEOUT_MS } from "../agents/runtimes.ts";
 import { digest, privateDirectory, readBlob } from "./journal.ts";
@@ -66,6 +68,7 @@ interface LiveRun {
   connection?: ManagedConnection;
   processes: Set<OwnedProcess>;
   fenced: boolean;
+  dispatched: boolean;
   cancelling?: boolean;
   finishing: boolean;
   finishingPromise?: Promise<void>;
@@ -1453,6 +1456,7 @@ export class ManagedChatService {
             processes: new Set(),
             starting: new Set(),
             fenced: false,
+            dispatched: false,
             finishing: false,
           };
           this.runs.set(chatId, run);
@@ -1553,7 +1557,18 @@ export class ManagedChatService {
         servers: this.store
           .mcpPolicy(run.profileId, state.workspaceId, state.workspaceEpoch)
           .servers.filter((server) => server.enabled),
-        ...(run.grant ? { mcp: { url: `${this.mcpOrigin}/api/managed-mcp`, grant: run.grant } } : {}),
+        ...(run.grant
+          ? {
+              mcp: {
+                url: `${this.mcpOrigin}/api/managed-mcp`,
+                grant: run.grant,
+                instructions: managedWorkflowInstructions,
+                requiredTools: this.options.tools!.list.map(
+                  (tool) => z.object({ name: z.string().min(1) }).parse(tool).name,
+                ),
+              },
+            }
+          : {}),
       },
       this.scopedLauncher(log, turn, run),
       (event) => {
@@ -1594,9 +1609,21 @@ export class ManagedChatService {
       throw new ManagedAgentError("unsupported-model", "This model or effort is unavailable for the account.");
     if (!connection.capabilities.images && turn.attachments.some((item) => item.mime.startsWith("image/")))
       throw new ManagedAgentError("unsupported-images", "This agent runtime does not support image attachments.");
-    log.append({ type: "runtime", runId: run.runId, generation: run.generation, state: "connected" });
-    log.append({ type: "turn_status", turnId: turn.id, status: "dispatching" });
-    await connection.startTurn({
+    if (run.grant && !connection.prepareTurn) throw managedToolsUnavailable();
+    if (connection.prepareTurn) {
+      const preparing = connection.prepareTurn(turn.settings);
+      run.starting.add(preparing);
+      try {
+        await bounded(preparing, 25_000);
+      } catch (error) {
+        if (error instanceof ManagedAgentError) throw error;
+        throw managedToolsUnavailable();
+      } finally {
+        run.starting.delete(preparing);
+      }
+      this.admit(log, turn, run);
+    }
+    const input: AgentInput = {
       turnId: turn.id,
       text: log.text(turn.textHash),
       settings: turn.settings,
@@ -1616,7 +1643,11 @@ export class ManagedChatService {
           bytes: readBlob(join(log.root, "blobs"), item.hash),
         })),
       ],
-    });
+    };
+    log.append({ type: "runtime", runId: run.runId, generation: run.generation, state: "connected" });
+    log.append({ type: "turn_status", turnId: turn.id, status: "dispatching" });
+    run.dispatched = true;
+    await connection.startTurn(input);
     if (!run.fenced && log.state.turns.find((item) => item.id === turn.id)?.status === "dispatching")
       log.append({ type: "turn_status", turnId: turn.id, status: "running" });
   }
@@ -1713,8 +1744,18 @@ export class ManagedChatService {
       log.append({
         type: "turn_status",
         turnId: run.turnId,
-        status: event.type === "completed" ? "completed" : event.outcomeUnknown ? "outcome_unknown" : "failed",
-        ...(event.type === "failed" ? { error: event.message.slice(0, 500) } : {}),
+        status: !run.dispatched
+          ? "failed"
+          : event.type === "completed"
+            ? "completed"
+            : event.outcomeUnknown
+              ? "outcome_unknown"
+              : "failed",
+        ...(!run.dispatched
+          ? { error: "The agent disconnected during startup. Your message was not sent. Send it again to retry." }
+          : event.type === "failed"
+            ? { error: event.message.slice(0, 500) }
+            : {}),
       });
       void this.finishRun(log, run).catch(() => {
         run.fenced = true;
@@ -1800,9 +1841,7 @@ export class ManagedChatService {
         log.append({
           type: "turn_status",
           turnId: turn.id,
-          status: ["dispatching", "running", "waiting", "stopping"].includes(turn.status)
-            ? "outcome_unknown"
-            : "failed",
+          status: run.dispatched ? "outcome_unknown" : "failed",
           error: reason ?? "The agent connection failed. No input was resent.",
         });
     } finally {
@@ -1824,17 +1863,18 @@ export class ManagedChatService {
     run.grant = undefined;
     for (const timer of run.decisionTimers?.values() ?? []) clearTimeout(timer);
     run.decisionTimers?.clear();
-    let drained = true;
-    try {
-      await bounded(Promise.allSettled([...run.starting]), 5_000);
-    } catch {
-      drained = false;
-    }
     await Promise.allSettled([...run.processes].map((child) => child.fence()));
     try {
       await bounded(Promise.resolve(run.connection?.close()), 5_000);
     } catch {
       // A closed SDK transport is not proof of a live process. Owned stop below decides.
+    }
+    // Closing first cancels native readiness reads; draining first can deadlock on them.
+    let drained = true;
+    try {
+      await bounded(Promise.allSettled([...run.starting]), 5_000);
+    } catch {
+      drained = false;
     }
     const exits = await Promise.allSettled([...run.processes].map((child) => child.stop()));
     const stopped = drained && exits.every((result) => result.status === "fulfilled");

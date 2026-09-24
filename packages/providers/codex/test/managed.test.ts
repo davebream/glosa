@@ -24,6 +24,7 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
   const sent: Record<string, any>[] = [];
   let output: (value: object) => void = () => {};
   let stopped = false;
+  let mcpStatus: (params: Record<string, unknown>) => Promise<object> = async () => ({ data: [], nextCursor: null });
   const launcher: ProcessLauncher = {
     async spawn(options) {
       expect(options.env.CODEX_HOME).toBe("/isolated/profile-a");
@@ -93,6 +94,7 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
             };
           if (frame.method === "thread/start" || frame.method === "thread/resume")
             result = { thread: { id: "thread-a" } };
+          if (frame.method === "mcpServerStatus/list") result = await mcpStatus(frame.params);
           if (frame.method === "turn/start") {
             output({ method: "turn/started", params: { threadId: "thread-a", turn: { id: "turn-a" } } });
             result = { turn: { id: "turn-a" } };
@@ -123,6 +125,9 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
     },
     output: (value: object) => output(value),
     stopped: () => stopped,
+    setMcpStatus: (read: typeof mcpStatus) => {
+      mcpStatus = read;
+    },
   };
 }
 
@@ -277,4 +282,76 @@ test("Codex refuses an unexpected project layer even when its dangerous settings
   await expect(new CodexManagedAdapter().preflight(f.spec, f.launcher)).rejects.toThrow("configuration conflicts");
   expect(f.sent.some((frame) => frame.method === "account/read" || frame.method === "thread/start")).toBe(false);
   expect(f.stopped()).toBe(true);
+});
+
+test("Codex waits for the built-in catalog before sending and reinstalls guidance on resume", async () => {
+  const f = fixture();
+  f.spec.mcp = {
+    url: "http://127.0.0.1:4646/api/managed-mcp",
+    grant: "private-grant",
+    instructions: "App-owned Glosa workflow",
+    requiredTools: ["glosa_present", "glosa_claim"],
+  };
+  let release!: () => void,
+    observed = false;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  let server = {
+    name: "glosa",
+    runtimeStatus: "connected",
+    authStatus: "unsupported",
+    tools: { present: { name: "glosa_present" } } as Record<string, { name: string }>,
+  };
+  f.setMcpStatus(async (params) => {
+    expect(params.threadId).toBe("thread-a");
+    expect(params.detail).toBe("toolsAndAuthOnly");
+    if (!params.cursor)
+      return { data: [{ ...server, name: "glosa-user-optional", runtimeStatus: "failed" }], nextCursor: "page2" };
+    observed = true;
+    await gate;
+    return { data: [server], nextCursor: null };
+  });
+  const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, () => {});
+  const input = {
+    turnId: "turn",
+    text: "Review the draft",
+    settings: { model: "model", effort: "high", permissionMode: "default" as const },
+    attachments: [],
+  };
+  try {
+    const preparing = connection.prepareTurn!(input.settings);
+    for (let i = 0; i < 100 && !observed; i++) await Promise.resolve();
+    expect(observed).toBe(true);
+    expect(f.sent.some((frame) => frame.method === "turn/start")).toBe(false);
+    release();
+    await expect(preparing).rejects.toThrow("Your message was not sent");
+    server = { ...server, runtimeStatus: "authenticationRequired" };
+    await expect(connection.startTurn(input)).rejects.toThrow("Your message was not sent");
+    expect(f.sent.some((frame) => frame.method === "turn/start")).toBe(false);
+    server = {
+      ...server,
+      runtimeStatus: "connected",
+      tools: { present: { name: "glosa_present" }, claim: { name: "glosa_claim" } },
+    };
+    await connection.prepareTurn!(input.settings);
+    expect(f.sent.some((frame) => frame.method === "turn/start")).toBe(false);
+    await connection.startTurn(input);
+    const starts = f.sent.filter((frame) => ["thread/start", "thread/resume"].includes(frame.method));
+    expect(starts.map((frame) => frame.method)).toContain("thread/resume");
+    for (const frame of starts) {
+      expect(frame.params.developerInstructions).toBe("App-owned Glosa workflow");
+      expect(frame.params.config["mcp_servers.glosa"]).toEqual({
+        url: f.spec.mcp.url,
+        bearer_token_env_var: "GLOSA_MANAGED_MCP_GRANT",
+      });
+    }
+    expect(f.sent.filter((frame) => frame.method === "turn/start")).toHaveLength(1);
+    expect(f.sent.find((frame) => frame.method === "turn/start")!.params.input).toEqual([
+      { type: "text", text: "Review the draft" },
+    ]);
+    expect((await connection.mcpStatus!()).find((item) => item.name === "glosa")!.login).toBe(false);
+  } finally {
+    await connection.close();
+  }
 });

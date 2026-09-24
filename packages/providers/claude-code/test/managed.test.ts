@@ -210,6 +210,13 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
     events: AgentEvent[] = [];
   let stopped = 0,
     configured!: Parameters<ClaudeSdk["query"]>[0];
+  let readiness = { name: "glosa", status: "connected", tools: [{ name: "glosa_present" }] };
+  let releaseStatus!: () => void;
+  const statusGate = new Promise<void>((resolve) => {
+    releaseStatus = resolve;
+  });
+  let statusRequested = false,
+    waitStatus = false;
   const abort = new AbortController();
   const adapter = new ClaudeManagedAdapter(async () => ({
     query(input) {
@@ -232,6 +239,11 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
           apiProvider: "firstParty",
           apiKeySource: "none",
         }),
+        mcpServerStatus: async () => {
+          statusRequested = true;
+          if (waitStatus) await statusGate;
+          return [readiness];
+        },
         interrupt: async () => {},
         close() {
           abort.abort();
@@ -300,18 +312,44 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
     sessionId: "logical",
     runId: "run",
     generation: 1,
-    mcp: { url: "http://127.0.0.1:4646/api/managed-mcp", grant: "private-grant" },
+    mcp: {
+      url: "http://127.0.0.1:4646/api/managed-mcp",
+      grant: "private-grant",
+      instructions: "App-owned Glosa workflow",
+      requiredTools: ["glosa_present", "glosa_claim"],
+    },
   } as SessionLaunchSpec;
   const connection = await adapter.connect(spec, launcher, (event) => events.push(event));
   try {
     expect(connection.capabilities.models[0]?.resolvedModel).toBe("claude-sonnet-5");
-    await connection.startTurn({ turnId: "turn", text: "Read notes", settings: spec.settings, attachments: [] });
+    expect(configured.options.systemPrompt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+      append: "App-owned Glosa workflow",
+      snapshot: false,
+    });
+    const prompt = { turnId: "turn", text: "Read notes", settings: spec.settings, attachments: [] };
+    // A connected server is insufficient when its tool catalog is incomplete.
+    await expect(connection.startTurn(prompt)).rejects.toThrow("Your message was not sent");
+    readiness = { ...readiness, status: "needs-auth" };
+    await expect(connection.startTurn(prompt)).rejects.toThrow("Your message was not sent");
+    expect(writes).toEqual([]);
+    readiness = { ...readiness, status: "connected", tools: [{ name: "glosa_present" }, { name: "glosa_claim" }] };
+    waitStatus = true;
+    statusRequested = false;
+    const sending = connection.startTurn(prompt);
+    for (let i = 0; i < 30 && !statusRequested; i++) await Promise.resolve();
+    expect(statusRequested).toBe(true);
+    expect(writes).toEqual([]);
+    releaseStatus();
+    await sending;
     for (let i = 0; i < 30 && !events.some((event) => event.type === "decision"); i++) await Promise.resolve();
     expect(events.find((event) => event.type === "decision")).toMatchObject({ decision: { id: "permission-1" } });
     await connection.answer("permission-1", "allow");
     for (let i = 0; i < 30 && !events.some((event) => event.type === "completed"); i++) await Promise.resolve();
     expect(events.find((event) => event.type === "text")).toMatchObject({ text: "allow" });
     expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]!).message.content).toEqual([{ type: "text", text: "Read notes" }]);
     expect(starts[1]).toMatchObject({
       command: "/qualified/claude",
       cwd: "/workspace",

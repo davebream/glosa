@@ -14,7 +14,10 @@ import {
   type ProcessLauncher,
   type ProfileLaunchSpec,
   type SessionLaunchSpec,
+  type TurnSettings,
 } from "../../../daemon/src/agents/interface.ts";
+
+import { waitForManagedTools } from "../../../daemon/src/agents/managed-bootstrap.ts";
 
 const accountSchema = z.object({
   account: z
@@ -648,6 +651,112 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
           ? { "mcp_servers.glosa": { url: spec.mcp.url, bearer_token_env_var: "GLOSA_MANAGED_MCP_GRANT" } }
           : {}),
       };
+      const readMcpServers = async () => {
+        const servers: {
+          name: string;
+          runtimeStatus?: string | null;
+          tools: Record<string, { name: string }>;
+          toolsError?: string | null;
+          authStatus: string;
+        }[] = [];
+        let cursor: string | null = null;
+        const seen = new Set<string | null>();
+        do {
+          if (seen.has(cursor) || servers.length >= 500) throw new Error("MCP pagination overflow");
+          seen.add(cursor);
+          const page = z
+            .object({
+              data: z
+                .array(
+                  z.object({
+                    name: z.string(),
+                    runtimeStatus: z.string().nullable().optional(),
+                    tools: z.record(z.string(), z.object({ name: z.string() })),
+                    toolsError: z.string().nullable().optional(),
+                    authStatus: z.string(),
+                  }),
+                )
+                .max(100),
+              nextCursor: z.string().nullable().optional(),
+            })
+            .parse(
+              await rpc.request("mcpServerStatus/list", { threadId, cursor, limit: 100, detail: "toolsAndAuthOnly" }),
+            );
+          servers.push(...page.data);
+          cursor = page.nextCursor ?? null;
+        } while (cursor);
+        return servers;
+      };
+      let prepared: string | undefined;
+      const prepareTurn = async (settings: TurnSettings) => {
+        if (ended) throw new ManagedAgentError("run-fenced", "This run was stopped.");
+        await rpc.audit(spec.cwd);
+        const selected = models.find((m) => m.model === settings.model);
+        if (!selected?.supportedReasoningEfforts.some((e) => e.reasoningEffort === settings.effort))
+          throw new ManagedAgentError("unsupported-model", "Choose a model and effort offered by this account.");
+        const planning = settings.permissionMode === "plan";
+        let effective: z.infer<typeof threadSchema>;
+        if (!threadId) {
+          const result = threadSchema.parse(
+            await rpc.request("thread/start", {
+              config,
+              ...(spec.mcp ? { developerInstructions: spec.mcp.instructions } : {}),
+              cwd: spec.cwd,
+              model: settings.model,
+              modelProvider: "openai",
+              approvalPolicy: "untrusted",
+              sandbox: planning ? "read-only" : "workspace-write",
+              experimentalRawEvents: false,
+              persistExtendedHistory: true,
+            }),
+          );
+          threadId = result.thread.id;
+          effective = result;
+        } else {
+          const result = threadSchema.parse(
+            await rpc.request("thread/resume", {
+              config,
+              ...(spec.mcp ? { developerInstructions: spec.mcp.instructions } : {}),
+              threadId,
+              cwd: spec.cwd,
+              model: settings.model,
+              modelProvider: "openai",
+              approvalPolicy: "untrusted",
+              sandbox: planning ? "read-only" : "workspace-write",
+            }),
+          );
+          if (result.thread.id !== threadId) throw new Error("resumed a different thread");
+          effective = result;
+        }
+        emit({ type: "effective_settings", model: effective.model });
+        if (effective.model && effective.model !== settings.model)
+          throw new ManagedAgentError(
+            "unsupported-model",
+            "Codex selected a different model. Review the model choice before sending again.",
+          );
+        emit({ type: "session", nativeId: threadId });
+
+        if (spec.mcp)
+          await waitForManagedTools(
+            async () => {
+              const server = (await readMcpServers()).find((item) => item.name === "glosa");
+              return {
+                state: server?.toolsError
+                  ? "failed"
+                  : !server?.runtimeStatus || ["notStarted", "starting"].includes(server.runtimeStatus)
+                    ? "pending"
+                    : server.runtimeStatus === "connected"
+                      ? "ready"
+                      : "failed",
+                tools: Object.values(server?.tools ?? {}).map((tool) => tool.name),
+              };
+            },
+            spec.mcp.requiredTools,
+            () => ended,
+          );
+        if (ended) throw new ManagedAgentError("run-fenced", "This run was stopped.");
+        prepared = JSON.stringify(settings);
+      };
       return {
         capabilities: {
           models: models.map((m) => ({
@@ -661,72 +770,21 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
           permissions: true,
           mcp: !!spec.mcp,
         },
+        prepareTurn,
         async mcpStatus() {
-          const result = z
-            .object({
-              data: z
-                .array(
-                  z.object({
-                    name: z.string(),
-                    authStatus: z.string(),
-                    runtimeStatus: z.string().nullable().optional(),
-                  }),
-                )
-                .max(100),
-              nextCursor: z.string().nullable().optional(),
-            })
-            .parse(await rpc.request("mcpServerStatus/list", { threadId, limit: 100, detail: "toolsAndAuthOnly" }));
-          return result.data.map((server) => ({
+          return (await readMcpServers()).map((server) => ({
             name: server.name,
             status: server.runtimeStatus ?? "unknown",
             auth: server.authStatus,
-            login: true,
+            login: server.name !== "glosa",
           }));
         },
         async startTurn(input) {
-          await rpc.audit(spec.cwd);
-          const selected = models.find((m) => m.model === input.settings.model);
-          if (!selected || !selected.supportedReasoningEfforts.some((e) => e.reasoningEffort === input.settings.effort))
-            throw new ManagedAgentError("unsupported-model", "Choose a model and effort offered by this account.");
+          if (prepared !== JSON.stringify(input.settings)) await prepareTurn(input.settings);
+          if (ended) throw new ManagedAgentError("run-fenced", "This run was stopped.");
+          prepared = undefined;
+          const selected = models.find((model) => model.model === input.settings.model)!;
           const planning = input.settings.permissionMode === "plan";
-          let effective: z.infer<typeof threadSchema>;
-          if (!threadId) {
-            const result = threadSchema.parse(
-              await rpc.request("thread/start", {
-                config,
-                cwd: spec.cwd,
-                model: input.settings.model,
-                modelProvider: "openai",
-                approvalPolicy: "untrusted",
-                sandbox: planning ? "read-only" : "workspace-write",
-                experimentalRawEvents: false,
-                persistExtendedHistory: true,
-              }),
-            );
-            threadId = result.thread.id;
-            effective = result;
-          } else {
-            const result = threadSchema.parse(
-              await rpc.request("thread/resume", {
-                config,
-                threadId,
-                cwd: spec.cwd,
-                model: input.settings.model,
-                modelProvider: "openai",
-                approvalPolicy: "untrusted",
-                sandbox: planning ? "read-only" : "workspace-write",
-              }),
-            );
-            if (result.thread.id !== threadId) throw new Error("resumed a different thread");
-            effective = result;
-          }
-          emit({ type: "effective_settings", model: effective.model });
-          if (effective.model && effective.model !== input.settings.model)
-            throw new ManagedAgentError(
-              "unsupported-model",
-              "Codex selected a different model. Review the model choice before sending again.",
-            );
-          emit({ type: "session", nativeId: threadId });
           const content: object[] = [{ type: "text", text: input.text }];
           for (const attachment of input.attachments) {
             if (attachment.mime.startsWith("image/")) {
