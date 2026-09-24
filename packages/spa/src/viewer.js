@@ -266,7 +266,7 @@ export function mountApp(
   function renderChats() {
     chatToggle.textContent = "Chats";
     const focusedId = chatsRows.contains(document.activeElement) ? document.activeElement.dataset.panelId : null;
-    const item = ({ id, provider, title, detail, pinned, archived, onClick, chat }) => {
+    const item = ({ id, title, pinned, archived, onClick, chat }) => {
       const row = el(
         "button",
         {
@@ -274,7 +274,8 @@ export function mountApp(
           className: "glosa-chat-list-item",
           "data-panel-id": id,
           "aria-current": activePanelId === id ? "page" : "false",
-          title: `${title} · ${agentName(provider)} · ${detail}${pinned ? " · Pinned" : ""}${archived ? " · Archived" : ""}`,
+          title,
+          "aria-label": `${title}${pinned ? " · Pinned" : ""}${archived ? " · Archived" : ""}`,
           onClick,
         },
         [el("span", { className: "glosa-chat-list-title", textContent: title })],

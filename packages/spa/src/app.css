@@ -6473,6 +6473,9 @@ input,
   border-radius: 4px;
   font-weight: 400;
 }
+.glosa-sidebar-chats .glosa-chat-list-item:hover:not([aria-current="page"]) {
+  background: var(--surface);
+}
 .glosa-sidebar-chats .glosa-chat-list-item[aria-current="page"] {
   background: var(--surface-sunken);
 }

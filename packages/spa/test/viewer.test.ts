@@ -1295,16 +1295,17 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     }
   });
 
-  test("title-only chat rows retain account and pending-reply details in their tooltip after renaming", async () => {
+  test("chat rows and hover text stay title-only when accounts or titles change", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
-    let label = "Personal subscription";
+    let label = "Personal subscription",
+      title = "Draft";
     const da = fakeDataAccess({
       getChats: async () => ({
         chats: [
           {
             id: "existing",
-            title: "Draft",
+            title,
             provider: "claude-code",
             profileId: "profile-a",
             status: "completed",
@@ -1318,23 +1319,21 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       getStatus: async () => ({ workspaces: [], sessions: [] }),
     });
     const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
-    async function waitForLabel(expected: string) {
+    async function waitForTitle(expected: string) {
       const deadline = Date.now() + 1000;
-      while (
-        !root.querySelector(".glosa-chat-list-item")?.getAttribute("title")?.includes(expected) &&
-        Date.now() < deadline
-      )
+      while (root.querySelector(".glosa-chat-list-item")?.getAttribute("title") !== expected && Date.now() < deadline)
         await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("title")).toContain(expected);
+      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("title")).toBe(expected);
     }
     try {
-      await waitForLabel(label);
-      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("title")).toContain("2 awaiting reply");
+      await waitForTitle(title);
+      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("aria-label")).toBe("Draft");
       expect(root.querySelector(".glosa-chat-list-item")?.textContent).toBe("Draft");
       label = "Work subscription";
+      title = "Revised draft";
       const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh sessions");
       (refresh as unknown as HTMLButtonElement).click();
-      await waitForLabel(label);
+      await waitForTitle(title);
     } finally {
       unmount();
     }
