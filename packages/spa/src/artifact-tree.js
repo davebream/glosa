@@ -45,9 +45,6 @@ const EXPANSION_STORAGE_PREFIX = "glosa:artifact-tree:expanded:";
 
 const ICONS = {
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
-  file: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>',
-  folder:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
 };
 
 /** @param {string} path */
@@ -253,15 +250,13 @@ export function createArtifactTreeNavigator(container, options) {
     if (node.kind === "directory") disclosure.innerHTML = ICONS.chevron;
     else disclosure.setAttribute("aria-hidden", "true");
 
-    const icon = document.createElement("span");
-    icon.className = "glosa-tree-icon";
-    icon.innerHTML = node.kind === "directory" ? ICONS.folder : ICONS.file;
-
+    // No file or folder glyph: the chevron already says "folder", a file is a row without one, and
+    // the 21px the glyph took is 21px more of every name in a 232px column.
     const label = document.createElement("span");
     label.className = "glosa-tree-label";
     label.textContent = node.name;
 
-    row.append(disclosure, icon, label);
+    row.append(disclosure, label);
 
     if (node.kind === "directory") {
       const isExpanded = expanded.has(node.id);

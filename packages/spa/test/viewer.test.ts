@@ -377,7 +377,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const sidebar = fresh.querySelector(".glosa-sidebar") as any;
     expect(sidebar.firstElementChild.classList.contains("glosa-sidebar-scroll")).toBe(true);
     expect(sidebar.querySelector(".glosa-starred")).not.toBeNull();
-    expect(sidebar.lastElementChild.textContent).toBe("Settings");
+    // Settings rides the foot strip beside the navigator's toggle, not a row of its own in the column.
+    expect(sidebar.lastElementChild.classList.contains("glosa-starred")).toBe(true);
+    const foot = fresh.querySelector(".glosa-nav-foot") as any;
+    expect(foot.lastElementChild.classList.contains("glosa-sidebar-settings")).toBe(true);
+    expect(foot.lastElementChild.textContent).toBe("Settings");
     expect(sidebar.querySelector(".glosa-starred").hidden).toBe(true);
     const toggle = fresh.querySelector(".glosa-sidebar-heading .glosa-star-toggle") as any;
     expect(toggle.hidden).toBe(false);

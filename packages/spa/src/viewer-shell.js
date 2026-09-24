@@ -22,6 +22,29 @@ export function createElement(tag, props = {}, children = []) {
   return node;
 }
 
+/** One section heading for every list in the navigator — Artifacts, Chats, Starred. The same
+ *  15px drawn chevron the tree's folders use, in the same slot at the same x, turning to face the
+ *  state it will move to; the label beside it in the Section Label style. Built from parts rather
+ *  than from `::before` text so the mark is one shape everywhere and never read aloud. `label`
+ *  is the span callers rewrite; the chevron is never touched. */
+export function createSectionToggle({ id, className, text, controls, expanded = true }) {
+  const chevron = createElement("span", { className: "glosa-sidebar-section-chevron", "aria-hidden": "true" });
+  chevron.innerHTML = '<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>';
+  const label = createElement("span", { className: "glosa-sidebar-section-label", textContent: text });
+  const button = createElement(
+    "button",
+    {
+      ...(id ? { id } : {}),
+      className: `glosa-sidebar-section-toggle${className ? ` ${className}` : ""}`,
+      type: "button",
+      "aria-expanded": String(expanded),
+      "aria-controls": controls,
+    },
+    [chevron, label],
+  );
+  return { button, label };
+}
+
 export function createViewerShell(
   root,
   {
@@ -122,12 +145,10 @@ export function createViewerShell(
   });
   starToggle.innerHTML = STAR_SVG;
   const artifactList = el("ul", { className: "glosa-artifact-list" });
-  const artifactToggle = el("button", {
+  const { button: artifactToggle } = createSectionToggle({
     className: "glosa-artifact-list-toggle",
-    type: "button",
-    textContent: "Artifacts",
-    "aria-expanded": "true",
-    "aria-controls": "glosa-artifacts-body",
+    text: "Artifacts",
+    controls: "glosa-artifacts-body",
   });
   const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [
     el("h2", {}, [artifactToggle]),
@@ -145,16 +166,12 @@ export function createViewerShell(
   });
   // The writer's starred folders sit at the navigator's foot, collapsible, out of the tree's way:
   // the tree is what the navigator is for, and a list you come back to is not what you read.
-  const starredToggle = el("button", {
+  const { button: starredToggle } = createSectionToggle({
     id: "glosa-starred-toggle",
-    className: "glosa-sidebar-section-toggle",
-    type: "button",
-    "aria-expanded": "true",
-    "aria-controls": "glosa-starred-list",
+    text: "Starred",
+    controls: "glosa-starred-list",
   });
   const starredCount = el("span", { className: "glosa-starred-count" });
-  starredToggle.innerHTML =
-    '<span class="glosa-sidebar-section-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span><span>Starred</span>';
   starredToggle.append(starredCount);
   const starredList = el("ul", { id: "glosa-starred-list", className: "glosa-starred-list" });
   const starredSection = el("section", { className: "glosa-sidebar-section glosa-starred", hidden: true }, [
@@ -177,6 +194,9 @@ export function createViewerShell(
     { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" },
     [el("div", { className: "glosa-sidebar-scroll" }, [artifactHeading, artifactsBody]), starredSection],
   );
+  // The foot strip holds the navigator's toggle and, while the navigator is shown, Settings: one
+  // 44px row under one rule, instead of a Settings row on its own rule stacked on the strip.
+  const navFoot = el("div", { className: "glosa-nav-foot" }, [navToggle]);
   const agentFeedbackHost = el("div", { className: "glosa-agent-feedback" });
   const agentFeedback = mountAgentFeedback(agentFeedbackHost, { overlayHost: topbarOverlays });
 
@@ -192,7 +212,7 @@ export function createViewerShell(
     // The navigator's toggle lives in the desk's bottom-left corner, not in the top bar: on a footer
     // strip at the foot of the navigator while it is shown, and in the same spot once it is hidden,
     // so the control that brings it back never moves and never pushes the mark around.
-    el("div", { className: "glosa-nav-foot" }, [navToggle]),
+    navFoot,
     mainEl,
     shortcutsEl,
   );
@@ -209,6 +229,7 @@ export function createViewerShell(
     starIcon: STAR_SVG,
     elements: {
       navToggle,
+      navFoot,
       titleEl,
       goToTrigger,
       shortcutsToggle,

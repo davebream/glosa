@@ -156,7 +156,6 @@ export function actionMenu(label) {
   const trigger = el("button", {
     type: "button",
     className: "glosa-agent-menu-trigger",
-    textContent: "···",
     "aria-label": label,
     title: label,
     "aria-expanded": "false",
@@ -174,6 +173,9 @@ export function actionMenu(label) {
       popup.querySelector("button:not(:disabled), input:not(:disabled)")?.focus({ preventScroll: true });
     },
   });
+  // Three drawn dots, not typed ones: the same 15px stroke family as every other tool.
+  trigger.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="16" cy="10" r="1.6"/></svg>';
   popup.addEventListener("toggle", (event) => trigger.setAttribute("aria-expanded", String(event.newState === "open")));
   popup.addEventListener("click", (event) => {
     if (event.target.closest("button")) {

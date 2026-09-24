@@ -358,7 +358,7 @@ Quiet and ink-led.
 - **Place:** entering and leaving Edit keeps the page's scroll position.
 
 ### Navigator
-- **Style:** paper, ink hairline at its right, 232px. Section labels in the Section Label style. Rows are 28px, 13px ink, 5px radius, hover to a Sunken bed; the current row is Sunken, ink, 600.
+- **Style:** paper, ink hairline at its right, 232px. Section labels in the Section Label style. Rows are 28px, 13px ink, 5px radius, hover to a Sunken bed; the current row is Sunken, ink, 600. Every section (Artifacts, Chats, Starred) opens with the same 15px drawn chevron the tree's folders use, on the same line (x 16) with a 6px gap to its label; a file row is a row without a chevron, no file or folder glyph, and children indent 12px per depth. Header tools (star, menu, new chat) are 28px drawn icons in one box. Chat rows are tree rows. Settings sits on the 44px foot strip beside the navigator's toggle.
 
 ### Tabs and Dock
 - **Style:** a 36px strip on paper with a Quiet Border bottom rule painted as an inset, so the active tab runs unbroken into the manuscript. Tabs are square, 13px, Muted; the active tab is paper, ink, 600, with Quiet Border sides and a 2px ink top edge (a neutral edge in an unfocused group).

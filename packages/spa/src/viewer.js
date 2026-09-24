@@ -31,7 +31,7 @@ import { artifactPanelId, chatPanelId, decodePanelId, externalPanelId, settingsP
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
 import { createViewerFeedbackController } from "./viewer-feedback.js";
 import { createNavigatorController } from "./viewer-navigator.js";
-import { createViewerShell, createElement as el } from "./viewer-shell.js";
+import { createElement as el, createSectionToggle, createViewerShell } from "./viewer-shell.js";
 
 /** The workspace this browser last had selected, so a reload with several live lands back on it. */
 export const LAST_WORKSPACE_STORAGE_KEY = "glosa_last_workspace";
@@ -212,37 +212,37 @@ export function mountApp(
   const chatsRows = el("div", { className: "glosa-chat-list" });
   const chatNotice = el("p", { role: "status", className: "glosa-sidebar-empty" });
   const listMenu = actionMenu("Chat list options");
-  const chatsBody = el("div", { id: `chat-list-${crypto.randomUUID()}` }, [chatsRows, chatNotice]);
-  const chatToggle = el("button", {
+  // Drawn, like the star and the menu's dots, so the three header tools share one stroke.
+  const newChatButton = el("button", {
     type: "button",
-    className: "glosa-chat-list-toggle",
-    textContent: "Chats",
-    "aria-expanded": "true",
-    "aria-controls": chatsBody.id,
-    onClick: () => {
-      chatsBody.hidden = !chatsBody.hidden;
-      chatToggle.setAttribute("aria-expanded", String(!chatsBody.hidden));
-    },
+    className: "glosa-tree-tool glosa-new-chat",
+    "aria-label": "New chat",
+    title: "New chat",
+    onClick: () => void newChat().catch(chatFailed("Couldn't start a chat")),
   });
+  newChatButton.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>';
+  const chatsBody = el("div", { id: `chat-list-${crypto.randomUUID()}` }, [chatsRows, chatNotice]);
+  const { button: chatToggle, label: chatToggleLabel } = createSectionToggle({
+    className: "glosa-chat-list-toggle",
+    text: "Chats",
+    controls: chatsBody.id,
+  });
+  chatToggle.addEventListener("click", () => {
+    chatsBody.hidden = !chatsBody.hidden;
+    chatToggle.setAttribute("aria-expanded", String(!chatsBody.hidden));
+  });
+  // What the sidebar says when a chat action fails: the action it was doing, then the reason —
+  // never the bare reason, which read as a label the interface had lost the front half of.
+  const chatFailed = (doing) => (error) => {
+    if (!unmounted) chatNotice.textContent = `${doing}: ${error.message}`;
+  };
   chatsHost.append(
-    el("div", { className: "glosa-sidebar-heading" }, [
-      el("h2", {}, [chatToggle]),
-      listMenu.element,
-      el("button", {
-        type: "button",
-        className: "glosa-icon-button",
-        textContent: "+",
-        "aria-label": "New chat",
-        title: "New chat",
-        onClick: () =>
-          void newChat().catch((error) => {
-            chatNotice.textContent = error.message;
-          }),
-      }),
-    ]),
+    el("div", { className: "glosa-sidebar-heading" }, [el("h2", {}, [chatToggle]), listMenu.element, newChatButton]),
     chatsBody,
   );
   sidebarEl.querySelector(".glosa-sidebar-scroll").append(chatsHost);
+  // Settings rides the foot strip beside the navigator's toggle: one row, one rule, and the gear
+  // starts on the same line as the tree's chevrons.
   const settingsLink = el("button", {
     type: "button",
     className: "glosa-sidebar-settings",
@@ -250,7 +250,7 @@ export function mountApp(
   });
   settingsLink.innerHTML =
     '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8.4 2.5h3.2l.5 2a6 6 0 0 1 1.2.7l2-.6 1.6 2.8-1.5 1.4a6 6 0 0 1 0 1.4l1.5 1.4-1.6 2.8-2-.6a6 6 0 0 1-1.2.7l-.5 2H8.4l-.5-2a6 6 0 0 1-1.2-.7l-2 .6-1.6-2.8 1.5-1.4a6 6 0 0 1 0-1.4L3.1 7.4l1.6-2.8 2 .6a6 6 0 0 1 1.2-.7z"/><circle cx="10" cy="9.5" r="2.5"/></svg><span>Settings</span>';
-  sidebarEl.append(settingsLink);
+  shell.elements.navFoot.append(settingsLink);
   const archivedChats = el("input", { type: "checkbox", "aria-label": "Include archived chats" });
   archivedChats.addEventListener("change", scheduleChatsRefresh);
   listMenu.popup.append(
@@ -258,14 +258,11 @@ export function mountApp(
     el("button", {
       type: "button",
       textContent: "Refresh sessions",
-      onClick: () =>
-        void refreshChats().catch((error) => {
-          chatNotice.textContent = error.message;
-        }),
+      onClick: () => void refreshChats().catch(chatFailed("Couldn't refresh chats")),
     }),
   );
   function renderChats() {
-    chatToggle.textContent = "Chats";
+    chatToggleLabel.textContent = "Chats";
     const focusedId = chatsRows.contains(document.activeElement) ? document.activeElement.dataset.panelId : null;
     const item = ({ id, title, pinned, archived, onClick, chat }) => {
       const row = el(
@@ -299,7 +296,7 @@ export function mountApp(
                 });
                 if (slug === currentSlug && !unmounted) await refreshChats();
               } catch (error) {
-                if (!unmounted) chatNotice.textContent = error.message;
+                chatFailed("Couldn't change that chat")(error);
               }
             },
           }),
@@ -336,17 +333,14 @@ export function mountApp(
           provider: session.provider,
           title: `${agentName(session.provider)} · ${session.session_id.slice(-8)}`,
           detail: `External · ${session.liveness}`,
-          onClick: () =>
-            void openExternalChat(session.session_id).catch((error) => {
-              chatNotice.textContent = error.message;
-            }),
+          onClick: () => void openExternalChat(session.session_id).catch(chatFailed("Couldn't open that chat")),
         }),
       );
     if (!chatsRows.children.length)
       chatsRows.append(
         el("p", {
           className: "glosa-chat-list-empty",
-          textContent: "Start a chat to work with an agent.",
+          textContent: "No chats yet. Start one with +.",
         }),
       );
     if (focusedId) [...chatsRows.querySelectorAll("button")].find((row) => row.dataset.panelId === focusedId)?.focus();
@@ -477,7 +471,7 @@ export function mountApp(
       }
       if (!chosen) {
         openAgentSettings();
-        chatNotice.textContent = "Choose an account and make it the default to start a chat.";
+        chatNotice.textContent = "Make an account the default in Settings to start a chat.";
         return;
       }
       if (slug !== currentSlug || unmounted) return;
@@ -720,10 +714,7 @@ export function mountApp(
       commands.push({
         id: "new-chat",
         label: "New chat",
-        run: () =>
-          void newChat().catch((error) => {
-            chatNotice.textContent = error.message;
-          }),
+        run: () => void newChat().catch(chatFailed("Couldn't start a chat")),
       });
     if (pane && pane.kind === "artifact" && !readLock) {
       const mode = pane.getMode?.();
@@ -1055,9 +1046,7 @@ export function mountApp(
         },
         onSettings: openAgentSettings,
         onNewChat: (profile, settings) =>
-          newChat(profile, settings, params.chatId).catch((error) => {
-            chatNotice.textContent = error.message;
-          }),
+          newChat(profile, settings, params.chatId).catch(chatFailed("Couldn't start a chat")),
         onChange: () => {
           refreshTabs();
           scheduleChatsRefresh();
@@ -1428,9 +1417,7 @@ export function mountApp(
     renderStarToggle();
     feedbackController.selectWorkspace();
     await refreshArtifactList();
-    await refreshChats().catch((error) => {
-      chatNotice.textContent = error.message;
-    });
+    await refreshChats().catch(chatFailed("Couldn't load chats"));
     mountDock();
     // The dock was just emptied, so the bar must stop naming the previous workspace's document.
     refreshTopbarTitle();
