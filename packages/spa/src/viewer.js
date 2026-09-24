@@ -246,9 +246,10 @@ export function mountApp(
   const settingsLink = el("button", {
     type: "button",
     className: "glosa-sidebar-settings",
-    textContent: "Settings",
     onClick: openAgentSettings,
   });
+  settingsLink.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8.4 2.5h3.2l.5 2a6 6 0 0 1 1.2.7l2-.6 1.6 2.8-1.5 1.4a6 6 0 0 1 0 1.4l1.5 1.4-1.6 2.8-2-.6a6 6 0 0 1-1.2.7l-.5 2H8.4l-.5-2a6 6 0 0 1-1.2-.7l-2 .6-1.6-2.8 1.5-1.4a6 6 0 0 1 0-1.4L3.1 7.4l1.6-2.8 2 .6a6 6 0 0 1 1.2-.7z"/><circle cx="10" cy="9.5" r="2.5"/></svg><span>Settings</span>';
   sidebarEl.append(settingsLink);
   const archivedChats = el("input", { type: "checkbox", "aria-label": "Include archived chats" });
   archivedChats.addEventListener("change", scheduleChatsRefresh);
