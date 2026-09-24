@@ -951,6 +951,61 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-history strong')?.textContent")).toBe(
         "clear opening",
       );
+      // Native selects keep keyboard behavior, while their shared custom tooltip stays dismissible.
+      expect(
+        await tab.evaluate<{ visible: boolean; clearance: number; text: string }>(`(()=>{
+        const select=document.querySelector('[aria-label=Effort]');select.focus();
+        const tip=document.getElementById(select.getAttribute('aria-describedby'));
+        const icon=select.parentElement.querySelector('svg').getBoundingClientRect();
+        return {visible:getComputedStyle(tip).visibility==='visible',text:tip.textContent,
+          clearance:select.getBoundingClientRect().left+parseFloat(getComputedStyle(select).paddingLeft)-icon.right};
+      })()`),
+      ).toEqual({
+        visible: true,
+        clearance: expect.any(Number),
+        text: expect.stringContaining("High effort · More reasoning"),
+      });
+      expect(
+        await tab.evaluate<number>(
+          `(()=>{const select=document.querySelector('[aria-label=Effort]');return parseFloat(getComputedStyle(select).paddingLeft)-26})()`,
+        ),
+      ).toBeGreaterThan(0);
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+      expect(
+        await tab.evaluate<{ focused: boolean; hidden: boolean }>(
+          `(()=>{const select=document.querySelector('[aria-label=Effort]');return {focused:document.activeElement===select,hidden:getComputedStyle(document.getElementById(select.getAttribute('aria-describedby'))).visibility==='hidden'}})()`,
+        ),
+      ).toEqual({ focused: true, hidden: true });
+      const effortBox = await tab.evaluate<{ x: number; y: number }>(
+        `(()=>{const select=document.querySelector('[aria-label=Effort]');select.blur();const box=select.getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2}})()`,
+      );
+      await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...effortBox });
+      const tipBox = await tab.evaluate<{ x: number; y: number; visible: boolean }>(
+        `(()=>{const tip=document.querySelector('.glosa-chat-effort-field [role=tooltip]'),box=tip.getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2,visible:getComputedStyle(tip).visibility==='visible'}})()`,
+      );
+      expect(tipBox.visible).toBe(true);
+      await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: tipBox.x, y: tipBox.y });
+      expect(
+        await tab.evaluate<string>(
+          "getComputedStyle(document.querySelector('.glosa-chat-effort-field [role=tooltip]')).visibility",
+        ),
+      ).toBe("visible");
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+      expect(
+        await tab.evaluate<string>(
+          "getComputedStyle(document.querySelector('.glosa-chat-effort-field [role=tooltip]')).visibility",
+        ),
+      ).toBe("hidden");
       const selected = await tab.evaluate<string>(`(() => {
       const text = document.querySelector('.glosa-chat-history strong').firstChild;
       const range=document.createRange(); range.selectNodeContents(text); const selection=getSelection(); selection.removeAllRanges(); selection.addRange(range);
@@ -1115,7 +1170,9 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         const { mountAgentSettings } = await import('/app/agent-settings.js');
         window.installFixture = {installed:false,calls:0};
         installFixture.pane=mountAgentSettings(document.querySelector('main'),{dataAccess:{
-          getAgentStatus:async()=>({available:true,providers:[{id:'claude-code',name:'Claude Code',installed:installFixture.installed,qualified:true}],profiles:[]}),
+          getAgentStatus:async()=>({available:true,providers:[{id:'claude-code',name:'Claude Code',installed:installFixture.installed,qualified:true,
+            installation:installFixture.calls&&!installFixture.installed?{phase:'downloading',startedAt:Date.now()-72000,updatedAt:Date.now()-35000,packagesCompleted:2,bytesCompleted:2612000}:undefined
+          }],profiles:[]}),
           installAgent:async()=>{installFixture.calls++;await new Promise(resolve=>installFixture.finish=resolve);installFixture.installed=true;}
         }});
         await installFixture.pane.ready;
@@ -1133,6 +1190,26 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         `(()=>{const b=document.querySelector('.glosa-agent-runtime button');b.click();return {disabled:b.disabled,label:b.textContent,busy:b.getAttribute('aria-busy'),calls:installFixture.calls}})()`,
       );
       expect(installing).toEqual({ disabled: true, label: "Installing runtime…", busy: "true", calls: 1 });
+      expect(
+        await tab.evaluate<{
+          phase: string;
+          metrics: string;
+          visible: boolean;
+          indeterminate: boolean;
+          quiet: boolean;
+        }>(`(()=>{
+        const card=document.querySelector('.glosa-agent-runtime'),bar=card.querySelector('progress'),metrics=card.querySelector('.glosa-runtime-metrics');
+        return {phase:card.querySelector('strong').textContent,metrics:metrics.textContent,
+          visible:bar.getBoundingClientRect().height>0&&metrics.getBoundingClientRect().height>0,
+          indeterminate:!bar.hasAttribute('value'),quiet:card.textContent.includes('No installer update for')};
+      })()`),
+      ).toEqual({
+        phase: "Claude Code runtime · Downloading runtime",
+        metrics: expect.stringMatching(/elapsed · 2 packages downloaded · ≈ 2[.,]6 MB received · Last update/),
+        visible: true,
+        indeterminate: true,
+        quiet: true,
+      });
       await tab.evaluate(`(async()=>{
         installFixture.finish();
         const deadline=Date.now()+3000;

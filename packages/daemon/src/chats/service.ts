@@ -43,7 +43,11 @@ export interface ChatServiceOptions {
   launcher: ProcessLauncher;
   manifest(provider: string): RuntimeManifest | undefined;
   runtimeIdentity?(provider: string): string | undefined;
-  runtimeStatus?(provider: string): { installed: boolean; qualified: boolean };
+  runtimeStatus?(provider: string): {
+    installed: boolean;
+    qualified: boolean;
+    installation?: import("../agents/runtimes.ts").RuntimeInstallationProgress;
+  };
   installRuntime?(provider: string, launcher: ProcessLauncher): Promise<RuntimeManifest>;
   /** Re-resolve registration/lifecycle at every admission and handoff. */
   workspace(id: string, epoch: string): ChatWorkspace;

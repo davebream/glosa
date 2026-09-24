@@ -2,7 +2,7 @@
 
 import { mountAgentLogin } from "./agent-login.js";
 import { mountMcpSettings } from "./agent-mcp-settings.js";
-import { actionMenu, agentIcon, agentName } from "./agent-ui.js";
+import { actionMenu, agentIcon, agentName, effortIcon, effortPresentation, modelPresentation } from "./agent-ui.js";
 import { loadChatMarkdown } from "./chat-markdown.js";
 import { confirmDialog } from "./dialog.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -123,10 +123,35 @@ export function createChatPane(
   const account = el("select", { "aria-label": "Agent account" });
   const model = el("select", { "aria-label": "Model" });
   const effort = el("select", { "aria-label": "Effort" });
-  const mode = el("select", { "aria-label": "Permissions" }, [
-    el("option", { value: "default", textContent: "Ask for approval" }),
-    el("option", { value: "plan", textContent: "Plan only" }),
-  ]);
+  const modelField = field("Model", model),
+    effortField = field("Effort", effort);
+  effortField.classList.add("glosa-chat-effort-field");
+  const modelTip = el("span", {
+    className: "glosa-control-tooltip",
+    role: "tooltip",
+    id: `model-tip-${crypto.randomUUID()}`,
+  });
+  const effortTip = el("span", {
+    className: "glosa-control-tooltip",
+    role: "tooltip",
+    id: `effort-tip-${crypto.randomUUID()}`,
+  });
+  model.setAttribute("aria-describedby", modelTip.id);
+  effort.setAttribute("aria-describedby", effortTip.id);
+  modelField.append(modelTip);
+  effortField.append(effortTip);
+  const tooltipFields = [modelField, effortField];
+  for (const field of tooltipFields) {
+    field.addEventListener("mouseenter", () => delete field.dataset.tooltipDismissed);
+    field.addEventListener("focusin", () => delete field.dataset.tooltipDismissed);
+  }
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Escape") for (const field of tooltipFields) field.dataset.tooltipDismissed = "true";
+    },
+    { signal: lifetime.signal },
+  );
   const history = el("div", { className: "glosa-chat-history", tabIndex: 0, "aria-label": "Chat messages" });
   const older = el("button", {
     type: "button",
@@ -514,7 +539,7 @@ export function createChatPane(
         }),
     }),
   );
-  controls.append(field("Account", account), field("Model", model), field("Effort", effort));
+  controls.append(field("Account", account), modelField, effortField);
   menu.popup.append(
     el("button", {
       type: "button",
@@ -564,7 +589,7 @@ export function createChatPane(
   const queueNotice = el("p", { className: "glosa-chat-queue-notice", hidden: true });
   const attach = el("button", {
     type: "button",
-    className: "glosa-chat-attach",
+    className: "glosa-chat-attach glosa-icon-button",
     textContent: "+",
     "aria-label": "Add attachments",
     title: "Attach documents or images",
@@ -577,7 +602,6 @@ export function createChatPane(
     el("div", { className: "glosa-chat-compose-actions" }, [
       attach,
       files,
-      field("Permissions", mode),
       el("span", { className: "glosa-chat-action-spacer" }),
       controls,
       stop,
@@ -657,10 +681,8 @@ export function createChatPane(
       renderControls();
     }
   }
-  function pick(select, values, selected) {
-    const entries = values.some((v) => v.id === selected)
-      ? values
-      : [{ id: selected, name: selected || "Choose…" }, ...values];
+  function pick(select, values, selected, fallbackLabel = selected || "Choose…") {
+    const entries = values.some((v) => v.id === selected) ? values : [{ id: selected, name: fallbackLabel }, ...values];
     const options = [...select.options];
     if (
       options.length !== entries.length ||
@@ -680,14 +702,21 @@ export function createChatPane(
       state.profileId,
     );
     const models = catalog?.capabilities?.[state.profileId]?.models ?? [];
-    pick(model, models, state.settings.model);
+    pick(
+      model,
+      models.map((entry) => ({ ...entry, name: modelPresentation(entry).label })),
+      state.settings.model,
+      modelPresentation({ id: state.settings.model, name: state.settings.model }).label,
+    );
     pick(
       effort,
-      (models.find((m) => m.id === state.settings.model)?.efforts ?? []).map((id) => ({ id, name: id })),
+      (models.find((m) => m.id === state.settings.model)?.efforts ?? []).map((id) => ({
+        id,
+        name: effortPresentation(id).label,
+      })),
       state.settings.effort,
+      effortPresentation(state.settings.effort).label,
     );
-    mode.value = state.settings.permissionMode;
-    mode.parentElement.dataset.selection = mode.selectedOptions[0]?.textContent ?? "Permissions";
     const profile = catalog?.profiles?.find((p) => p.id === state.profileId);
     const accountReady =
       !!profile?.enabled && !profile.removed && (!profile.auth || profile.auth.state === "authenticated");
@@ -699,7 +728,6 @@ export function createChatPane(
     account.disabled = changingSettings || uploading || pending || !!sendIntent;
     model.disabled = changingAccount || changingSettings || !models.length;
     effort.disabled = changingAccount || changingSettings || !selectedModel?.efforts.length;
-    mode.disabled = changingAccount || changingSettings;
     readiness.hidden = readyToSend || !catalog?.available || state.archived;
     readinessText.textContent = !accountReady
       ? "This account needs attention before it can send."
@@ -713,9 +741,15 @@ export function createChatPane(
     account.title = state.turns.length
       ? "Changing account starts a fresh chat. You can move your draft there."
       : "Choose the account for this chat";
-    model.title = "Applies to the next message";
-    effort.title = "How much time the agent spends reasoning; applies to the next message";
-    mode.title = "Ask for approval before actions, or plan without changing files";
+    const selectedModelDisplay = modelPresentation(
+      selectedModel ?? { id: state.settings.model, name: state.settings.model },
+    );
+    modelTip.textContent = `${selectedModelDisplay.label} · ${selectedModelDisplay.description} Applies to your next message.`;
+    const selectedEffort = effortPresentation(state.settings.effort);
+    effortTip.textContent = `${selectedEffort.label} effort · ${selectedEffort.description} Applies to your next message.`;
+    for (const option of effort.options) option.title = effortPresentation(option.value).description;
+    effortField.querySelector(".glosa-effort-mark")?.remove();
+    effortField.append(effortIcon(state.settings.effort));
     menu.popup.querySelector('[data-chat-action="pin"]').textContent = state.pinned ? "Unpin chat" : "Pin chat";
     menu.popup.querySelector('[data-chat-action="archive"]').textContent = state.archived
       ? "Restore chat"
@@ -743,6 +777,7 @@ export function createChatPane(
       const content = el("div", { className: "glosa-chat-text" });
       const copy = el("button", {
         type: "button",
+        className: "glosa-icon-button",
         textContent: "⧉",
         title: "Copy message",
         "aria-label": `Copy ${label}`,
@@ -1022,7 +1057,7 @@ export function createChatPane(
     const editing = changingAccount || changingSettings || uploading;
     const queued = state.turns.some((turn) => ["accepted", "queued", "held"].includes(turn.status));
     queueNotice.hidden = !queued;
-    queueNotice.textContent = "A message is waiting. Model, effort and permission changes apply after it.";
+    queueNotice.textContent = "A message is waiting. Model and effort changes apply after it.";
     feedback.disabled = pending || editing || !catalog?.available || state.archived || queued;
     send.disabled =
       pending || editing || (!sendIntent && (!catalog?.available || state.archived || !readyToSend || queued));
@@ -1325,7 +1360,7 @@ export function createChatPane(
         }),
       ),
   );
-  for (const select of [model, effort, mode])
+  for (const select of [model, effort])
     select.addEventListener("change", () => {
       if (changingAccount || changingSettings || pending || sendIntent) {
         renderControls();
@@ -1338,9 +1373,9 @@ export function createChatPane(
           select === model
             ? (catalog?.capabilities?.[state.profileId]?.models.find((m) => m.id === model.value)?.efforts[0] ?? "")
             : effort.value,
-        permissionMode: mode.value,
+        permissionMode: state.settings.permissionMode,
       };
-      for (const control of [account, model, effort, mode]) control.disabled = true;
+      for (const control of [account, model, effort]) control.disabled = true;
       render();
       void act(() =>
         dataAccess.changeChat(slug, chatId, {
@@ -1361,7 +1396,7 @@ export function createChatPane(
     }
     const generation = ++accountGeneration;
     changingAccount = true;
-    for (const control of [model, effort, mode]) control.disabled = true;
+    for (const control of [model, effort]) control.disabled = true;
     render();
     void act(
       async () => {

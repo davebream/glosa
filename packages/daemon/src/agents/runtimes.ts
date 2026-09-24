@@ -27,6 +27,15 @@ import { writeOwnership } from "./ownership.ts";
 // slower connections while retaining a finite owned-process cleanup deadline.
 export const RUNTIME_INSTALL_TIMEOUT_MS = 20 * 60_000;
 
+export interface RuntimeInstallationProgress {
+  phase: "preparing" | "downloading" | "installing" | "verifying" | "complete" | "failed";
+  startedAt: number;
+  updatedAt: number;
+  packagesCompleted: number;
+  /** Bun reports rounded archive sizes after completion, not bytes currently in flight. */
+  bytesCompleted: number;
+}
+
 export interface RuntimeCandidate {
   provider: string;
   version: string;
@@ -89,6 +98,7 @@ function treeHash(root: string): string {
 
 /** Explicit install only. Construction, status and opening history never download anything. */
 export class RuntimeCatalog {
+  private readonly installations = new Map<string, RuntimeInstallationProgress>();
   constructor(
     private readonly root: string,
     private readonly candidates: RuntimeCandidate[],
@@ -107,7 +117,7 @@ export class RuntimeCatalog {
   status(provider: string) {
     const candidate = this.candidate(provider),
       installed = existsSync(join(this.directory(candidate), "manifest.json"));
-    return { installed, qualified: installed && candidate.qualified };
+    return { installed, qualified: installed && candidate.qualified, installation: this.installations.get(provider) };
   }
   private candidate(provider: string): RuntimeCandidate {
     const candidate = this.candidates.find((item) => item.provider === provider);
@@ -171,6 +181,9 @@ export class RuntimeCatalog {
   }
   async install(provider: string, launcher: ProcessLauncher): Promise<RuntimeManifest> {
     const candidate = this.candidate(provider);
+    const previous = this.installations.get(provider);
+    if (previous && !["complete", "failed"].includes(previous.phase))
+      throw new ManagedAgentError("management-busy", "Runtime installation is already running.");
     if (
       process.platform !== "darwin" ||
       !["arm64", "x64"].includes(process.arch) ||
@@ -193,6 +206,41 @@ export class RuntimeCatalog {
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     let child: OwnedProcess | undefined;
+    const progress: RuntimeInstallationProgress = {
+      phase: "preparing",
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      packagesCompleted: 0,
+      bytesCompleted: 0,
+    };
+    this.installations.set(provider, progress);
+    const phase = (value: RuntimeInstallationProgress["phase"]) => {
+      progress.phase = value;
+      progress.updatedAt = Date.now();
+    };
+    const lines = new Map<string, { decoder: TextDecoder; pending: string }>();
+    const onData: Parameters<ProcessLauncher["spawn"]>[0]["onData"] = (channel, bytes) => {
+      if (["complete", "failed"].includes(progress.phase)) return;
+      progress.updatedAt = Date.now();
+      const stream = lines.get(channel) ?? { decoder: new TextDecoder(), pending: "" };
+      const chunks = (stream.pending + stream.decoder.decode(bytes, { stream: true })).split(/\r?\n/);
+      stream.pending = chunks.pop()!.slice(-8192);
+      lines.set(channel, stream);
+      for (const line of chunks) {
+        // Only expose known counters and phase names. Verbose installer headers/paths never leave here.
+        if (/^ HTTP\/\d(?:\.\d)? GET https:\/\/registry\.npmjs\.org\//.test(line)) phase("downloading");
+        if (/^Resolved, downloaded and extracted/.test(line)) phase("installing");
+        const archive = /^\[[^\]\r\n]{1,200}\] Streamed (\d+(?:\.\d+)?) ([kKMGT]?B) tarball/.exec(line);
+        if (archive) {
+          const unit = ({ B: 1, kB: 1e3, KB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12 } as Record<string, number>)[archive[2]!];
+          const size = Number(archive[1]) * unit!;
+          if (Number.isFinite(size) && size >= 0 && size <= 1e12) {
+            progress.packagesCompleted++;
+            progress.bytesCompleted += size;
+          }
+        }
+      }
+    };
     try {
       writeFileSync(
         join(staging, "package.json"),
@@ -207,6 +255,7 @@ export class RuntimeCatalog {
           "--frozen-lockfile",
           "--ignore-scripts",
           "--no-progress",
+          "--verbose",
           "--backend=copyfile",
           "--omit=optional",
           "--registry=https://registry.npmjs.org/",
@@ -214,7 +263,7 @@ export class RuntimeCatalog {
         ],
         cwd: staging,
         env,
-        onData() {},
+        onData,
       });
       const exit = await Promise.race([
         child.exited,
@@ -235,6 +284,7 @@ export class RuntimeCatalog {
       if (timer) clearTimeout(timer);
       await child.stop();
       if (exit.code !== 0 || !exit.groupEmpty) throw new Error("install failed");
+      phase("verifying");
       const binaryRoot = join(staging, "node_modules", candidate.binaryPackage);
       const binaries = files(binaryRoot).filter((path) => path.split("/").pop() === candidate.binaryName);
       if (binaries.length !== 1) throw new Error("native executable could not be uniquely selected");
@@ -266,8 +316,11 @@ export class RuntimeCatalog {
       }
       renameSync(staging, root);
       fsyncContainingDir(root);
-      return this.manifest(provider)!;
+      const installed = this.manifest(provider)!;
+      phase("complete");
+      return installed;
     } catch (error) {
+      phase("failed");
       if (error instanceof ManagedAgentError && error.code === "runtime-install-timeout") throw error;
       throw new ManagedAgentError(
         "runtime-unqualified",

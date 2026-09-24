@@ -10,6 +10,16 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
     login,
     busy = false,
     selectedProvider;
+  let installTimer,
+    installGeneration = 0,
+    localInstallation,
+    remoteInstallation = false;
+  const runtimeRows = new Map();
+  const installing = (progress) => progress && !["complete", "failed"].includes(progress.phase);
+  const duration = (milliseconds) => {
+    const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  };
   const selectedAccounts = new Map();
   const loginAbort = new AbortController();
   const root = el("section", { className: "glosa-agent-settings" });
@@ -76,8 +86,94 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
     el("div", { className: "glosa-settings-layout" }, [navigation, agents, appearancePage]),
   );
   host.append(root);
+  function paintInstallation(row, progress, connectionLost = false) {
+    if (!progress) return;
+    const active = installing(progress);
+    const names = {
+      preparing: "Preparing installation",
+      downloading: "Downloading runtime",
+      installing: "Installing packages",
+      verifying: "Verifying runtime",
+      complete: "Installed",
+      failed: "Installation failed",
+    };
+    row.title.textContent = `${agentName(row.provider)} runtime · ${names[progress.phase] ?? "Installing"}`;
+    row.progress.hidden = !active;
+    row.metrics.hidden = !active;
+    row.detail.textContent = active
+      ? connectionLost
+        ? "Waiting for a progress update from Glosa. Installation may still be running."
+        : Date.now() - progress.updatedAt >= 30_000
+          ? `No installer update for ${duration(Date.now() - progress.updatedAt)}. Large downloads can be quiet.`
+          : "Your terminal setup stays separate. Accounts will be available after installation."
+      : progress.phase === "failed"
+        ? "Installation did not finish. Check your connection and try again."
+        : row.installedDetail;
+    row.metrics.textContent = [
+      `${duration(Date.now() - progress.startedAt)} elapsed`,
+      ...(progress.packagesCompleted
+        ? [
+            `${progress.packagesCompleted} ${progress.packagesCompleted === 1 ? "package" : "packages"} downloaded`,
+            `≈ ${(progress.bytesCompleted / 1e6).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB received`,
+          ]
+        : []),
+      `Last update ${duration(Date.now() - progress.updatedAt)} ago`,
+      ...(connectionLost ? ["Progress connection interrupted"] : []),
+    ].join(" · ");
+    if (active) {
+      row.button.disabled = true;
+      row.button.textContent = "Installing runtime…";
+      row.button.setAttribute("aria-busy", "true");
+    }
+  }
+  function stopInstallationPolling() {
+    clearInterval(installTimer);
+    installTimer = undefined;
+    installGeneration++;
+  }
+  function watchInstallations() {
+    if (installTimer || disposed) return;
+    const generation = ++installGeneration;
+    let inFlight = false,
+      lastResponse = Date.now(),
+      connectionLost = false;
+    const tick = () => {
+      for (const row of runtimeRows.values())
+        if (installing(row.installation))
+          paintInstallation(row, row.installation, connectionLost || Date.now() - lastResponse > 5000);
+      if (inFlight) return;
+      inFlight = true;
+      void dataAccess
+        .getAgentStatus()
+        .then(async (state) => {
+          if (disposed || generation !== installGeneration) return;
+          connectionLost = false;
+          lastResponse = Date.now();
+          remoteInstallation = state.providers.some((provider) => installing(provider.installation));
+          for (const provider of state.providers) {
+            const row = runtimeRows.get(provider.id);
+            if (row && provider.installation) {
+              row.installation = provider.installation;
+              paintInstallation(row, row.installation);
+            }
+          }
+          if (!remoteInstallation && !localInstallation) {
+            await refresh();
+          }
+        })
+        .catch(() => {
+          if (disposed || generation !== installGeneration) return;
+          connectionLost = true;
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    installTimer = setInterval(tick, 1000);
+    tick();
+  }
   const act = async (fn, progress = "Saving changes…", trigger) => {
-    if (busy || disposed) return;
+    if (busy || remoteInstallation || disposed) return;
     busy = true;
     root.setAttribute("aria-busy", "true");
     message.textContent = progress;
@@ -100,8 +196,9 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
     } finally {
       busy = false;
       root.removeAttribute("aria-busy");
-      for (const [control, disabled] of locked) control.disabled = disabled;
-      if (trigger?.isConnected) {
+      for (const [control, disabled] of locked)
+        control.disabled = disabled || (remoteInstallation && body.contains(control));
+      if (trigger?.isConnected && !remoteInstallation) {
         trigger.textContent = originalLabel;
         trigger.removeAttribute("aria-busy");
       }
@@ -133,6 +230,9 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
   async function refresh() {
     const state = await dataAccess.getAgentStatus();
     if (disposed) return;
+    stopInstallationPolling();
+    remoteInstallation = state.providers.some((provider) => installing(provider.installation));
+    runtimeRows.clear();
     const focused = root.contains(document.activeElement) ? document.activeElement : null;
     const focusedProfile = focused?.closest("[data-profile-id]")?.dataset.profileId;
     const focusedLabel = focused?.getAttribute("aria-label") ?? focused?.textContent;
@@ -175,36 +275,83 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
         ]),
       ]);
       section.append(sectionHeader);
+      const installedDetail = provider.qualified
+        ? "Tested runtime installed"
+        : "Installed. Chat support is not available in this build yet.";
+      const runtimeTitle = el("strong", {
+        role: "status",
+        textContent: `${agentName(provider.id)} runtime · ${provider.installed ? "Installed" : "Not installed"}`,
+      });
+      const runtimeDetail = el("p", {
+        textContent: provider.installed
+          ? installedDetail
+          : "Install the runtime first. Then add an account and sign in. Your terminal setup stays separate.",
+      });
+      const runtimeProgress = el("progress", {
+        className: "glosa-runtime-progress",
+        "aria-label": `${provider.name} installation`,
+        hidden: true,
+      });
+      const runtimeMetrics = el("p", { className: "glosa-runtime-metrics", hidden: true });
+      const runtimeButton = button(provider.installed ? "Verify / repair runtime" : "Install runtime", async () => {
+        if (
+          await confirmDialog({
+            title: `Install ${provider.name}?`,
+            body: "Download Glosa's pinned runtime from the npm registry. Your system CLI and its settings stay separate.",
+            confirmLabel: "Install",
+          })
+        ) {
+          localInstallation = provider.id;
+          message.textContent = "";
+          const row = runtimeRows.get(provider.id);
+          row.installation = {
+            phase: "preparing",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            packagesCompleted: 0,
+            bytesCompleted: 0,
+          };
+          paintInstallation(row, row.installation);
+          try {
+            const request = dataAccess.installAgent(provider.id);
+            watchInstallations();
+            await request;
+          } finally {
+            localInstallation = undefined;
+            // Reconcile even on a dropped POST response: a server-side install may still be running.
+            try {
+              await refresh();
+            } catch (error) {
+              remoteInstallation = true;
+              watchInstallations();
+              message.textContent = error.message;
+            }
+          }
+        }
+      });
       const runtime = el("div", { className: "glosa-agent-runtime", "data-installed": String(provider.installed) }, [
-        el("strong", {
-          textContent: `${agentName(provider.id)} runtime · ${provider.installed ? "Installed" : "Not installed"}`,
-        }),
+        runtimeTitle,
+        runtimeDetail,
+        runtimeButton,
+        runtimeProgress,
+        runtimeMetrics,
       ]);
-      runtime.append(
-        el("p", {
-          textContent: provider.installed
-            ? provider.qualified
-              ? "Tested runtime installed"
-              : "Installed. Chat support is not available in this build yet."
-            : "Install the runtime first. Then add an account and sign in. Your terminal setup stays separate.",
-        }),
-      );
-      runtime.append(
-        button(provider.installed ? "Verify / repair runtime" : "Install runtime", async () => {
-          if (
-            await confirmDialog({
-              title: `Install ${provider.name}?`,
-              body: "Download Glosa's pinned runtime from the npm registry. Your system CLI and its settings stay separate.",
-              confirmLabel: "Install",
-            })
-          )
-            await dataAccess.installAgent(provider.id);
-        }),
-      );
+      const runtimeRow = {
+        provider: provider.id,
+        title: runtimeTitle,
+        detail: runtimeDetail,
+        progress: runtimeProgress,
+        metrics: runtimeMetrics,
+        button: runtimeButton,
+        installedDetail,
+        installation: provider.installation,
+      };
+      runtimeRows.set(provider.id, runtimeRow);
+      paintInstallation(runtimeRow, provider.installation);
       section.prepend(runtime);
       const accountArea = el("fieldset", {
         className: "glosa-agent-account-area",
-        disabled: !provider.installed || !state.available,
+        disabled: !provider.installed || !state.available || remoteInstallation,
       });
       const blockedReason = el("p", {
         className: "glosa-agent-recovery",
@@ -456,7 +603,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
       ]);
       form.addEventListener("submit", (event) => {
         event.preventDefault();
-        if (!provider.installed || !state.available || busy) return;
+        if (!provider.installed || !state.available || busy || remoteInstallation) return;
         if (label.value.trim())
           void act(async () => {
             const created = await dataAccess.createAgentProfile({
@@ -469,6 +616,10 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
       });
       accountArea.append(form);
       body.append(section);
+    }
+    if (remoteInstallation) {
+      for (const control of body.querySelectorAll("button,input,select,textarea")) control.disabled = true;
+      watchInstallations();
     }
     if (focusedProfile) {
       const card = [...body.querySelectorAll("[data-profile-id]")].find(
@@ -493,6 +644,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
     ready,
     destroy() {
       disposed = true;
+      stopInstallationPolling();
       stopAppearance?.();
       loginAbort.abort();
       void login?.destroy().catch(() => {});

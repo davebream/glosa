@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import MarkdownIt from "markdown-it";
 import { createSafeChatRenderer } from "../src/chat-markdown.js";
 import { createChatPane, applyChatEvent } from "../src/chat-pane.js";
+import { modelPresentation } from "../src/agent-ui.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
 let dom: DomEnv;
 beforeEach(() => {
@@ -12,6 +13,24 @@ afterEach(() => dom.teardown());
 const flush = async () => {
   for (let i = 0; i < 30; i++) await Promise.resolve();
 };
+
+test("model labels retain provider-reported versions and never infer a version from an alias or context size", () => {
+  for (const [model, label] of [
+    [{ id: "sonnet", name: "Sonnet", resolvedModel: "claude-sonnet-5" }, "Sonnet 5"],
+    [{ id: "default", name: "Default (recommended)", resolvedModel: "claude-opus-5-5" }, "Opus 5.5"],
+    [{ id: "opus[1m]", name: "Opus (1M context)", resolvedModel: "claude-opus-5-5" }, "Opus 5.5 · 1M"],
+    [{ id: "claude-sonnet-4-5-20250929", name: "Sonnet" }, "Sonnet 4.5"],
+    [{ id: "gpt-6-astra", name: "Astra" }, "GPT-6 Astra"],
+    [{ id: "gpt-5.6-sol", name: "Sol" }, "GPT-5.6 Sol"],
+    [{ id: "sonnet", name: "Sonnet" }, "Sonnet · version not reported"],
+    [{ id: "opus[1m]", name: "Opus (1M context)" }, "Opus (1M context) · version not reported"],
+    [{ id: "opus[1m]", name: "Opus 1M context" }, "Opus 1M context · version not reported"],
+  ] as const)
+    expect(modelPresentation(model).label).toBe(label);
+  expect(modelPresentation({ id: "sonnet", name: "Sonnet", resolvedModel: "claude-sonnet-5" }).description).toContain(
+    "At last model discovery, alias sonnet resolved to claude-sonnet-5",
+  );
+});
 
 test("an unresolved send remains retryable after the selected account is disabled", async () => {
   const f = fixture();
@@ -130,7 +149,7 @@ function fixture(options: { sourceChatId?: string } = {}) {
       { id: "b", provider: "codex", enabled: true, label: "Work" },
     ],
     capabilities: {
-      a: { models: [{ id: "model", name: "Model", efforts: ["high"] }] },
+      a: { models: [{ id: "model", name: "Model", resolvedModel: "claude-sonnet-5", efforts: ["high", "low"] }] },
       b: { models: [{ id: "codex-model", name: "Codex model", efforts: ["medium"] }] },
     },
   };
@@ -250,6 +269,9 @@ test("settings must finish saving before an ordinary or feedback turn can be sen
   for (const fails of [false, true]) {
     const f = fixture();
     await f.pane.ready;
+    const model = f.host.querySelector('[aria-label="Model"]') as HTMLSelectElement;
+    expect(model.selectedOptions[0]!.textContent).toBe("Sonnet 5");
+    expect(model.value).toBe("model");
     let finish!: () => void;
     f.dataAccess.changeChat = (_slug: string, _id: string, input: { settings: typeof f.state.settings }) =>
       new Promise<void>((resolve, reject) => {
@@ -262,11 +284,11 @@ test("settings must finish saving before an ordinary or feedback turn can be sen
           }
         };
       });
-    const mode = f.host.querySelector('[aria-label="Permissions"]') as HTMLSelectElement;
-    mode.value = "plan";
-    mode.dispatchEvent(new Event("change"));
+    const effort = f.host.querySelector('[aria-label="Effort"]') as HTMLSelectElement;
+    effort.value = "low";
+    effort.dispatchEvent(new Event("change"));
     const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
-    draft.value = "Use the selected permissions";
+    draft.value = "Use the selected effort";
     draft.dispatchEvent(new Event("input", { bubbles: true }));
     draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Send feedback")!.click();
@@ -276,7 +298,8 @@ test("settings must finish saving before an ordinary or feedback turn can be sen
     expect((f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).disabled).toBe(true);
     finish();
     await flush();
-    expect(mode.value).toBe(fails ? "default" : "plan");
+    expect(effort.value).toBe(fails ? "high" : "low");
+    expect(f.state.settings.permissionMode).toBe("default");
     draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await flush();
     expect(f.sends).toHaveLength(1);
@@ -548,7 +571,24 @@ test("runtime setup disables accounts, reports installation, rejects repeated cl
     dataAccess: {
       getAgentStatus: async () => ({
         available: true,
-        providers: [{ id: "claude-code", name: "Claude Code", installed, qualified: true }],
+        providers: [
+          {
+            id: "claude-code",
+            name: "Claude Code",
+            installed,
+            qualified: true,
+            installation:
+              installs && !installed
+                ? {
+                    phase: "downloading",
+                    startedAt: Date.now() - 70_000,
+                    updatedAt: Date.now() - 35_000,
+                    packagesCompleted: 2,
+                    bytesCompleted: 2_612_000,
+                  }
+                : undefined,
+          },
+        ],
         profiles: [],
       }),
       installAgent: async () => {
@@ -581,16 +621,186 @@ test("runtime setup disables accounts, reports installation, rejects repeated cl
   expect(install.disabled).toBe(true);
   expect(install.textContent).toBe("Installing runtime…");
   expect(install.getAttribute("aria-busy")).toBe("true");
+  expect(host.querySelector(".glosa-agent-runtime strong")!.textContent).toContain("Downloading runtime");
+  expect(host.querySelector(".glosa-runtime-metrics")!.textContent).toContain(
+    "2 packages downloaded · ≈ 2.6 MB received",
+  );
+  expect(host.querySelector(".glosa-runtime-metrics")!.textContent).toContain("1m 10s elapsed");
+  expect(host.textContent).toContain("No installer update for 35s");
+  expect(host.querySelector("progress")!.hasAttribute("value")).toBe(false);
+  expect((host.querySelector("progress") as HTMLProgressElement).hidden).toBe(false);
   install.click();
   expect(installs).toBe(1);
   finish();
   await flush();
   expect(area().disabled).toBe(false);
+  expect((host.querySelector("progress") as HTMLProgressElement).hidden).toBe(true);
   name().value = "Personal";
   form().dispatchEvent(new Event("submit", { cancelable: true }));
   await flush();
   expect(creates).toBe(1);
   pane.destroy();
+});
+
+test("reopened runtime settings recover progress after a disconnect and stop polling when destroyed", async () => {
+  const { mountAgentSettings } = await import("../src/agent-settings.js");
+  const host = document.createElement("div");
+  document.body.append(host);
+  let tick!: () => void,
+    offline = false,
+    reads = 0,
+    installed = false;
+  let resolvePending: (() => void) | undefined;
+  const timer = spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
+    tick = callback;
+    return 991;
+  }) as typeof setInterval);
+  const clear = spyOn(globalThis, "clearInterval");
+  const pane = mountAgentSettings(host, {
+    appearance: undefined,
+    onChange: undefined,
+    dataAccess: {
+      getAgentStatus: async () => {
+        reads++;
+        if (offline) throw new Error("disconnected");
+        if (installed)
+          await new Promise<void>((resolve) => {
+            resolvePending = resolve;
+          });
+        return {
+          available: true,
+          profiles: [],
+          providers: [
+            {
+              id: "codex",
+              name: "Codex",
+              installed,
+              qualified: true,
+              installation: {
+                phase: installed ? "complete" : "downloading",
+                startedAt: Date.now() - 1000,
+                updatedAt: Date.now(),
+                packagesCompleted: 0,
+                bytesCompleted: 0,
+              },
+            },
+          ],
+        };
+      },
+    },
+  });
+  try {
+    await pane.ready;
+    await flush();
+    expect((host.querySelector(".glosa-agent-runtime button") as HTMLButtonElement).disabled).toBe(true);
+    expect(host.querySelector("strong")!.textContent).toContain("Downloading runtime");
+    offline = true;
+    tick();
+    await flush();
+    tick();
+    expect(host.textContent).toContain("Progress connection interrupted");
+    await flush();
+    offline = false;
+    tick();
+    await flush();
+    expect(host.textContent).not.toContain("Progress connection interrupted");
+    installed = true;
+    tick();
+    await flush();
+    const pendingReads = reads;
+    tick();
+    tick();
+    expect(reads).toBe(pendingReads);
+    pane.destroy();
+    expect(clear).toHaveBeenCalledWith(991);
+    resolvePending!();
+    await flush();
+    expect(host.childElementCount).toBe(0);
+    expect(reads).toBe(pendingReads);
+  } finally {
+    pane.destroy();
+    timer.mockRestore();
+    clear.mockRestore();
+  }
+});
+
+test("an interrupted install request keeps tracking the unknown outcome until status reconnects", async () => {
+  const { mountAgentSettings } = await import("../src/agent-settings.js");
+  const host = document.createElement("div");
+  document.body.append(host);
+  let tick!: () => void,
+    offline = false,
+    installed = false,
+    installing = false;
+  let rejectInstall!: (error: Error) => void;
+  const timer = spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
+    tick = callback;
+    return 992;
+  }) as typeof setInterval);
+  const pane = mountAgentSettings(host, {
+    appearance: undefined,
+    onChange: undefined,
+    dataAccess: {
+      getAgentStatus: async () => {
+        if (offline) throw new Error("Connection interrupted");
+        return {
+          available: true,
+          profiles: [],
+          providers: [
+            {
+              id: "codex",
+              name: "Codex",
+              installed,
+              qualified: true,
+              installation: installing
+                ? {
+                    phase: "downloading",
+                    startedAt: Date.now(),
+                    updatedAt: Date.now(),
+                    packagesCompleted: 0,
+                    bytesCompleted: 0,
+                  }
+                : undefined,
+            },
+          ],
+        };
+      },
+      installAgent: async () => {
+        installing = true;
+        await new Promise<void>((_resolve, reject) => {
+          rejectInstall = reject;
+        });
+      },
+    },
+  });
+  try {
+    await pane.ready;
+    (host.querySelector(".glosa-agent-runtime button") as HTMLButtonElement).click();
+    await flush();
+    (document.querySelector("dialog .glosa-save") as HTMLButtonElement).click();
+    await flush();
+    offline = true;
+    rejectInstall(new Error("Connection interrupted"));
+    await flush();
+    expect((host.querySelector(".glosa-agent-runtime button") as HTMLButtonElement).disabled).toBe(true);
+    tick();
+    await flush();
+    tick();
+    await flush();
+    expect(host.textContent).toContain("Progress connection interrupted");
+    offline = false;
+    installing = false;
+    installed = true;
+    tick();
+    await flush();
+    expect(host.querySelector("strong")!.textContent).toContain("Installed");
+    expect((host.querySelector(".glosa-agent-runtime button") as HTMLButtonElement).disabled).toBe(false);
+    expect((host.querySelector("fieldset") as HTMLFieldSetElement).disabled).toBe(false);
+    expect((host.querySelector("progress") as HTMLProgressElement).hidden).toBe(true);
+  } finally {
+    pane.destroy();
+    timer.mockRestore();
+  }
 });
 
 test("failed account creation preserves the label and restores usable controls", async () => {

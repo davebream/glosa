@@ -31,6 +31,8 @@ export type AgentMcpServer = { id: string; label: string; enabled: boolean } & (
 export interface AgentModel {
   id: string;
   name: string;
+  /** Provider-reported concrete model behind a selectable alias; never inferred from a family name. */
+  resolvedModel?: string;
   efforts: string[];
 }
 export interface AgentCapabilities {

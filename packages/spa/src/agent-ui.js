@@ -19,6 +19,88 @@ const brands = {
 };
 export const agentName = (provider) => ({ "claude-code": "Claude Code", codex: "Codex" })[provider] ?? provider;
 
+/** Version labels come from discovery metadata, never a hardcoded family-to-latest map. */
+export function modelPresentation(model) {
+  const wire = model.resolvedModel || model.id;
+  const name = model.name || model.id;
+  const claude = /^claude-(opus|sonnet|haiku|fable)-(\d+(?:[-.]\d{1,2})?)(?:-\d{8})?(?:\[.*\])?$/i.exec(wire);
+  let label;
+  if (claude) {
+    label = `${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2].replaceAll("-", ".")}`;
+    if (/\[1m\]/i.test(model.id) || /\b1m\b/i.test(name)) label += " · 1M";
+  } else if (/^(?:gpt-\d|o\d)/i.test(wire)) {
+    label = wire
+      .replace(/^gpt/i, "GPT")
+      .replace(
+        /-(astra|sol|terra|codex|mini|max|nano|pro)\b/gi,
+        (_match, word) => ` ${word[0].toUpperCase()}${word.slice(1)}`,
+      );
+  } else if (/\b(?:opus|sonnet|haiku|fable|gpt|o)[ -]?\d+(?:\.\d+)?\b/i.test(name)) {
+    label = name;
+  } else if (/^claude-\d+(?:[-.]\d+)?-(?:opus|sonnet|haiku|fable)(?:-\d{8})?$/i.test(wire)) {
+    label = wire;
+  } else {
+    return {
+      label: `${name} · version not reported`,
+      description: "The agent has not reported a model version. Refresh its models in Settings.",
+      versionKnown: false,
+    };
+  }
+  return {
+    label,
+    description:
+      model.resolvedModel && model.resolvedModel !== model.id
+        ? `At last model discovery, alias ${model.id} resolved to ${model.resolvedModel}.`
+        : `Model ID: ${wire}.`,
+    versionKnown: true,
+  };
+}
+
+/** One effort vocabulary for both providers; these are relative settings, never latency promises. */
+export function effortPresentation(value) {
+  const levels = {
+    none: ["None", 0, "Reasoning effort is turned off."],
+    minimal: ["Minimal", 1, "The smallest reasoning budget, for straightforward requests."],
+    low: ["Low", 1, "Less reasoning, for quicker responses to straightforward requests."],
+    medium: ["Medium", 2, "A balance of reasoning depth and response time."],
+    high: ["High", 3, "More reasoning for difficult requests; responses may take longer."],
+    xhigh: ["Extra high", 4, "An extended reasoning budget for demanding requests."],
+    max: ["Maximum", 4, "The highest available reasoning budget; responses may take longer."],
+    auto: ["Auto", 0, "The agent chooses how much reasoning to use."],
+  };
+  const [label, bars, description] = levels[value] ?? [
+    value || "Default",
+    0,
+    "Uses the agent’s configured reasoning effort.",
+  ];
+  return { label, bars, description };
+}
+
+export function effortIcon(value) {
+  const { bars } = effortPresentation(value);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 20 16");
+  svg.setAttribute("class", "glosa-effort-mark");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  for (let index = 0; index < 4; index++) {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    const height = 4 + index * 3;
+    for (const [name, content] of Object.entries({
+      x: 1 + index * 5,
+      y: 15 - height,
+      width: 3,
+      height,
+      rx: 1,
+      fill: "currentColor",
+      opacity: index < bars ? 1 : 0.2,
+    }))
+      rect.setAttribute(name, String(content));
+    svg.append(rect);
+  }
+  return svg;
+}
+
 export function agentIcon(provider) {
   const brand = brands[provider];
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");

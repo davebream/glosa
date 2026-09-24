@@ -230,8 +230,10 @@ export function mountApp(
       listMenu.element,
       el("button", {
         type: "button",
+        className: "glosa-icon-button",
         textContent: "+",
         "aria-label": "New chat",
+        title: "New chat",
         onClick: () =>
           void newChat().catch((error) => {
             chatNotice.textContent = error.message;

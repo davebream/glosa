@@ -52,11 +52,27 @@ test("torn final bytes are quarantined but corrupt interior executable policy bl
   expect(() => new IntentJournal(path, schema)).toThrow("execution is blocked");
 });
 
-test("chat/profile replay preserves logical identity, frozen turns and separate draft revisions", () => {
+test("chat/profile replay preserves model resolution, logical identity, frozen turns and separate draft revisions", () => {
   const dir = root(),
     store = new AgentStore(dir),
     profile = newProfile("fixture", "Personal");
   store.saveProfiles([profile]);
+  const legacyCapabilities = {
+    models: [{ id: "sonnet", name: "Sonnet", efforts: ["high"] }],
+    resume: true,
+    images: true,
+    questions: true,
+    permissions: true,
+    mcp: true,
+  };
+  // A pre-version-discovery record remains replayable before a refreshed record.
+  store.saveCapabilities(profile.id, profile.epoch, "fixture-runtime", legacyCapabilities);
+  const refreshedCapabilities = {
+    ...legacyCapabilities,
+    models: [{ ...legacyCapabilities.models[0]!, resolvedModel: "claude-sonnet-5" }],
+  };
+  store.saveCapabilities(profile.id, profile.epoch, "fixture-runtime", refreshedCapabilities);
+  expect(store.savedCapabilities(profile.id)?.capabilities).toEqual(refreshedCapabilities);
   const chatId = randomUUID(),
     sessionId = randomUUID();
   const input = {
@@ -95,6 +111,7 @@ test("chat/profile replay preserves logical identity, frozen turns and separate 
   expect(() => chat.append({ type: "changed", profileId: randomUUID() })).toThrow("identity cannot change");
   store.close();
   const replay = new AgentStore(dir);
+  expect(replay.savedCapabilities(profile.id)?.capabilities).toEqual(refreshedCapabilities);
   expect(replay.chat(chatId).state.sessionId).toBe(sessionId);
   expect(replay.chat(chatId).text(replay.chat(chatId).state.turns[0]?.textHash)).toBe("first prompt");
   expect(replay.list(workspaceId, "new-registration")).toEqual([]);

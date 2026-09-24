@@ -21,7 +21,9 @@ import { nativeProbe } from "../../../daemon/src/agents/probe.ts";
 // Structural boundary checked against the published 0.3.280 declarations. The optional commercial
 // SDK is loaded only from an explicitly installed/qualified runtime, never imported by core.
 export interface ClaudeQuery extends AsyncIterable<unknown> {
-  supportedModels(): Promise<{ value: string; displayName: string; supportedEffortLevels?: string[] }[]>;
+  supportedModels(): Promise<
+    { value: string; displayName: string; resolvedModel?: string; supportedEffortLevels?: string[] }[]
+  >;
   accountInfo(): Promise<{
     email?: string;
     organization?: string;
@@ -427,6 +429,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
           models: models.map((model) => ({
             id: model.value,
             name: model.displayName,
+            ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
             efforts: model.supportedEffortLevels ?? [],
           })),
           images: true,

@@ -97,7 +97,12 @@ const capabilitiesSchema = z
     models: z
       .array(
         z
-          .object({ id: z.string().max(160), name: z.string().max(200), efforts: z.array(z.string().max(40)).max(32) })
+          .object({
+            id: z.string().max(160),
+            name: z.string().max(200),
+            resolvedModel: z.string().min(1).max(160).optional(),
+            efforts: z.array(z.string().max(40)).max(32),
+          })
           .strict(),
       )
       .max(500),

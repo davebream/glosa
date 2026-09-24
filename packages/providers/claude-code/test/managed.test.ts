@@ -223,7 +223,9 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
       });
       process.on("error", () => {});
       return {
-        supportedModels: async () => [{ value: "model", displayName: "Model", supportedEffortLevels: ["high"] }],
+        supportedModels: async () => [
+          { value: "model", displayName: "Model", resolvedModel: "claude-sonnet-5", supportedEffortLevels: ["high"] },
+        ],
         accountInfo: async () => ({
           email: "writer@example.test",
           organization: "A display name, not an org ID",
@@ -302,6 +304,7 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
   } as SessionLaunchSpec;
   const connection = await adapter.connect(spec, launcher, (event) => events.push(event));
   try {
+    expect(connection.capabilities.models[0]?.resolvedModel).toBe("claude-sonnet-5");
     await connection.startTurn({ turnId: "turn", text: "Read notes", settings: spec.settings, attachments: [] });
     for (let i = 0; i < 30 && !events.some((event) => event.type === "decision"); i++) await Promise.resolve();
     expect(events.find((event) => event.type === "decision")).toMatchObject({ decision: { id: "permission-1" } });
