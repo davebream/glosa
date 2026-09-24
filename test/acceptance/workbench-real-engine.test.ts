@@ -1109,11 +1109,13 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         last.querySelector('.glosa-agent-menu-trigger').click();
         await new Promise(resolve=>requestAnimationFrame(resolve));
       })()`);
-      const menuBounds = await tab.evaluate<{ top: number; bottom: number; height: number }>(
-        `(()=>{const rect=document.querySelector('.glosa-agent-menu:popover-open').getBoundingClientRect();return {top:rect.top,bottom:rect.bottom,height:innerHeight}})()`,
+      const menuBounds = await tab.evaluate<{ top: number; bottom: number; height: number; menuHeight: number }>(
+        `(()=>{const rect=document.querySelector('.glosa-agent-menu:popover-open').getBoundingClientRect();return {top:rect.top,bottom:rect.bottom,height:innerHeight,menuHeight:rect.height}})()`,
       );
       expect(menuBounds.top).toBeGreaterThanOrEqual(0);
       expect(menuBounds.bottom).toBeLessThanOrEqual(menuBounds.height);
+      // This short action list must remain compact, not stretch to the 900px fixture viewport.
+      expect(menuBounds.menuHeight).toBeLessThan(400);
       expect(
         await tab.evaluate<string>("document.querySelector('[data-profile-id=p0] .glosa-agent-state').textContent"),
       ).toBe("Could not verify");
@@ -1134,8 +1136,8 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       ).toBe(true);
       expect(await tab.evaluate<number>("document.querySelectorAll('.glosa-agent-menu:popover-open').length")).toBe(0);
       await tab.evaluate(`(async()=>{
-        const card=document.querySelector('[data-profile-id="p3"]');card.querySelector('.glosa-agent-menu-trigger').click();
-        [...card.querySelectorAll('.glosa-agent-menu button')].find(b=>b.textContent==='Make default').click();
+        const card=document.querySelector('[data-profile-id="p3"]');
+        [...card.querySelectorAll('.glosa-agent-account-actions > button')].find(b=>b.textContent==='Make default').click();
         const deadline=Date.now()+3000;
         while(!document.querySelector('[data-profile-id="p3"] .glosa-agent-default')) {
           if(Date.now()>deadline) throw new Error('Default account did not update');

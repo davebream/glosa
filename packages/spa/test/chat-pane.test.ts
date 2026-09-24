@@ -865,7 +865,8 @@ test("an interrupted install request keeps tracking the unknown outcome until st
   let tick!: () => void,
     offline = false,
     installed = false,
-    installing = false;
+    installing = false,
+    reads = 0;
   let rejectInstall!: (error: Error) => void;
   const timer = spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
     tick = callback;
@@ -876,6 +877,7 @@ test("an interrupted install request keeps tracking the unknown outcome until st
     onChange: undefined,
     dataAccess: {
       getAgentStatus: async () => {
+        reads++;
         if (offline) throw new Error("Connection interrupted");
         return {
           available: true,
@@ -922,6 +924,15 @@ test("an interrupted install request keeps tracking the unknown outcome until st
     tick();
     await flush();
     expect(host.textContent).toContain("Progress connection interrupted");
+    const retry = [...host.querySelectorAll("button")].find((button) => button.textContent === "Refresh settings")!;
+    const beforeRefresh = reads;
+    expect(retry.hidden).toBe(false);
+    expect(retry.disabled).toBe(false);
+    retry.click();
+    await flush();
+    expect(reads).toBeGreaterThan(beforeRefresh);
+    expect(retry.textContent).toBe("Refresh settings");
+    expect((host.querySelector(".glosa-agent-runtime button") as HTMLButtonElement).disabled).toBe(true);
     offline = false;
     installing = false;
     installed = true;
@@ -941,16 +952,22 @@ test("failed account creation preserves the label and restores usable controls",
   const { mountAgentSettings } = await import("../src/agent-settings.js");
   const host = document.createElement("div");
   document.body.append(host);
+  let reads = 0,
+    creates = 0;
   const pane = mountAgentSettings(host, {
     appearance: undefined,
     onChange: undefined,
     dataAccess: {
-      getAgentStatus: async () => ({
-        available: true,
-        providers: [{ id: "codex", name: "Codex", installed: true, qualified: true }],
-        profiles: [],
-      }),
+      getAgentStatus: async () => {
+        reads++;
+        return {
+          available: true,
+          providers: [{ id: "codex", name: "Codex", installed: true, qualified: true }],
+          profiles: [],
+        };
+      },
       createAgentProfile: async () => {
+        creates++;
         throw new Error("Could not save the account. Try again.");
       },
     },
@@ -963,5 +980,78 @@ test("failed account creation preserves the label and restores usable controls",
   expect(input.value).toBe("Work");
   expect(input.disabled).toBe(false);
   expect(host.querySelector(".glosa-agent-status")!.textContent).toContain("Try again");
+  const retry = [...host.querySelectorAll("button")].find((button) => button.textContent === "Refresh settings")!;
+  expect(retry.hidden).toBe(false);
+  retry.click();
+  await flush();
+  expect(reads).toBe(2);
+  expect(creates).toBe(1);
+  expect(retry.hidden).toBe(true);
+  expect(host.querySelector(".glosa-agent-status")!.textContent).toBe("");
+  expect((host.querySelector(".glosa-agent-add-account input") as HTMLInputElement).value).toBe("Work");
+  pane.destroy();
+});
+
+test("account settings expose actionable health, enabling and default selection without changing other accounts", async () => {
+  const { mountAgentSettings } = await import("../src/agent-settings.js");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const profiles = [
+    {
+      id: "off",
+      label: "Personal subscription disabled for this device",
+      enabled: false,
+      isDefault: false,
+      auth: { state: "authenticated", label: "personal@example.com" },
+    },
+    {
+      id: "expired",
+      label: "Work",
+      enabled: true,
+      isDefault: true,
+      auth: { state: "expired", label: "work@example.com" },
+    },
+  ].map((p) => ({ ...p, provider: "codex", revision: 1 }));
+  const updates: unknown[] = [];
+  const pane = mountAgentSettings(host, {
+    appearance: undefined,
+    onChange: undefined,
+    dataAccess: {
+      getAgentStatus: async () => ({
+        available: true,
+        providers: [{ id: "codex", name: "Codex", installed: true, qualified: true }],
+        profiles,
+        capabilities: { off: { models: [{ id: "model" }] } },
+      }),
+      updateAgentProfile: async (id: string, changes: object) => {
+        updates.push({ id, ...changes });
+        Object.assign(profiles.find((p) => p.id === id)!, changes);
+      },
+    },
+  });
+  await pane.ready;
+  expect((host.querySelector(".glosa-agent-runtime-maintenance") as HTMLDetailsElement).open).toBe(false);
+  const row = host.querySelector('[data-account-choice="expired"]')!;
+  expect(row.textContent).toContain("Sign-in expired");
+  expect(row.textContent).toContain("Default");
+  expect(row.getAttribute("title")).toContain("work@example.com");
+  const active = () => host.querySelector(".glosa-agent-account:not([hidden])")!;
+  const controls = () => [...active().querySelectorAll<HTMLButtonElement>(".glosa-agent-account-actions > button")];
+  expect(controls().map((b) => b.textContent)).toEqual(["Enable account"]);
+  expect(active().textContent).toContain("will not restart stopped chats");
+  controls()[0]!.click();
+  await flush();
+  expect(updates).toHaveLength(1);
+  expect(updates[0]).toMatchObject({ id: "off", enabled: true });
+  expect(profiles[1]!.isDefault).toBe(true);
+  expect(controls().map((b) => b.textContent)).toContain("Make default");
+  const rename = [...active().querySelectorAll("button")].find((b) => b.textContent === "Rename account")!;
+  rename.click();
+  const name = active().querySelector("input") as HTMLInputElement;
+  expect(document.activeElement).toBe(name);
+  name.value = "Uncommitted name";
+  name.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(name.value).toBe(profiles[0]!.label);
+  expect(updates).toHaveLength(1);
   pane.destroy();
 });

@@ -6410,24 +6410,39 @@ input,
   inset: auto;
   margin: 0;
   width: 224px;
+  height: fit-content;
+  min-height: 0;
   max-width: calc(100vw - 16px);
   max-height: min(60vh, 28rem);
   overflow: auto;
   background: var(--bg);
   color: var(--ink);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   padding: 5px;
-  box-shadow: 0 3px 8px #0002;
+  box-shadow: var(--shadow-rest);
 }
 .glosa-agent-menu:popover-open {
   display: grid;
+  align-content: start;
+  grid-auto-rows: min-content;
   gap: 2px;
 }
 .glosa-agent-menu button {
   text-align: left;
   border-color: transparent;
   width: 100%;
+  min-height: 36px;
+}
+.glosa-agent-menu hr {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.glosa-agent-menu-group {
+  display: grid;
+  gap: 2px;
 }
 .glosa-agent-menu label {
   display: flex;
@@ -6582,6 +6597,15 @@ input,
 .glosa-agent-login-host:empty {
   display: none;
 }
+.glosa-agent-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.glosa-agent-notice:has(.glosa-agent-status:empty) {
+  display: none;
+}
 .glosa-agent-section-heading h2 {
   font: 600 var(--text-md) / 1.4 var(--font-sans);
   margin: 0 0 4px;
@@ -6626,7 +6650,7 @@ input,
   gap: 10px;
   align-items: center;
   color: var(--muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   margin-top: 5px;
 }
 .glosa-agent-state {
@@ -6647,7 +6671,7 @@ input,
 .glosa-agent-default {
   color: var(--ink);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-micro);
   padding: 0 5px;
 }
 .glosa-agent-account-actions {
@@ -6655,13 +6679,6 @@ input,
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-}
-.glosa-agent-account-actions .glosa-agent-enable {
-  border-color: transparent;
-  color: var(--muted);
-}
-.glosa-agent-enable[aria-pressed="true"]::before {
-  content: "✓ ";
 }
 .glosa-agent-account-details {
   margin-top: 12px;
@@ -6671,7 +6688,17 @@ input,
   color: var(--muted);
   cursor: pointer;
   width: fit-content;
-  padding-block: 3px;
+  padding-block: 8px;
+}
+.glosa-agent-connections > summary {
+  cursor: pointer;
+  padding-block: 8px;
+}
+.glosa-agent-help {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  max-width: 60ch;
+  margin-block: 12px;
 }
 .glosa-agent-account-details[open] > summary {
   color: var(--ink);
@@ -6755,6 +6782,25 @@ input,
   color: var(--bg);
   border-color: var(--ink);
 }
+.glosa-agent-runtime-maintenance {
+  margin-bottom: 24px;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.glosa-agent-runtime-maintenance > summary {
+  padding-block: 8px;
+  width: fit-content;
+  cursor: pointer;
+}
+.glosa-agent-runtime-maintenance .glosa-agent-runtime:not([data-attention="true"]) {
+  border: 0;
+  padding: 12px 0 0;
+  margin: 0;
+}
+.glosa-agent-runtime-maintenance .glosa-agent-runtime[data-attention="true"] {
+  margin-block: 8px 0;
+  background: var(--surface);
+}
 .glosa-agent-settings [aria-busy="true"]::before {
   content: "";
   display: inline-block;
@@ -6831,7 +6877,7 @@ input,
 }
 .glosa-agent-account-layout {
   display: grid;
-  grid-template-columns: minmax(120px, 160px) minmax(0, 1fr);
+  grid-template-columns: minmax(160px, 200px) minmax(0, 1fr);
   gap: 20px;
 }
 .glosa-agent-account-list {
@@ -6854,21 +6900,37 @@ input,
   border-color: transparent;
   min-width: 0;
 }
-.glosa-agent-account-list button span {
+.glosa-agent-account-list .glosa-agent-account-label {
   width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.glosa-agent-account-identity {
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.glosa-agent-account-list-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 .glosa-agent-account-list button small {
   color: var(--muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
 }
 .glosa-agent-account-list [aria-current="page"] {
   background: var(--surface-sunken);
 }
 .glosa-agent-account-detail {
   min-width: 0;
+}
+.glosa-agent-account-browser {
+  min-width: 0;
+}
+.glosa-agent-settings .glosa-agent-account-chooser {
+  display: none;
 }
 @container (max-width: 750px) {
   .glosa-settings-layout {
@@ -6886,14 +6948,36 @@ input,
     grid-template-columns: minmax(0, 1fr);
   }
   .glosa-agent-account-list {
-    flex-direction: row;
-    overflow-x: auto;
+    flex-direction: column;
     padding-bottom: 8px;
   }
   .glosa-agent-account-list button {
-    min-width: 110px;
-    max-width: 160px;
+    width: 100%;
     flex: none;
+  }
+  .glosa-agent-settings .glosa-agent-account-chooser {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    overflow-wrap: anywhere;
+    background: var(--surface-sunken);
+    border-color: transparent;
+  }
+  .glosa-agent-account-chooser::after {
+    content: "⌄";
+    flex: none;
+    color: var(--muted);
+  }
+  .glosa-agent-account-browser[data-expanded="false"] .glosa-agent-account-list {
+    display: none;
+  }
+  .glosa-agent-account-browser[data-expanded="true"] .glosa-agent-account-list {
+    max-height: 18rem;
+    overflow-y: auto;
+    margin-top: 8px;
   }
   .glosa-agent-runtime {
     grid-template-columns: minmax(0, 1fr);
@@ -7695,6 +7779,27 @@ button:is(
   ):disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Settings trades a little density for comfortable account-management targets. */
+.glosa-agent-settings button,
+.glosa-agent-settings button.glosa-agent-menu-trigger {
+  min-height: 36px;
+}
+.glosa-agent-settings button.glosa-agent-menu-trigger {
+  width: 36px;
+  min-width: 36px;
+}
+@media (pointer: coarse) {
+  .glosa-agent-settings button,
+  .glosa-agent-settings summary,
+  .glosa-agent-settings button.glosa-agent-menu-trigger {
+    min-height: 44px;
+  }
+  .glosa-agent-settings button.glosa-agent-menu-trigger {
+    width: 44px;
+    min-width: 44px;
+  }
 }
 
 .glosa-chat-field::after {

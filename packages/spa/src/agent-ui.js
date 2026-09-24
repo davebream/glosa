@@ -166,22 +166,28 @@ export function actionMenu(label) {
       popup.style.maxHeight = `${Math.max(80, window.innerHeight - 16)}px`;
       popup.style.left = `${Math.max(8, Math.min(box.right - 224, window.innerWidth - 232))}px`;
       popup.togglePopover?.();
+      if (!popup.matches(":popover-open")) return;
       const height = popup.getBoundingClientRect().height;
       const below = box.bottom + 6;
       const top = below + height <= window.innerHeight - 8 ? below : box.top - height - 6;
       popup.style.top = `${Math.max(8, Math.min(top, window.innerHeight - height - 8))}px`;
+      popup.querySelector("button:not(:disabled), input:not(:disabled)")?.focus({ preventScroll: true });
     },
   });
   popup.addEventListener("toggle", (event) => trigger.setAttribute("aria-expanded", String(event.newState === "open")));
   popup.addEventListener("click", (event) => {
-    if (event.target.closest("button")) popup.hidePopover?.();
+    if (event.target.closest("button")) {
+      popup.hidePopover?.();
+      if (popup.contains(document.activeElement) || document.activeElement === document.body)
+        trigger.focus({ preventScroll: true });
+    }
   });
   popup.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
     popup.hidePopover?.();
-    trigger.focus();
+    trigger.focus({ preventScroll: true });
   });
   const element = el("div", { className: "glosa-agent-menu-anchor" }, [trigger, popup]);
   return { element, popup, trigger };
