@@ -80,7 +80,7 @@ export function createNavigatorController({ root, elements, storage = defaultSto
     open = Boolean(next);
     root.setAttribute("data-nav-open", String(open));
     navToggle.setAttribute("aria-expanded", String(open));
-    navToggle.setAttribute("aria-label", open ? "Hide artifacts" : "Show artifacts");
+    navToggle.setAttribute("aria-label", open ? "Hide navigator" : "Show navigator");
     if (persist) writeFlag(storage, NAV_OPEN_STORAGE_KEY, open);
     syncInteractivity();
     // A column appearing beside the work must not pull the reader out of the text, so showing it

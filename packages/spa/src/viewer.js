@@ -241,8 +241,7 @@ export function mountApp(
     chatsBody,
   );
   sidebarEl.querySelector(".glosa-sidebar-scroll").append(chatsHost);
-  // Settings rides the foot strip beside the navigator's toggle: one row, one rule, and the gear
-  // starts on the same line as the tree's chevrons.
+  // Settings rides the foot strip beside the navigator's toggle: one row, one rule.
   const settingsLink = el("button", {
     type: "button",
     className: "glosa-sidebar-settings",
@@ -340,7 +339,7 @@ export function mountApp(
       chatsRows.append(
         el("p", {
           className: "glosa-chat-list-empty",
-          textContent: "No chats yet. Start one with +.",
+          textContent: "No chats yet. Start one with New chat.",
         }),
       );
     if (focusedId) [...chatsRows.querySelectorAll("button")].find((row) => row.dataset.panelId === focusedId)?.focus();
@@ -470,8 +469,9 @@ export function mountApp(
         if (!chosen) return;
       }
       if (!chosen) {
+        // Settings opens in the main area, which is the whole answer; a second sentence in the
+        // sidebar under the empty state only said it again.
         openAgentSettings();
-        chatNotice.textContent = "Make an account the default in Settings to start a chat.";
         return;
       }
       if (slug !== currentSlug || unmounted) return;

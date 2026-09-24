@@ -525,7 +525,7 @@ input,
   width: 28px;
   height: 28px;
   border: 1px solid transparent;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-tool); /* the column's one radius for a 28px box */
   color: var(--muted);
   transition:
     background var(--dur-fast) var(--ease-out),
@@ -534,6 +534,11 @@ input,
 
 .glosa-nav-toggle:hover {
   background: var(--surface-sunken);
+}
+
+.glosa-nav-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px; /* drawn inside, like every other ring in the navigator */
 }
 
 .glosa-app[data-nav-open="false"] .glosa-nav-toggle {
@@ -1657,9 +1662,10 @@ input,
   color: var(--ink);
 }
 
-.glosa-star-toggle svg,
+/* One stroke for every drawn tool (1.6, from the shared `.glosa-tree-tool svg` rule); the unstar
+   control is not a tree tool and says so itself. */
 .glosa-starred-unstar svg {
-  stroke-width: 1.4;
+  stroke-width: 1.6;
 }
 
 /* Scoped under the navigator so it outranks the tree tools' own unfilled icon rule below. */
@@ -1723,9 +1729,10 @@ input,
 
 /* Box, bed and hover come from the shared icon-button rule (search "One quiet icon-button"), so the
    star, the chats menu and New chat are one control in three places. Only the stroke lives here. */
-.glosa-tree-tool:focus-visible {
+.glosa-tree-tool:focus-visible,
+.glosa-sidebar .glosa-agent-menu-trigger:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 .glosa-tree-tool svg {
@@ -1810,18 +1817,21 @@ input,
   outline-offset: -2px;
 }
 
-.glosa-artifact-list [role="treeitem"][aria-current="page"] > .glosa-tree-row {
-  background: var(--surface-sunken);
-  color: var(--primary);
-  font-weight: 600;
-}
-
 /* An open artifact is one the reader already has on screen in some pane; the active pane's is
    the one the URL and the top bar are talking about. Two states, told apart by weight and colour
    as well as by the mark, so the tree says what is open rather than only where you last clicked. */
 .glosa-artifact-list [role="treeitem"][data-open="true"] > .glosa-tree-row {
   color: var(--ink);
   font-weight: 500;
+}
+
+/* AFTER the open rule on purpose: the current artifact is always also open, the two selectors
+   weigh the same, and written the other way round the open rule's 500 silently replaced this 600
+   — measured, the current row lost the weight DESIGN.md gives it and kept only the dot's colour. */
+.glosa-artifact-list [role="treeitem"][aria-current="page"] > .glosa-tree-row {
+  background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
 }
 
 /* Open-in-a-pane is a dot in the disclosure slot a file never uses — inside the row's own
@@ -1870,9 +1880,24 @@ input,
 
 .glosa-tree-label {
   min-width: 0;
+  display: flex;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A long name clips in the middle, not at the end: the head takes the ellipsis and the tail (the
+   part after the last hyphen, with the extension) stays, so six underfive-* siblings read as six
+   names rather than one prefix. Plain names have no tail span and clip at the end as before. */
+.glosa-tree-label-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glosa-tree-label-tail {
+  flex: none;
 }
 
 .glosa-tree-stale {

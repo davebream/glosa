@@ -65,7 +65,7 @@ export function createViewerShell(
   const navToggle = el("button", {
     className: "glosa-nav-toggle",
     type: "button",
-    "aria-label": "Show artifacts",
+    "aria-label": "Show navigator",
     "aria-expanded": "false",
     "aria-controls": "glosa-sidebar",
   });

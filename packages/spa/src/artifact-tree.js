@@ -43,6 +43,20 @@
 const TYPEAHEAD_RESET_MS = 650;
 const EXPANSION_STORAGE_PREFIX = "glosa:artifact-tree:expanded:";
 
+/** Where a long hyphenated name may clip: the head takes the ellipsis, the tail (after the last
+ *  hyphen, extension included) stays visible, so siblings that share a prefix keep their names. Short
+ *  names, and names whose tail would be most of the name, are left whole.
+ *  @param {string} name
+ *  @returns {{ head: string, tail: string } | null} */
+function splitName(name) {
+  if (name.length < 24) return null;
+  const at = name.lastIndexOf("-");
+  if (at <= 0) return null;
+  const tail = name.slice(at + 1);
+  if (tail.length === 0 || tail.length > 16) return null;
+  return { head: name.slice(0, at + 1), tail };
+}
+
 const ICONS = {
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
 };
@@ -254,7 +268,16 @@ export function createArtifactTreeNavigator(container, options) {
     // the 21px the glyph took is 21px more of every name in a 232px column.
     const label = document.createElement("span");
     label.className = "glosa-tree-label";
-    label.textContent = node.name;
+    const split = splitName(node.name);
+    if (split) {
+      const head = document.createElement("span");
+      head.className = "glosa-tree-label-head";
+      head.textContent = split.head;
+      const tail = document.createElement("span");
+      tail.className = "glosa-tree-label-tail";
+      tail.textContent = split.tail;
+      label.append(head, tail);
+    } else label.textContent = node.name;
 
     row.append(disclosure, label);
 
