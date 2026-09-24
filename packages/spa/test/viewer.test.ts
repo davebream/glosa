@@ -376,8 +376,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     await settle();
     const sidebar = fresh.querySelector(".glosa-sidebar") as any;
     expect(sidebar.firstElementChild.classList.contains("glosa-sidebar-scroll")).toBe(true);
-    expect(sidebar.lastElementChild.classList.contains("glosa-starred")).toBe(true);
-    expect(sidebar.lastElementChild.hidden).toBe(true);
+    expect(sidebar.querySelector(".glosa-starred")).not.toBeNull();
+    expect(sidebar.lastElementChild.textContent).toBe("Settings");
+    expect(sidebar.querySelector(".glosa-starred").hidden).toBe(true);
     const toggle = fresh.querySelector(".glosa-sidebar-heading .glosa-star-toggle") as any;
     expect(toggle.hidden).toBe(false);
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
@@ -432,7 +433,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
     mountApp(root, { dataAccess: da, initialSlug: "ws-1", initialArtifact: "notes.md" });
     await settle();
-    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("notes.md");
+    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("Search artifacts and chats");
 
     const rows = Array.from(root.querySelectorAll(".glosa-starred-row")) as any[];
     expect(
@@ -456,7 +457,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(reopened.querySelector(".glosa-starred-open").getAttribute("aria-current")).toBe("true");
     expect(globalThis.localStorage.getItem("glosa_last_workspace")).toBe("drafts-reopened");
     // The bar no longer names the document of the workspace that was left.
-    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("drafts-reopened");
+    expect((root.querySelector(".glosa-goto-trigger") as any).title).toContain("drafts-reopened");
   });
 
   test("a reopen that fails says so on its row and leaves the current workspace alone", async () => {
@@ -559,11 +560,12 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const trigger = tools.querySelector(".glosa-tools-trigger") as any;
     const menu = root.querySelector(".glosa-tools-menu") as any;
     expect(trigger.getAttribute("aria-controls")).toBe("glosa-tools-menu");
-    // Workspace-scoped only (§6): the attention tray, Conversation, Appearance and the keyboard
+    // Workspace-scoped only: the attention tray, Appearance and the keyboard
     // sheet. Copy source, Print and History moved into the pane that holds their artifact.
     expect(
       menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance"),
-    ).toHaveLength(4);
+    ).toHaveLength(3);
+    expect(menu.querySelector(".glosa-conversation-toggle")).toBeNull();
     expect(menu.querySelector(".glosa-tools-copy-source")).toBeNull();
     expect(menu.querySelector(".glosa-tools-print")).toBeNull();
     expect(menu.querySelector(".glosa-history-toggle")).toBeNull();
@@ -574,7 +576,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(dom.document.activeElement as any).toBe(menu.querySelector("button:not(:disabled)") as any);
 
-    (menu.querySelector(".glosa-conversation-toggle") as any).click();
+    (menu.querySelector(".glosa-shortcuts-toggle") as any).click();
     await Promise.resolve();
     expect(tools.dataset.open).toBe("false");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -1166,68 +1168,223 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.activeElement).toBe(heading);
   });
 
-  test("P4.2: the Conversation toggle mounts conversation.js's pane against the current workspace, and un-hides it", async () => {
+  test("new chat stays local without a model catalog and Chats collapses independently", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
-    const openedForSlugs: string[] = [];
+    const created: { settings: { model: string } }[] = [];
+    let discoveries = 0;
     const da = fakeDataAccess({
-      openTranscriptStream: (slug: string) => {
-        openedForSlugs.push(slug);
+      getChats: async () => ({ chats: [], external: [] }),
+      getAgentStatus: async () => ({
+        available: true,
+        profiles: [
+          {
+            id: "a",
+            provider: "claude-code",
+            label: "Personal",
+            enabled: true,
+            isDefault: true,
+            auth: { state: "authenticated" },
+          },
+        ],
+        capabilities: {},
+      }),
+      getStatus: async () => ({ workspaces: [], sessions: [] }),
+      discoverAgentModels: async () => {
+        discoveries++;
+      },
+      createChat: async (_slug: string, input: { settings: { model: string } }) => {
+        created.push(input);
+        return { id: "fresh" };
+      },
+      getChat: async () => ({
+        id: "fresh",
+        title: "New chat",
+        provider: "claude-code",
+        profileId: "a",
+        revision: 1,
+        configRevision: 1,
+        draftRevision: 0,
+        draft: "",
+        draftAttachments: [],
+        settings: { model: "", effort: "", permissionMode: "default" },
+        turns: [],
+        content: [],
+        decisions: [],
+      }),
+      openChatStream: () => () => {},
+    });
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    try {
+      for (let i = 0; i < 30; i++) await Promise.resolve();
+      (root.querySelector('[aria-label="New chat"]') as unknown as HTMLButtonElement).click();
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+      expect(created).toHaveLength(1);
+      expect(created[0]!.settings.model).toBe("");
+      expect(discoveries).toBe(0);
+      const toggle = root.querySelector(".glosa-chat-list-toggle") as unknown as HTMLButtonElement;
+      toggle.click();
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(
+        (dom.document.getElementById(toggle.getAttribute("aria-controls")!) as unknown as HTMLElement).hidden,
+      ).toBe(true);
+      expect(root.querySelector(".glosa-artifact-list")!.closest("[hidden]")).toBeNull();
+      toggle.click();
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      const artifactsToggle = root.querySelector(".glosa-artifact-list-toggle") as unknown as HTMLButtonElement;
+      artifactsToggle.click();
+      expect(artifactsToggle.getAttribute("aria-expanded")).toBe("false");
+      expect(root.querySelector(".glosa-artifact-list")!.closest("[hidden]")).not.toBeNull();
+      expect(dom.document.getElementById(toggle.getAttribute("aria-controls")!)!.closest("[hidden]")).toBeNull();
+      artifactsToggle.click();
+      expect(root.querySelector(".glosa-artifact-list")!.closest("[hidden]")).toBeNull();
+    } finally {
+      unmount();
+    }
+  });
+
+  test("sidebar limits conversations to 20 title rows, pins persist, and shared search reaches older chats and terminal sessions", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const chats = Array.from({ length: 24 }, (_, i) => ({
+      id: `chat-${i}`,
+      title: `Topic ${i}`,
+      provider: "claude-code",
+      profileId: "a",
+      pinned: false,
+      configRevision: 1,
+      status: "completed",
+      updatedAt: new Date(2026, 0, 25 - i).toISOString(),
+    }));
+    const calls: any[] = [];
+    const da = fakeDataAccess({
+      getChats: async (_slug: string, options: any) => {
+        calls.push(options);
+        return {
+          chats: chats.filter((c) => !options.q || c.title.includes(options.q)),
+          external: [{ sessionId: "terminal-id", provider: "codex" }],
+        };
+      },
+      getAgentStatus: async () => ({ profiles: [{ id: "a", label: "Personal" }] }),
+      getStatus: async () => ({ sessions: [], workspaces: [] }),
+      getChat: async (_slug: string, id: string) => chats.find((c) => c.id === id),
+      changeChat: async (_slug: string, id: string, input: any) =>
+        Object.assign(chats.find((c) => c.id === id)!, input),
+    });
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    try {
+      await settle();
+      expect(root.querySelectorAll(".glosa-chat-list-item")).toHaveLength(20);
+      expect(root.querySelector(".glosa-chat-list-toggle")!.textContent).toBe("Chats");
+      expect(root.querySelector('[placeholder="Find chats"]')).toBeNull();
+      expect(root.querySelector(".glosa-chat-list-item svg")).toBeNull();
+      const secondRow = root.querySelectorAll(".glosa-chat-list-row")[1]!;
+      (secondRow.querySelector(".glosa-agent-menu button") as any).click();
+      await settle();
+      expect(root.querySelector(".glosa-chat-list-title")!.textContent).toBe("Topic 1");
+      expect(chats[1]!.pinned).toBe(true);
+      (root.querySelector(".glosa-goto-trigger") as any).click();
+      await settle();
+      expect([...root.querySelectorAll('[data-kind="chat"]')].some((n) => n.textContent?.includes("Topic 23"))).toBe(
+        true,
+      );
+      expect([...root.querySelectorAll('[data-kind="chat"]')].some((n) => n.textContent?.includes("Codex"))).toBe(true);
+      expect(calls.some((c) => c.archived === true)).toBe(true);
+    } finally {
+      unmount();
+    }
+  });
+
+  test("chat rows and hover text stay title-only when accounts or titles change", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let label = "Personal subscription",
+      title = "Draft";
+    const da = fakeDataAccess({
+      getChats: async () => ({
+        chats: [
+          {
+            id: "existing",
+            title,
+            provider: "claude-code",
+            profileId: "profile-a",
+            status: "completed",
+            pendingDecisions: 2,
+            updatedAt: "2026-09-23T00:00:00Z",
+          },
+        ],
+        external: [],
+      }),
+      getAgentStatus: async () => ({ profiles: [{ id: "profile-a", label }] }),
+      getStatus: async () => ({ workspaces: [], sessions: [] }),
+    });
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    async function waitForTitle(expected: string) {
+      const deadline = Date.now() + 1000;
+      while (root.querySelector(".glosa-chat-list-item")?.getAttribute("title") !== expected && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("title")).toBe(expected);
+    }
+    try {
+      await waitForTitle(title);
+      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("aria-label")).toBe("Draft");
+      expect(root.querySelector(".glosa-chat-list-item")?.textContent).toBe("Draft");
+      label = "Work subscription";
+      title = "Revised draft";
+      const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh sessions");
+      (refresh as unknown as HTMLButtonElement).click();
+      await waitForTitle(title);
+    } finally {
+      unmount();
+    }
+  });
+
+  test("external sessions open as exact-session tabs while artifact history stays in its own pane", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const opened: unknown[] = [],
+      remembered: unknown[] = [];
+    const da = fakeDataAccess({
+      getChats: async () => ({ chats: [], external: [] }),
+      getStatus: async () => ({
+        workspaces: [],
+        sessions: [
+          { session_id: "external-a", provider: "claude-code", workspace_binding: "/tmp/ws-1", liveness: "alive" },
+          { session_id: "external-b", provider: "codex", workspace_binding: "/tmp/ws-1", liveness: "alive" },
+        ],
+      }),
+      rememberExternalChat: async (slug: string, sessionId: string) => {
+        remembered.push({ slug, sessionId });
+      },
+      openSessionTranscript: (slug: string, sessionId: string) => {
+        opened.push({ slug, sessionId });
         return () => {};
       },
     });
-
-    // The notes-hidden page: the transcript is read-only context there, and composing needs notes shown.
-    mountApp(root, { dataAccess: da, initialMode: "read" });
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    // History lives in a pane now, so there has to be one open to compare the two scopes.
-    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-
-    const toggle = root.querySelector(".glosa-conversation-toggle") as any;
-    const pane = root.querySelector(".glosa-conversation") as any;
-    // §6: Conversation is workspace-scoped (conversation.js keys on slug alone) so it stays in
-    // the top bar. History is artifact-scoped and lives in the pane that holds its artifact.
-    const historyToggle = inPane(root, ".glosa-history-toggle");
-    const historyPane = inPane(root, ".glosa-history");
-    expect(pane.parentElement).toBe(root);
-    expect(historyPane.parentElement).toBe(activePane(root));
-    expect(root.querySelector(".glosa-topbar .glosa-history-toggle")).toBeNull();
-    expect(pane.hidden).toBe(true);
-    expect(toggle.getAttribute("aria-controls")).toBe("glosa-conversation");
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-
-    toggle.click();
-    for (let i = 0; i < 5 && openedForSlugs.length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-    expect(pane.hidden).toBe(false);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(openedForSlugs).toEqual(["ws-1"]);
-    // Preview exposes the transcript as read-only agent context; composition requires Annotate.
-    expect(pane.querySelector(".glosa-conv-composer-input")).toBeNull();
-    expect(pane.textContent).toContain("Agent context");
-
-    // The pane's History opens beside its own manuscript and leaves Conversation alone — they
-    // describe different scopes now, so one no longer has to close the other.
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    for (let i = 0; i < 15; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(root.querySelector(".glosa-conversation-toggle")).toBeNull();
+    expect(root.querySelectorAll(".glosa-chat-list-item")).toHaveLength(2);
+    (root.querySelectorAll(".glosa-chat-list-item")[1] as unknown as HTMLButtonElement).click();
+    for (let i = 0; i < 15; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(opened).toEqual([{ slug: "ws-1", sessionId: "external-b" }]);
+    expect(remembered).toEqual([{ slug: "ws-1", sessionId: "external-b" }]);
+    const external = root.querySelector(".glosa-external-chat");
+    expect(external?.querySelector(".glosa-conv-composer-input")).not.toBeNull();
+    (
+      root.querySelector(
+        '.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]',
+      ) as unknown as HTMLButtonElement
+    ).click();
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    const historyToggle = inPane(root, ".glosa-history-toggle"),
+      historyPane = inPane(root, ".glosa-history");
     historyToggle.click();
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
     expect(historyPane.hidden).toBe(false);
-    expect(historyToggle.getAttribute("aria-expanded")).toBe("true");
-    expect(pane.hidden).toBe(false);
-
-    historyToggle.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(historyPane.hidden).toBe(true);
-    expect(historyToggle.getAttribute("aria-expanded")).toBe("false");
-    expect(pane.hidden).toBe(false);
-
-    const close = pane.querySelector(".glosa-conv-close") as any;
-    expect(close.getAttribute("aria-label")).toBe("Close agent context");
-    close.click();
-    expect(pane.hidden).toBe(true);
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(dom.document.activeElement).toBe(root.querySelector(".glosa-tools-trigger") as any);
+    expect(external?.isConnected).toBe(true);
+    expect(root.querySelector(".glosa-topbar .glosa-history-toggle")).toBeNull();
+    unmount();
   });
 
   test("document surface hides navigator chrome", async () => {

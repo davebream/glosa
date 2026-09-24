@@ -574,3 +574,45 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     ).not.toThrow();
   });
 });
+
+test("opening an exact external tab migrates the original pending message ID and reconciles before resending", async () => {
+  const dom = installDom();
+  try {
+    const key = "glosa:conversation-pending:migration";
+    globalThis.sessionStorage.setItem(
+      key,
+      JSON.stringify({ id: "original-id", text: "pending text", sessionHint: "session-a" }),
+    );
+    const observed: string[] = [];
+    const root = document.createElement("div");
+    document.body.append(root);
+    const unmount = mountConversationPane(root, {
+      slug: "migration",
+      sessionId: "session-a",
+      embedded: true,
+      dataAccess: {
+        openSessionTranscript() {
+          return () => {};
+        },
+        openStream() {
+          return () => {};
+        },
+        async getComposerMessageStatus(_slug: string, id: string) {
+          observed.push(id);
+          return { delivered: true };
+        },
+        async sendComposerMessage() {
+          throw new Error("must not resend");
+        },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(observed).toEqual(["original-id"]);
+    expect(globalThis.sessionStorage.getItem(key)).toBeNull();
+    expect(globalThis.sessionStorage.getItem(`${key}:session-a`)).toBeNull();
+    unmount();
+  } finally {
+    dom.teardown();
+  }
+});

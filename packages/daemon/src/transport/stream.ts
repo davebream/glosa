@@ -47,6 +47,7 @@ export interface StreamOptions {
   subscribeArtifacts?: (listener: (event: ArtifactWatcherEvent) => void) => () => void;
   shutdownSignal?: AbortSignal;
   subscribeMetadata?: (listener: () => void) => () => void;
+  subscribeChats?: (listener: () => void) => () => void;
 }
 
 /** Builds the `GET /w/:slug/stream` response. `server` is used only to disable Bun's idle
@@ -81,12 +82,16 @@ export function createJournalStreamResponse(
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let shutdownListener: (() => void) | null = null;
   let unsubscribeMetadata: (() => void) | null = null;
+  let unsubscribeChats: (() => void) | null = null;
+  let chatTimer: ReturnType<typeof setTimeout> | undefined;
 
   const teardown = (): void => {
     if (closed) return;
     closed = true;
     unsubscribe?.();
     unsubscribeMetadata?.();
+    unsubscribeChats?.();
+    clearTimeout(chatTimer);
     unsubscribeArtifacts?.();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (shutdownListener) opts.shutdownSignal?.removeEventListener("abort", shutdownListener);
@@ -140,6 +145,19 @@ export function createJournalStreamResponse(
       // never leak that listener/the heartbeat timer/the watcher. `sinceSeq`'s own range is
       // guarded above so this catch is belt-and-suspenders, not the primary defense against #1.
       try {
+        unsubscribeChats =
+          opts.subscribeChats?.(() => {
+            if (closed || chatTimer) return;
+            chatTimer = setTimeout(() => {
+              chatTimer = undefined;
+              if (closed) return;
+              if ((controller.desiredSize ?? 0) < -4) {
+                shutdownListener?.();
+                return;
+              }
+              send(encodeSseFrame({ event: "chats_changed", data: {} }));
+            }, 250);
+          }) ?? null;
         let replayedAny = false;
         if (sinceSeq === null) {
           // First connect (A1 §8.2 case 1): one snapshot at the current cursor, then live from

@@ -14,17 +14,20 @@
 
 import { mountAgentFeedback } from "./agent-feedback.js";
 import { isQuestion, selectArrivals } from "./agent-request.js";
+import { mountAgentSettings } from "./agent-settings.js";
+import { actionMenu, agentName } from "./agent-ui.js";
 import { mountAppearanceControl } from "./appearance.js";
 import { createArtifactPane, MODES } from "./artifact-pane.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAttentionTray } from "./attention-tray.js";
+import { createChatPane } from "./chat-pane.js";
 import { createDataAccess } from "./data-access.js";
-import { confirmDialog, noticeDialog } from "./dialog.js";
 import { createDictationController } from "./dictation.js";
 import { createDiffPane } from "./diff-pane.js";
 import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH } from "./dock.js";
 import { createFaceStore } from "./face.js";
 import { createCommandPalette } from "./palette.js";
+import { artifactPanelId, chatPanelId, decodePanelId, externalPanelId, settingsPanelId } from "./panel-identity.js";
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
 import { createViewerFeedbackController } from "./viewer-feedback.js";
 import { createNavigatorController } from "./viewer-navigator.js";
@@ -178,7 +181,6 @@ export function mountApp(
     navToggle,
     titleEl,
     goToTrigger,
-    conversationToggle,
     shortcutsToggle,
     topbarOverlays,
     appearanceHost,
@@ -193,17 +195,313 @@ export function mountApp(
     starredList,
     artifactList,
     artifactListEmpty,
-    conversationEl,
     shortcutsEl,
     bannerEl,
     dockHost,
     sidebarEl,
   } = shell.elements;
 
+  let chatList = [],
+    externalSessions = [],
+    rememberedExternal = [],
+    agentStatus,
+    chatsRefreshTimer,
+    stopChatsStream,
+    creatingChat = false;
+  const chatsHost = el("section", { className: "glosa-sidebar-chats", hidden: singlePane || !dataAccess.getChats });
+  const chatsRows = el("div", { className: "glosa-chat-list" });
+  const chatNotice = el("p", { role: "status", className: "glosa-sidebar-empty" });
+  const listMenu = actionMenu("Chat list options");
+  const chatsBody = el("div", { id: `chat-list-${crypto.randomUUID()}` }, [chatsRows, chatNotice]);
+  const chatToggle = el("button", {
+    type: "button",
+    className: "glosa-chat-list-toggle",
+    textContent: "Chats",
+    "aria-expanded": "true",
+    "aria-controls": chatsBody.id,
+    onClick: () => {
+      chatsBody.hidden = !chatsBody.hidden;
+      chatToggle.setAttribute("aria-expanded", String(!chatsBody.hidden));
+    },
+  });
+  chatsHost.append(
+    el("div", { className: "glosa-sidebar-heading" }, [
+      el("h2", {}, [chatToggle]),
+      listMenu.element,
+      el("button", {
+        type: "button",
+        className: "glosa-icon-button",
+        textContent: "+",
+        "aria-label": "New chat",
+        title: "New chat",
+        onClick: () =>
+          void newChat().catch((error) => {
+            chatNotice.textContent = error.message;
+          }),
+      }),
+    ]),
+    chatsBody,
+  );
+  sidebarEl.querySelector(".glosa-sidebar-scroll").append(chatsHost);
+  const settingsLink = el("button", {
+    type: "button",
+    className: "glosa-sidebar-settings",
+    onClick: openAgentSettings,
+  });
+  settingsLink.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8.4 2.5h3.2l.5 2a6 6 0 0 1 1.2.7l2-.6 1.6 2.8-1.5 1.4a6 6 0 0 1 0 1.4l1.5 1.4-1.6 2.8-2-.6a6 6 0 0 1-1.2.7l-.5 2H8.4l-.5-2a6 6 0 0 1-1.2-.7l-2 .6-1.6-2.8 1.5-1.4a6 6 0 0 1 0-1.4L3.1 7.4l1.6-2.8 2 .6a6 6 0 0 1 1.2-.7z"/><circle cx="10" cy="9.5" r="2.5"/></svg><span>Settings</span>';
+  sidebarEl.append(settingsLink);
+  const archivedChats = el("input", { type: "checkbox", "aria-label": "Include archived chats" });
+  archivedChats.addEventListener("change", scheduleChatsRefresh);
+  listMenu.popup.append(
+    el("label", {}, [archivedChats, document.createTextNode(" Include archived chats")]),
+    el("button", {
+      type: "button",
+      textContent: "Refresh sessions",
+      onClick: () =>
+        void refreshChats().catch((error) => {
+          chatNotice.textContent = error.message;
+        }),
+    }),
+  );
+  function renderChats() {
+    chatToggle.textContent = "Chats";
+    const focusedId = chatsRows.contains(document.activeElement) ? document.activeElement.dataset.panelId : null;
+    const item = ({ id, title, pinned, archived, onClick, chat }) => {
+      const row = el(
+        "button",
+        {
+          type: "button",
+          className: "glosa-chat-list-item",
+          "data-panel-id": id,
+          "aria-current": activePanelId === id ? "page" : "false",
+          title,
+          "aria-label": `${title}${pinned ? " · Pinned" : ""}${archived ? " · Archived" : ""}`,
+          onClick,
+        },
+        [el("span", { className: "glosa-chat-list-title", textContent: title })],
+      );
+      const wrapper = el("div", { className: "glosa-chat-list-row", "data-pinned": String(!!pinned) }, [row]);
+      if (chat) {
+        const actions = actionMenu(`Actions for ${title}`);
+        actions.popup.append(
+          el("button", {
+            type: "button",
+            textContent: pinned ? "Unpin chat" : "Pin chat",
+            onClick: async () => {
+              const slug = currentSlug;
+              try {
+                const current = await dataAccess.getChat(slug, chat.id);
+                await dataAccess.changeChat(slug, chat.id, {
+                  requestId: crypto.randomUUID(),
+                  revision: current.configRevision,
+                  pinned: !current.pinned,
+                });
+                if (slug === currentSlug && !unmounted) await refreshChats();
+              } catch (error) {
+                if (!unmounted) chatNotice.textContent = error.message;
+              }
+            },
+          }),
+        );
+        wrapper.append(actions.element);
+      }
+      return wrapper;
+    };
+    chatsRows.replaceChildren(
+      ...chatList
+        .filter((chat) => !chat.archived || archivedChats.checked)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 20)
+        .map((chat) =>
+          item({
+            chat,
+            id: chatPanelId(chat.id),
+            provider: chat.provider,
+            title: chat.title,
+            detail: `${agentStatus?.profiles.find((p) => p.id === chat.profileId)?.label ?? "Account unavailable"} · ${chat.pendingDecisions ? `${chat.pendingDecisions} awaiting reply` : chat.status.replaceAll("_", " ")}`,
+            pinned: chat.pinned,
+            archived: chat.archived,
+            onClick: () => openChat(chat.id),
+          }),
+        ),
+    );
+    const visibleExternal = externalSessions.slice(0, Math.max(0, 20 - Math.min(chatList.length, 20)));
+    if (visibleExternal.length)
+      chatsRows.append(el("p", { className: "glosa-chat-list-group", textContent: "Terminal sessions" }));
+    for (const session of visibleExternal)
+      chatsRows.append(
+        item({
+          id: externalPanelId(session.session_id),
+          provider: session.provider,
+          title: `${agentName(session.provider)} · ${session.session_id.slice(-8)}`,
+          detail: `External · ${session.liveness}`,
+          onClick: () =>
+            void openExternalChat(session.session_id).catch((error) => {
+              chatNotice.textContent = error.message;
+            }),
+        }),
+      );
+    if (!chatsRows.children.length)
+      chatsRows.append(
+        el("p", {
+          className: "glosa-chat-list-empty",
+          textContent: "Start a chat to work with an agent.",
+        }),
+      );
+    if (focusedId) [...chatsRows.querySelectorAll("button")].find((row) => row.dataset.panelId === focusedId)?.focus();
+  }
+  function scheduleChatsRefresh() {
+    clearTimeout(chatsRefreshTimer);
+    chatsRefreshTimer = setTimeout(() => void refreshChats().catch(() => {}), 300);
+  }
+  async function refreshChats() {
+    if (!dataAccess.getChats || !currentSlug || singlePane) return;
+    const slug = currentSlug;
+    const result = await dataAccess.getChats(slug, {
+      archived: archivedChats.checked,
+    });
+    if (slug !== currentSlug || unmounted) return;
+    chatList = result.chats;
+    rememberedExternal = result.external ?? [];
+    const [aggregate, accounts] = await Promise.all([dataAccess.getStatus?.(), dataAccess.getAgentStatus?.()]);
+    if (slug !== currentSlug || unmounted) return;
+    agentStatus = accounts;
+    const workspace = workspaces.find((entry) => entry.slug === slug);
+    externalSessions = (aggregate?.sessions ?? []).filter(
+      (session) => session.workspace_binding === workspace?.path && session.source !== "managed-chat",
+    );
+    for (const remembered of rememberedExternal)
+      if (!externalSessions.some((session) => session.session_id === remembered.sessionId))
+        externalSessions.push({
+          session_id: remembered.sessionId,
+          provider: remembered.provider,
+          liveness: "disconnected",
+        });
+    renderChats();
+  }
+  async function openExternalChat(sessionId) {
+    const slug = currentSlug;
+    if (!rememberedExternal.some((item) => item.sessionId === sessionId))
+      await dataAccess.rememberExternalChat(slug, sessionId);
+    if (slug !== currentSlug || unmounted) return;
+    if (!dock) return;
+    const id = externalPanelId(sessionId),
+      panel = dock.api.getPanel(id);
+    if (panel) {
+      panel.api.setActive();
+      return;
+    }
+    dock.api.addPanel({
+      id,
+      component: "pane",
+      tabComponent: "pane",
+      title: "External session",
+      params: { kind: "external-chat", sessionId },
+    });
+  }
+  function openChat(chatId, sourceChatId) {
+    if (!dock) return;
+    const id = chatPanelId(chatId),
+      panel = dock.api.getPanel(id);
+    if (panel) {
+      panel.api.setActive();
+      return;
+    }
+    dock.api.addPanel({
+      id,
+      component: "pane",
+      tabComponent: "pane",
+      title: "Chat",
+      params: { kind: "chat", chatId, sourceChatId },
+    });
+  }
+  function openAgentSettings() {
+    if (!dock) return;
+    const id = settingsPanelId(),
+      panel = dock.api.getPanel(id);
+    if (panel) {
+      panel.api.setActive();
+      return;
+    }
+    dock.api.addPanel({
+      id,
+      component: "pane",
+      tabComponent: "pane",
+      title: "Settings",
+      params: { kind: "agent-settings" },
+    });
+  }
+  async function newChat(profile, settings, sourceChatId) {
+    if (creatingChat) return;
+    creatingChat = true;
+    try {
+      agentStatus = await dataAccess.getAgentStatus();
+      const slug = currentSlug;
+      const providerKey = `glosa.chat-provider:${slug}`;
+      const lastProvider = readStored(layoutStorage, providerKey);
+      const eligible = agentStatus.profiles.filter((p) => p.enabled && !p.removed && p.auth?.state === "authenticated");
+      let chosen = profile ?? eligible.find((p) => p.isDefault && p.provider === lastProvider);
+      if (!chosen && !lastProvider && eligible.filter((p) => p.isDefault).length === 1)
+        chosen = eligible.find((p) => p.isDefault);
+      if (!chosen && eligible.length) {
+        chosen = await new Promise((resolve) => {
+          const previous = document.activeElement;
+          const dialog = el("dialog", { className: "glosa-dialog", "aria-label": "Choose agent account" });
+          dialog.append(el("h2", { textContent: "Choose an account for this chat" }));
+          for (const account of eligible)
+            dialog.append(
+              el("button", {
+                type: "button",
+                textContent: `${agentName(account.provider)} · ${account.label}`,
+                onClick: () => {
+                  dialog.choice = account;
+                  dialog.close();
+                },
+              }),
+            );
+          dialog.append(el("button", { type: "button", textContent: "Cancel", onClick: () => dialog.close() }));
+          dialog.addEventListener(
+            "close",
+            () => {
+              resolve(dialog.choice);
+              dialog.remove();
+              previous?.focus();
+            },
+            { once: true },
+          );
+          document.body.append(dialog);
+          dialog.showModal();
+        });
+        if (!chosen) return;
+      }
+      if (!chosen) {
+        openAgentSettings();
+        chatNotice.textContent = "Choose an account and make it the default to start a chat.";
+        return;
+      }
+      if (slug !== currentSlug || unmounted) return;
+      writeStored(layoutStorage, providerKey, chosen.provider);
+      const model = agentStatus.capabilities?.[chosen.id]?.models[0];
+      const chat = await dataAccess.createChat(slug, {
+        requestId: crypto.randomUUID(),
+        id: crypto.randomUUID(),
+        provider: chosen.provider,
+        profileId: chosen.id,
+        settings: settings ?? { model: model?.id ?? "", effort: model?.efforts[0] ?? "", permissionMode: "default" },
+      });
+      if (slug !== currentSlug || unmounted) return;
+      await refreshChats();
+      if (slug !== currentSlug || unmounted) return;
+      openChat(chat.id, sourceChatId);
+    } finally {
+      creatingChat = false;
+    }
+  }
+
   const toolControls = () =>
     [
       attentionHost.querySelector(".glosa-attention-trigger"),
-      conversationToggle,
       appearanceHost.querySelector(".glosa-appearance-trigger"),
       shortcutsToggle,
     ].filter((control) => control && !control.disabled && !control.hidden);
@@ -320,7 +618,7 @@ export function mountApp(
     const opened = await openArtifact(path, { mode: "review" });
     // The open is async, so the workspace can be torn down between the press and the result.
     if (!opened || unmounted) return false;
-    const pane = panes.get(path);
+    const pane = panes.get(artifactPanelId(path));
     await pane?.ready;
     if (unmounted) return false;
     pane?.revealRequest?.(request.id);
@@ -341,8 +639,8 @@ export function mountApp(
   /** The top bar names the document in the active pane, by its workspace-relative path, and the
    * workspace itself only while nothing is open. */
   function refreshTopbarTitle() {
-    const path = activePanelId && isArtifactPanel(activePanelId) ? activePanelId : activePane()?.path;
-    titleEl.textContent = path || currentSlug || "glosa";
+    titleEl.textContent = "Search artifacts and chats";
+    goToTrigger.title = `Search in ${currentSlug || "Glosa"} (⌘K)`;
   }
 
   // Go to (⌘K): the active pane's sections and every file in the workspace, in one list. The
@@ -351,10 +649,38 @@ export function mountApp(
   const palette = createCommandPalette({
     host: root,
     getFiles: () => [...knownArtifacts.keys()],
+    getChats: () => [
+      ...chatList,
+      ...externalSessions.map((session) => ({
+        id: `external:${session.session_id}`,
+        title: `${agentName(session.provider)} · ${session.session_id.slice(-8)}`,
+      })),
+    ],
+    searchChats: dataAccess.getChats
+      ? async (q, after) => {
+          const slug = currentSlug;
+          if (!slug) return { chats: [] };
+          const result = await dataAccess.getChats(slug, { q, after, archived: true });
+          if (slug !== currentSlug || unmounted) return { chats: [] };
+          const terminals = after
+            ? []
+            : externalSessions
+                .map((session) => ({
+                  id: `external:${session.session_id}`,
+                  title: `${agentName(session.provider)} · ${session.session_id.slice(-8)}`,
+                }))
+                .filter((session) => session.title.toLowerCase().includes(q.trim().toLowerCase()));
+          return { ...result, chats: [...result.chats, ...terminals] };
+        }
+      : undefined,
+    onOpenChat: (id) => {
+      if (id.startsWith("external:")) void openExternalChat(id.slice(9)).catch(showWorkspaceError);
+      else openChat(id);
+    },
     getSections: () => {
       const pane = activePane();
       const outline = pane?.getOutline?.();
-      if (!pane || !outline?.entries.length || !isArtifactPanel(pane.path)) return null;
+      if (!pane || !outline?.entries.length || pane.kind !== "artifact") return null;
       return { title: pane.path, entries: outline.entries, current: outline.current };
     },
     onOpenFile: (path) => void openArtifact(path),
@@ -383,7 +709,23 @@ export function mountApp(
   function paletteCommands() {
     const pane = activePane();
     const commands = [];
-    if (pane && isArtifactPanel(pane.path) && !readLock) {
+    if (!singlePane)
+      commands.push({
+        id: "settings",
+        label: "Settings",
+        detail: "Agents & accounts · Appearance",
+        run: openAgentSettings,
+      });
+    if (!singlePane && dataAccess.getChats)
+      commands.push({
+        id: "new-chat",
+        label: "New chat",
+        run: () =>
+          void newChat().catch((error) => {
+            chatNotice.textContent = error.message;
+          }),
+      });
+    if (pane && pane.kind === "artifact" && !readLock) {
       const mode = pane.getMode?.();
       if (mode === "edit") {
         commands.push({ id: "done", label: "Done editing", detail: "⌘E", run: () => pane.toggleEdit?.() });
@@ -531,6 +873,8 @@ export function mountApp(
    * mode control, the shortcuts, and the address bar are all talking about. The active tab's
    * olive edge says it in the strip; this says it in the pane, by letting the others go quiet. */
   function markActivePane() {
+    for (const row of chatsRows.querySelectorAll("[data-panel-id]"))
+      row.setAttribute("aria-current", row.dataset.panelId === activePanelId ? "page" : "false");
     for (const [id, pane] of panes) {
       pane.element?.setAttribute("data-active", String(id === activePanelId));
       // Only the active pane offers questions about artifacts nobody has open, and the set of open
@@ -540,7 +884,7 @@ export function mountApp(
   }
 
   function isArtifactPanel(id) {
-    return !id.startsWith("diff:");
+    return decodePanelId(id)[0] === "artifact";
   }
 
   // ---------- tab state (§5: reuse the navigator tree's vocabulary, never a second one) ----------
@@ -554,12 +898,27 @@ export function mountApp(
   }
 
   function tabLabels() {
-    return disambiguateLabels(openPanelIds().filter(isArtifactPanel));
+    return disambiguateLabels(
+      openPanelIds()
+        .filter(isArtifactPanel)
+        .map((id) => decodePanelId(id)[1]),
+    );
   }
 
   function tabStateFor(id) {
     const pane = panes.get(id);
     if (!pane) return { label: id, tooltip: id };
+    if (["chat", "external-chat", "agent-settings"].includes(pane.kind))
+      return {
+        kind: pane.kind,
+        provider: pane.provider,
+        label: pane.title,
+        tooltip: [pane.title, pane.attentionCount ? `${pane.attentionCount} awaiting reply` : pane.activityLabel]
+          .filter(Boolean)
+          .join(" · "),
+        attentionCount: pane.attentionCount,
+        activityLabel: pane.activityLabel,
+      };
     if (!isArtifactPanel(id)) {
       const [, path, from, to] = splitDiffId(id);
       const filename = path.split("/").pop();
@@ -569,14 +928,15 @@ export function mountApp(
         tooltip: `${path} — comparing ${describeVersion(from)} with ${describeVersion(to)}`,
       };
     }
-    const summary = knownArtifacts.get(id);
+    const path = decodePanelId(id)[1];
+    const summary = knownArtifacts.get(path);
     // Issue #155: who is working on this file — the exclusive holder first, else whoever is looking.
-    const holder = claimFor(id) ?? claimsFor(id)[0] ?? null;
+    const holder = claimFor(path) ?? claimsFor(path)[0] ?? null;
     return {
       kind: "artifact",
       ...(holder ? { claim: { mode: holder.mode, label: describeClaim(holder) } } : {}),
-      label: tabLabels().get(id) ?? id.split("/").pop(),
-      tooltip: id,
+      label: tabLabels().get(decodePanelId(id)[1]) ?? decodePanelId(id)[1].split("/").pop(),
+      tooltip: path,
       artifactClass: pane.artifactClass() ?? summary?.class ?? "R",
       stale: pane.isStale() || Boolean(summary?.stale),
       unresolved: pane.annotationCount(),
@@ -586,11 +946,7 @@ export function mountApp(
   }
 
   function splitDiffId(id) {
-    // `diff:<path>:<from>:<to>` — a path can contain colons, so split from the right.
-    const body = id.slice("diff:".length);
-    const lastColon = body.lastIndexOf(":");
-    const prevColon = body.lastIndexOf(":", lastColon - 1);
-    return ["diff", body.slice(0, prevColon), body.slice(prevColon + 1, lastColon), body.slice(lastColon + 1)];
+    return decodePanelId(id);
   }
 
   function refreshTabs() {
@@ -648,9 +1004,72 @@ export function mountApp(
   }
 
   function createPane(id, params, host, panelApi) {
+    if (params.kind === "external-chat") {
+      let disposed = false,
+        unmount;
+      const paneSlug = currentSlug;
+      const element = el("section", { className: "glosa-external-chat" });
+      host.append(element);
+      const pane = {
+        kind: "external-chat",
+        title: `External · ${params.sessionId.slice(-8)}`,
+        element,
+        destroy() {
+          disposed = true;
+          unmount?.();
+          element.remove();
+        },
+      };
+      void loadConversationPane().then((mount) => {
+        if (!disposed)
+          unmount = mount(element, {
+            dataAccess,
+            slug: paneSlug,
+            sessionId: params.sessionId,
+            embedded: true,
+            dictationController,
+          });
+      });
+      panes.set(id, pane);
+      return pane;
+    }
+    if (params.kind === "agent-settings") {
+      const pane = mountAgentSettings(host, {
+        dataAccess,
+        appearance,
+        onChange: () => void refreshChats().catch(() => {}),
+      });
+      panes.set(id, pane);
+      return pane;
+    }
+    if (params.kind === "chat") {
+      const pane = createChatPane(host, {
+        dataAccess,
+        slug: currentSlug,
+        chatId: params.chatId,
+        sourceChatId: params.sourceChatId,
+        onDeleted: () => {
+          const panel = dock?.api.getPanel(chatPanelId(params.chatId));
+          if (panel) dock.api.removePanel(panel);
+          scheduleChatsRefresh();
+        },
+        onSettings: openAgentSettings,
+        onNewChat: (profile, settings) =>
+          newChat(profile, settings, params.chatId).catch((error) => {
+            chatNotice.textContent = error.message;
+          }),
+        onChange: () => {
+          refreshTabs();
+          scheduleChatsRefresh();
+        },
+      });
+      panes.set(id, pane);
+      return pane;
+    }
     if (!isArtifactPanel(id)) {
       const [, path, from, to] = splitDiffId(id);
       const pane = createDiffPane(host, { dataAccess, slug: currentSlug, path, from, to, describeVersion });
+      pane.kind = "diff";
       panes.set(id, pane);
       applyClaimsTo(pane, path);
       return pane;
@@ -658,7 +1077,7 @@ export function mountApp(
     const pane = createArtifactPane(host, {
       dataAccess,
       slug: currentSlug,
-      path: id,
+      path: params.path ?? decodePanelId(id)[1],
       initialMode: params.mode ?? requestedMode,
       readLock,
       loadHistoryPane,
@@ -666,11 +1085,12 @@ export function mountApp(
       getAttentionEntries: () => attentionEntries,
       refreshAttention: () => attentionTray.refresh(),
       getProviderName: () => feedbackController.providerName() ?? "An agent session",
-      isArtifactOpen: (artifactPath) => panes.has(artifactPath),
+      isArtifactOpen: (artifactPath) => panes.has(artifactPanelId(artifactPath)),
       goToRequestElsewhere: (request) => goToRequestIn(request),
       openArtifactInThisPane: (nextPath) => replacePanel(id, nextPath),
       // A presented single document has no tab strip, so its pane carries the whole identity.
-      getTabLabel: () => (singlePane ? null : (tabLabels().get(id) ?? id.split("/").pop())),
+      getTabLabel: () =>
+        singlePane ? null : (tabLabels().get(decodePanelId(id)[1]) ?? decodePanelId(id)[1].split("/").pop()),
       faceStore,
       dictationController,
       openDiffTab: openDiff,
@@ -683,6 +1103,7 @@ export function mountApp(
         if (id === activePanelId) reflectFocus();
       },
     });
+    pane.kind = "artifact";
     panes.set(id, pane);
     // Seeded from what this panel was restored (or opened) with, so restoring a layout does not
     // immediately write the same arrangement back over itself.
@@ -726,10 +1147,10 @@ export function mountApp(
   async function openArtifact(path, { mode, group } = {}) {
     if (!path || !currentSlug) return false;
     if (mode) requestedMode = mode;
-    const existing = dock?.api.getPanel(path);
+    const existing = dock?.api.getPanel(artifactPanelId(path));
     if (existing) {
       existing.api.setActive();
-      const pane = panes.get(path);
+      const pane = panes.get(artifactPanelId(path));
       if (mode && pane) pane.setMode(mode);
       return true;
     }
@@ -738,7 +1159,7 @@ export function mountApp(
       for (const openId of [...panes.keys()]) dock.api.getPanel(openId)?.api.close();
     }
     dock.api.addPanel({
-      id: path,
+      id: artifactPanelId(path),
       component: "pane",
       tabComponent: "pane",
       title: path.split("/").pop(),
@@ -775,10 +1196,17 @@ export function mountApp(
   /** The navigator marks every OPEN artifact quietly and the active pane's artifact as current,
    * so the tree says what is already on screen instead of only where you last clicked. */
   function markNavigatorOpenSet() {
-    artifactNavigator.setOpenPaths?.(openPanelIds().filter(isArtifactPanel));
-    artifactNavigator.setCurrent(activePanelId && isArtifactPanel(activePanelId) ? activePanelId : null, {
-      reveal: false,
-    });
+    artifactNavigator.setOpenPaths?.(
+      openPanelIds()
+        .filter(isArtifactPanel)
+        .map((id) => decodePanelId(id)[1]),
+    );
+    artifactNavigator.setCurrent(
+      activePanelId && isArtifactPanel(activePanelId) ? decodePanelId(activePanelId)[1] : null,
+      {
+        reveal: false,
+      },
+    );
   }
 
   function reflectFocus() {
@@ -788,7 +1216,7 @@ export function mountApp(
     // arrangement itself is never serialized into the address bar.
     onFocusChange?.({
       slug: currentSlug,
-      artifact: pane && isArtifactPanel(pane.path) ? pane.path : null,
+      artifact: pane && pane.kind === "artifact" ? pane.path : null,
       mode: pane?.getMode?.() ?? requestedMode,
     });
     document.title = documentTitle();
@@ -797,7 +1225,7 @@ export function mountApp(
   function documentTitle() {
     const pane = activePane();
     if (!pane) return currentSlug ?? "glosa";
-    const name = pane.path.split("/").pop();
+    const name = pane.title ?? pane.path?.split("/").pop() ?? "glosa";
     return surface === "document" || !currentSlug ? name : `${currentSlug} — ${name}`;
   }
 
@@ -851,14 +1279,12 @@ export function mountApp(
 
   const contextSurfaces = createContextSurfaceController({
     dataAccess,
-    elements: { conversationEl, shortcutsEl, conversationToggle, shortcutsToggle },
+    elements: { shortcutsEl, shortcutsToggle },
     getState: () => ({ slug: currentSlug, mode: activePane()?.getMode?.() ?? "read" }),
-    loadConversationPane,
     createElement: el,
     returnFocus: () => toolsTrigger.focus({ preventScroll: true }),
     dictationController,
   });
-  const { renderConversation } = contextSurfaces;
 
   // ---------- workspace data ----------
 
@@ -878,16 +1304,16 @@ export function mountApp(
     await refreshArtifactList();
     for (const [id, pane] of panes) {
       if (!isArtifactPanel(id)) continue;
-      if (!knownArtifacts.has(id)) pane.markMissing();
+      if (!knownArtifacts.has(pane.path)) pane.markMissing();
     }
     refreshTabs();
   }
 
   function refreshOpenArtifact(path) {
-    const pane = panes.get(path);
-    if (pane) void pane.refreshArtifact();
+    const pane = panes.get(artifactPanelId(path));
+    if (pane) void pane.refreshArtifact?.();
     for (const [id, diffPane] of panes) {
-      if (!isArtifactPanel(id) && splitDiffId(id)[1] === path) void diffPane.refreshArtifact();
+      if (decodePanelId(id)[0] === "diff" && splitDiffId(id)[1] === path) void diffPane.refreshArtifact();
     }
   }
 
@@ -915,9 +1341,10 @@ export function mountApp(
         bannerEl.hidden = status !== "down";
       },
       onReconnect: () => {
+        scheduleChatsRefresh();
         void hydrateClaims();
         void refreshArtifactList();
-        for (const pane of panes.values()) void pane.refreshArtifact();
+        for (const pane of panes.values()) void pane.refreshArtifact?.();
         void attentionTray.refresh();
         void refreshAgentFeedback();
       },
@@ -927,19 +1354,26 @@ export function mountApp(
         if (frame.event === "journal") {
           trackClaims(frame.data);
           for (const pane of panes.values()) {
-            if (pane.applyJournalEvent(frame.data)) break;
+            if (pane.applyJournalEvent?.(frame.data)) break;
           }
         }
         if (frame.event === "journal" || frame.event === "metadata") void attentionTray.refresh();
         if (frame.event === "metadata") {
           void refreshArtifactList();
-          for (const pane of panes.values()) void pane.refreshArtifact();
+          for (const pane of panes.values()) void pane.refreshArtifact?.();
         }
         // Any existing workspace-stream activity may coincide with a bind/heartbeat. No new SSE
         // event is needed: refresh the aggregate through the same bounded status read.
         void refreshAgentFeedback();
       },
     });
+  }
+
+  function workspaceLayoutIdentity() {
+    const workspace = workspaces.find((entry) => entry.slug === currentSlug);
+    return workspace?.registration_id && workspace?.registration_epoch
+      ? `${workspace.registration_id}:${workspace.registration_epoch}`
+      : null;
   }
 
   function mountDock() {
@@ -950,6 +1384,7 @@ export function mountApp(
     dockHost.textContent = "";
     dock = createDock(dockHost, {
       slug: currentSlug,
+      workspaceIdentity: workspaceLayoutIdentity(),
       appearance,
       storage: singlePane ? null : layoutStorage,
       createPane,
@@ -976,7 +1411,15 @@ export function mountApp(
   }
 
   async function selectWorkspace(slug) {
+    palette.close();
+    stopChatsStream?.();
     currentSlug = slug;
+    chatList = [];
+    externalSessions = [];
+    rememberedExternal = [];
+    chatNotice.textContent = "";
+    renderChats();
+    stopChatsStream = singlePane ? undefined : dataAccess.openChatsStream?.(slug, { onEvent: scheduleChatsRefresh });
     refreshTopbarTitle();
     attentionTray.setWorkspace(slug);
     artifactNavigator.setWorkspace(slug);
@@ -985,20 +1428,27 @@ export function mountApp(
     renderStarToggle();
     feedbackController.selectWorkspace();
     await refreshArtifactList();
+    await refreshChats().catch((error) => {
+      chatNotice.textContent = error.message;
+    });
     mountDock();
     // The dock was just emptied, so the bar must stop naming the previous workspace's document.
     refreshTopbarTitle();
     startStream();
     void hydrateClaims();
-    void renderConversation(); // the open pane, if any, should follow the newly selected workspace
 
     // §10: the arrangement is restored per workspace, defensively. A panel whose artifact no
     // longer exists is dropped; if restore throws for ANY reason the workspace still opens with
     // one pane. A corrupt saved layout must never make a workspace unopenable.
     const restored =
       !singlePane &&
-      dock.restoreLayout((id) =>
-        id.startsWith("diff:") ? knownArtifacts.has(splitDiffId(id)[1]) : knownArtifacts.has(id),
+      dock.restoreLayout(
+        (_id, params) =>
+          params.kind === "agent-settings" ||
+          (params.kind === "external-chat" &&
+            externalSessions.some((session) => session.session_id === params.sessionId)) ||
+          (params.kind === "chat" && chatList.some((chat) => chat.id === params.chatId)) ||
+          ((params.kind === "diff" || params.kind === "artifact") && knownArtifacts.has(params.path)),
       );
 
     // CLI deep-link (`glosa open <file>`): the first workspace selection focuses the named
@@ -1263,6 +1713,8 @@ export function mountApp(
 
   const unmount = () => {
     unmounted = true;
+    clearTimeout(chatsRefreshTimer);
+    stopChatsStream?.();
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
     window.removeEventListener("focus", onWindowFocus);

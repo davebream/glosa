@@ -464,3 +464,36 @@ describe("createJournalStreamResponse — heartbeat (A1 §8.3)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+test("managed-chat invalidations share the workspace stream without changing its journal cursor", async () => {
+  const root = mkdtempSync(join(tmpdir(), "glosa-stream-chats-"));
+  const bus = new WorkspaceBus(root, {});
+  await bus.reconcile();
+  let notify: (() => void) | undefined,
+    released = 0;
+  const response = createJournalStreamResponse(root, bus, new Request("http://127.0.0.1:1/w/x/stream"), undefined, {
+    subscribeChats(listener) {
+      notify = listener;
+      return () => {
+        released++;
+      };
+    },
+  });
+  const reader = response.body!.getReader();
+  try {
+    const snapshot = await readEvent(reader);
+    expect(snapshot.event).toBe("snapshot");
+    notify!();
+    notify!();
+    const change = await readEvent(reader);
+    expect(change.event).toBe("chats_changed");
+    expect(change.id).toBeUndefined();
+    expect(JSON.parse(change.data)).toEqual({});
+    expect(bus.currentCursor()).toBe(Number(snapshot.id));
+  } finally {
+    await reader.cancel();
+    await bus.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+  expect(released).toBe(1);
+});

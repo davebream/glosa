@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// The workspace's contextual surfaces: Conversation and the keyboard-shortcut sheet. This
+// The workspace keyboard-shortcut sheet. Chats live in dock panels. This
 // controller is deliberately transport-free: mountApp injects its one data-access instance, lazy
 // module loaders, and live state.
 //
@@ -24,71 +24,16 @@ export const SHORTCUTS = [
   ["Esc", "Close the artifact drawer"],
 ];
 
-export function createContextSurfaceController({
-  dataAccess,
-  elements,
-  getState,
-  loadConversationPane,
-  createElement,
-  returnFocus,
-  dictationController = null,
-}) {
-  const { conversationEl, shortcutsEl, conversationToggle, shortcutsToggle } = elements;
-  let conversationVisible = false;
+export function createContextSurfaceController({ elements, createElement, returnFocus }) {
+  const { shortcutsEl, shortcutsToggle } = elements;
   let shortcutsVisible = false;
-  let stopConversation = null;
-
-  function closeContextSurfaces(except = null) {
-    if (except !== "conversation") setConversationVisible(false);
-    if (except !== "shortcuts") {
-      shortcutsVisible = false;
-      shortcutsEl.hidden = true;
-      shortcutsToggle.setAttribute("aria-expanded", "false");
-    }
+  function closeContextSurfaces() {
+    shortcutsVisible = false;
+    shortcutsEl.hidden = true;
+    shortcutsToggle.setAttribute("aria-expanded", "false");
   }
-
-  function setConversationVisible(visible) {
-    conversationVisible = visible;
-    conversationEl.hidden = !conversationVisible;
-    conversationToggle.setAttribute("aria-expanded", String(conversationVisible));
-    void renderConversation();
-  }
-
-  async function renderConversation() {
-    stopConversation?.();
-    stopConversation = null;
-    const { slug } = getState();
-    if (!conversationVisible || !slug) return;
-    try {
-      const mountConversationPane = await loadConversationPane();
-      if (!conversationVisible || getState().slug !== slug) return;
-      const { mode } = getState();
-      stopConversation = mountConversationPane(conversationEl, {
-        dataAccess,
-        slug,
-        readOnly: mode === "read",
-        onClose: () => {
-          setConversationVisible(false);
-          returnFocus();
-        },
-        dictationController,
-      });
-    } catch {
-      if (!conversationVisible || getState().slug !== slug) return;
-      conversationEl.setAttribute("role", "alert");
-      conversationEl.textContent = "Conversation couldn't be loaded. Close this panel and use the terminal.";
-    }
-  }
-
-  function onConversationToggle() {
-    const nextVisible = !conversationVisible;
-    if (nextVisible) closeContextSurfaces("conversation");
-    setConversationVisible(nextVisible);
-  }
-
   function onShortcutsToggle() {
     const nextVisible = !shortcutsVisible;
-    if (nextVisible) closeContextSurfaces("shortcuts");
     shortcutsVisible = nextVisible;
     shortcutsEl.hidden = !nextVisible;
     shortcutsToggle.setAttribute("aria-expanded", String(nextVisible));
@@ -114,16 +59,13 @@ export function createContextSurfaceController({
     queueMicrotask(() => shortcutsEl.querySelector("h3")?.focus({ preventScroll: true }));
   }
 
-  conversationToggle.addEventListener("click", onConversationToggle);
   shortcutsToggle.addEventListener("click", onShortcutsToggle);
 
   return {
     closeContextSurfaces,
-    renderConversation,
     destroy() {
-      conversationToggle.removeEventListener("click", onConversationToggle);
       shortcutsToggle.removeEventListener("click", onShortcutsToggle);
-      stopConversation?.();
+      closeContextSurfaces();
     },
   };
 }

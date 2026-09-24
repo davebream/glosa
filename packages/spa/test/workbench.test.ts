@@ -491,7 +491,10 @@ describe("the multi-artifact workbench", () => {
     paneFor(root, "drafts/outline.md").querySelector('.glosa-modebar [data-mode="read"]').click();
     // Asserted before any flush: dockview buffers the layout-change event a parameter update
     // raises, so a reload in that gap would keep the old state unless the write is synchronous.
-    expect(JSON.parse(storage.map.get("glosa:layout:ws-1")!).panels["drafts/outline.md"].params.mode).toBe("read");
+    expect(
+      JSON.parse(storage.map.get("glosa:layout:ws-1")!).panels[JSON.stringify(["artifact", "drafts/outline.md"])].params
+        .mode,
+    ).toBe("read");
     await flush();
     expect(paneFor(root, "drafts/outline.md").getAttribute("data-mode")).toBe("read");
     expect(paneFor(root, "notes.md").getAttribute("data-mode")).toBe("review");

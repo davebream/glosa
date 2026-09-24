@@ -122,7 +122,15 @@ function renderItem(item) {
  */
 export function mountConversationPane(
   container,
-  { dataAccess, slug, readOnly = false, onClose = () => {}, dictationController = null },
+  {
+    dataAccess,
+    slug,
+    readOnly = false,
+    onClose = () => {},
+    dictationController = null,
+    sessionId = "",
+    embedded = false,
+  },
 ) {
   container.textContent = "";
 
@@ -203,16 +211,36 @@ export function mountConversationPane(
             .map((event) => ({ role: event.role, content: event.content })),
         }),
       });
+  if (embedded) closeButton.hidden = true;
   let mirrorAvailable = true;
   let stopStream = null;
   let stopDeliveryStream = null;
   let pending = null;
   let waitingForPresentation = false;
-  const pendingStorageKey = `glosa:conversation-pending:${slug ?? "unknown"}`;
+  const pendingStorageKey = `glosa:conversation-pending:${slug ?? "unknown"}${sessionId ? `:${sessionId}` : ""}`;
+  const legacyPendingKey = `glosa:conversation-pending:${slug ?? "unknown"}`;
+  function legacyPending() {
+    try {
+      return JSON.parse(globalThis.sessionStorage?.getItem(legacyPendingKey) ?? "null");
+    } catch {
+      return null;
+    }
+  }
 
   function readStoredPending() {
     try {
-      const parsed = JSON.parse(globalThis.sessionStorage?.getItem(pendingStorageKey) ?? "null");
+      let parsed = JSON.parse(globalThis.sessionStorage?.getItem(pendingStorageKey) ?? "null");
+      const legacy = sessionId && !parsed ? legacyPending() : null;
+      if (
+        legacy &&
+        legacy.sessionHint === sessionId &&
+        typeof legacy.id === "string" &&
+        typeof legacy.text === "string"
+      ) {
+        globalThis.sessionStorage?.setItem(pendingStorageKey, JSON.stringify(legacy));
+        globalThis.sessionStorage?.removeItem(legacyPendingKey);
+        parsed = legacy;
+      }
       return parsed && typeof parsed.id === "string" && typeof parsed.text === "string" ? parsed : null;
     } catch {
       return null;
@@ -304,7 +332,7 @@ export function mountConversationPane(
   async function send() {
     const text = composerInput.value;
     if (!text.trim() || !slug || composerSend.disabled || waitingForPresentation) return;
-    const selectedSession = sessionPicker.value || pending?.sessionHint || undefined;
+    const selectedSession = sessionId || sessionPicker.value || pending?.sessionHint || undefined;
     if (!pending || pending.text !== text) {
       pending = {
         id: newMessageId(),
@@ -334,7 +362,7 @@ export function mountConversationPane(
               candidate.session_id.length > 0,
           )
         : [];
-      if (candidates.length > 0) {
+      if (candidates.length > 0 && !sessionId) {
         showSessionPicker(candidates);
         markFailed("Choose which live agent session should receive this message.");
       } else {
@@ -359,7 +387,10 @@ export function mountConversationPane(
 
   function startStream() {
     stopStream?.();
-    stopStream = dataAccess.openTranscriptStream(slug, {
+    const openTranscript = sessionId
+      ? (slug, options) => dataAccess.openSessionTranscript(slug, sessionId, options)
+      : (slug, options) => dataAccess.openTranscriptStream(slug, options);
+    stopStream = openTranscript(slug, {
       onEvent: (frame) => {
         if (frame.event === "mirror_unavailable") {
           showMirrorUnavailable();
@@ -426,6 +457,29 @@ export function mountConversationPane(
   }
 
   pending = readStoredPending();
+  const legacy = sessionId && !pending ? legacyPending() : null;
+  if (legacy && !legacy.sessionHint && typeof legacy.id === "string" && typeof legacy.text === "string" && !readOnly) {
+    const recover = el("button", {
+      type: "button",
+      textContent: "Recover previous pending message in this chat",
+      onClick: () => {
+        // User selects the destination explicitly; keep the original ID for delivery reconciliation.
+        const current = legacyPending();
+        if (current?.id !== legacy.id) {
+          recover.remove();
+          return;
+        }
+        pending = { ...legacy, sessionHint: sessionId };
+        storePending(pending);
+        globalThis.sessionStorage?.removeItem(legacyPendingKey);
+        composerInput.value = pending.text;
+        markWaiting({ state: "queued" });
+        void refreshPendingStatus();
+        recover.remove();
+      },
+    });
+    composer.prepend(recover);
+  }
   if (pending) {
     composerInput.value = pending.text;
     markWaiting({ state: "queued" });

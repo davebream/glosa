@@ -279,6 +279,10 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./artifact-pane.js",
     "./diff-pane.js",
     "./dock.js",
+    "./panel-identity.js",
+    "./chat-pane.js",
+    "./agent-settings.js",
+    "./agent-ui.js",
     "./palette.js",
     "./vendor/dockview.js",
     "./vendor/idiomorph.js",
@@ -332,7 +336,7 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
     // The dock decides which panes exist and where they sit. Everything a pane knows — including
     // how to reach the daemon — is injected by viewer.js.
-    expect(specifiers).toEqual(["./vendor/dockview.js", "./viewer-shell.js"]);
+    expect(specifiers).toEqual(["./vendor/dockview.js", "./viewer-shell.js", "./panel-identity.js", "./agent-ui.js"]);
     expect(source).not.toContain("data-access");
   });
 

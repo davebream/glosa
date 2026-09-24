@@ -6,8 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Chats have their own workspace list and content tabs.** Existing terminal sessions open as
+  explicitly selected external chats; pending message IDs survive the navigation migration.
+- **Managed Claude and Codex integration is implemented behind a closed release gate.** It includes
+  private account profiles, pinned runtime installation, native login terminals, durable chat
+  history and drafts, tool decisions, workspace feedback and MCP configuration. Public managed
+  execution remains unavailable until both providers pass native account-isolation and lifecycle
+  qualification and the Claude subscription-integration release determination is recorded.
+
 ### Fixed
 
+- **Fresh managed accounts reach the sign-in state.** Claude's valid signed-out response is
+  recognized even when its CLI exits with status 1. Codex accepts the pinned runtime's exact
+  serialized defaults while rejecting changed endpoints and inherited configuration overrides.
 - **An artifact whose name has a space, an accent, or a character such as `+`, `#` or `%` now
   opens.** Clicking it in the tree, or opening the link glosa prints for it, answered "This
   artifact couldn't be opened", because the daemon never undid the escaping the app applied to the

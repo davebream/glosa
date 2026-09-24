@@ -650,3 +650,107 @@ describe("openStream — reconnect + Last-Event-ID + onReconnect", () => {
     expect(storage.getItem("glosa_token")).toBe("stale");
   });
 });
+
+test("workspace, sidebar and eight chat panes share one stream and release it after the last subscriber", async () => {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let streamCount = 0,
+    signal: AbortSignal | undefined,
+    revision = 1;
+  const reads: string[] = [];
+  const da = createDataAccess({
+    storage: fakeStorage(),
+    fetchFn: async (path: string, init: RequestInit) => {
+      if (path.endsWith("/stream")) {
+        streamCount++;
+        signal = init.signal ?? undefined;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(value) {
+              controller = value;
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      reads.push(path);
+      return jsonResponse(200, { revision, id: path.split("/").pop() });
+    },
+  });
+  const stopWorkspace = da.openStream("ws");
+  let listChanges = 0;
+  const stopList = da.openChatsStream("ws", {
+    onEvent: () => {
+      listChanges++;
+    },
+  });
+  const initial = Array.from({ length: 8 }, () => Promise.withResolvers<void>());
+  const updated = Array.from({ length: 8 }, () => Promise.withResolvers<void>());
+  const stops = initial.map((ready, index) =>
+    da.openChatStream("ws", `chat-${index}`, {
+      onEvent(frame) {
+        expect(frame.event).toBe("chat_snapshot");
+        const data = frame.data as { revision: number };
+        if (data.revision === 1) ready.resolve();
+        else updated[index]!.resolve();
+      },
+    }),
+  );
+  try {
+    await Promise.all(initial.map((value) => value.promise));
+    expect(streamCount).toBe(1);
+    expect(reads).toHaveLength(8);
+    stopWorkspace();
+    stopList();
+    expect(signal?.aborted).toBe(false);
+    revision = 2;
+    controller!.enqueue(new TextEncoder().encode("event: chats_changed\ndata: {}\n\n"));
+    await Promise.all(updated.map((value) => value.promise));
+    expect(reads).toHaveLength(16);
+    expect(listChanges).toBe(0);
+    expect(streamCount).toBe(1);
+  } finally {
+    stopWorkspace();
+    stopList();
+    for (const stop of stops) stop();
+  }
+  expect(signal?.aborted).toBe(true);
+});
+
+test("a failed final chat snapshot retries without another stream event or sending any turn", async () => {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let reads = 0;
+  const first = Promise.withResolvers<void>(),
+    recovered = Promise.withResolvers<void>();
+  const da = createDataAccess({
+    storage: fakeStorage(),
+    fetchFn: async (path: string, init: RequestInit) => {
+      expect(init.method ?? "GET").toBe("GET");
+      if (path.endsWith("/stream"))
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(value) {
+              controller = value;
+            },
+          }),
+        );
+      reads++;
+      if (reads === 2) return jsonResponse(503, { title: "temporary failure" });
+      return jsonResponse(200, { revision: reads === 1 ? 1 : 2 });
+    },
+  });
+  const stop = da.openChatStream("ws", "chat", {
+    onEvent(frame) {
+      if ((frame.data as { revision: number }).revision === 1) first.resolve();
+      else recovered.resolve();
+    },
+  });
+  try {
+    await first.promise;
+    controller!.enqueue(new TextEncoder().encode("event: chats_changed\ndata: {}\n\n"));
+    // The one real backoff witness: the stream remains quiet after this final change.
+    await recovered.promise;
+    expect(reads).toBe(3);
+  } finally {
+    stop();
+  }
+});

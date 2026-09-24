@@ -39,7 +39,7 @@ const TOKEN_KEY = "glosa_token";
  *   expectedInstallId?: string | null,
  *   onForeignDaemon?: () => void,
  * }} DataAccessDeps */
-/** @typedef {{ method?: string, headers?: Record<string, string>, body?: string }} RequestOptions */
+/** @typedef {{ method?: string, headers?: Record<string, string>, body?: string | Blob, signal?: AbortSignal }} RequestOptions */
 
 /** Thrown by every data-access call that gets a non-2xx response. Carries the parsed
  * problem+json body (A1 §1) when the daemon sent one, so a caller can branch on `.status`/
@@ -149,6 +149,7 @@ function openEventStream(
   },
 ) {
   let stopped = false;
+  const abort = new AbortController();
   /** @type {string | null} */
   let lastEventId = null;
   let attempt = 0;
@@ -164,7 +165,7 @@ function openEventStream(
     if (token) headers.Authorization = `Bearer ${token}`;
     if (lastEventId !== null) headers["Last-Event-ID"] = lastEventId;
 
-    const res = await /** @type {FetchFn} */ (fetchFn)(path, { headers });
+    const res = await /** @type {FetchFn} */ (fetchFn)(path, { headers, signal: abort.signal });
     if (res.status === 401) {
       // Deliberately does NOT drop the credential here. Whether a 401 means "revoked" or "a
       // different daemon holds this port" is one decision, and it lives in `handleUnauthorized`
@@ -233,6 +234,7 @@ function openEventStream(
 
   return () => {
     stopped = true;
+    abort.abort();
     cancelReader?.();
   };
 }
@@ -410,7 +412,242 @@ export function createDataAccess(deps = {}) {
     return (await request(path, init)).json();
   }
 
+  /** @param {string} path @param {unknown} [body] @param {Record<string, string>} [headers] */
+  const postJson = (path, body = {}, headers = {}) =>
+    requestJson(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  /** @param {string} slug @param {string} [id] @param {string} [action] */
+  const chatPath = (slug, id = "", action = "") =>
+    `/w/${encodeURIComponent(slug)}/chats${id ? `/${encodeURIComponent(id)}` : ""}${action ? `/${action}` : ""}`;
+  /** @param {string} id @param {string} [action] */
+  const profilePath = (id, action = "") =>
+    `/api/agents/profiles/${encodeURIComponent(id)}${action ? `/${action}` : ""}`;
+  /** @param {string} id @param {string} [action] */
+  const loginPath = (id, action = "") => `/api/agents/logins/${encodeURIComponent(id)}${action ? `/${action}` : ""}`;
+
+  // One long-lived connection per workspace, regardless of dock/chat pane count.
+  /** @type {Map<string, {listeners: Set<StreamOptions>, stop: () => void}>} */
+  const workspaceStreams = new Map();
+  /** @param {string} slug @param {StreamOptions} callbacks */
+  function subscribeWorkspace(slug, callbacks) {
+    let shared = workspaceStreams.get(slug);
+    if (!shared) {
+      /** @type {Set<StreamOptions>} */
+      const listeners = new Set();
+      shared = { listeners, stop: () => {} };
+      workspaceStreams.set(slug, shared);
+      shared.stop = openStream({
+        fetchFn,
+        storage,
+        slug,
+        onUnauthorized: handleUnauthorized,
+        onEvent: (frame) => {
+          for (const listener of listeners) {
+            try {
+              listener.onEvent?.(frame);
+            } catch {
+              /* isolate consumers */
+            }
+          }
+        },
+        onReconnect: () => {
+          for (const listener of listeners) {
+            try {
+              listener.onReconnect?.();
+            } catch {
+              /* isolate consumers */
+            }
+          }
+        },
+        onStatus: (status) => {
+          for (const listener of listeners) {
+            try {
+              listener.onStatus?.(status);
+            } catch {
+              /* isolate consumers */
+            }
+          }
+        },
+      });
+    }
+    shared.listeners.add(callbacks);
+    const owned = shared;
+    return () => {
+      owned.listeners.delete(callbacks);
+      if (owned.listeners.size === 0 && workspaceStreams.get(slug) === owned) {
+        workspaceStreams.delete(slug);
+        owned.stop();
+      }
+    };
+  }
+
   return {
+    getAgentStatus: () => requestJson("/api/agents/status"),
+    /** @param {string} slug @param {string} profileId */
+    getMcpPolicy: (slug, profileId) =>
+      requestJson(`${profilePath(profileId, "mcp")}?workspace=${encodeURIComponent(slug)}`),
+    /** @param {string} slug @param {string} profileId @param {unknown} input */
+    setMcpPolicy: (slug, profileId, input) =>
+      postJson(`${profilePath(profileId, "mcp")}?workspace=${encodeURIComponent(slug)}`, input),
+    /** @param {string} slug @param {string} id */
+    deleteChat: (slug, id) => postJson(`/w/${encodeURIComponent(slug)}/chats/${encodeURIComponent(id)}/delete`),
+    /** @param {string} slug @param {string} id */
+    getChatFeedback: (slug, id) =>
+      requestJson(`/w/${encodeURIComponent(slug)}/chats/${encodeURIComponent(id)}/feedback`),
+    /** @param {string} slug @param {string} id @param {unknown} input */
+    sendChatFeedback: (slug, id, input) =>
+      postJson(`/w/${encodeURIComponent(slug)}/chats/${encodeURIComponent(id)}/feedback`, input),
+    /** @param {string} slug @param {string} sessionId */
+    rememberExternalChat: (slug, sessionId) => postJson(`/w/${encodeURIComponent(slug)}/chats/external`, { sessionId }),
+    /** @param {unknown} input */
+    createAgentProfile: (input) => postJson("/api/agents/profiles", input),
+    /** @param {string} id @param {unknown} input */
+    updateAgentProfile: (id, input) => postJson(profilePath(id), input),
+    /** @param {string} provider */
+    installAgent: (provider) => postJson(`/api/agents/runtimes/${encodeURIComponent(provider)}/install`),
+    /** @param {string} id */
+    probeAgent: (id) => postJson(profilePath(id, "probe")),
+    /** @param {string} id @param {unknown} input */
+    signOutAgent: (id, input) => postJson(profilePath(id, "logout"), input),
+    /** @param {string} id */
+    discoverAgentModels: (id) => postJson(profilePath(id, "models")),
+    /** @param {string} id */
+    loginAgent: (id) => postJson(profilePath(id, "login")),
+    /** @param {string} id @param {string} workspace @param {string} [serverId] */
+    loginAgentMcp: (id, workspace, serverId) =>
+      postJson(profilePath(id, "mcp-login"), { workspace, ...(serverId ? { serverId } : {}) }),
+    /** @param {string} slug @param {string} id */
+    nativeChatMcp: (slug, id) => postJson(chatPath(slug, id, "mcp"), {}),
+    /** @param {string} id @param {string} secret @param {number} offset */
+    readAgentLogin: (id, secret, offset) =>
+      requestJson(`${loginPath(id)}?offset=${offset}`, { headers: { "X-Glosa-Operation": secret } }),
+    /** @param {string} id @param {string} secret @param {string} data */
+    writeAgentLogin: (id, secret, data) => postJson(loginPath(id, "input"), { data }, { "X-Glosa-Operation": secret }),
+    /** @param {string} id @param {string} secret @param {number} cols @param {number} rows */
+    resizeAgentLogin: (id, secret, cols, rows) =>
+      postJson(loginPath(id, "resize"), { cols, rows }, { "X-Glosa-Operation": secret }),
+    /** @param {string} id @param {string} secret */
+    finishAgentLogin: (id, secret) => postJson(loginPath(id, "finish"), {}, { "X-Glosa-Operation": secret }),
+    /** @param {string} id @param {string} slug @param {boolean} granted */
+    setAgentConsent: (id, slug, granted) =>
+      postJson(profilePath(id, "consent"), { workspace: slug, granted, version: 1 }),
+    /** @param {string} slug @param {StreamOptions} [callbacks] */
+    openChatsStream(slug, callbacks = {}) {
+      return subscribeWorkspace(slug, {
+        ...callbacks,
+        onEvent: (frame) => {
+          if (frame.event === "chats_changed" || frame.event === "snapshot") callbacks.onEvent?.(frame);
+        },
+        onReconnect: () => {
+          callbacks.onReconnect?.();
+          callbacks.onEvent?.({ event: "chats_changed", data: {} });
+        },
+      });
+    },
+    /** @param {string} slug @param {{q?: string, after?: string, archived?: boolean}} [options] */
+    getChats: (slug, options = {}) =>
+      requestJson(
+        chatPath(slug) +
+          `?${new URLSearchParams({ q: options.q ?? "", after: options.after ?? "", archived: String(options.archived ?? false) })}`,
+      ),
+    /** @param {string} slug @param {string} id @param {unknown} input */
+    moveChatDraft: (slug, id, input) => postJson(chatPath(slug, id, "move-draft"), input),
+    /** @param {string} slug @param {unknown} input */
+    createChat: (slug, input) => postJson(chatPath(slug), input),
+    /** @param {string} slug @param {string} id */
+    getChat: (slug, id, before = "") =>
+      requestJson(chatPath(slug, id) + (before ? `?before=${encodeURIComponent(before)}` : "")),
+    /** @param {string} slug @param {string} id @param {unknown} input */
+    changeChat: (slug, id, input) => postJson(chatPath(slug, id), input),
+    /** @param {string} slug @param {string} id @param {unknown} input */
+    saveChatDraft: (slug, id, input) => postJson(chatPath(slug, id, "draft"), input),
+    /** @param {string} slug @param {string} id @param {unknown} input */
+    sendChatTurn: (slug, id, input) => postJson(chatPath(slug, id, "turns"), input),
+    /** @param {string} slug @param {string} id @param {unknown} input */
+    answerChatDecision: (slug, id, input) => postJson(chatPath(slug, id, "decisions"), input),
+    /** @param {string} slug @param {string} id @param {string} [turnId] */
+    stopChat: (slug, id, turnId) => postJson(chatPath(slug, id, "stop"), { ...(turnId ? { turnId } : {}) }),
+    /** @param {string} slug @param {string} id @param {string} turnId */
+    resumeChatTurn: (slug, id, turnId) => postJson(chatPath(slug, id, "resume"), { turnId }),
+    /** @param {string} slug @param {string} id */
+    exportChat: async (slug, id) => (await request(chatPath(slug, id, "export"))).text(),
+    /** @param {string} slug @param {string} id */
+    previewChatTranscript: (slug, id) => requestJson(chatPath(slug, id, "transfer")),
+    /** @param {string} slug @param {string} id @param {File} file */
+    uploadChatAttachment: (slug, id, file) =>
+      requestJson(chatPath(slug, id, "attachments"), {
+        method: "POST",
+        headers: { "Content-Type": file.type || "text/plain", "X-Glosa-Filename": encodeURIComponent(file.name) },
+        body: file,
+      }),
+    /** @param {string} slug @param {string} id @param {{ onEvent?: StreamEventHandler, onReconnect?: () => void, onStatus?: (status: "down" | "up") => unknown }} [callbacks] */
+    openChatStream(slug, id, callbacks = {}, before = "") {
+      const abort = new AbortController();
+      let stopped = false,
+        loading = false,
+        pending = false,
+        attempt = 0;
+      /** @type {ReturnType<typeof setTimeout> | undefined} */
+      let retry;
+      const refresh = async () => {
+        if (stopped) return;
+        if (loading) {
+          pending = true;
+          return;
+        }
+        clearTimeout(retry);
+        loading = true;
+        try {
+          do {
+            pending = false;
+            const data = await requestJson(
+              chatPath(slug, id) + (before ? `?before=${encodeURIComponent(before)}` : ""),
+              { signal: abort.signal },
+            );
+            attempt = 0;
+            if (!stopped) {
+              callbacks.onStatus?.("up");
+              callbacks.onEvent?.({ event: "chat_snapshot", data });
+            }
+          } while (pending && !stopped);
+        } catch (error) {
+          if (!stopped) {
+            callbacks.onStatus?.("down");
+            if (!(error instanceof DataAccessError && [401, 403, 404, 410].includes(error.status)))
+              retry = setTimeout(() => void refresh(), computeBackoffMs(attempt++));
+          }
+        } finally {
+          loading = false;
+        }
+      };
+      const stop = subscribeWorkspace(slug, {
+        onEvent: (frame) => {
+          if (frame.event === "chats_changed" || frame.event === "snapshot") void refresh();
+        },
+        onReconnect: () => {
+          callbacks.onReconnect?.();
+          void refresh();
+        },
+        onStatus: callbacks.onStatus,
+      });
+      void refresh();
+      return () => {
+        stopped = true;
+        clearTimeout(retry);
+        abort.abort();
+        stop();
+      };
+    },
+    /** @param {string} slug @param {string} sessionId @param {StreamOptions} [callbacks] */
+    openSessionTranscript(slug, sessionId, callbacks = {}) {
+      return openEventStream(
+        `/w/${encodeURIComponent(slug)}/transcript/stream?session=${encodeURIComponent(sessionId)}`,
+        { ...callbacks, fetchFn, storage, onUnauthorized: handleUnauthorized },
+      );
+    },
     /** Local-only configuration/credential status. This endpoint never probes a provider. */
     getDictationStatus() {
       return requestJson("/api/dictation/status");
@@ -567,7 +804,7 @@ export function createDataAccess(deps = {}) {
      *  @param {{ onEvent?: StreamEventHandler, onReconnect?: () => void,
      *            onStatus?: (status: "down" | "up") => unknown }} [options] */
     openStream(slug, { onEvent, onReconnect, onStatus } = {}) {
-      return openStream({ fetchFn, storage, slug, onEvent, onReconnect, onStatus, onUnauthorized: handleUnauthorized });
+      return subscribeWorkspace(slug, { onEvent, onReconnect, onStatus });
     },
     /** `GET /w/:slug/transcript/stream` (A1 §5.8/§8, P4.2) — the conversation mirror. See
      * `openTranscriptStream`'s own docstring for the frame kinds `onEvent` receives. */

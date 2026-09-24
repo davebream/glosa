@@ -264,6 +264,18 @@ generic.**
   names the holder in the journal.
 
 ### R4 — delivery: provider-based, cmux-free  (detail: A2 §F06/§F07/§F16)
+
+**Managed-chat amendment (2026-09-23).** Companion sessions remain externally owned. An additional,
+explicitly selected managed topology may launch the unmodified Claude/Codex runtime through a
+provider adapter and an owned Bun guardian. It uses private account profiles, native subscription
+login, foreground versioned workspace/MCP consent and durable chat intent. Opening history never
+starts a runtime. No account fallback, API fallback, credential import or external-session takeover.
+Public managed execution stays unavailable until the joint Claude/Codex qualification and offering
+gates in the [implementation contract](design/2026-09-23-agent-chat-implementation.md) pass.
+Pluginless managed registration grants only its exact session/workspace; the existing inbox journal,
+claim interval and human-save precedence remain authoritative. This amendment supersedes the old
+unqualified “never launches” rule only for managed chats; it does not authorize process enumeration.
+
 Delivery is per-agent-provider, selecting the best injection point that provider offers. Durable inbox
 is always the truth; a transport failure only changes *which* mechanism delivers next, never whether
 the entry survives. The ladder is **`push → mcp_pull`**; there are no hook rungs (#152).
@@ -331,7 +343,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.17: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.18: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -342,6 +354,19 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   `confinePath()` realpath guard (A3 §3).
 
 ### R6 — SPA: three modes, four viewers  (detail: A3 §1-2, A5 §F10/§F11, A1)
+
+**First-class chats (2026-09-23).** Workspace Chats and document panes share the dock. Managed chat
+history/drafts and exact external-session conversations are separate panel kinds. Remove the old
+contextual Conversation entry; retain artifact History and the external composer’s immutable receipts.
+Changing a submitted chat’s provider creates a fresh tab without implicit history transfer. Switching
+subscriptions within the same provider stays on that chat and persists until changed again; it requires
+stopped runtime ownership and no pending turns. The next explicit send starts a fresh native session
+and Glosa binding with bounded prior message text, never the old account’s native ID or tool state.
+Old turns retain their account/binding attribution. Model and effort changes affect only future
+accepted turns. Agents settings manages isolated accounts and native
+login. All transport still passes through the one SPA data-access module. Typed panel IDs plus workspace
+registration epochs prevent filename collisions and restoration into a replacement registration.
+
 - **v1 invariant — swappable data layer**: the SPA reaches the daemon through ONE data-access module
   (same-origin fetch today). This is a v1 build constraint, not future scope: it is what makes a future
   hosted-shell/Electron topology a config change rather than a refactor (the L0→L3 distribution ladder).

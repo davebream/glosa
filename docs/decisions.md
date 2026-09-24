@@ -1399,3 +1399,29 @@ questions no longer need the older-keeps-the-fill rule, because washes on the sa
 up. The acceptance test that pinned "a stepped outline, not a block" now pins both levels: the
 bracket spans the paragraph, the wash holds exactly the asked sentence starting mid-line, and the
 tab sits level with that sentence's first line.
+
+
+## Launching sessions (2026-09-23)
+
+Historical invariant, preserved verbatim: “glosa never launches an agent, enumerates agent CLI
+processes, selects between candidate sessions, or persists a binding.”
+
+That invariant continues to describe external companion sessions. The accepted managed-chat design
+adds an explicit second topology: the user creates a chat, chooses a private subscription account,
+consents to its workspace and sends a message. Only then may a provider adapter launch an owned
+native runtime. It cannot adopt or interrupt an externally owned CLI. No process enumeration or
+heuristic candidate selection is added; a default is an explicit profile choice, not a discovered
+terminal identity. Logical managed session registration is pluginless and scoped to the chat.
+
+Prerequisites are Bun's built-in PTY, a verified process owner, pinned runtimes, account isolation,
+structured provider protocols and preserved workspace provenance. Electron/cmux are unnecessary.
+The native login ceremony uses the provider executable with the profile's private config root;
+the same root is used for status, inference, resume and logout. Secrets never become SPA settings.
+
+This is the historical decision requested in closed issue #157, not a claim to have newly closed
+that issue. The old connect-flow assumptions in #151/#160 apply to companion sessions; their scope
+is not silently widened. Managed onboarding and runtime ownership use a separate boundary. This
+work follows the maintainer's accepted implementation specification; it changes no ROADMAP order.
+Claude is built first internally, then Codex; both public paths remain unavailable until their joint
+native qualification and offering gates pass. The current implementation does not supply that
+attended evidence or T8 maintainer sign-off.

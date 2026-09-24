@@ -234,3 +234,40 @@ or alternate Git directory is accepted from the request. The daemon validates re
 anchors, bounded loose-file tracking, and local or home-state bus placement before opening a writer,
 then repeats the validation under the shared bus mutex. Symlink bus/journal/HEAD/ref paths are refused.
 Repair requires singleton ownership and respects apply leases and adoption/forget seals (A4 F21).
+
+
+## Managed native execution boundary (2026-09-23)
+
+Managed execution is additional, consented native egress; class-F remains CSP-blocked and cannot call
+login/chat/account routes. The daemon’s ordinary routes retain Host/Origin/Bearer enforcement. Native
+MCP grants are separate, memory-only and limited to one run, session and registration epoch. Grants
+are removed before shutdown awaits and checked again at native writes and bus mutation boundaries.
+No native credential or operation secret belongs in argv, URLs, persistent browser storage, chat
+journals or logs. Login output is bounded and memory-only. OSC 52 and terminal link activation are
+disabled; screen-reader mode is enabled. The daemon serializes login and bounds it, including completed output retention, to ten minutes
+from admission. Polling neither renews nor shortens that deadline: signing in through another
+browser can suspend the controller. Closing its login/settings view cancels immediately when the
+controller is running; abrupt browser exit remains bounded by the absolute deadline. Expired or
+completed views remove sign-in links and disable terminal input; explicit verification is still
+required before the profile becomes authenticated.
+
+Every managed child receives an allowlisted environment. Ambient provider/API/cloud credentials,
+provider routing, CLI-home selectors, telemetry and auto-update configuration are not inherited.
+`ANTHROPIC_API_KEY` is always removed. Profile roots are private and never aliases to system CLI
+configuration. Native tools/subprocesses remain subject to the provider sandbox/approval mode; a
+process group is a lifetime boundary, not an operating-system filesystem/network sandbox. Provider
+escape/daemonization is a qualification risk and must not be advertised as contained without G3.
+
+Chat Markdown disables raw HTML and remote images; links allow only HTTP(S)/mailto. Text/image uploads
+are bounded, text is validated as UTF-8, and PNG/JPEG/WebP headers must declare bounded dimensions.
+This checks format/size rather than certifying that every image byte is valid. Native decoders can
+still reject a malformed attachment. Scope/digest changes require fresh consent; no automatic account
+rotation, quota evasion, API fallback, MCP OAuth token proxy or credential import is supported.
+
+Managed Codex uses neutral-cwd startup and audits the native effective configuration before
+account management and each thread start/resume. Project configuration (including the root
+checkout of a linked worktree) and unapproved inherited tools/routing cause a policy conflict;
+Glosa does not rewrite organizational configuration. Explicit CLI settings disable apps,
+plugins, hooks, analytics, feedback, OpenTelemetry, update checks and login-shell startup.
+Claude uses empty settings sources, strict MCP configuration and disabled account-connected
+tools. Native startup egress and OS-managed policy behavior still require G2/G3 qualification.

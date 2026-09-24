@@ -182,3 +182,27 @@ shared bus mutex. Canonical path and lifecycle checks run again after acquiring 
 parent adoption can mark a loose source under a different coordinator key. The singleton lock must
 prove this process owns Git writes. Watcher, human saves, leases, repair and journal writes therefore
 share one serialization boundary. Repair never runs as a CLI-side offline Git mutation (A4 F21).
+
+
+## Managed process ownership (2026-09-23)
+
+The one daemon owns a generic managed service and provider registry injected by the CLI composition
+root. Core imports no provider implementation. A transient Bun guardian verifies an execution host's
+fresh process group before releasing it to launch the native executable. The host, native agent and
+ordinary descendants share that owned group. Guardian stdin loss or heartbeat expiry triggers
+TERM/KILL cleanup. Writes/fences have explicit acknowledgments. A durable nonce-bound empty-group
+receipt releases capacity; missing proof blocks replacement and execution. Saved PIDs are never
+signalled after restart. A new macOS boot identity proves old processes no longer exist.
+
+Limits include starting/stopping/unknown reservations: six native processes globally, four managed
+turns, two turns per account and one active plus one queued user turn per chat. One management task
+(login, probe, discovery or installation) runs globally. Native handshake/probe is bounded to thirty
+seconds; control replies to fifteen seconds. Explicit runtime installation allows ten minutes.
+Native inference has no arbitrary wall-time cutoff. Cancellation first fences local authority, then
+native writes, then stops the owned group. An unconfirmed exit remains visibly unknown.
+
+Daemon replacement checks busy state then obtains an instance-bound quiesce acknowledgment and
+rechecks the lock before signalling. Authentication-token revocation fences managed work. Browser
+reconnection restores state only. Login has a short controller lease; chats have daemon ownership.
+Provider constructors, status reads, history reads and incoming background feedback perform no
+native discovery, update, login or inference.
