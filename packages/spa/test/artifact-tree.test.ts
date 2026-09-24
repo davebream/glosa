@@ -123,3 +123,40 @@ describe("artifact tree navigator", () => {
     navigator.destroy();
   });
 });
+
+// A name the tree does not split still ends in an ellipsis when it overflows: the label is a flex
+// row, and `text-overflow` only works on the head span, never on a flex row's bare text. Measured
+// in a browser after the split landed: `sibling-writer-rule-preregistration.md` cut mid-glyph.
+// A name with no hyphen stays whole in the head; the hyphen travels with the tail.
+describe("long names in the tree", () => {
+  test("every label carries its name in a head span; a split name adds the tail after the last hyphen", () => {
+    const dom = installDom();
+    try {
+      const container = dom.document.createElement("ul");
+      dom.document.body.append(container);
+      const navigator = createArtifactTreeNavigator(container as unknown as HTMLElement, {
+        storage: null,
+        onOpen: () => {},
+      });
+      navigator.setWorkspace("ws");
+      navigator.setArtifacts([
+        { path: "sibling-writer-rule-preregistration.md", class: "R" },
+        { path: "underfive-competitive-research.md", class: "R" },
+        { path: "validation.md", class: "R" },
+      ]);
+      const labels = Array.from(container.querySelectorAll(".glosa-tree-label")).map((label) => ({
+        text: label.textContent,
+        head: label.querySelector(".glosa-tree-label-head")?.textContent ?? null,
+        tail: label.querySelector(".glosa-tree-label-tail")?.textContent ?? null,
+      }));
+      expect(labels).toEqual([
+        { text: "sibling-writer-rule-preregistration.md", head: "sibling-writer-rule", tail: "-preregistration.md" },
+        { text: "underfive-competitive-research.md", head: "underfive-competitive", tail: "-research.md" },
+        { text: "validation.md", head: "validation.md", tail: null },
+      ]);
+      navigator.destroy();
+    } finally {
+      dom.teardown();
+    }
+  });
+});

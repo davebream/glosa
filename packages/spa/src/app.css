@@ -507,6 +507,7 @@ input,
   height: var(--nav-foot-height);
   padding: 0 var(--space-3);
   gap: var(--space-1);
+  border-top: 1px solid transparent; /* the shown state's rule, kept as a size, so nothing drifts */
 }
 
 .glosa-app[data-nav-open="true"] .glosa-nav-foot {
@@ -1888,7 +1889,8 @@ input,
 
 /* A long name clips in the middle, not at the end: the head takes the ellipsis and the tail (the
    part after the last hyphen, with the extension) stays, so six underfive-* siblings read as six
-   names rather than one prefix. Plain names have no tail span and clip at the end as before. */
+   names rather than one prefix. A name that is not split is the head alone and clips at its end,
+   with the ellipsis — the label itself is a flex row, and a flex row's bare text gets none. */
 .glosa-tree-label-head {
   min-width: 0;
   overflow: hidden;
@@ -6361,11 +6363,12 @@ input,
 
 /* Managed agents share the paper, type and dock of the writing workspace. */
 /* The heading sits directly on its rule, as Artifacts sits on the top bar's: one 36px band, no
-   air between the hairline and the label it belongs to. */
+   air between the hairline and the label it belongs to. The rule runs edge to edge, the length the
+   foot's rule runs, out through the scroll padding and back in for the content. */
 .glosa-sidebar-chats {
-  margin-top: var(--space-3);
+  margin: var(--space-3) calc(var(--space-3) * -1) 0;
+  padding: 0 var(--space-3);
   border-top: 1px solid var(--border);
-  padding-top: 0;
 }
 .glosa-sidebar-chats input {
   width: 100%;
@@ -6606,7 +6609,25 @@ input,
   outline: 2px solid var(--focus);
   outline-offset: -2px;
 }
-.glosa-app[data-nav-open="false"] .glosa-sidebar-settings,
+/* With the navigator hidden, Settings stays on the desk as the gear alone, in the toggle's own
+   bordered box, so the one path to accounts never leaves the corner. */
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+  background: var(--desk);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings:hover {
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings span {
+  display: none;
+}
+
 .glosa-app[data-surface="document"] .glosa-sidebar-settings {
   display: none;
 }

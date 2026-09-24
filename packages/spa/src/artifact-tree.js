@@ -52,9 +52,11 @@ function splitName(name) {
   if (name.length < 24) return null;
   const at = name.lastIndexOf("-");
   if (at <= 0) return null;
-  const tail = name.slice(at + 1);
-  if (tail.length === 0 || tail.length > 16) return null;
-  return { head: name.slice(0, at + 1), tail };
+  // The hyphen travels with the tail, so the join after the head's ellipsis still reads as one
+  // word ("underfive-t…-comparison.md"), and a tail as long as "-preregistration.md" still fits.
+  const tail = name.slice(at);
+  if (tail.length < 2 || tail.length > 21) return null;
+  return { head: name.slice(0, at), tail };
 }
 
 const ICONS = {
@@ -268,16 +270,20 @@ export function createArtifactTreeNavigator(container, options) {
     // the 21px the glyph took is 21px more of every name in a 232px column.
     const label = document.createElement("span");
     label.className = "glosa-tree-label";
+    // The name always sits in a head span, because the label is a flex row and `text-overflow`
+    // does nothing for a flex container's bare text: a whole name that overflowed was cut mid-glyph
+    // with no ellipsis at all. Split names add the tail beside it.
     const split = splitName(node.name);
+    const head = document.createElement("span");
+    head.className = "glosa-tree-label-head";
+    head.textContent = split ? split.head : node.name;
+    label.append(head);
     if (split) {
-      const head = document.createElement("span");
-      head.className = "glosa-tree-label-head";
-      head.textContent = split.head;
       const tail = document.createElement("span");
       tail.className = "glosa-tree-label-tail";
       tail.textContent = split.tail;
-      label.append(head, tail);
-    } else label.textContent = node.name;
+      label.append(tail);
+    }
 
     row.append(disclosure, label);
 

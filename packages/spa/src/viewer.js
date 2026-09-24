@@ -245,6 +245,8 @@ export function mountApp(
   const settingsLink = el("button", {
     type: "button",
     className: "glosa-sidebar-settings",
+    "aria-label": "Settings",
+    title: "Settings",
     onClick: openAgentSettings,
   });
   settingsLink.innerHTML =
@@ -1496,8 +1498,10 @@ export function mountApp(
     const starred = Boolean(currentStar());
     const name = folderName(workspace.path, workspace.slug);
     starToggle.setAttribute("aria-pressed", String(starred));
-    starToggle.setAttribute("aria-label", starred ? "Unstar this workspace" : "Star this workspace");
-    starToggle.title = starred ? `Unstar ${name}` : `Star ${name}`;
+    // One name, spoken and shown: the tooltip and the accessible name say the same thing.
+    const starName = starred ? `Unstar ${name}` : `Star ${name}`;
+    starToggle.setAttribute("aria-label", starName);
+    starToggle.title = starName;
   }
 
   function starRow(star) {

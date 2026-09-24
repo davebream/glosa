@@ -386,7 +386,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const toggle = fresh.querySelector(".glosa-sidebar-heading .glosa-star-toggle") as any;
     expect(toggle.hidden).toBe(false);
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
-    expect(toggle.getAttribute("aria-label")).toBe("Star this workspace");
+    expect(toggle.getAttribute("aria-label")).toBe("Star ws-1");
   });
 
   test("starring the current workspace lists it under Starred; unstarring removes it; collapse persists", async () => {
@@ -401,7 +401,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     await settle();
     expect(calls.star).toEqual(["ws-1"]);
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
-    expect(toggle.getAttribute("aria-label")).toBe("Unstar this workspace");
+    expect(toggle.getAttribute("aria-label")).toBe("Unstar ws-1");
     const section = root.querySelector(".glosa-starred") as any;
     expect(section.hidden).toBe(false);
     const row = root.querySelector(".glosa-starred-row") as any;

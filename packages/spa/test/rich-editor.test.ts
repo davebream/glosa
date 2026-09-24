@@ -2005,7 +2005,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // 753 blocks / 683 edits; per-cause 49, shipped 1/1, ablated 44/44 unchanged.
   // Chat/settings refinements add three editable blocks to DESIGN.md: 756 blocks / 686 edits.
   // Per-cause 49, shipped 1/1, ablated 44/44 and missed/false alarms stay unchanged.
-  // Settings critique follow-through adds one editable paragraph: 757 blocks / 689 edits.
+  // Settings critique follow-through adds one editable paragraph: 759 blocks / 689 edits.
   // Re-measured per-cause 49, shipped 1/1 and ablated 44/44 remain unchanged.
   const BLOCKS = 759;
 
