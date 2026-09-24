@@ -251,6 +251,10 @@
     "packages/providers/codex/test/managed.test.ts": {
       "seconds": 0.1,
       "reason": "Initial local Bun 1.4.2 estimate for managed chat rendering and native protocol fixtures; replace with measured CI medians."
+    },
+    "packages/spa/test/soft-break-display.test.ts": {
+      "seconds": 0.3,
+      "reason": "Initial local Bun 1.4.2 estimate for the rich editor's soft-break display and restore guards (happy-dom mount plus state-level plugin tests); replace with measured CI medians."
     }
   }
 }
