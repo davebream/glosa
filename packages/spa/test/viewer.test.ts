@@ -1335,7 +1335,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       expect(root.querySelector(".glosa-chat-list-item")?.textContent).toBe("Draft");
       label = "Work subscription";
       title = "Revised draft";
-      const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh sessions");
+      const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh chats");
       (refresh as unknown as HTMLButtonElement).click();
       await waitForTitle(title);
     } finally {

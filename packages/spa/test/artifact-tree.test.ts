@@ -160,3 +160,39 @@ describe("long names in the tree", () => {
     }
   });
 });
+
+// The tab strip shows an open document; a folded folder holding it must not look like a plain
+// folder. The mark is a dot at the row's end and the row says how many are inside.
+describe("a folded folder with an open document inside", () => {
+  test("carries the open-inside mark and names the count; expanded, the files carry their own", () => {
+    const dom = installDom();
+    try {
+      const container = dom.document.createElement("ul");
+      dom.document.body.append(container);
+      const navigator = createArtifactTreeNavigator(container as unknown as HTMLElement, {
+        storage: null,
+        onOpen: () => {},
+      });
+      navigator.setWorkspace("ws");
+      navigator.setArtifacts([
+        { path: "plans/roadmap.md", class: "R" },
+        { path: "plans/deep/goals.md", class: "R" },
+        { path: "README.md", class: "R" },
+      ]);
+      navigator.setOpenPaths(["plans/roadmap.md", "plans/deep/goals.md"]);
+      const plans = () => container.querySelector('[data-node-id="d:plans"] > .glosa-tree-row') as any;
+      expect(plans().querySelector(".glosa-tree-open-inside")).not.toBeNull();
+      expect(plans().getAttribute("aria-label")).toBe("plans, 2 open inside");
+      plans().click();
+      expect(plans().querySelector(".glosa-tree-open-inside")).toBeNull();
+      expect(plans().getAttribute("aria-label")).toBeNull();
+      expect(container.querySelectorAll(".glosa-tree-open")).toHaveLength(1);
+      // The nested folder is still folded and says so.
+      const deep = container.querySelector('[data-node-id="d:plans/deep"] > .glosa-tree-row') as any;
+      expect(deep.getAttribute("aria-label")).toBe("deep, 1 open inside");
+      navigator.destroy();
+    } finally {
+      dom.teardown();
+    }
+  });
+});

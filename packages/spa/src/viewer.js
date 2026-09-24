@@ -258,7 +258,7 @@ export function mountApp(
     el("label", {}, [archivedChats, document.createTextNode(" Include archived chats")]),
     el("button", {
       type: "button",
-      textContent: "Refresh sessions",
+      textContent: "Refresh chats",
       onClick: () => void refreshChats().catch(chatFailed("Couldn't refresh chats")),
     }),
   );
@@ -1555,6 +1555,9 @@ export function mountApp(
     starredList.textContent = "";
     for (const star of stars) starredList.append(starRow(star));
     starredCount.textContent = String(stars.length);
+    // The count is painted for the folded section; spoken, "Starred0" is not a name. The toggle
+    // carries the number in words instead.
+    starredToggle.setAttribute("aria-label", stars.length ? `Starred, ${stars.length}` : "Starred");
     sidebarNav.setStarredAvailable(starsSupported && stars.length > 0);
     // A re-render must not drop the keyboard out of the list it was in.
     if (focusedStar) {

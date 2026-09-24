@@ -171,7 +171,7 @@ export function createViewerShell(
     text: "Starred",
     controls: "glosa-starred-list",
   });
-  const starredCount = el("span", { className: "glosa-starred-count" });
+  const starredCount = el("span", { className: "glosa-starred-count", "aria-hidden": "true" });
   starredToggle.append(starredCount);
   const starredList = el("ul", { id: "glosa-starred-list", className: "glosa-starred-list" });
   const starredSection = el("section", { className: "glosa-sidebar-section glosa-starred", hidden: true }, [

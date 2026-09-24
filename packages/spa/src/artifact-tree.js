@@ -43,6 +43,19 @@
 const TYPEAHEAD_RESET_MS = 650;
 const EXPANSION_STORAGE_PREFIX = "glosa:artifact-tree:expanded:";
 
+/** How many of `openPaths` sit anywhere under a folder.
+ *  @param {{ children: Array<any> }} node
+ *  @param {Set<string>} openPaths
+ *  @returns {number} */
+function openInside(node, openPaths) {
+  let count = 0;
+  for (const child of node.children) {
+    if (child.kind === "directory") count += openInside(child, openPaths);
+    else if (openPaths.has(child.path)) count += 1;
+  }
+  return count;
+}
+
 /** Where a long hyphenated name may clip: the head takes the ellipsis, the tail (after the last
  *  hyphen, extension included) stays visible, so siblings that share a prefix keep their names. Short
  *  names, and names whose tail would be most of the name, are left whole.
@@ -291,6 +304,17 @@ export function createArtifactTreeNavigator(container, options) {
       const isExpanded = expanded.has(node.id);
       item.setAttribute("aria-expanded", String(isExpanded));
       if (isExpanded) item.setAttribute("data-expanded", "true");
+      // A folded folder with an open document inside still says so: the tab strip shows the
+      // document, so the tree must not show a plain folder. The mark sits at the row's end (the
+      // chevron owns the slot the file's dot uses) and the row names the count.
+      const inside = isExpanded ? 0 : openInside(node, openPaths);
+      if (inside > 0) {
+        const mark = document.createElement("span");
+        mark.className = "glosa-tree-open-inside";
+        mark.setAttribute("aria-hidden", "true");
+        row.append(mark);
+        row.setAttribute("aria-label", `${node.name}, ${inside} open inside`);
+      }
       item.append(row);
       if (isExpanded) {
         const group = document.createElement("ul");
