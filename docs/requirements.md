@@ -358,8 +358,12 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 **First-class chats (2026-09-23).** Workspace Chats and document panes share the dock. Managed chat
 history/drafts and exact external-session conversations are separate panel kinds. Remove the old
 contextual Conversation entry; retain artifact History and the external composer’s immutable receipts.
-Changing a submitted chat’s provider/account creates a fresh tab without history transfer; model and
-effort changes affect only future accepted turns. Agents settings manages isolated accounts and native
+Changing a submitted chat’s provider creates a fresh tab without implicit history transfer. Switching
+subscriptions within the same provider stays on that chat and persists until changed again; it requires
+stopped runtime ownership and no pending turns. The next explicit send starts a fresh native session
+and Glosa binding with bounded prior message text, never the old account’s native ID or tool state.
+Old turns retain their account/binding attribution. Model and effort changes affect only future
+accepted turns. Agents settings manages isolated accounts and native
 login. All transport still passes through the one SPA data-access module. Typed panel IDs plus workspace
 registration epochs prevent filename collisions and restoration into a replacement registration.
 

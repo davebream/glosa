@@ -1299,6 +1299,13 @@ chat creation/change/draft/send/decision. Repeating the same ID with changed inp
 | `.../:id/{events,export}` | SSE snapshot plus sequenced events; complete Markdown export. |
 | `.../:id/transfer` | Read-only frozen transcript preview: title, included turn count, UTF-8 byte count and text. Includes only user prompts and assistant text; excludes tool output, reasoning and control/approval events. Opening the preview never sends content to another account. |
 
+A same-provider subscription change uses the configuration CAS route and retains the chat ID. It
+requires an authenticated enabled profile, stopped owned runtime and no pending turns. The journal
+allocates a new Glosa session binding, clears the native ID and records a bounded message-text handoff;
+accepted turns retain their own profile and binding. The next explicitly accepted turn rechecks
+target-account consent before dispatch. Internal binding IDs and handoff hashes cannot be supplied
+through configuration requests. Changing provider after submission requires a new chat.
+
 Chat stream IDs are `<chat UUID>:1:<journal sequence>`. Snapshot and listener installation do not
 yield. Reconnect replaces local projection from a snapshot; it never replays a native send. Sequence
 gaps trigger another snapshot. Slow readers are disconnected; output/history remain durable.
