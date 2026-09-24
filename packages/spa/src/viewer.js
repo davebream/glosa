@@ -14,20 +14,20 @@
 
 import { mountAgentFeedback } from "./agent-feedback.js";
 import { isQuestion, selectArrivals } from "./agent-request.js";
+import { mountAgentSettings } from "./agent-settings.js";
+import { actionMenu, agentName } from "./agent-ui.js";
 import { mountAppearanceControl } from "./appearance.js";
 import { createArtifactPane, MODES } from "./artifact-pane.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAttentionTray } from "./attention-tray.js";
+import { createChatPane } from "./chat-pane.js";
 import { createDataAccess } from "./data-access.js";
 import { createDictationController } from "./dictation.js";
 import { createDiffPane } from "./diff-pane.js";
 import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH } from "./dock.js";
-import { artifactPanelId, chatPanelId, externalPanelId, settingsPanelId, decodePanelId } from "./panel-identity.js";
-import { createChatPane } from "./chat-pane.js";
-import { mountAgentSettings } from "./agent-settings.js";
-import { agentIcon, agentName, actionMenu } from "./agent-ui.js";
 import { createFaceStore } from "./face.js";
 import { createCommandPalette } from "./palette.js";
+import { artifactPanelId, chatPanelId, decodePanelId, externalPanelId, settingsPanelId } from "./panel-identity.js";
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
 import { createViewerFeedbackController } from "./viewer-feedback.js";
 import { createNavigatorController } from "./viewer-navigator.js";
@@ -207,28 +207,12 @@ export function mountApp(
     agentStatus,
     chatsRefreshTimer,
     stopChatsStream,
-    nextChatsPage,
     creatingChat = false;
   const chatsHost = el("section", { className: "glosa-sidebar-chats", hidden: singlePane || !dataAccess.getChats });
   const chatsRows = el("div", { className: "glosa-chat-list" });
-  const chatSearch = el("input", { type: "search", placeholder: "Find chats", "aria-label": "Find workspace chats" });
   const chatNotice = el("p", { role: "status", className: "glosa-sidebar-empty" });
-  const moreChats = el("button", {
-    type: "button",
-    textContent: "More chats",
-    hidden: true,
-    onClick: () =>
-      void refreshChats(true).catch((error) => {
-        chatNotice.textContent = error.message;
-      }),
-  });
   const listMenu = actionMenu("Chat list options");
-  const chatsBody = el("div", { id: `chat-list-${crypto.randomUUID()}` }, [
-    chatSearch,
-    chatsRows,
-    moreChats,
-    chatNotice,
-  ]);
+  const chatsBody = el("div", { id: `chat-list-${crypto.randomUUID()}` }, [chatsRows, chatNotice]);
   const chatToggle = el("button", {
     type: "button",
     className: "glosa-chat-list-toggle",
@@ -255,11 +239,15 @@ export function mountApp(
       }),
     ]),
     chatsBody,
-    el("button", { type: "button", textContent: "Agents & accounts", onClick: openAgentSettings }),
   );
   sidebarEl.querySelector(".glosa-sidebar-scroll").append(chatsHost);
-  chatSearch.maxLength = 256;
-  chatSearch.addEventListener("input", scheduleChatsRefresh);
+  const settingsLink = el("button", {
+    type: "button",
+    className: "glosa-sidebar-settings",
+    textContent: "Settings",
+    onClick: openAgentSettings,
+  });
+  sidebarEl.append(settingsLink);
   const archivedChats = el("input", { type: "checkbox", "aria-label": "Include archived chats" });
   archivedChats.addEventListener("change", scheduleChatsRefresh);
   listMenu.popup.append(
@@ -274,11 +262,10 @@ export function mountApp(
     }),
   );
   function renderChats() {
-    chatToggle.textContent = `Chats${chatList.length ? ` · ${chatList.length}${nextChatsPage ? "+" : ""}` : ""}`;
+    chatToggle.textContent = "Chats";
     const focusedId = chatsRows.contains(document.activeElement) ? document.activeElement.dataset.panelId : null;
-    const query = chatSearch.value.toLowerCase();
-    const item = ({ id, provider, title, detail, pinned, archived, onClick }) =>
-      el(
+    const item = ({ id, provider, title, detail, pinned, archived, onClick, chat }) => {
+      const row = el(
         "button",
         {
           type: "button",
@@ -288,23 +275,43 @@ export function mountApp(
           title: `${title} · ${agentName(provider)} · ${detail}${pinned ? " · Pinned" : ""}${archived ? " · Archived" : ""}`,
           onClick,
         },
-        [
-          agentIcon(provider),
-          el("span", { className: "glosa-chat-list-copy" }, [
-            el("span", { className: "glosa-chat-list-title", textContent: title }),
-            el("span", { className: "glosa-chat-list-meta", textContent: `${detail}${archived ? " · Archived" : ""}` }),
-          ]),
-          ...(pinned
-            ? [el("span", { className: "glosa-chat-list-pin", textContent: "◆", "aria-label": "Pinned" })]
-            : []),
-        ],
+        [el("span", { className: "glosa-chat-list-title", textContent: title })],
       );
+      const wrapper = el("div", { className: "glosa-chat-list-row", "data-pinned": String(!!pinned) }, [row]);
+      if (chat) {
+        const actions = actionMenu(`Actions for ${title}`);
+        actions.popup.append(
+          el("button", {
+            type: "button",
+            textContent: pinned ? "Unpin chat" : "Pin chat",
+            onClick: async () => {
+              const slug = currentSlug;
+              try {
+                const current = await dataAccess.getChat(slug, chat.id);
+                await dataAccess.changeChat(slug, chat.id, {
+                  requestId: crypto.randomUUID(),
+                  revision: current.configRevision,
+                  pinned: !current.pinned,
+                });
+                if (slug === currentSlug && !unmounted) await refreshChats();
+              } catch (error) {
+                if (!unmounted) chatNotice.textContent = error.message;
+              }
+            },
+          }),
+        );
+        wrapper.append(actions.element);
+      }
+      return wrapper;
+    };
     chatsRows.replaceChildren(
       ...chatList
         .filter((chat) => !chat.archived || archivedChats.checked)
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 20)
         .map((chat) =>
           item({
+            chat,
             id: chatPanelId(chat.id),
             provider: chat.provider,
             title: chat.title,
@@ -315,9 +322,7 @@ export function mountApp(
           }),
         ),
     );
-    const visibleExternal = externalSessions.filter((session) =>
-      `${session.provider} ${session.session_id}`.toLowerCase().includes(query),
-    );
+    const visibleExternal = externalSessions.slice(0, Math.max(0, 20 - Math.min(chatList.length, 20)));
     if (visibleExternal.length)
       chatsRows.append(el("p", { className: "glosa-chat-list-group", textContent: "Terminal sessions" }));
     for (const session of visibleExternal)
@@ -337,7 +342,7 @@ export function mountApp(
       chatsRows.append(
         el("p", {
           className: "glosa-chat-list-empty",
-          textContent: query ? "No chats match your search." : "Start a chat to work with an agent.",
+          textContent: "Start a chat to work with an agent.",
         }),
       );
     if (focusedId) [...chatsRows.querySelectorAll("button")].find((row) => row.dataset.panelId === focusedId)?.focus();
@@ -346,21 +351,14 @@ export function mountApp(
     clearTimeout(chatsRefreshTimer);
     chatsRefreshTimer = setTimeout(() => void refreshChats().catch(() => {}), 300);
   }
-  async function refreshChats(append = false) {
+  async function refreshChats() {
     if (!dataAccess.getChats || !currentSlug || singlePane) return;
     const slug = currentSlug;
-    const q = chatSearch.value;
     const result = await dataAccess.getChats(slug, {
-      q,
-      after: append ? nextChatsPage : undefined,
       archived: archivedChats.checked,
     });
-    if (slug !== currentSlug || unmounted || q !== chatSearch.value) return;
-    chatList = append
-      ? [...new Map([...chatList, ...result.chats].map((chat) => [chat.id, chat])).values()]
-      : result.chats;
-    nextChatsPage = result.next;
-    moreChats.hidden = !nextChatsPage;
+    if (slug !== currentSlug || unmounted) return;
+    chatList = result.chats;
     rememberedExternal = result.external ?? [];
     const [aggregate, accounts] = await Promise.all([dataAccess.getStatus?.(), dataAccess.getAgentStatus?.()]);
     if (slug !== currentSlug || unmounted) return;
@@ -426,7 +424,7 @@ export function mountApp(
       id,
       component: "pane",
       tabComponent: "pane",
-      title: "Agents",
+      title: "Settings",
       params: { kind: "agent-settings" },
     });
   }
@@ -637,11 +635,8 @@ export function mountApp(
   /** The top bar names the document in the active pane, by its workspace-relative path, and the
    * workspace itself only while nothing is open. */
   function refreshTopbarTitle() {
-    const path =
-      activePanelId && isArtifactPanel(activePanelId)
-        ? decodePanelId(activePanelId)[1]
-        : (activePane()?.title ?? activePane()?.path);
-    titleEl.textContent = path || currentSlug || "glosa";
+    titleEl.textContent = "Search artifacts and chats";
+    goToTrigger.title = `Search in ${currentSlug || "Glosa"} (⌘K)`;
   }
 
   // Go to (⌘K): the active pane's sections and every file in the workspace, in one list. The
@@ -650,6 +645,34 @@ export function mountApp(
   const palette = createCommandPalette({
     host: root,
     getFiles: () => [...knownArtifacts.keys()],
+    getChats: () => [
+      ...chatList,
+      ...externalSessions.map((session) => ({
+        id: `external:${session.session_id}`,
+        title: `${agentName(session.provider)} · ${session.session_id.slice(-8)}`,
+      })),
+    ],
+    searchChats: dataAccess.getChats
+      ? async (q, after) => {
+          const slug = currentSlug;
+          if (!slug) return { chats: [] };
+          const result = await dataAccess.getChats(slug, { q, after, archived: true });
+          if (slug !== currentSlug || unmounted) return { chats: [] };
+          const terminals = after
+            ? []
+            : externalSessions
+                .map((session) => ({
+                  id: `external:${session.session_id}`,
+                  title: `${agentName(session.provider)} · ${session.session_id.slice(-8)}`,
+                }))
+                .filter((session) => session.title.toLowerCase().includes(q.trim().toLowerCase()));
+          return { ...result, chats: [...result.chats, ...terminals] };
+        }
+      : undefined,
+    onOpenChat: (id) => {
+      if (id.startsWith("external:")) void openExternalChat(id.slice(9)).catch(showWorkspaceError);
+      else openChat(id);
+    },
     getSections: () => {
       const pane = activePane();
       const outline = pane?.getOutline?.();
@@ -682,6 +705,22 @@ export function mountApp(
   function paletteCommands() {
     const pane = activePane();
     const commands = [];
+    if (!singlePane)
+      commands.push({
+        id: "settings",
+        label: "Settings",
+        detail: "Agents & accounts · Appearance",
+        run: openAgentSettings,
+      });
+    if (!singlePane && dataAccess.getChats)
+      commands.push({
+        id: "new-chat",
+        label: "New chat",
+        run: () =>
+          void newChat().catch((error) => {
+            chatNotice.textContent = error.message;
+          }),
+      });
     if (pane && pane.kind === "artifact" && !readLock) {
       const mode = pane.getMode?.();
       if (mode === "edit") {
@@ -991,7 +1030,11 @@ export function mountApp(
       return pane;
     }
     if (params.kind === "agent-settings") {
-      const pane = mountAgentSettings(host, { dataAccess, onChange: () => void refreshChats().catch(() => {}) });
+      const pane = mountAgentSettings(host, {
+        dataAccess,
+        appearance,
+        onChange: () => void refreshChats().catch(() => {}),
+      });
       panes.set(id, pane);
       return pane;
     }
@@ -1364,8 +1407,14 @@ export function mountApp(
   }
 
   async function selectWorkspace(slug) {
+    palette.close();
     stopChatsStream?.();
     currentSlug = slug;
+    chatList = [];
+    externalSessions = [];
+    rememberedExternal = [];
+    chatNotice.textContent = "";
+    renderChats();
     stopChatsStream = singlePane ? undefined : dataAccess.openChatsStream?.(slug, { onEvent: scheduleChatsRefresh });
     refreshTopbarTitle();
     attentionTray.setWorkspace(slug);

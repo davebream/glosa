@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-import { createElement as el } from "./viewer-shell.js";
+
+import { mountAgentLogin } from "./agent-login.js";
+import { mountMcpSettings } from "./agent-mcp-settings.js";
+import { actionMenu, agentIcon, agentName } from "./agent-ui.js";
 import { loadChatMarkdown } from "./chat-markdown.js";
 import { confirmDialog } from "./dialog.js";
-import { mountMcpSettings } from "./agent-mcp-settings.js";
-import { mountAgentLogin } from "./agent-login.js";
-import { agentIcon, agentName, actionMenu } from "./agent-ui.js";
+import { createElement as el } from "./viewer-shell.js";
 
 /** Pure stream projection. Durable snapshots restore prompt/blob content; delta frames never start work. */
 export function applyChatEvent(state, record) {
@@ -115,7 +116,10 @@ export function createChatPane(
   const manageAccount = el("button", { type: "button", textContent: "Manage account", onClick: onSettings });
   readiness.append(readinessText, loadModels, manageAccount);
   const field = (label, input) =>
-    el("label", { className: "glosa-chat-field" }, [el("span", { textContent: label }), input]);
+    el("label", { className: "glosa-chat-field" }, [
+      el("span", { className: "glosa-visually-hidden", textContent: label }),
+      input,
+    ]);
   const account = el("select", { "aria-label": "Agent account" });
   const model = el("select", { "aria-label": "Model" });
   const effort = el("select", { "aria-label": "Effort" });
@@ -561,20 +565,21 @@ export function createChatPane(
   const attach = el("button", {
     type: "button",
     className: "glosa-chat-attach",
-    textContent: "+ Attach",
+    textContent: "+",
+    "aria-label": "Add attachments",
     title: "Attach documents or images",
     onClick: () => files.click(),
   });
   const composer = el("div", { className: "glosa-chat-composer" }, [
     draft,
     attachmentList,
-    controls,
     queueNotice,
     el("div", { className: "glosa-chat-compose-actions" }, [
       attach,
       files,
       field("Permissions", mode),
       el("span", { className: "glosa-chat-action-spacer" }),
+      controls,
       stop,
       send,
     ]),
@@ -663,14 +668,15 @@ export function createChatPane(
     )
       select.replaceChildren(...entries.map((v) => el("option", { value: v.id, textContent: v.name })));
     if (select.value !== selected) select.value = selected;
+    // Size to the selected label, not the longest option in the account catalog.
+    const selectedLabel = select.selectedOptions[0]?.textContent ?? "Choose…";
+    select.parentElement.dataset.selection = selectedLabel;
   }
   function renderControls() {
     if (!state) return;
     pick(
       account,
-      (catalog?.profiles ?? [])
-        .filter((p) => p.enabled && !p.removed)
-        .map((p) => ({ id: p.id, name: `${agentName(p.provider)} · ${p.label}` })),
+      (catalog?.profiles ?? []).filter((p) => p.enabled && !p.removed).map((p) => ({ id: p.id, name: p.label })),
       state.profileId,
     );
     const models = catalog?.capabilities?.[state.profileId]?.models ?? [];
@@ -681,6 +687,7 @@ export function createChatPane(
       state.settings.effort,
     );
     mode.value = state.settings.permissionMode;
+    mode.parentElement.dataset.selection = mode.selectedOptions[0]?.textContent ?? "Permissions";
     const profile = catalog?.profiles?.find((p) => p.id === state.profileId);
     const accountReady =
       !!profile?.enabled && !profile.removed && (!profile.auth || profile.auth.state === "authenticated");
@@ -729,11 +736,15 @@ export function createChatPane(
               ? "detail"
               : "agent",
       });
-      const heading = el(collapsible ? "summary" : "h3", { textContent: label });
+      const heading = el(collapsible ? "summary" : "h3", {
+        textContent: label,
+        className: !collapsible && !key.startsWith("error:") ? "glosa-visually-hidden" : "",
+      });
       const content = el("div", { className: "glosa-chat-text" });
       const copy = el("button", {
         type: "button",
-        textContent: "Copy",
+        textContent: "⧉",
+        title: "Copy message",
         "aria-label": `Copy ${label}`,
         onClick: () => {
           void navigator.clipboard

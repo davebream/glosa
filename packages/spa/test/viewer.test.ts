@@ -376,8 +376,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     await settle();
     const sidebar = fresh.querySelector(".glosa-sidebar") as any;
     expect(sidebar.firstElementChild.classList.contains("glosa-sidebar-scroll")).toBe(true);
-    expect(sidebar.lastElementChild.classList.contains("glosa-starred")).toBe(true);
-    expect(sidebar.lastElementChild.hidden).toBe(true);
+    expect(sidebar.querySelector(".glosa-starred")).not.toBeNull();
+    expect(sidebar.lastElementChild.textContent).toBe("Settings");
+    expect(sidebar.querySelector(".glosa-starred").hidden).toBe(true);
     const toggle = fresh.querySelector(".glosa-sidebar-heading .glosa-star-toggle") as any;
     expect(toggle.hidden).toBe(false);
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
@@ -432,7 +433,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
     mountApp(root, { dataAccess: da, initialSlug: "ws-1", initialArtifact: "notes.md" });
     await settle();
-    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("notes.md");
+    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("Search artifacts and chats");
 
     const rows = Array.from(root.querySelectorAll(".glosa-starred-row")) as any[];
     expect(
@@ -456,7 +457,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(reopened.querySelector(".glosa-starred-open").getAttribute("aria-current")).toBe("true");
     expect(globalThis.localStorage.getItem("glosa_last_workspace")).toBe("drafts-reopened");
     // The bar no longer names the document of the workspace that was left.
-    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("drafts-reopened");
+    expect((root.querySelector(".glosa-goto-trigger") as any).title).toContain("drafts-reopened");
   });
 
   test("a reopen that fails says so on its row and leaves the current workspace alone", async () => {
@@ -1242,7 +1243,59 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     }
   });
 
-  test("existing chat sidebar resolves account labels on initial load and refresh after renaming", async () => {
+  test("sidebar limits conversations to 20 title rows, pins persist, and shared search reaches older chats and terminal sessions", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const chats = Array.from({ length: 24 }, (_, i) => ({
+      id: `chat-${i}`,
+      title: `Topic ${i}`,
+      provider: "claude-code",
+      profileId: "a",
+      pinned: false,
+      configRevision: 1,
+      status: "completed",
+      updatedAt: new Date(2026, 0, 25 - i).toISOString(),
+    }));
+    const calls: any[] = [];
+    const da = fakeDataAccess({
+      getChats: async (_slug: string, options: any) => {
+        calls.push(options);
+        return {
+          chats: chats.filter((c) => !options.q || c.title.includes(options.q)),
+          external: [{ sessionId: "terminal-id", provider: "codex" }],
+        };
+      },
+      getAgentStatus: async () => ({ profiles: [{ id: "a", label: "Personal" }] }),
+      getStatus: async () => ({ sessions: [], workspaces: [] }),
+      getChat: async (_slug: string, id: string) => chats.find((c) => c.id === id),
+      changeChat: async (_slug: string, id: string, input: any) =>
+        Object.assign(chats.find((c) => c.id === id)!, input),
+    });
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    try {
+      await settle();
+      expect(root.querySelectorAll(".glosa-chat-list-item")).toHaveLength(20);
+      expect(root.querySelector(".glosa-chat-list-toggle")!.textContent).toBe("Chats");
+      expect(root.querySelector('[placeholder="Find chats"]')).toBeNull();
+      expect(root.querySelector(".glosa-chat-list-item svg")).toBeNull();
+      const secondRow = root.querySelectorAll(".glosa-chat-list-row")[1]!;
+      (secondRow.querySelector(".glosa-agent-menu button") as any).click();
+      await settle();
+      expect(root.querySelector(".glosa-chat-list-title")!.textContent).toBe("Topic 1");
+      expect(chats[1]!.pinned).toBe(true);
+      (root.querySelector(".glosa-goto-trigger") as any).click();
+      await settle();
+      expect([...root.querySelectorAll('[data-kind="chat"]')].some((n) => n.textContent?.includes("Topic 23"))).toBe(
+        true,
+      );
+      expect([...root.querySelectorAll('[data-kind="chat"]')].some((n) => n.textContent?.includes("Codex"))).toBe(true);
+      expect(calls.some((c) => c.archived === true)).toBe(true);
+    } finally {
+      unmount();
+    }
+  });
+
+  test("title-only chat rows retain account and pending-reply details in their tooltip after renaming", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     let label = "Personal subscription";
@@ -1267,13 +1320,17 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
     async function waitForLabel(expected: string) {
       const deadline = Date.now() + 1000;
-      while (!root.querySelector(".glosa-chat-list-item")?.textContent?.includes(expected) && Date.now() < deadline)
+      while (
+        !root.querySelector(".glosa-chat-list-item")?.getAttribute("title")?.includes(expected) &&
+        Date.now() < deadline
+      )
         await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(root.querySelector(".glosa-chat-list-item")?.textContent).toContain(expected);
+      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("title")).toContain(expected);
     }
     try {
       await waitForLabel(label);
-      expect(root.querySelector(".glosa-chat-list-item")?.textContent).toContain("2 awaiting reply");
+      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("title")).toContain("2 awaiting reply");
+      expect(root.querySelector(".glosa-chat-list-item")?.textContent).toBe("Draft");
       label = "Work subscription";
       const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh sessions");
       (refresh as unknown as HTMLButtonElement).click();

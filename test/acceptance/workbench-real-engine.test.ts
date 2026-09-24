@@ -1048,6 +1048,7 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
           ,probeAgent:async(id)=>{accountFixture.probes.push(id);profiles.find(p=>p.id===id).auth.state='authenticated';}
         }});
         await accountFixture.pane.ready;
+        document.querySelector('[data-account-choice="p3"]').click();
         const last=document.querySelector('[data-profile-id="p3"]');
         last.scrollIntoView({block:'end'});
         last.querySelector('.glosa-agent-menu-trigger').click();
@@ -1092,6 +1093,7 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         ),
       ).toEqual({ id: "p3", revision: 1, isDefault: true });
       await tab.evaluate(`(async()=>{
+        document.querySelector('[data-account-choice=p0]').click();
         [...document.querySelectorAll('[data-profile-id=p0] button')].find(b=>b.textContent==='Retry verification').click();
         const deadline=Date.now()+3000;
         while(document.querySelector('[data-profile-id=p0] .glosa-agent-state').textContent!=='Connected') {
@@ -1108,7 +1110,38 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
           "document.querySelector('[data-provider-panel]:not([hidden])').dataset.providerPanel",
         ),
       ).toBe("codex");
-      await tab.evaluate("accountFixture.pane.destroy()");
+      await tab.evaluate(`(async()=>{
+        accountFixture.pane.destroy();
+        const { mountAgentSettings } = await import('/app/agent-settings.js');
+        window.installFixture = {installed:false,calls:0};
+        installFixture.pane=mountAgentSettings(document.querySelector('main'),{dataAccess:{
+          getAgentStatus:async()=>({available:true,providers:[{id:'claude-code',name:'Claude Code',installed:installFixture.installed,qualified:true}],profiles:[]}),
+          installAgent:async()=>{installFixture.calls++;await new Promise(resolve=>installFixture.finish=resolve);installFixture.installed=true;}
+        }});
+        await installFixture.pane.ready;
+      })()`);
+      expect(
+        await tab.evaluate<boolean>("document.querySelector('.glosa-agent-add-account button').matches(':disabled')"),
+      ).toBe(true);
+      expect(
+        await tab.evaluate<boolean>("document.querySelector('.glosa-agent-add-account input').matches(':disabled')"),
+      ).toBe(true);
+      await tab.evaluate("document.querySelector('.glosa-agent-runtime button').click()");
+      await tab.evaluate("document.querySelector('dialog .glosa-save').click()");
+      await tab.evaluate(`new Promise(resolve=>requestAnimationFrame(resolve))`);
+      const installing = await tab.evaluate<{ disabled: boolean; label: string; busy: string; calls: number }>(
+        `(()=>{const b=document.querySelector('.glosa-agent-runtime button');b.click();return {disabled:b.disabled,label:b.textContent,busy:b.getAttribute('aria-busy'),calls:installFixture.calls}})()`,
+      );
+      expect(installing).toEqual({ disabled: true, label: "Installing runtime…", busy: "true", calls: 1 });
+      await tab.evaluate(`(async()=>{
+        installFixture.finish();
+        const deadline=Date.now()+3000;
+        while(document.querySelector('.glosa-agent-add-account button').matches(':disabled')) {
+          if(Date.now()>deadline) throw new Error('Account setup stayed locked after installation');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        installFixture.pane.destroy();
+      })()`);
     },
     TEST_TIMEOUT_MS,
   );

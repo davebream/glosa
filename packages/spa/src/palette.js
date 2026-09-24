@@ -28,9 +28,11 @@ import { createElement as el } from "./viewer-shell.js";
  * @typedef {{ text: string, depth: number, address?: string | null, jump: () => void }} SectionEntry
  * @typedef {{ id: string, label: string, detail?: string, run: () => void }} CommandEntry
  * @typedef {{ slug: string, name: string, detail?: string, current: boolean, starred: boolean }} WorkspaceEntry
+ * @typedef {{ id: string, title: string, archived?: boolean }} ChatEntry
  * @typedef {{ kind: "section", entry: SectionEntry, depth: number, text: string, address: string | null, current: boolean }
  *   | { kind: "file", path: string, name: string, dir: string, text: string }
  *   | { kind: "workspace", workspace: WorkspaceEntry, text: string }
+ *   | { kind: "chat", chat: ChatEntry, text: string, matched?: boolean }
  *   | { kind: "command", command: CommandEntry, text: string }} PaletteItem
  */
 
@@ -44,6 +46,9 @@ import { createElement as el } from "./viewer-shell.js";
  *   getWorkspaces?: () => WorkspaceEntry[],
  *   onOpenWorkspace?: (slug: string) => void,
  *   starIcon?: string,
+ *   getChats?: () => ChatEntry[],
+ *   searchChats?: (query: string, after?: string) => Promise<{chats: ChatEntry[], next?: string}>,
+ *   onOpenChat?: (id: string) => void,
  * }} options
  */
 export function createCommandPalette({
@@ -55,6 +60,9 @@ export function createCommandPalette({
   getWorkspaces = () => [],
   onOpenWorkspace = () => {},
   starIcon = "",
+  getChats = () => [],
+  searchChats,
+  onOpenChat = () => {},
 }) {
   let open = false;
   let destroyed = false;
@@ -63,14 +71,20 @@ export function createCommandPalette({
   let active = 0;
   /** @type {any} */ let previousFocus = null;
   let sectionsTitle = "";
+  let filter = "all",
+    searchGeneration = 0,
+    searching = false;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */ let searchTimer;
+  /** @type {string | undefined} */ let nextChatPage;
 
   const inputEl = el("input", {
     className: "glosa-palette-input",
     type: "text",
     autocomplete: "off",
     spellcheck: false,
-    placeholder: "Go to a section, a file, a workspace or a command",
-    "aria-label": "Go to a section, a file, a workspace or a command",
+    placeholder: "Search artifacts, chats and commands…",
+    "aria-label": "Search artifacts, chats and commands",
+    maxLength: 256,
     role: "combobox",
     "aria-expanded": "true",
     "aria-autocomplete": "list",
@@ -84,7 +98,46 @@ export function createCommandPalette({
     className: "glosa-palette-hint",
     textContent: "↑↓ to move · Enter to go · # sections · / files · @ workspaces · > commands",
   });
-  const sheetEl = el("div", { className: "glosa-palette-sheet" }, [inputEl, listEl, emptyEl, hintEl]);
+  const filters = el("div", { className: "glosa-palette-filters", role: "group", "aria-label": "Search in" });
+  for (const [value, label] of [
+    ["all", "All"],
+    ["file", "Artifacts"],
+    ["chat", "Chats"],
+    ["command", "Commands"],
+  ]) {
+    filters.append(
+      el("button", {
+        type: "button",
+        textContent: label,
+        "data-filter": value,
+        "aria-pressed": String(value === filter),
+        onClick: () => {
+          filter = value ?? "all";
+          for (const button of filters.children)
+            button.setAttribute("aria-pressed", String(button.dataset.filter === filter));
+          onInput();
+          inputEl.focus();
+        },
+      }),
+    );
+  }
+  const searchStatus = el("p", { className: "glosa-palette-search-status", role: "status" });
+  const more = el("button", {
+    className: "glosa-palette-more",
+    type: "button",
+    textContent: "More matching chats",
+    hidden: true,
+    onClick: () => void findChats(true),
+  });
+  const sheetEl = el("div", { className: "glosa-palette-sheet" }, [
+    inputEl,
+    filters,
+    listEl,
+    emptyEl,
+    searchStatus,
+    more,
+    hintEl,
+  ]);
   const rootEl = el(
     "div",
     { className: "glosa-palette", role: "dialog", "aria-modal": "true", "aria-label": "Go to", hidden: true },
@@ -130,6 +183,7 @@ export function createCommandPalette({
         text: path,
       });
     }
+    for (const chat of getChats()) next.push({ kind: "chat", chat, text: chat.title });
     for (const workspace of getWorkspaces()) {
       next.push({ kind: "workspace", workspace, text: workspace.name });
     }
@@ -143,7 +197,12 @@ export function createCommandPalette({
 
   function render() {
     const { scope, query } = parseQuery(inputEl.value);
-    shown = items.filter((item) => (scope === null || item.kind === scope) && matchesQuery(item.text, query));
+    shown = items.filter(
+      (item) =>
+        (scope === null || item.kind === scope) &&
+        (filter === "all" || item.kind === filter) &&
+        ((item.kind === "chat" && item.matched) || matchesQuery(item.text, query)),
+    );
     active = Math.min(active, Math.max(0, shown.length - 1));
     listEl.textContent = "";
     emptyEl.hidden = shown.length > 0;
@@ -162,9 +221,11 @@ export function createCommandPalette({
                 ? `Sections · ${sectionsTitle}`
                 : item.kind === "file"
                   ? "Files"
-                  : item.kind === "workspace"
-                    ? "Workspaces"
-                    : "Commands",
+                  : item.kind === "chat"
+                    ? "Chats"
+                    : item.kind === "workspace"
+                      ? "Workspaces"
+                      : "Commands",
           }),
         );
       }
@@ -192,6 +253,9 @@ export function createCommandPalette({
       } else if (item.kind === "file") {
         row.append(el("span", { className: "glosa-palette-label", textContent: item.name }));
         if (item.dir) row.append(el("span", { className: "glosa-palette-meta", textContent: item.dir }));
+      } else if (item.kind === "chat") {
+        row.append(el("span", { className: "glosa-palette-label", textContent: item.chat.title }));
+        if (item.chat.archived) row.append(el("span", { className: "glosa-palette-meta", textContent: "Archived" }));
       } else if (item.kind === "workspace") {
         const { workspace } = item;
         // Every workspace row keeps the star's slot, so names line up whether or not it is starred.
@@ -250,12 +314,16 @@ export function createCommandPalette({
     if (item.kind === "section") item.entry.jump();
     else if (item.kind === "file") onOpenFile(item.path);
     else if (item.kind === "workspace") onOpenWorkspace(item.workspace.slug);
+    else if (item.kind === "chat") onOpenChat(item.chat.id);
     else item.command.run();
   }
 
   function show() {
     if (destroyed || open) return;
     open = true;
+    filter = "all";
+    for (const button of filters.children)
+      button.setAttribute("aria-pressed", String(button.dataset.filter === filter));
     previousFocus = document.activeElement;
     collect();
     inputEl.value = "";
@@ -264,12 +332,15 @@ export function createCommandPalette({
     active = Math.max(0, here);
     rootEl.hidden = false;
     render();
+    void findChats();
     queueMicrotask(() => inputEl.focus({ preventScroll: true }));
   }
 
   function close({ restoreFocus = true } = {}) {
     if (!open) return;
     open = false;
+    searchGeneration++;
+    clearTimeout(searchTimer);
     rootEl.hidden = true;
     listEl.textContent = "";
     items = [];
@@ -283,7 +354,55 @@ export function createCommandPalette({
 
   function onInput() {
     active = 0;
+    searchGeneration++;
+    clearTimeout(searchTimer);
+    nextChatPage = undefined;
+    more.hidden = true;
+    searchStatus.textContent = "";
+    collect();
     render();
+    if (searchChats) searchTimer = setTimeout(() => void findChats(), 150);
+  }
+
+  async function findChats(append = false) {
+    const { scope, query } = parseQuery(inputEl.value);
+    if (
+      (append && searching) ||
+      !searchChats ||
+      !open ||
+      (scope && scope !== "chat") ||
+      !["all", "chat"].includes(filter)
+    )
+      return;
+    const generation = ++searchGeneration;
+    searching = true;
+    more.disabled = true;
+    searchStatus.textContent = "Searching chats…";
+    try {
+      const result = await searchChats(query, append ? nextChatPage : undefined);
+      if (generation !== searchGeneration || !open || destroyed) return;
+      const prior = append ? items.filter((item) => item.kind === "chat") : [];
+      const matches = [
+        ...prior,
+        ...result.chats.map((chat) => ({ kind: /** @type {const} */ ("chat"), chat, text: chat.title, matched: true })),
+      ];
+      const unique = [...new Map(matches.map((item) => [item.chat.id, item])).values()];
+      const beforeChats = items.filter((item) => item.kind === "section" || item.kind === "file");
+      const afterChats = items.filter((item) => item.kind === "workspace" || item.kind === "command");
+      items = [...beforeChats, ...unique, ...afterChats];
+      nextChatPage = result.next;
+      more.hidden = !nextChatPage;
+      searchStatus.textContent = "";
+      render();
+    } catch {
+      if (generation !== searchGeneration || !open) return;
+      searchStatus.textContent = "Chat search could not finish. Change the search to try again.";
+    } finally {
+      if (generation === searchGeneration) {
+        searching = false;
+        more.disabled = false;
+      }
+    }
   }
 
   /** @param {any} event */
@@ -293,6 +412,9 @@ export function createCommandPalette({
       close();
       return;
     }
+    // Filter/pagination buttons keep native Enter/Space activation. Only the combobox
+    // owns result navigation; otherwise Enter would open whichever result was active.
+    if (event.target !== inputEl) return;
     if (event.key === "Enter") {
       event.preventDefault();
       pick(active);

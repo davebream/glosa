@@ -1,25 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
-import { createElement as el } from "./viewer-shell.js";
-import { confirmDialog } from "./dialog.js";
-import { mountMcpSettings } from "./agent-mcp-settings.js";
-import { agentIcon, agentName, actionMenu } from "./agent-ui.js";
 
-export function mountAgentSettings(host, { dataAccess, onChange }) {
+import { mountMcpSettings } from "./agent-mcp-settings.js";
+import { actionMenu, agentIcon, agentName } from "./agent-ui.js";
+import { confirmDialog } from "./dialog.js";
+import { createElement as el } from "./viewer-shell.js";
+
+export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
   let disposed = false,
     login,
     busy = false,
     selectedProvider;
+  const selectedAccounts = new Map();
   const loginAbort = new AbortController();
   const root = el("section", { className: "glosa-agent-settings" });
   const message = el("p", { role: "status", className: "glosa-agent-status" });
   const body = el("div", { className: "glosa-agent-settings-body" }),
     loginHost = el("div", { className: "glosa-agent-login-host" }),
     tabs = el("nav", { className: "glosa-agent-tabs", "aria-label": "Coding agents" });
-  root.append(
-    el("h1", { textContent: "Agents & accounts" }),
+  const agents = el("section", { className: "glosa-settings-content" });
+  agents.append(
+    el("h2", { className: "glosa-settings-title", textContent: "Agents & accounts" }),
     el("p", {
-      textContent:
-        "Your coding agents, at your writing desk. Connect accounts, choose a default, and keep each login separate from your terminal.",
+      textContent: "Connect your accounts and choose which one new chats use.",
       className: "glosa-agent-intro",
     }),
     tabs,
@@ -27,12 +29,68 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
     loginHost,
     body,
   );
+  const navigation = el("nav", { className: "glosa-settings-nav", "aria-label": "Settings" });
+  const appearancePage = el("section", { className: "glosa-settings-content", hidden: true }, [
+    el("h2", { className: "glosa-settings-title", textContent: "Appearance" }),
+    el("p", { className: "glosa-agent-intro", textContent: "Choose how Glosa looks on this device." }),
+  ]);
+  for (const [label, panel] of [
+    ["Agents & accounts", agents],
+    ...(appearance ? [["Appearance", appearancePage]] : []),
+  ]) {
+    const item = el("button", {
+      type: "button",
+      textContent: label,
+      "aria-current": panel === agents ? "page" : "false",
+      onClick: () => {
+        agents.hidden = panel !== agents;
+        appearancePage.hidden = panel !== appearancePage;
+        for (const button of navigation.children)
+          button.setAttribute("aria-current", String(button === item ? "page" : "false"));
+      },
+    });
+    navigation.append(item);
+  }
+  const appearanceOptions = el("div", {
+    className: "glosa-settings-appearance",
+    role: "group",
+    "aria-label": "Color theme",
+  });
+  for (const value of ["system", "light", "dark"]) {
+    appearanceOptions.append(
+      el("button", {
+        type: "button",
+        "data-theme-choice": value,
+        textContent: value === "system" ? "Use system setting" : value === "light" ? "Light" : "Dark",
+        onClick: () => appearance.setPreference(value),
+      }),
+    );
+  }
+  appearancePage.append(appearanceOptions);
+  const stopAppearance = appearance?.subscribe(({ preference }) => {
+    for (const button of appearanceOptions.children)
+      button.setAttribute("aria-pressed", String(button.dataset.themeChoice === preference));
+  });
+  root.append(
+    el("h1", { textContent: "Settings" }),
+    el("div", { className: "glosa-settings-layout" }, [navigation, agents, appearancePage]),
+  );
   host.append(root);
-  const act = async (fn) => {
+  const act = async (fn, progress = "Saving changes…", trigger) => {
     if (busy || disposed) return;
     busy = true;
     root.setAttribute("aria-busy", "true");
-    message.textContent = "Working…";
+    message.textContent = progress;
+    const locked = [...root.querySelectorAll("button,input,select,textarea")].map((control) => [
+      control,
+      control.disabled,
+    ]);
+    for (const [control] of locked) control.disabled = true;
+    const originalLabel = trigger?.textContent;
+    if (trigger) {
+      trigger.textContent = progress;
+      trigger.setAttribute("aria-busy", "true");
+    }
     try {
       await fn();
       await refresh();
@@ -42,10 +100,30 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
     } finally {
       busy = false;
       root.removeAttribute("aria-busy");
+      for (const [control, disabled] of locked) control.disabled = disabled;
+      if (trigger?.isConnected) {
+        trigger.textContent = originalLabel;
+        trigger.removeAttribute("aria-busy");
+      }
     }
   };
-  const button = (label, fn, disabled = false) =>
-    el("button", { type: "button", textContent: label, disabled, onClick: () => void act(fn) });
+  const button = (label, fn, disabled = false) => {
+    const control = el("button", { type: "button", textContent: label, disabled });
+    control.addEventListener(
+      "click",
+      () =>
+        void act(
+          fn,
+          label.includes("runtime")
+            ? "Installing runtime…"
+            : label === "Load models"
+              ? "Loading models…"
+              : "Saving changes…",
+          control,
+        ),
+    );
+    return control;
+  };
   const update = (profile, changes) =>
     dataAccess.updateAgentProfile(profile.id, {
       requestId: crypto.randomUUID(),
@@ -58,7 +136,7 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
     const focused = root.contains(document.activeElement) ? document.activeElement : null;
     const focusedProfile = focused?.closest("[data-profile-id]")?.dataset.profileId;
     const focusedLabel = focused?.getAttribute("aria-label") ?? focused?.textContent;
-    message.textContent = state.recovery ?? state.reason ?? "";
+    message.textContent = state.recovery ?? (state.available ? "" : "Chat support is not available in this build yet.");
     selectedProvider ??= state.providers[0]?.id;
     tabs.replaceChildren();
     body.replaceChildren();
@@ -97,8 +175,8 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
         ]),
       ]);
       section.append(sectionHeader);
-      const runtime = el("details", { className: "glosa-agent-runtime" }, [
-        el("summary", {
+      const runtime = el("div", { className: "glosa-agent-runtime", "data-installed": String(provider.installed) }, [
+        el("strong", {
           textContent: `${agentName(provider.id)} runtime · ${provider.installed ? "Installed" : "Not installed"}`,
         }),
       ]);
@@ -107,8 +185,8 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
           textContent: provider.installed
             ? provider.qualified
               ? "Tested runtime installed"
-              : "Installed · compatibility qualification pending"
-            : "Runtime not installed",
+              : "Installed. Chat support is not available in this build yet."
+            : "Install the runtime first. Then add an account and sign in. Your terminal setup stays separate.",
         }),
       );
       runtime.append(
@@ -123,9 +201,32 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
             await dataAccess.installAgent(provider.id);
         }),
       );
+      section.prepend(runtime);
+      const accountArea = el("fieldset", {
+        className: "glosa-agent-account-area",
+        disabled: !provider.installed || !state.available,
+      });
+      const blockedReason = el("p", {
+        className: "glosa-agent-recovery",
+        hidden: provider.installed && state.available,
+        textContent: !provider.installed
+          ? "Accounts become available after installation."
+          : "Account setup is unavailable in this build.",
+      });
+      accountArea.setAttribute("aria-label", `${provider.name} accounts`);
+      section.append(blockedReason, accountArea);
       const profiles = state.profiles.filter((p) => p.provider === provider.id && !p.removed);
+      if (!profiles.some((p) => p.id === selectedAccounts.get(provider.id)))
+        selectedAccounts.set(provider.id, profiles[0]?.id);
+      const accountList = el("nav", {
+        className: "glosa-agent-account-list",
+        "aria-label": `${provider.name} accounts`,
+      });
+      const accountDetail = el("div", { className: "glosa-agent-account-detail" });
+      const accountLayout = el("div", { className: "glosa-agent-account-layout" }, [accountList, accountDetail]);
+      accountArea.append(accountLayout);
       if (!profiles.length)
-        section.append(
+        accountDetail.append(
           el("div", { className: "glosa-agent-empty" }, [
             el("h3", { textContent: `Connect ${agentName(provider.id)}` }),
             el("p", {
@@ -135,7 +236,39 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
           ]),
         );
       for (const profile of profiles) {
-        const card = el("article", { className: "glosa-agent-account", "data-profile-id": profile.id });
+        const card = el("article", {
+          className: "glosa-agent-account",
+          "data-profile-id": profile.id,
+          hidden: selectedAccounts.get(provider.id) !== profile.id,
+        });
+        const accountRow = el(
+          "button",
+          {
+            type: "button",
+            "data-account-choice": profile.id,
+            "aria-current": card.hidden ? "false" : "page",
+            onClick: () => {
+              selectedAccounts.set(provider.id, profile.id);
+              for (const article of accountDetail.querySelectorAll("[data-profile-id]"))
+                article.hidden = article !== card;
+              for (const row of accountList.children)
+                row.setAttribute("aria-current", row === accountRow ? "page" : "false");
+            },
+          },
+          [
+            el("span", { textContent: profile.label }),
+            el("small", {
+              textContent: profile.isDefault
+                ? "Default"
+                : !profile.enabled
+                  ? "Disabled"
+                  : profile.auth.state === "authenticated"
+                    ? "Connected"
+                    : "Needs sign-in",
+            }),
+          ],
+        );
+        accountList.append(accountRow);
         const name = el("input", {
           value: profile.label,
           maxLength: 80,
@@ -167,11 +300,13 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
           name,
           el("div", { className: "glosa-agent-account-meta" }, [
             badge,
-            ...(profile.auth.plan ? [el("span", { textContent: profile.auth.plan })] : []),
+            ...(profile.auth.plan
+              ? [el("span", { textContent: profile.auth.plan[0].toUpperCase() + profile.auth.plan.slice(1) })]
+              : []),
             ...(profile.isDefault ? [el("span", { className: "glosa-agent-default", textContent: "Default" })] : []),
           ]),
         ]);
-        const details = el("details", { className: "glosa-agent-account-details" }, [
+        const details = el("details", { className: "glosa-agent-account-details", open: true }, [
           el("summary", { textContent: "Account details & connections" }),
         ]);
         const identity = el("dl", { className: "glosa-agent-facts" });
@@ -307,7 +442,7 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
             }),
           );
         card.append(details);
-        section.append(card);
+        accountDetail.append(card);
       }
       const label = el("input", {
         placeholder: "e.g. Personal or Work",
@@ -321,16 +456,18 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
       ]);
       form.addEventListener("submit", (event) => {
         event.preventDefault();
+        if (!provider.installed || !state.available || busy) return;
         if (label.value.trim())
-          void act(() =>
-            dataAccess.createAgentProfile({
+          void act(async () => {
+            const created = await dataAccess.createAgentProfile({
               requestId: crypto.randomUUID(),
               provider: provider.id,
               label: label.value.trim(),
-            }),
-          );
+            });
+            if (created?.id) selectedAccounts.set(provider.id, created.id);
+          });
       });
-      section.append(form, runtime);
+      accountArea.append(form);
       body.append(section);
     }
     if (focusedProfile) {
@@ -352,10 +489,11 @@ export function mountAgentSettings(host, { dataAccess, onChange }) {
   return {
     element: root,
     kind: "agent-settings",
-    title: "Agents",
+    title: "Settings",
     ready,
     destroy() {
       disposed = true;
+      stopAppearance?.();
       loginAbort.abort();
       void login?.destroy().catch(() => {});
       root.remove();

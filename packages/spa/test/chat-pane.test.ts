@@ -533,3 +533,91 @@ test("streamed snapshots keep model option nodes and recovery clears only its ow
   expect(notice.textContent).toBe("Draft changed in another browser");
   f.pane.destroy();
 });
+
+test("runtime setup disables accounts, reports installation, rejects repeated clicks and unlocks on success", async () => {
+  const { mountAgentSettings } = await import("../src/agent-settings.js");
+  const host = document.createElement("div");
+  document.body.append(host);
+  let installed = false,
+    installs = 0,
+    creates = 0;
+  let finish!: () => void;
+  const pane = mountAgentSettings(host, {
+    appearance: undefined,
+    onChange: undefined,
+    dataAccess: {
+      getAgentStatus: async () => ({
+        available: true,
+        providers: [{ id: "claude-code", name: "Claude Code", installed, qualified: true }],
+        profiles: [],
+      }),
+      installAgent: async () => {
+        installs++;
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        installed = true;
+      },
+      createAgentProfile: async () => {
+        creates++;
+      },
+    },
+  });
+  await pane.ready;
+  const area = () => host.querySelector(".glosa-agent-account-area") as HTMLFieldSetElement;
+  const form = () => host.querySelector("form") as HTMLFormElement;
+  const name = () => form().querySelector("input") as HTMLInputElement;
+  expect(area().disabled).toBe(true);
+  name().value = "Personal";
+  form().dispatchEvent(new Event("submit", { cancelable: true }));
+  await flush();
+  expect(creates).toBe(0);
+  const install = host.querySelector(".glosa-agent-runtime button") as HTMLButtonElement;
+  install.click();
+  await flush();
+  (document.querySelector("dialog .glosa-save") as HTMLButtonElement | null)?.click();
+  await flush();
+  expect(installs).toBe(1);
+  expect(install.disabled).toBe(true);
+  expect(install.textContent).toBe("Installing runtime…");
+  expect(install.getAttribute("aria-busy")).toBe("true");
+  install.click();
+  expect(installs).toBe(1);
+  finish();
+  await flush();
+  expect(area().disabled).toBe(false);
+  name().value = "Personal";
+  form().dispatchEvent(new Event("submit", { cancelable: true }));
+  await flush();
+  expect(creates).toBe(1);
+  pane.destroy();
+});
+
+test("failed account creation preserves the label and restores usable controls", async () => {
+  const { mountAgentSettings } = await import("../src/agent-settings.js");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const pane = mountAgentSettings(host, {
+    appearance: undefined,
+    onChange: undefined,
+    dataAccess: {
+      getAgentStatus: async () => ({
+        available: true,
+        providers: [{ id: "codex", name: "Codex", installed: true, qualified: true }],
+        profiles: [],
+      }),
+      createAgentProfile: async () => {
+        throw new Error("Could not save the account. Try again.");
+      },
+    },
+  });
+  await pane.ready;
+  const input = host.querySelector(".glosa-agent-add-account input") as HTMLInputElement;
+  input.value = "Work";
+  host.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await flush();
+  expect(input.value).toBe("Work");
+  expect(input.disabled).toBe(false);
+  expect(host.querySelector(".glosa-agent-status")!.textContent).toContain("Try again");
+  pane.destroy();
+});

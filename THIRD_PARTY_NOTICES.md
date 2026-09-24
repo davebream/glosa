@@ -66,10 +66,29 @@ The full license text for both families is in `packages/spa/src/fonts/OFL.txt`.
 The locally embedded monochrome marks in `packages/spa/src/agent-ui.js` identify the selected
 coding agent. They are third-party trademarks, not Glosa branding or an endorsement.
 
-- Claude Code mark: Simple Icons (CC0), commit `b86d5c9a0bdd4f3f5c30898a63654dd32f39fd76`,
-  [claudecode.svg](https://github.com/simple-icons/simple-icons/blob/b86d5c9a0bdd4f3f5c30898a63654dd32f39fd76/icons/claudecode.svg).
-  The upstream source is [Claude Code](https://code.claude.com); the mark belongs to Anthropic.
-- OpenAI Blossom: [OpenAI Cookbook artwork](https://github.com/openai/openai-cookbook/blob/5986832a554169dc87285b1b0b396941f235a62e/examples/agents_sdk/deployment_manager/frontend/src/openai-logomark.svg),
-  commit `5986832a554169dc87285b1b0b396941f235a62e`. Geometry and viewBox are unchanged;
-  monochrome fill follows the interface's light/dark foreground. The mark belongs to OpenAI and
-  is subject to [OpenAI's brand guidelines and Marks usage terms](https://openai.com/brand/).
+- Claude and OpenAI (used for Codex, matching the selected UI reference): [Lobe Icons](https://github.com/lobehub/lobe-icons), MIT, commit
+  `5c1ecb4fb06b92519a39102482d4e8273f000422`. Static SVG geometry and viewBox are unchanged;
+  fill follows the interface foreground. Source assets: `packages/static-svg/icons/claude.svg`
+  and `packages/static-svg/icons/openai.svg`. The marks belong to Anthropic and OpenAI respectively.
+
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
