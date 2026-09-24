@@ -108,7 +108,9 @@ test("chat/profile replay preserves model resolution, logical identity, frozen t
   });
   chat.append({ type: "content", content: { id: "answer", turnId, role: "assistant", kind: "text", text: "Hello" } });
   expect(chat.state.draftRevision).toBe(0);
-  expect(() => chat.append({ type: "changed", profileId: randomUUID() })).toThrow("identity cannot change");
+  expect(() => chat.append({ type: "changed", profileId: randomUUID() })).toThrow(
+    "active chat subscription cannot change",
+  );
   store.close();
   const replay = new AgentStore(dir);
   expect(replay.savedCapabilities(profile.id)?.capabilities).toEqual(refreshedCapabilities);

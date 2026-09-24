@@ -2,15 +2,7 @@
 
 import { mountAgentLogin } from "./agent-login.js";
 import { mountMcpSettings } from "./agent-mcp-settings.js";
-import {
-  actionMenu,
-  agentIcon,
-  agentName,
-  effortIcon,
-  effortPresentation,
-  modelChoices,
-  modelPresentation,
-} from "./agent-ui.js";
+import { actionMenu, agentIcon, agentName, effortIcon, effortPresentation, modelPicker } from "./agent-ui.js";
 import { loadChatMarkdown } from "./chat-markdown.js";
 import { confirmDialog } from "./dialog.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -128,27 +120,22 @@ export function createChatPane(
       el("span", { className: "glosa-visually-hidden", textContent: label }),
       input,
     ]);
-  const account = el("select", { "aria-label": "Agent account" });
-  const model = el("select", { "aria-label": "Model" });
-  const effort = el("select", { "aria-label": "Effort" });
-  const modelField = field("Model", model),
-    effortField = field("Effort", effort);
-  effortField.classList.add("glosa-chat-effort-field");
-  const modelTip = el("span", {
-    className: "glosa-control-tooltip",
-    role: "tooltip",
-    id: `model-tip-${crypto.randomUUID()}`,
+  const picker = modelPicker({
+    onModel: (id) => changeSettings(id),
+    onProfile: (id) => changeAccount(id),
+    onSettings,
   });
+  const effort = el("select", { "aria-label": "Effort" });
+  const effortField = field("Effort", effort);
+  effortField.classList.add("glosa-chat-effort-field");
   const effortTip = el("span", {
     className: "glosa-control-tooltip",
     role: "tooltip",
     id: `effort-tip-${crypto.randomUUID()}`,
   });
-  model.setAttribute("aria-describedby", modelTip.id);
   effort.setAttribute("aria-describedby", effortTip.id);
-  modelField.append(modelTip);
   effortField.append(effortTip);
-  const tooltipFields = [modelField, effortField];
+  const tooltipFields = [effortField];
   for (const field of tooltipFields) {
     field.addEventListener("mouseenter", () => delete field.dataset.tooltipDismissed);
     field.addEventListener("focusin", () => delete field.dataset.tooltipDismissed);
@@ -207,8 +194,8 @@ export function createChatPane(
   const attachmentList = el("div", { className: "glosa-chat-attachments" });
   const send = el("button", {
     type: "button",
-    textContent: "Send ↑",
-    className: "glosa-agent-primary",
+    textContent: "↑",
+    className: "glosa-agent-primary glosa-chat-send",
     "aria-label": "Send message",
     onClick: () => void submit(),
   });
@@ -547,7 +534,7 @@ export function createChatPane(
         }),
     }),
   );
-  controls.append(field("Account", account), modelField, effortField);
+  controls.append(picker.element, effortField);
   menu.popup.append(
     el("button", {
       type: "button",
@@ -610,8 +597,8 @@ export function createChatPane(
     el("div", { className: "glosa-chat-compose-actions" }, [
       attach,
       files,
-      el("span", { className: "glosa-chat-action-spacer" }),
       controls,
+      el("span", { className: "glosa-chat-action-spacer" }),
       stop,
       send,
     ]),
@@ -650,6 +637,7 @@ export function createChatPane(
       disposed = true;
       accountGeneration++;
       lifetime.abort();
+      picker.destroy();
       clearTimeout(timer);
       stopStream?.();
       document.removeEventListener("selectionchange", selectionChanged);
@@ -678,15 +666,21 @@ export function createChatPane(
   };
   function failure(error) {
     status.textContent = error.message || "The chat could not be updated.";
+    picker.error(status.textContent);
   }
   async function act(fn, current = () => !disposed) {
     try {
       await fn();
-      if (current()) await refresh();
+      if (current()) {
+        await refresh();
+        return true;
+      }
+      return false;
     } catch (error) {
-      if (!current()) return;
+      if (!current()) return false;
       failure(error);
       renderControls();
+      return false;
     }
   }
   function pick(select, values, selected, fallbackLabel = selected || "Choose…") {
@@ -704,19 +698,7 @@ export function createChatPane(
   }
   function renderControls() {
     if (!state) return;
-    pick(
-      account,
-      (catalog?.profiles ?? []).filter((p) => p.enabled && !p.removed).map((p) => ({ id: p.id, name: p.label })),
-      state.profileId,
-    );
     const models = catalog?.capabilities?.[state.profileId]?.models ?? [];
-    const choices = modelChoices(models, state.settings.model);
-    pick(
-      model,
-      choices,
-      state.settings.model,
-      modelPresentation({ id: state.settings.model, name: state.settings.model }).label,
-    );
     pick(
       effort,
       (models.find((m) => m.id === state.settings.model)?.efforts ?? []).map((id) => ({
@@ -734,8 +716,6 @@ export function createChatPane(
       accountReady &&
       !!selectedModel &&
       (!state.settings.effort || selectedModel.efforts.includes(state.settings.effort));
-    account.disabled = changingSettings || uploading || pending || !!sendIntent;
-    model.disabled = changingAccount || changingSettings || !models.length;
     effort.disabled = changingAccount || changingSettings || !selectedModel?.efforts.length;
     readiness.hidden = readyToSend || !catalog?.available || state.archived;
     readinessText.textContent = !accountReady
@@ -747,17 +727,15 @@ export function createChatPane(
     manageAccount.hidden = accountReady;
     identity.replaceChildren(agentIcon(state.provider));
     identity.title = agentName(state.provider);
-    account.title = state.turns.length
-      ? "Changing account starts a fresh chat. You can move your draft there."
-      : "Choose the account for this chat";
-    const choice = choices.find((entry) => entry.id === state.settings.model);
-    const selectedModelDisplay = choice
-      ? { label: choice.name, description: choice.description }
-      : modelPresentation(selectedModel ?? { id: state.settings.model, name: state.settings.model });
-    for (const option of model.options)
-      option.title =
-        choices.find((entry) => entry.id === option.value)?.description ?? selectedModelDisplay.description;
-    modelTip.textContent = `${selectedModelDisplay.label} · ${selectedModelDisplay.description} Applies to your next message.`;
+    picker.render({
+      state,
+      catalog,
+      disabled: changingSettings || uploading || pending || !!sendIntent || !!state.archived,
+      busy: changingAccount || changingSettings,
+      subscriptionBlocked:
+        state.turns.some((turn) => !["completed", "failed", "cancelled", "outcome_unknown"].includes(turn.status)) ||
+        (!!state.runtime && state.runtime.state !== "stopped"),
+    });
     const selectedEffort = effortPresentation(state.settings.effort);
     effortTip.textContent = `${selectedEffort.label} effort · ${selectedEffort.description} Applies to your next message.`;
     for (const option of effort.options) option.title = effortPresentation(option.value).description;
@@ -842,6 +820,7 @@ export function createChatPane(
   }
   function render() {
     if (!state || disposed) return;
+    renderControls();
     const following = history.scrollHeight - history.scrollTop - history.clientHeight < 64;
     handle.title = state.title;
     handle.provider = state.provider;
@@ -1082,15 +1061,13 @@ export function createChatPane(
           ? "Saving…"
           : sendIntent
             ? "Retry ↑"
-            : active
-              ? "Queue ↑"
-              : "Send ↑";
+            : "↑";
     send.setAttribute("aria-label", active ? "Queue message" : "Send message");
+    send.title = active ? "Queue next message" : "Send message";
     draft.disabled = !!state.archived;
     draft.placeholder = state.archived ? "Restore this chat to send a message." : "What would you like to work on?";
     files.disabled = pending || !!sendIntent || editing || !!state.archived;
     attach.disabled = files.disabled;
-    account.disabled = changingSettings || uploading || pending || !!sendIntent;
     for (const button of attachmentList.querySelectorAll("button")) button.disabled = pending || !!sendIntent;
     if (state.usage) {
       const value = state.usage;
@@ -1140,7 +1117,7 @@ export function createChatPane(
       if (metrics.length)
         sections.push(
           [
-            `Token usage · ${value.scope === "native-thread" ? "conversation totals" : "agent-reported totals"}`,
+            `Token usage · ${value.scope === "native-thread" ? "current session totals" : "agent-reported totals"}`,
             `Source: ${value.source ?? agentName(state.provider)}`,
             `Observed: ${value.asOf ? observedAt(value.asOf) : "Not reported"}`,
             ...metrics,
@@ -1373,87 +1350,109 @@ export function createChatPane(
         }),
       ),
   );
-  for (const select of [model, effort])
-    select.addEventListener("change", () => {
-      if (changingAccount || changingSettings || pending || sendIntent) {
-        renderControls();
-        return;
-      }
-      changingSettings = true;
-      const settings = {
-        model: model.value,
-        effort:
-          select === model
-            ? (catalog?.capabilities?.[state.profileId]?.models.find((m) => m.id === model.value)?.efforts[0] ?? "")
-            : effort.value,
-        permissionMode: state.settings.permissionMode,
-      };
-      for (const control of [account, model, effort]) control.disabled = true;
-      render();
-      void act(() =>
+  effort.addEventListener("change", () => void changeSettings(state.settings.model, effort.value));
+  async function changeSettings(modelId, desiredEffort) {
+    if (changingAccount || changingSettings || pending || sendIntent) return false;
+    changingSettings = true;
+    const supported =
+      catalog?.capabilities?.[state.profileId]?.models.find((entry) => entry.id === modelId)?.efforts ?? [];
+    const settings = {
+      model: modelId,
+      effort:
+        desiredEffort ?? (supported.includes(state.settings.effort) ? state.settings.effort : (supported[0] ?? "")),
+      permissionMode: state.settings.permissionMode,
+    };
+    render();
+    try {
+      return await act(() =>
         dataAccess.changeChat(slug, chatId, {
           requestId: crypto.randomUUID(),
           revision: state.configRevision,
           settings,
         }),
-      ).finally(() => {
-        changingSettings = false;
-        renderControls();
-        render();
-      });
-    });
-  account.addEventListener("change", () => {
-    if (changingSettings || uploading || pending || sendIntent) {
-      renderControls();
-      return;
-    }
-    const generation = ++accountGeneration;
-    changingAccount = true;
-    for (const control of [model, effort]) control.disabled = true;
-    render();
-    void act(
-      async () => {
-        const profile = catalog.profiles.find((p) => p.id === account.value);
-        if (!profile || (profile.auth && profile.auth.state !== "authenticated"))
-          throw new Error("Sign in to this account in Agents & accounts first.");
-        let target = catalog.capabilities?.[profile.id]?.models[0];
-        if (!target && dataAccess.discoverAgentModels) {
-          status.textContent = `Loading ${agentName(profile.provider)} models…`;
-          await dataAccess.discoverAgentModels(profile.id);
-          if (disposed || generation !== accountGeneration) return;
-          const nextCatalog = await dataAccess.getAgentStatus();
-          if (disposed || generation !== accountGeneration) return;
-          catalog = nextCatalog;
-          target = catalog.capabilities?.[profile.id]?.models[0];
-        }
-        if (!target)
-          throw new Error("Load this account’s models in Agents & accounts first. Your current chat is unchanged.");
-        const settings = {
-          model: target.id,
-          effort: target.efforts[0] ?? "",
-          permissionMode: state.settings.permissionMode,
-        };
-        if (state.turns.length) {
-          await save();
-          if (disposed || generation !== accountGeneration) return;
-          await onNewChat?.(profile, settings);
-        } else
-          await dataAccess.changeChat(slug, chatId, {
-            requestId: crypto.randomUUID(),
-            revision: state.configRevision,
-            provider: profile.provider,
-            profileId: profile.id,
-            settings,
-          });
-      },
-      () => !disposed && generation === accountGeneration,
-    ).finally(() => {
-      if (disposed || generation !== accountGeneration) return;
-      changingAccount = false;
+      );
+    } finally {
+      changingSettings = false;
       renderControls();
       render();
-    });
-  });
+    }
+  }
+  async function changeAccount(profileId) {
+    if (changingAccount || changingSettings || uploading || pending || sendIntent) return false;
+    const generation = ++accountGeneration;
+    changingAccount = true;
+    render();
+    try {
+      return await act(
+        async () => {
+          const profile = catalog.profiles.find((entry) => entry.id === profileId);
+          if (
+            !profile ||
+            !profile.enabled ||
+            profile.removed ||
+            (profile.auth && profile.auth.state !== "authenticated")
+          )
+            throw new Error("Sign in to this subscription in Settings first.");
+          let models = catalog.capabilities?.[profile.id]?.models ?? [];
+          if (!models.length && dataAccess.discoverAgentModels) {
+            status.textContent = `Loading ${agentName(profile.provider)} models…`;
+            await dataAccess.discoverAgentModels(profile.id);
+            if (disposed || generation !== accountGeneration) return;
+            const nextCatalog = await dataAccess.getAgentStatus();
+            if (disposed || generation !== accountGeneration) return;
+            catalog = nextCatalog;
+            models = catalog.capabilities?.[profile.id]?.models ?? [];
+          }
+          const current = catalog.capabilities?.[state.profileId]?.models.find(
+            (entry) => entry.id === state.settings.model,
+          );
+          const sameProvider = profile.provider === state.provider;
+          if (!models.length)
+            throw new Error("Load this subscription’s models in Settings first. Your chat is unchanged.");
+          const target = sameProvider
+            ? (models.find(
+                (entry) =>
+                  entry.id === state.settings.model &&
+                  (!current?.resolvedModel || entry.resolvedModel === current.resolvedModel),
+              ) ??
+              (current?.resolvedModel && models.find((entry) => entry.resolvedModel === current.resolvedModel)))
+            : models[0];
+          const settings = {
+            model: target ? target.id : "",
+            effort: target
+              ? target.efforts.includes(state.settings.effort)
+                ? state.settings.effort
+                : (target.efforts[0] ?? "")
+              : "",
+            permissionMode: state.settings.permissionMode,
+          };
+          if (state.turns.length && !sameProvider) {
+            await save();
+            if (disposed || generation !== accountGeneration) return;
+            await onNewChat?.(profile, settings);
+          } else {
+            await dataAccess.changeChat(slug, chatId, {
+              requestId: crypto.randomUUID(),
+              revision: state.configRevision,
+              provider: profile.provider,
+              profileId: profile.id,
+              settings,
+            });
+            status.textContent = target
+              ? `Using ${profile.label} for this chat.`
+              : `Using ${profile.label}. Choose a model available on this subscription.`;
+          }
+        },
+        () => !disposed && generation === accountGeneration,
+      );
+    } finally {
+      if (!disposed && generation === accountGeneration) {
+        changingAccount = false;
+        renderControls();
+        render();
+      }
+    }
+  }
   handle.ready = (async () => {
     catalog = await dataAccess.getAgentStatus();
     await refresh();

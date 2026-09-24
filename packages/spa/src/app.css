@@ -7153,7 +7153,7 @@ nav.glosa-chat-actions[hidden] {
   width: 100%;
   display: block;
   border: 0;
-  resize: vertical;
+  resize: none;
   min-height: 68px;
   max-height: 25vh;
   padding: 12px 13px;
@@ -7167,9 +7167,176 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: var(--space-1);
   align-items: center;
   min-width: 0;
+}
+.glosa-model-picker-anchor {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+.glosa-chat-pane .glosa-model-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  min-height: 30px;
+  padding: var(--space-1) var(--space-2);
+  max-width: 100%;
+  color: var(--muted);
+}
+.glosa-model-picker-trigger > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.glosa-model-picker-trigger svg,
+.glosa-model-picker-accounts svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: inherit;
+}
+.glosa-picker-chevron {
+  font-size: 0;
+  width: 5px;
+  height: 5px;
+  margin: -3px 2px 0 1px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+  flex: none;
+}
+.glosa-model-picker {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 312px;
+  max-width: calc(100vw - 16px);
+  overflow: auto;
+  padding: 6px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 3px 8px #0002;
+  font: var(--text-sm) / 1.4 var(--font-sans);
+}
+.glosa-model-picker-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-model-picker-models {
+  max-height: min(40vh, 20rem);
+  overflow: auto;
+}
+.glosa-chat-pane .glosa-model-picker-back {
+  border: 0;
+  min-height: 28px;
+  padding: 0 4px;
+  margin: -4px;
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+.glosa-chat-pane .glosa-model-picker-models button,
+.glosa-chat-pane .glosa-model-picker-accounts button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.glosa-model-picker-models [aria-pressed="true"],
+.glosa-model-picker-accounts [aria-pressed="true"] {
+  background: var(--surface);
+}
+.glosa-model-picker-footer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px 8px;
+  margin-top: 6px;
+  padding: 8px 4px 2px;
+  border-top: 1px solid var(--border);
+}
+.glosa-model-picker-footer > span {
+  padding-left: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-chat-pane .glosa-model-picker-account {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  border: 0;
+  padding: 5px 6px;
+  min-height: 30px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.glosa-model-picker-account > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.glosa-model-picker-accounts {
+  max-height: min(42vh, 20rem);
+  overflow: auto;
+}
+.glosa-model-picker-accounts,
+.glosa-model-picker-note,
+.glosa-model-picker-manage {
+  grid-column: 1 / -1;
+}
+.glosa-model-picker-account-label {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.glosa-model-picker-account-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.glosa-model-picker-account-label small,
+.glosa-model-picker-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-model-picker-note {
+  margin: 6px;
+  line-height: 1.5;
+}
+.glosa-chat-pane .glosa-model-picker-manage {
+  border: 0;
+  text-align: left;
+  padding: 5px 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-model-picker-error {
+  margin: 8px 10px;
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+.glosa-chat-pane .glosa-model-picker button:focus-visible {
+  outline-offset: -2px;
+}
+.glosa-model-picker [hidden] {
+  display: none;
 }
 .glosa-chat-field {
   position: relative;
@@ -7232,9 +7399,14 @@ nav.glosa-chat-actions[hidden] {
   flex: 1;
 }
 .glosa-chat-compose-actions .glosa-agent-primary {
-  min-width: 60px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px 9px;
   white-space: nowrap;
   border-radius: 16px;
+}
+.glosa-chat-pane .glosa-chat-send {
+  font-size: var(--text-base);
 }
 .glosa-chat-attachments {
   display: flex;
@@ -7397,10 +7569,6 @@ nav.glosa-chat-actions[hidden] {
   .glosa-chat-controls {
     gap: 6px;
   }
-  .glosa-chat-controls {
-    order: 1;
-    flex-basis: 100%;
-  }
   .glosa-chat-compose-actions {
     gap: 3px;
     padding-inline: 3px;
@@ -7551,7 +7719,7 @@ button:is(
 }
 .glosa-chat-effort-field::after,
 .glosa-chat-pane .glosa-chat-effort-field select {
-  padding-left: 32px;
+  padding-left: 28px;
 }
 .glosa-effort-mark {
   width: 20px;
@@ -7562,6 +7730,8 @@ button:is(
 .glosa-chat-effort-field > .glosa-effort-mark {
   position: absolute;
   left: 6px;
+  width: 16px;
+  height: 14px;
 }
 .glosa-chat-effort-field:has(select:disabled) .glosa-effort-mark {
   opacity: 0.5;

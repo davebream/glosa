@@ -208,6 +208,9 @@ const turn = z
     textHash: hash,
     attachments: z.array(attachment).max(10),
     settings,
+    profileId: id.optional(),
+    contextHash: hash.optional(),
+    sessionId: id.optional(),
     profileEpoch: z.number().int().nonnegative(),
     identityRevision: z.number().int().nonnegative(),
     runtimeManifestId: z.string().max(256).optional(),
@@ -302,6 +305,8 @@ export const chatEventSchema = z.discriminatedUnion("type", [
       settings: settings.optional(),
       provider: z.string().min(1).max(64).optional(),
       profileId: id.optional(),
+      contextHash: hash.optional(),
+      sessionId: id.optional(),
     })
     .strict(),
   z
@@ -368,6 +373,7 @@ export interface ChatState extends z.infer<typeof created> {
   decisions: ChatDecision[];
   runtime?: Extract<ChatEvent, { type: "runtime" }>;
   usage?: Record<string, number | string | null>;
+  handoffHash?: string;
 }
 
 function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number, at: string): ChatState {
@@ -404,9 +410,16 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
       break;
     }
     case "changed": {
-      if (state.turns.length && (event.provider || event.profileId))
-        throw new Error("started chat identity cannot change");
-      const { type: _type, ...changes } = event;
+      if (state.turns.length && event.provider && event.provider !== state.provider)
+        throw new Error("started chat provider cannot change");
+      if (event.profileId && event.profileId !== state.profileId) {
+        if (state.turns.some((turn) => !["completed", "failed", "cancelled", "outcome_unknown"].includes(turn.status)))
+          throw new Error("active chat subscription cannot change");
+        state.handoffHash = event.contextHash;
+        if (state.runtime) state.runtime = { ...state.runtime, nativeId: undefined, state: "stopped" };
+        state.usage = undefined;
+      }
+      const { type: _type, contextHash: _contextHash, ...changes } = event;
       Object.assign(state, changes);
       if (event.title !== undefined) state.titleEdited = true;
       state.configRevision++;
@@ -428,7 +441,11 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
         state.draftHash = undefined;
         state.draftAttachments = [];
       }
-      state.turns.push(event.turn);
+      state.turns.push({
+        ...event.turn,
+        profileId: event.turn.profileId ?? state.profileId,
+        sessionId: event.turn.sessionId ?? state.sessionId,
+      });
       break;
     case "turn_status": {
       const target = state.turns.find((t) => t.id === event.turnId);
@@ -447,6 +464,7 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
         outcome_unknown: [],
       };
       if (!transitions[target.status].includes(event.status)) throw new Error("invalid turn transition");
+      if (event.status === "completed" && target.contextHash === state.handoffHash) state.handoffHash = undefined;
       target.status = event.status;
       target.error = event.error;
       break;

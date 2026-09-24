@@ -71,26 +71,94 @@ test("the model picker shows one resolved choice without rewriting a saved defau
     };
     [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
     await flush();
-    const select = f.host.querySelector('[aria-label="Model"]') as HTMLSelectElement;
-    expect([...select.options].map((option) => option.textContent)).toEqual(["Opus 5.5", "Haiku 4.5"]);
-    expect(select.value).toBe(selected);
+    const choices = () => [...f.host.querySelectorAll<HTMLButtonElement>("[data-model-id]")];
+    expect(choices().map((button) => button.firstElementChild!.textContent)).toEqual(["Opus 5.5", "Haiku 4.5"]);
+    expect(choices().find((button) => button.getAttribute("aria-pressed") === "true")!.dataset.modelId).toBe(selected);
     expect(changes).toEqual([]);
     const effort = f.host.querySelector('[aria-label="Effort"]') as HTMLSelectElement;
     effort.value = "low";
     effort.dispatchEvent(new Event("change"));
     await flush();
     expect(changes).toEqual([selected]);
-    select.value = "haiku";
-    select.dispatchEvent(new Event("change"));
+    modelButton(f.host, "haiku").click();
     await flush();
-    expect(select.options[0]!.value).toBe("opus[1m]");
-    select.value = "opus[1m]";
-    select.dispatchEvent(new Event("change"));
+    expect(choices()[0]!.dataset.modelId).toBe("opus[1m]");
+    modelButton(f.host, "opus[1m]").click();
     await flush();
     expect(changes).toEqual([selected, "haiku", "opus[1m]"]);
-    expect(select.selectedOptions[0]!.textContent).toBe("Opus 5.5");
+    expect(f.host.querySelector(".glosa-model-picker-trigger")!.textContent).toContain("Opus 5.5");
     f.pane.destroy();
   }
+});
+
+test("subscription choices stay on the chat, preserve its draft and recover from a rejected switch", async () => {
+  const f = fixture();
+  f.catalog.profiles.push({ id: "c", provider: "claude-code", enabled: true, label: "Second subscription" });
+  Object.assign(f.catalog.capabilities, { c: structuredClone(f.catalog.capabilities.a) });
+  f.state.turns.push({ id: "prior", status: "completed", settings: f.state.settings });
+  await f.pane.ready;
+  [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
+  await flush();
+  const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+  draft.value = "Keep this unsent text";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  const account = f.host.querySelector(".glosa-model-picker-account") as HTMLButtonElement;
+  account.click();
+  const models = f.host.querySelector(".glosa-model-picker-models") as HTMLElement;
+  const accounts = f.host.querySelector(".glosa-model-picker-accounts") as HTMLElement;
+  expect(models.hidden).toBe(true);
+  expect(accounts.hidden).toBe(false);
+  expect((document.activeElement as HTMLElement).dataset.profileId).toBe("a");
+  document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  expect((document.activeElement as HTMLElement).dataset.profileId).toBe("c");
+  const changes: any[] = [];
+  f.dataAccess.changeChat = async (slug: string, id: string, input: any) => {
+    changes.push({ slug, id, ...input });
+    if (changes.length === 1) throw new Error("Subscription is busy. Try again.");
+    f.state.profileId = input.profileId;
+    f.state.settings = input.settings;
+    f.state.configRevision++;
+  };
+  profileButton(f.host, "c").click();
+  await flush();
+  expect(f.host.querySelector(".glosa-model-picker-error")!.textContent).toContain("Subscription is busy");
+  expect(profileButton(f.host, "c").disabled).toBe(false);
+  expect(f.state.profileId).toBe("a");
+  profileButton(f.host, "c").click();
+  await flush();
+  expect(changes[1]).toMatchObject({
+    slug: "ws",
+    id: "chat",
+    profileId: "c",
+    settings: { model: "model", effort: "high" },
+  });
+  expect(f.newChats).toHaveLength(0);
+  expect(draft.value).toBe("Keep this unsent text");
+  expect(account.textContent).toBe("Second subscription");
+  expect(models.hidden).toBe(false);
+  expect(accounts.hidden).toBe(true);
+  f.state.revision++;
+  f.snapshot();
+  expect(account.textContent).toBe("Second subscription");
+  account.click();
+  profileButton(f.host, "c").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+  expect(models.hidden).toBe(false);
+  expect(document.activeElement === account).toBe(true);
+  f.catalog.capabilities.a.models = [{ id: "other", name: "Other 2", resolvedModel: "other-2", efforts: ["low"] }];
+  [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
+  await flush();
+  account.click();
+  profileButton(f.host, "a").click();
+  await flush();
+  expect(f.state.profileId).toBe("a");
+  expect(f.state.settings.model).toBe("");
+  expect(f.host.querySelector(".glosa-model-picker-trigger")!.textContent).toBe("Choose model");
+  f.state.runtime = { state: "unknown" };
+  f.state.revision++;
+  f.snapshot();
+  expect(account.disabled).toBe(true);
+  expect(profileButton(f.host, "a").disabled).toBe(true);
+  f.pane.destroy();
 });
 
 test("an unresolved send remains retryable after the selected account is disabled", async () => {
@@ -135,7 +203,7 @@ test("missing model data blocks a fresh keyboard send and exposes local recovery
   f.pane.destroy();
 });
 
-test("a newer account choice wins over delayed model discovery and its stale error", async () => {
+test("account discovery locks other choices and sending until success or recoverable failure", async () => {
   for (const fails of [false, true]) {
     const f = fixture();
     await f.pane.ready;
@@ -156,9 +224,7 @@ test("a newer account choice wins over delayed model discovery and its stale err
       });
     [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
     await flush();
-    const account = f.host.querySelector('[aria-label="Agent account"]') as HTMLSelectElement;
-    account.value = "b";
-    account.dispatchEvent(new Event("change"));
+    profileButton(f.host, "b").click();
     const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
     draft.value = "Wait for the chosen account";
     draft.dispatchEvent(new Event("input", { bubbles: true }));
@@ -168,17 +234,30 @@ test("a newer account choice wins over delayed model discovery and its stale err
     [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Send feedback")!.click();
     await flush();
     expect(f.feedbacks).toHaveLength(0);
-    account.value = "c";
-    account.dispatchEvent(new Event("change"));
+    expect(profileButton(f.host, "c").disabled).toBe(true);
+    profileButton(f.host, "c").click();
     await flush();
-    expect(f.newChats.map((args) => args[0].id)).toEqual(["c"]);
+    expect(f.newChats).toHaveLength(0);
     resolve();
     await flush();
-    expect(f.newChats.map((args) => args[0].id)).toEqual(["c"]);
-    expect(f.host.querySelector(".glosa-chat-status")!.textContent).not.toContain("Stale account failure");
+    expect(f.newChats.map((args) => args[0].id)).toEqual(fails ? [] : ["b"]);
+    expect(profileButton(f.host, "c").disabled).toBe(false);
+    profileButton(f.host, "c").click();
+    await flush();
+    expect(f.newChats.map((args) => args[0].id)).toEqual(fails ? ["c"] : ["b", "c"]);
     f.pane.destroy();
   }
 });
+function modelButton(host: HTMLElement, id: string) {
+  return [...host.querySelectorAll<HTMLButtonElement>("[data-model-id]")].find(
+    (button) => button.dataset.modelId === id,
+  )!;
+}
+function profileButton(host: HTMLElement, id: string) {
+  return [...host.querySelectorAll<HTMLButtonElement>("[data-profile-id]")].find(
+    (button) => button.dataset.profileId === id,
+  )!;
+}
 function fixture(options: { sourceChatId?: string } = {}) {
   const state = {
     id: "chat",
@@ -263,7 +342,7 @@ function fixture(options: { sourceChatId?: string } = {}) {
   };
 }
 
-test("usage separates conversation totals from account limits without inventing current context use", async () => {
+test("usage separates current session totals from account limits without inventing current context use", async () => {
   const f = fixture();
   await f.pane.ready;
   f.state.usage = {
@@ -281,7 +360,7 @@ test("usage separates conversation totals from account limits without inventing 
   f.state.revision++;
   f.snapshot();
   const usage = [...f.host.querySelectorAll("details")].find((row) => row.textContent!.includes("Usage & limits"))!;
-  expect(usage.textContent).toContain("conversation totals");
+  expect(usage.textContent).toContain("current session totals");
   expect(usage.textContent).toContain("Context capacity (tokens): 200,000");
   expect(usage.textContent).toContain("Current context use: Not reported");
   expect(usage.textContent).toContain("Account limits");
@@ -330,9 +409,8 @@ test("settings must finish saving before an ordinary or feedback turn can be sen
   for (const fails of [false, true]) {
     const f = fixture();
     await f.pane.ready;
-    const model = f.host.querySelector('[aria-label="Model"]') as HTMLSelectElement;
-    expect(model.selectedOptions[0]!.textContent).toBe("Sonnet 5");
-    expect(model.value).toBe("model");
+    expect(modelButton(f.host, "model").textContent).toContain("Sonnet 5");
+    expect(modelButton(f.host, "model").getAttribute("aria-pressed")).toBe("true");
     let finish!: () => void;
     f.dataAccess.changeChat = (_slug: string, _id: string, input: { settings: typeof f.state.settings }) =>
       new Promise<void>((resolve, reject) => {
@@ -552,9 +630,7 @@ test("switching provider after a submitted turn requests a fresh chat and leaves
   const f = fixture();
   f.state.turns.push({ id: "turn", text: "Hello", status: "completed" });
   await f.pane.ready;
-  const select = f.host.querySelector('[aria-label="Agent account"]') as HTMLSelectElement;
-  select.value = "b";
-  select.dispatchEvent(new Event("change"));
+  profileButton(f.host, "b").click();
   await flush();
   expect(f.newChats).toHaveLength(1);
   expect(f.newChats[0][0].provider).toBe("codex");
@@ -598,15 +674,12 @@ test("native login links keep provider domains strict and require a visible HTTP
 test("streamed snapshots keep model option nodes and recovery clears only its own status", async () => {
   const f = fixture();
   await f.pane.ready;
-  const selects = [...f.host.querySelectorAll("select")];
-  const options = selects.map((select) => [...select.children]);
-  selects[1]!.focus();
+  const choice = modelButton(f.host, "model");
+  choice.focus();
   f.state.revision++;
   f.snapshot();
-  for (const [index, select] of selects.entries())
-    for (const [optionIndex, option] of [...select.children].entries())
-      expect(option).toBe(options[index]![optionIndex]!);
-  expect(document.activeElement).toBe(selects[1]!);
+  expect(modelButton(f.host, "model")).toBe(choice);
+  expect(document.activeElement).toBe(choice);
   f.status("down");
   expect(f.host.textContent).toContain("Reconnecting");
   f.status("up");

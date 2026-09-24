@@ -186,3 +186,297 @@ export function actionMenu(label) {
   const element = el("div", { className: "glosa-agent-menu-anchor" }, [trigger, popup]);
   return { element, popup, trigger };
 }
+
+/** One compact entry point for model and per-chat subscription choices. */
+export function modelPicker({ onModel, onProfile, onSettings }) {
+  const lifetime = new AbortController();
+  const popup = el("div", {
+    id: `model-picker-${crypto.randomUUID()}`,
+    className: "glosa-model-picker",
+    popover: "auto",
+    role: "dialog",
+    "aria-label": "Model and subscription",
+  });
+  const trigger = el("button", {
+    type: "button",
+    className: "glosa-model-picker-trigger",
+    "aria-label": "Model and subscription",
+    "aria-haspopup": "dialog",
+    "aria-controls": popup.id,
+    "aria-expanded": "false",
+  });
+  const heading = el("div", { className: "glosa-model-picker-heading" });
+  const models = el("div", { className: "glosa-model-picker-models", role: "group", "aria-label": "Models" });
+  const accountLabel = el("span", { textContent: "Subscription" });
+  const account = el("button", { type: "button", className: "glosa-model-picker-account", "aria-expanded": "false" });
+  const accounts = el("div", {
+    className: "glosa-model-picker-accounts",
+    hidden: true,
+    role: "group",
+    "aria-label": "Subscriptions",
+  });
+  const note = el("p", { className: "glosa-model-picker-note" });
+  const back = el("button", {
+    type: "button",
+    className: "glosa-model-picker-back",
+    textContent: "‹ Subscriptions",
+    "aria-label": "Back to models",
+    onClick: () => view(false, true),
+  });
+  const headingLabel = el("span");
+  const savingLabel = el("span");
+  heading.append(back, headingLabel, savingLabel);
+  const error = el("p", { className: "glosa-model-picker-error", role: "status", hidden: true });
+  const manage = el("button", {
+    type: "button",
+    className: "glosa-model-picker-manage",
+    textContent: "Manage accounts…",
+    onClick: () => {
+      close();
+      onSettings();
+    },
+  });
+  popup.append(
+    heading,
+    models,
+    el("div", { className: "glosa-model-picker-footer" }, [accountLabel, account, accounts, note, manage]),
+    error,
+  );
+  const element = el("div", { className: "glosa-model-picker-anchor" }, [trigger, popup]);
+  let signature = "",
+    open = false,
+    subscriptionView = false,
+    blocked = false,
+    started = false;
+  function view(subscriptions, focus = false) {
+    subscriptionView = subscriptions;
+    models.hidden = subscriptions;
+    accounts.hidden = !subscriptions;
+    account.hidden = subscriptions;
+    accountLabel.hidden = subscriptions;
+    headingLabel.hidden = subscriptions;
+    back.hidden = !subscriptions;
+    manage.hidden = !subscriptions;
+    account.setAttribute("aria-expanded", String(subscriptions));
+    note.hidden = !subscriptions && !blocked;
+    note.textContent = blocked
+      ? "Finish or stop pending work to switch subscriptions."
+      : started
+        ? "Same agent: message text carries over. Another agent opens a new chat."
+        : "For this chat only. Your default stays unchanged.";
+    if (open) position();
+    if (focus)
+      (subscriptions
+        ? (accounts.querySelector('[aria-pressed="true"]:not(:disabled)') ??
+          accounts.querySelector("button:not(:disabled)") ??
+          back)
+        : account
+      )?.focus({ preventScroll: true });
+  }
+  function position() {
+    const box = trigger.getBoundingClientRect();
+    popup.style.maxHeight = `${Math.max(100, window.innerHeight - 16)}px`;
+    const width = popup.getBoundingClientRect().width;
+    popup.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - width - 8))}px`;
+    const height = popup.getBoundingClientRect().height;
+    popup.style.top = `${Math.max(8, Math.min(box.top - height - 8, window.innerHeight - height - 8))}px`;
+  }
+  function close() {
+    popup.hidePopover?.();
+    trigger.focus({ preventScroll: true });
+  }
+  trigger.addEventListener("click", () => {
+    if (open) {
+      close();
+      return;
+    }
+    error.hidden = true;
+    popup.showPopover?.();
+    position();
+    (
+      models.querySelector('[aria-pressed="true"]:not(:disabled)') ??
+      models.querySelector("button:not(:disabled)") ??
+      account
+    ).focus({ preventScroll: true });
+  });
+  popup.addEventListener("toggle", (event) => {
+    open = event.newState === "open";
+    trigger.setAttribute("aria-expanded", String(open));
+    if (!open) view(false);
+  });
+  account.addEventListener("click", () => view(true, true));
+  popup.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    }
+    if (event.key === "ArrowLeft" && subscriptionView) {
+      event.preventDefault();
+      view(false, true);
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const group = event.target.closest('[role="group"]');
+    if (!group) return;
+    const buttons = [...group.querySelectorAll("button:not(:disabled)")];
+    if (!buttons.length) return;
+    event.preventDefault();
+    const index = buttons.indexOf(document.activeElement);
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? buttons.length - 1
+          : (index + (event.key === "ArrowUp" ? -1 : 1) + buttons.length) % buttons.length;
+    buttons[next].focus({ preventScroll: true });
+  });
+  window.addEventListener(
+    "resize",
+    () => {
+      if (open) position();
+    },
+    { signal: lifetime.signal },
+  );
+  return {
+    element,
+    trigger,
+    popup,
+    error(message) {
+      error.textContent = message;
+      error.hidden = false;
+      if (open) position();
+    },
+    destroy() {
+      lifetime.abort();
+      popup.hidePopover?.();
+      element.remove();
+    },
+    render({ state, catalog, disabled, subscriptionBlocked, busy }) {
+      const profiles = (catalog?.profiles ?? [])
+        .filter((profile) => profile.enabled && !profile.removed)
+        .sort((a, b) => Number(b.provider === state.provider) - Number(a.provider === state.provider));
+      const profile = catalog?.profiles?.find((profile) => profile.id === state.profileId);
+      const choices = modelChoices(catalog?.capabilities?.[state.profileId]?.models ?? [], state.settings.model);
+      const selected = choices.find((choice) => choice.id === state.settings.model);
+      const name =
+        selected?.name ??
+        (state.settings.model
+          ? modelPresentation({ id: state.settings.model, name: state.settings.model }).label
+          : "Choose model");
+      const nextSignature = JSON.stringify([
+        state.provider,
+        state.profileId,
+        state.settings.model,
+        !!state.turns.length,
+        choices,
+        profiles,
+        disabled,
+        subscriptionBlocked,
+        busy,
+      ]);
+      if (signature === nextSignature) return;
+      signature = nextSignature;
+      const focusedChoice = popup.contains(document.activeElement) ? document.activeElement?.dataset.choice : undefined;
+      trigger.replaceChildren(
+        agentIcon(state.provider),
+        el("span", { textContent: name }),
+        el("span", { className: "glosa-picker-chevron", "aria-hidden": "true" }),
+      );
+      trigger.title = `${name} · ${profile?.label ?? "Choose subscription"}`;
+      trigger.disabled = disabled && !busy;
+      trigger.setAttribute("aria-busy", String(busy));
+      headingLabel.textContent = agentName(state.provider);
+      savingLabel.textContent = busy ? "Saving…" : "";
+      models.replaceChildren(
+        ...choices.map((choice) =>
+          el(
+            "button",
+            {
+              type: "button",
+              "data-model-id": choice.id,
+              "data-choice": `model:${choice.id}`,
+              "aria-pressed": String(choice.id === state.settings.model),
+              title: choice.description,
+              disabled: disabled || busy,
+              onClick: () => {
+                if (!disabled && !busy)
+                  void onModel(choice.id).then((saved) => {
+                    if (saved) close();
+                  });
+              },
+            },
+            [
+              el("span", { textContent: choice.name }),
+              el("span", { textContent: choice.id === state.settings.model ? "✓" : "", "aria-hidden": "true" }),
+            ],
+          ),
+        ),
+      );
+      if (!choices.length)
+        models.append(
+          el("p", {
+            className: "glosa-model-picker-note",
+            textContent: "Load this subscription’s models in Settings.",
+          }),
+        );
+      account.replaceChildren(
+        el("span", { textContent: profile?.label ?? "Choose subscription" }),
+        el("span", { className: "glosa-picker-chevron", "aria-hidden": "true" }),
+      );
+      account.setAttribute("aria-label", `Subscription: ${profile?.label ?? "Choose subscription"}`);
+      account.disabled = busy || disabled || subscriptionBlocked;
+      blocked = subscriptionBlocked;
+      started = !!state.turns.length;
+      view(subscriptionView);
+      accounts.replaceChildren(
+        ...profiles.map((entry) => {
+          const ready = !entry.auth || entry.auth.state === "authenticated";
+          const otherProvider = entry.provider !== state.provider;
+          const detail = !ready
+            ? "Sign in in Settings"
+            : otherProvider
+              ? `${agentName(entry.provider)}${state.turns.length ? " · New chat" : ""}`
+              : (entry.auth?.plan ?? "");
+          return el(
+            "button",
+            {
+              type: "button",
+              "data-profile-id": entry.id,
+              title: entry.label,
+              "data-choice": `profile:${entry.id}`,
+              "aria-pressed": String(entry.id === state.profileId),
+              disabled: busy || disabled || subscriptionBlocked || !ready,
+              onClick: () => {
+                if (entry.id === state.profileId) {
+                  view(false, true);
+                  return;
+                }
+                if (!ready || busy || disabled || subscriptionBlocked) return;
+                error.hidden = true;
+                void onProfile(entry.id).then((saved) => {
+                  if (!saved) return;
+                  if (otherProvider && state.turns.length) close();
+                  else view(false, true);
+                });
+              },
+            },
+            [
+              agentIcon(entry.provider),
+              el("span", { className: "glosa-model-picker-account-label" }, [
+                el("span", { textContent: entry.label }),
+                ...(detail ? [el("small", { textContent: detail })] : []),
+              ]),
+              el("span", { textContent: entry.id === state.profileId ? "✓" : "", "aria-hidden": "true" }),
+            ],
+          );
+        }),
+      );
+      if (focusedChoice)
+        [...popup.querySelectorAll("[data-choice]")]
+          .find((button) => button.dataset.choice === focusedChoice && !button.disabled)
+          ?.focus({ preventScroll: true });
+      if (open) position();
+    },
+  };
+}

@@ -386,6 +386,94 @@ test("a draft with no model stays local and cannot dispatch until a model is sel
   await eventually(() => h.inputs.length === 1);
 });
 
+test("subscription switches persist on one chat, keep turn provenance and start isolated sessions with text history", async () => {
+  const h = setup(),
+    chat = h.chat(),
+    log = h.store.chat(chat.id);
+  const other = h.service.createProfile({ requestId: randomUUID(), provider: "fixture", label: "Work" });
+  h.store.saveProfiles([
+    { ...other, auth: { state: "authenticated", identity: "account-b", observedAt: new Date().toISOString() } },
+  ]);
+  const originalDefault = h.store.profile(h.profile.id).isDefault;
+  const originalSession = chat.sessionId;
+  const first = h.send(chat.id, "Remember: the manuscript is called Cedar.");
+  await eventually(() => h.inputs.length === 1);
+  const switchTo = (profileId: string, revision = log.state.configRevision) => ({
+    requestId: randomUUID(),
+    revision,
+    profileId,
+    provider: "fixture",
+    settings: { model: "model-a", effort: "low", permissionMode: "default" },
+  });
+  expect(() => h.service.change(h.workspace, chat.id, switchTo(other.id))).toThrow("Finish or stop pending work");
+  const emit = h.events.get(originalSession)!;
+  emit({ type: "session", nativeId: "account-a-native" });
+  emit({ type: "text", id: "answer-a", text: "Cedar noted." });
+  emit({ type: "text", id: "private-thought", reasoning: true, text: "PRIVATE_REASONING" });
+  emit({ type: "tool", id: "private-tool", name: "Read", detail: "PRIVATE_TOOL_RESULT", status: "completed" });
+  emit({ type: "completed" });
+  await eventually(() => log.state.runtime?.state === "stopped");
+  h.service.saveDraft(h.workspace, chat.id, {
+    requestId: randomUUID(),
+    revision: log.state.draftRevision,
+    text: "Keep my draft",
+    attachments: [],
+  });
+  const request = switchTo(other.id);
+  h.service.change(h.workspace, chat.id, request);
+  h.service.change(h.workspace, chat.id, request);
+  expect(h.store.list(h.workspace.id, h.workspace.epoch)).toHaveLength(1);
+  expect(log.state.profileId).toBe(other.id);
+  expect(log.state.configRevision).toBe(request.revision + 1);
+  expect(log.text(log.state.draftHash)).toBe("Keep my draft");
+  expect(log.state.runtime?.nativeId).toBeUndefined();
+  expect(log.state.sessionId).not.toBe(originalSession);
+  expect(log.state.turns[0]).toMatchObject({ id: first.turnId, profileId: h.profile.id, sessionId: originalSession });
+  expect(h.store.profile(h.profile.id).isDefault).toBe(originalDefault);
+  const replayed = new AgentStore(h.root).chat(chat.id).state;
+  expect(replayed.profileId).toBe(other.id);
+  expect(replayed.handoffHash).toBe(log.state.handoffHash);
+  expect(replayed.turns[0]!.profileId).toBe(h.profile.id);
+  expect(() => h.send(chat.id, "Continue")).toThrow("approve this account");
+  await h.service.consent(h.workspace, other.id, true);
+  h.send(chat.id, "What is the manuscript called?");
+  await eventually(() => h.inputs.length === 2);
+  expect(h.specs.at(-1)!.profile.id).toBe(other.id);
+  expect(h.specs.at(-1)!.nativeId).toBeUndefined();
+  expect(h.specs.at(-1)!.configRoot).not.toBe(h.specs[0]!.configRoot);
+  const history = new TextDecoder().decode(h.inputs[1]!.attachments[0]!.bytes);
+  expect(history).toContain("Remember: the manuscript is called Cedar.");
+  expect(history).toContain("Cedar noted.");
+  expect(history).not.toContain("PRIVATE_REASONING");
+  expect(history).not.toContain("PRIVATE_TOOL_RESULT");
+  expect(history).not.toContain("Keep my draft");
+  expect(history).not.toContain("account-a-native");
+  const secondSession = log.state.sessionId;
+  h.events.get(secondSession)!({ type: "session", nativeId: "account-b-native" });
+  h.events.get(secondSession)!({ type: "text", id: "answer-b", text: "It is Cedar." });
+  h.send(chat.id, "Continue with the same subscription");
+  h.events.get(secondSession)!({ type: "completed" });
+  await eventually(() => h.inputs.length === 3);
+  expect(h.specs.at(-1)!.nativeId).toBe("account-b-native");
+  expect(h.inputs[2]!.attachments).toHaveLength(0);
+  expect(log.state.handoffHash).toBeUndefined();
+  h.events.get(secondSession)!({ type: "text", id: "partial", text: "The stopped partial reply" });
+  await h.service.stop(h.workspace, chat.id);
+  await eventually(() => log.state.runtime?.state === "stopped");
+  h.service.change(h.workspace, chat.id, switchTo(h.profile.id));
+  expect(log.state.profileId).toBe(h.profile.id);
+  expect(log.state.runtime?.nativeId).toBeUndefined();
+  expect(log.text(log.state.handoffHash)).toContain("It is Cedar.");
+  expect(log.text(log.state.handoffHash)).toContain("The stopped partial reply");
+  expect(log.text(log.state.handoffHash)).toContain("cancelled");
+  expect(log.state.turns.map((turn) => turn.profileId)).toEqual([h.profile.id, other.id, other.id]);
+  expect(() => h.service.change(h.workspace, chat.id, { ...switchTo(other.id), provider: "codex" })).toThrow(
+    "switch its agent",
+  );
+  log.append({ type: "runtime", runId: randomUUID(), generation: 50, state: "unknown" });
+  expect(() => h.service.change(h.workspace, chat.id, switchTo(other.id))).toThrow("Finish or stop pending work");
+});
+
 test("Retry stop after restart requires independent recovered-ownership proof", async () => {
   const h = setup(),
     chat = h.chat();
