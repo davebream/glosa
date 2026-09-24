@@ -350,8 +350,8 @@ Quiet and ink-led.
 - **Parked edit:** a hand dot on Edit marks an unsaved draft parked off screen.
 
 ### Go to Trigger
-- **Style:** the top bar's title, drawn as a quiet field: 30px, Quiet Border, 6px radius, Surface fill, the document path in 14px/600 ink on the left and a `⌘K` keycap (11px/600 Muted in a Quiet Border box on paper) on the right. Hover sharpens the edge to Strong Border on paper.
-- **Behaviour:** a button, not an input: clicking it opens the Go to palette, which lists the document's sections, the workspace's files and the commands that apply now (Hide or Show notes, Edit or Done). `#`, `/` and `>` narrow to each group.
+- **Style:** the top bar's title, drawn as a quiet field: 30px, Quiet Border, 6px radius, Surface fill, the stable label “Search artifacts and chats” in 14px/600 ink on the left and a `⌘K` keycap (11px/600 Muted in a Quiet Border box on paper) on the right. Hover sharpens the edge to Strong Border on paper.
+- **Behaviour:** a button, not an input: clicking it opens the Go to palette, which searches artifacts and chats together. All, Artifacts, Chats and Commands filters share one query. Existing `#`, `/`, `@` and `>` prefixes still reach sections, files, workspaces and commands. Chat search includes older and archived conversations, with more results available inside the palette.
 
 ### Edit on the Page
 - **Scrolling:** the page scrolls in Edit, never an inner editor box. The formatting toolbar (with the Rich/Source toggle on its row) sticks to the top of the pane, and the Save row sticks to the bottom on paper above a Quiet Border rule. The source face grows with its text.
@@ -409,7 +409,12 @@ Under the manuscript, on its measure, above a Quiet Border rule: a wrapping row 
 A 36rem sheet 12vh from the top over the Scrim: a 44px transparent query line at 15px sans on a Quiet Border rule (hand on focus), groups under 11px uppercase Muted headings, the document's sections first (28px rows indented 12px per depth, each leading with its address in the hand), then workspace files with their folder trailing in Muted. The selected row sits on a Sunken bed.
 
 ### Conversation Pane
-Turns are 15px / 1.6 prose with a 12px 600 speaker label. The human's turn sits right on an Anchor Wash block (10px radius) with the label in the hand; a session's sits left, unboxed, in ink. Tool calls are 12px mono Muted disclosures.
+Managed chat uses right-aligned human bubbles (sans, Surface, up to 80% of the column) and unboxed assistant prose on the left (serif). Author names remain available to assistive technology but are not printed above every message. Tool calls and reported settings remain disclosures. Copy actions appear on hover or keyboard focus.
+
+The composer has a borderless text area and compact, borderless account/model/effort selectors sized to their selected labels, with accessible names. Permissions, attachments, Stop and Send remain operable. At narrow pane widths controls wrap. The sidebar shows at most 20 title-only conversation rows, pinned first, without a count or separate search field. A hover/focus menu supplies Pin/Unpin; older chats remain searchable.
+
+### Settings
+The sidebar footer and shared palette open Settings. Agents & accounts and Appearance are separate destinations within the page. Small monochrome Claude asterisk and OpenAI knot marks follow the selected reference; local Lobe Icons geometry carries its MIT attribution. Show installation first when a runtime is missing. Installation has an indeterminate busy indicator and disabled controls; account setup remains visibly disabled until the runtime and the build are ready. Account navigation displays a compact list and one selected detail pane, preserving identity, default, enable/disable, authentication, model discovery, MCP and cleanup actions.
 
 ### Dialog
 Paper, Quiet Border, 12px radius, 1.5rem padding, 26rem maximum, Dialog Float over the Scrim. Title 19px 600, copy Muted, actions right-aligned.
