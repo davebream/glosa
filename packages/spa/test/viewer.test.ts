@@ -377,12 +377,16 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const sidebar = fresh.querySelector(".glosa-sidebar") as any;
     expect(sidebar.firstElementChild.classList.contains("glosa-sidebar-scroll")).toBe(true);
     expect(sidebar.querySelector(".glosa-starred")).not.toBeNull();
-    expect(sidebar.lastElementChild.textContent).toBe("Settings");
+    // Settings rides the foot strip beside the navigator's toggle, not a row of its own in the column.
+    expect(sidebar.lastElementChild.classList.contains("glosa-starred")).toBe(true);
+    const foot = fresh.querySelector(".glosa-nav-foot") as any;
+    expect(foot.lastElementChild.classList.contains("glosa-sidebar-settings")).toBe(true);
+    expect(foot.lastElementChild.textContent).toBe("Settings");
     expect(sidebar.querySelector(".glosa-starred").hidden).toBe(true);
     const toggle = fresh.querySelector(".glosa-sidebar-heading .glosa-star-toggle") as any;
     expect(toggle.hidden).toBe(false);
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
-    expect(toggle.getAttribute("aria-label")).toBe("Star this workspace");
+    expect(toggle.getAttribute("aria-label")).toBe("Star ws-1");
   });
 
   test("starring the current workspace lists it under Starred; unstarring removes it; collapse persists", async () => {
@@ -397,7 +401,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     await settle();
     expect(calls.star).toEqual(["ws-1"]);
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
-    expect(toggle.getAttribute("aria-label")).toBe("Unstar this workspace");
+    expect(toggle.getAttribute("aria-label")).toBe("Unstar ws-1");
     const section = root.querySelector(".glosa-starred") as any;
     expect(section.hidden).toBe(false);
     const row = root.querySelector(".glosa-starred-row") as any;
@@ -1331,7 +1335,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       expect(root.querySelector(".glosa-chat-list-item")?.textContent).toBe("Draft");
       label = "Work subscription";
       title = "Revised draft";
-      const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh sessions");
+      const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh chats");
       (refresh as unknown as HTMLButtonElement).click();
       await waitForTitle(title);
     } finally {

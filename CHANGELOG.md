@@ -16,6 +16,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   execution remains unavailable until both providers pass native account-isolation and lifecycle
   qualification and the Claude subscription-integration release determination is recorded.
 
+### Changed
+
+- **The navigator's sections are one construction.** Artifacts, Chats and Starred share the tree's
+  drawn chevron in the same slot at the same x, one label style and one hover; the Chats header no
+  longer borrows the chat pane's bordered button, and its menu and New chat controls are drawn at the
+  star's size. The Chats rule sits directly under the tree with its heading on it, Settings rides the
+  foot strip beside the navigator's toggle, tree rows drop their file and folder glyphs and indent
+  12px per depth so long names keep more of the column, chat rows take the tree row's shape, and a
+  failed chat action says what it was doing before the reason.
+
 ### Fixed
 
 - **A hand-wrapped paragraph keeps its shape when it becomes editable.** The rich face keeps a

@@ -506,6 +506,8 @@ input,
   align-items: center;
   height: var(--nav-foot-height);
   padding: 0 var(--space-3);
+  gap: var(--space-1);
+  border-top: 1px solid transparent; /* the shown state's rule, kept as a size, so nothing drifts */
 }
 
 .glosa-app[data-nav-open="true"] .glosa-nav-foot {
@@ -524,7 +526,7 @@ input,
   width: 28px;
   height: 28px;
   border: 1px solid transparent;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-tool); /* the column's one radius for a 28px box */
   color: var(--muted);
   transition:
     background var(--dur-fast) var(--ease-out),
@@ -533,6 +535,11 @@ input,
 
 .glosa-nav-toggle:hover {
   background: var(--surface-sunken);
+}
+
+.glosa-nav-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px; /* drawn inside, like every other ring in the navigator */
 }
 
 .glosa-app[data-nav-open="false"] .glosa-nav-toggle {
@@ -1446,10 +1453,12 @@ input,
 .glosa-sidebar-section-toggle {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px; /* the tree row's gap, so a section label and a folder name start on one line */
+  min-width: 0;
   width: 100%;
+  min-height: 28px;
   margin-left: calc(var(--space-2) * -1);
-  padding: 2px var(--space-2) 2px 0;
+  padding: 0 var(--space-2) 0 var(--space-1); /* the row's 4px, so the chevron sits at the tree's x */
   border-radius: var(--radius-tool);
   color: inherit;
   /* The UA stylesheet forces `text-transform: none` on buttons, which `font: inherit` does not
@@ -1461,6 +1470,18 @@ input,
 
 .glosa-sidebar-section-toggle:hover {
   color: var(--ink);
+}
+
+.glosa-sidebar-section-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px; /* the tree row's, so every focus ring in the column is drawn the same way */
+}
+
+.glosa-sidebar-section-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .glosa-sidebar-section-chevron {
@@ -1642,9 +1663,10 @@ input,
   color: var(--ink);
 }
 
-.glosa-star-toggle svg,
+/* One stroke for every drawn tool (1.6, from the shared `.glosa-tree-tool svg` rule); the unstar
+   control is not a tree tool and says so itself. */
 .glosa-starred-unstar svg {
-  stroke-width: 1.4;
+  stroke-width: 1.6;
 }
 
 /* Scoped under the navigator so it outranks the tree tools' own unfilled icon rule below. */
@@ -1695,6 +1717,8 @@ input,
 }
 
 .glosa-sidebar-heading h2 {
+  flex: 1 1 auto;
+  min-width: 0;
   margin-bottom: 0;
 }
 
@@ -1704,26 +1728,12 @@ input,
   gap: 2px;
 }
 
-.glosa-tree-tool {
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-tool);
-  color: var(--muted);
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
-}
-
-.glosa-tree-tool:hover {
-  color: var(--ink);
-  background: var(--surface-sunken);
-}
-
-.glosa-tree-tool:focus-visible {
+/* Box, bed and hover come from the shared icon-button rule (search "One quiet icon-button"), so the
+   star, the chats menu and New chat are one control in three places. Only the stroke lives here. */
+.glosa-tree-tool:focus-visible,
+.glosa-sidebar .glosa-agent-menu-trigger:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 .glosa-tree-tool svg {
@@ -1770,11 +1780,11 @@ input,
 }
 
 .glosa-artifact-list {
-  margin-bottom: var(--space-6) !important;
+  margin-bottom: var(--space-3);
 }
 
 .glosa-artifact-list [role="group"] {
-  padding-left: 21px; /* disclosure (15) + gap (6): a child's mark sits under its parent's icon */
+  padding-left: 12px; /* the Go to palette's step per depth; a deep name keeps most of the column */
 }
 
 .glosa-artifact-list [role="treeitem"] {
@@ -1789,7 +1799,7 @@ input,
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 var(--space-2) 0 var(--space-1);
+  padding: 0 var(--space-1); /* 4px each side: an 8px inset cost a clipped name three glyphs */
   border-radius: var(--radius-tool);
   color: var(--ink);
   cursor: default;
@@ -1808,18 +1818,21 @@ input,
   outline-offset: -2px;
 }
 
-.glosa-artifact-list [role="treeitem"][aria-current="page"] > .glosa-tree-row {
-  background: var(--surface-sunken);
-  color: var(--primary);
-  font-weight: 600;
-}
-
 /* An open artifact is one the reader already has on screen in some pane; the active pane's is
    the one the URL and the top bar are talking about. Two states, told apart by weight and colour
    as well as by the mark, so the tree says what is open rather than only where you last clicked. */
 .glosa-artifact-list [role="treeitem"][data-open="true"] > .glosa-tree-row {
   color: var(--ink);
   font-weight: 500;
+}
+
+/* AFTER the open rule on purpose: the current artifact is always also open, the two selectors
+   weigh the same, and written the other way round the open rule's 500 silently replaced this 600
+   — measured, the current row lost the weight DESIGN.md gives it and kept only the dot's colour. */
+.glosa-artifact-list [role="treeitem"][aria-current="page"] > .glosa-tree-row {
+  background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
 }
 
 /* Open-in-a-pane is a dot in the disclosure slot a file never uses — inside the row's own
@@ -1839,8 +1852,7 @@ input,
   background: var(--primary);
 }
 
-.glosa-tree-disclosure,
-.glosa-tree-icon {
+.glosa-tree-disclosure {
   width: 15px;
   height: 15px;
   flex: 0 0 15px;
@@ -1860,15 +1872,6 @@ input,
 .glosa-tree-disclosure svg {
   width: 13px;
   height: 13px;
-}
-
-.glosa-tree-icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-.glosa-tree-disclosure svg,
-.glosa-tree-icon svg {
   fill: none;
   stroke: currentColor;
   stroke-width: 1.6;
@@ -1878,9 +1881,39 @@ input,
 
 .glosa-tree-label {
   min-width: 0;
+  display: flex;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A long name clips in the middle, not at the end: the head takes the ellipsis and the tail (the
+   part after the last hyphen, with the extension) stays, so six underfive-* siblings read as six
+   names rather than one prefix. A name that is not split is the head alone and clips at its end,
+   with the ellipsis — the label itself is a flex row, and a flex row's bare text gets none. */
+.glosa-tree-label-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glosa-tree-label-tail {
+  flex: none;
+  /* No negative margin at the join. A clipped head leaves the air of the partial glyph the ellipsis
+     replaced, so "…" then "-preregistration" reads with a small space; pulling the tail back by a
+     fraction of an em was tried and made every UNclipped join collide ("self-driving-adoption" with
+     the hyphen on the g) while the clipped ones kept their air. The air is the ellipsis's own. */
+}
+
+/* A folded folder's open document: the file dot's size and colour, at the row's end. */
+.glosa-tree-open-inside {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--muted);
 }
 
 .glosa-tree-stale {
@@ -1895,10 +1928,14 @@ input,
 
 .glosa-sidebar-empty {
   color: var(--muted);
-  padding: 0 var(--space-2);
-  margin: 0 0 var(--space-6);
+  padding: 0 var(--space-2) 0 25px; /* the name line: the row's 4px, the 15px slot, the 6px gap */
+  margin: 0 0 var(--space-3);
   font-size: var(--text-xs);
   text-wrap: pretty;
+}
+
+.glosa-sidebar-empty:empty {
+  display: none;
 }
 
 /* Connection banner: a thin, honest strip across the whole workbench. One banner, never one per
@@ -6339,10 +6376,13 @@ input,
 }
 
 /* Managed agents share the paper, type and dock of the writing workspace. */
+/* The heading sits directly on its rule, as Artifacts sits on the top bar's: one 36px band, no
+   air between the hairline and the label it belongs to. The rule runs edge to edge, the length the
+   foot's rule runs, out through the scroll padding and back in for the content. */
 .glosa-sidebar-chats {
-  margin-top: 1.5rem;
+  margin: var(--space-3) calc(var(--space-3) * -1) 0;
+  padding: 0 var(--space-3);
   border-top: 1px solid var(--border);
-  padding-top: 0.75rem;
 }
 .glosa-sidebar-chats input {
   width: 100%;
@@ -6362,7 +6402,10 @@ input,
   font: var(--text-base) / 1.5 var(--font-sans);
   min-width: 0;
 }
-:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-sidebar-chats, .glosa-agent-menu) button {
+/* The chat pane's button kit. The navigator's Chats section is NOT in this list on purpose: it is a
+   list in the navigator and wears the navigator's rules; a 32px bordered pill behind a 12px section
+   label was this selector reaching where it had no business. */
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-agent-menu) button {
   color: var(--ink);
   background: transparent;
   border: 1px solid var(--border);
@@ -6372,10 +6415,10 @@ input,
   font: var(--text-sm) / 1.4 var(--font-sans);
   cursor: pointer;
 }
-:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-sidebar-chats, .glosa-agent-menu) button:hover:not(:disabled) {
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-agent-menu) button:hover:not(:disabled) {
   background: var(--surface-sunken);
 }
-:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-sidebar-chats, .glosa-agent-menu) button:disabled {
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-agent-menu) button:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -6389,7 +6432,7 @@ input,
   background: var(--muted);
   border-color: var(--muted);
 }
-:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-sidebar-chats, .glosa-agent-menu) :focus-visible {
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-agent-menu) :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
@@ -6407,12 +6450,17 @@ input,
   display: inline-flex;
   flex: none;
 }
-:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-sidebar-chats) .glosa-agent-menu-trigger {
+:is(.glosa-chat-pane, .glosa-agent-settings) .glosa-agent-menu-trigger {
   border-color: transparent;
-  font-size: 20px;
-  letter-spacing: 1px;
   padding: 0 8px;
   width: 32px;
+}
+/* The menu's dots are drawn; filled, since a dot has no stroke to speak of. */
+.glosa-agent-menu-trigger svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  stroke: none;
 }
 .glosa-agent-menu {
   position: fixed;
@@ -6477,31 +6525,45 @@ input,
 .glosa-chat-list {
   display: grid;
   gap: 1px;
-  margin-block: 4px 12px;
+  margin-block: 0 var(--space-3);
 }
 .glosa-chat-list-row {
   display: flex;
   position: relative;
   min-width: 0;
   align-items: center;
-  border-radius: 4px;
+  border-radius: var(--radius-tool);
 }
+/* A chat row is a tree row: 28px, 13px ink, the tree's radius and bed, its title on the name line. */
 .glosa-sidebar-chats .glosa-chat-list-item {
   display: block;
   text-align: left;
   border: 0;
-  padding: 5px 28px 5px 8px;
+  background: transparent;
+  padding: 0 28px 0 25px;
   width: 100%;
   min-width: 0;
   min-height: 28px;
-  border-radius: 4px;
+  border-radius: var(--radius-tool);
+  color: var(--ink);
+  font: var(--text-sm) / 1.4 var(--font-sans);
   font-weight: 400;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .glosa-sidebar-chats .glosa-chat-list-item:hover:not([aria-current="page"]) {
-  background: var(--surface);
+  background: var(--surface-sunken);
 }
 .glosa-sidebar-chats .glosa-chat-list-item[aria-current="page"] {
   background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
+}
+.glosa-sidebar-chats .glosa-chat-list-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 .glosa-chat-list-title {
   display: block;
@@ -6519,30 +6581,38 @@ input,
 }
 .glosa-chat-list-row .glosa-agent-menu-trigger {
   min-height: 26px;
+  height: 26px;
   width: 26px;
-  font-size: 16px;
+  min-width: 26px;
   padding: 0;
 }
+/* Settings shares the foot strip with the navigator's toggle: a 28px row in the tree's vocabulary,
+   shown only while the navigator is, so the strip closes the column with one rule instead of three. */
 .glosa-sidebar-settings {
   display: flex;
   align-items: center;
-  gap: 8px;
-  border: 0;
-  border-top: 1px solid var(--border);
+  gap: 6px;
+  min-height: 28px;
+  border: 1px solid transparent; /* the toggle's construction, so the two boxes fade alike */
+  border-radius: var(--radius-tool);
   color: var(--muted);
   background: transparent;
   font: var(--text-sm) / 1.4 var(--font-sans);
-  padding: 12px 16px;
+  padding: 0 var(--space-2) 0 var(--space-1);
   text-align: left;
   cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 .glosa-sidebar-settings svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   flex: none;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.5;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -6550,12 +6620,39 @@ input,
   color: var(--ink);
   background: var(--surface-sunken);
 }
+.glosa-sidebar-settings:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+/* With the navigator hidden, Settings stays on the desk as the gear alone, in the toggle's own
+   bordered box, so the one path to accounts never leaves the corner. */
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+  background: var(--desk);
+  border-color: var(--border);
+}
+
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings:hover {
+  background: var(--surface-sunken);
+  border-color: var(--border-strong);
+}
+
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings span {
+  display: none;
+}
+
+.glosa-app[data-surface="document"] .glosa-sidebar-settings {
+  display: none;
+}
 .glosa-chat-list-group,
 .glosa-chat-list-empty {
   color: var(--muted);
   font-size: var(--text-xs);
-  padding: 6px;
+  padding: 0 var(--space-2) 0 25px; /* the name line, like every other line of quiet copy here */
   margin: 0;
+  text-wrap: pretty;
 }
 .glosa-sidebar-chats > button {
   border-color: transparent;
@@ -7029,27 +7126,6 @@ input,
   color: var(--muted);
   font-size: var(--text-sm);
   line-height: 1.5;
-}
-.glosa-sidebar-heading .glosa-chat-list-toggle,
-.glosa-sidebar-heading .glosa-artifact-list-toggle {
-  border: 0;
-  background: transparent;
-  padding: 4px 0;
-  color: inherit;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  cursor: pointer;
-}
-.glosa-chat-list-toggle::before,
-.glosa-artifact-list-toggle::before {
-  content: "⌄";
-  display: inline-block;
-  margin-right: 6px;
-}
-.glosa-chat-list-toggle[aria-expanded="false"]::before,
-.glosa-artifact-list-toggle[aria-expanded="false"]::before {
-  content: "›";
 }
 .glosa-agent-login-host:not(:empty) {
   padding: 16px;
