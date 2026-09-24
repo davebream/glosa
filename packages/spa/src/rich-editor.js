@@ -44,6 +44,10 @@ import {
   sinkListItem,
   tableNodes,
   TextSelection,
+  Decoration,
+  DecorationSet,
+  Plugin,
+  PluginKey,
 } from "./vendor/prosemirror.js";
 import {
   NON_MANUSCRIPT_BLOCK_TOKEN,
@@ -374,6 +378,141 @@ const editorParser = new defaultMarkdownParser.constructor(editorSchema, commonM
  *  no round trip undoes. A second softbreak handler in this file is a bug for the same reason:
  *  `parseMarkdown` resolves through exactly one parser, and this is it. */
 editorParser.tokenHandlers.softbreak = (state) => state.addText("\n");
+
+/** The soft break #173 keeps as a `\n` in the text, DRAWN as the space Preview draws it as.
+ *
+ *  `.ProseMirror` is `white-space: pre-wrap` — ProseMirror's own contract, and the reason a trailing
+ *  space, and the caret after one, are visible at all — and under `pre-wrap` a `\n` is a line
+ *  break. So a hand-wrapped paragraph opened in Edit wrapped at every source break AND at the
+ *  measure: twice the lines, everything below pushed down, and the words the reader clicked no
+ *  longer under their finger. Preview never showed those breaks (markdown-it renders a softbreak as
+ *  a newline the HTML then collapses), so the switch read as the page reflowing under the caret.
+ *
+ *  View-only, because the `\n` itself is load-bearing: each one is wrapped in an inline decoration
+ *  whose class app.css sets to `white-space: normal`, and CSS Text collapses a segment break in
+ *  that context to one space. The text node still holds the `\n`, `readDOMChange` still reads it
+ *  back, and the serializer and the splice see exactly the model they saw before. Text under a
+ *  `code` node — a fenced block, the raw construct — is left alone: there a `\n` is a line.
+ *
+ *  `white-space-collapse: preserve-spaces` would have done this in CSS alone, but WebKit does not
+ *  implement it (`CSS.supports` is false in Safari 26.6) and this is a macOS product. */
+export const SOFT_BREAK_CLASS = "glosa-soft-break";
+const softBreakKey = new PluginKey("glosa-soft-break");
+
+/** Every soft break in `doc`, as the inline decorations the view draws them through. Exported for
+ *  tests that need the DOM-free half. */
+export function softBreakDecorations(doc) {
+  const found = [];
+  doc.descendants((node, pos) => {
+    if (node.type.spec.code) return false;
+    if (!node.isText) return true;
+    const text = node.text ?? "";
+    for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) {
+      found.push(Decoration.inline(pos + i, pos + i + 1, { class: SOFT_BREAK_CLASS }));
+    }
+    return false;
+  });
+  return DecorationSet.create(doc, found);
+}
+
+/** True when a DOM-read change could have been the browser rewriting a soft break: the char is
+ *  the space or the no-break space WebKit and Blink substitute for collapsible whitespace they
+ *  touch. */
+const isSoftBreakSubstitute = (ch) => ch === " " || ch === " ";
+const SOFT_BREAK_TYPED = "typed";
+
+/** Text input that lands beside a soft break, taken away from the browser. Under `white-space:
+ *  normal` the `\n` is collapsible whitespace, and both engines "rebalance" collapsible whitespace
+ *  they insert next to — WebKit turned `live\npilot` into `live&nbsp;Xpilot` on the first keystroke
+ *  measured (Safari 26.6), and `readDOMChange` then faithfully reported that the break was gone.
+ *  So the one input that can reach that code path is inserted through the model instead: the DOM
+ *  is redrawn from the state, and nothing in it was ever the browser's to rebalance. Composition
+ *  (`insertCompositionText`) and every other input type stay native; `restoreSoftBreaks` is the
+ *  net under those. */
+function softBreakTyping(view, event) {
+  if (event.inputType !== "insertText" || typeof event.data !== "string" || event.data === "") return false;
+  const { state } = view;
+  const { $from, $to } = state.selection;
+  if (!$from.sameParent($to) || !$from.parent.isTextblock || $from.parent.type.spec.code) return false;
+  const text = $from.parent.textContent;
+  const before = text.charAt($from.parentOffset - 1);
+  const after = text.charAt($to.parentOffset);
+  if (before !== "\n" && after !== "\n") return false;
+  event.preventDefault();
+  view.dispatch(state.tr.insertText(event.data).setMeta(softBreakKey, SOFT_BREAK_TYPED).scrollIntoView());
+  return true;
+}
+
+/** Puts back every soft break a change replaced, in place, with a space or a no-break space. A
+ *  `ReplaceStep` from `readDOMChange` covers the smallest range whose DOM text changed; the old
+ *  and new texts are aligned from both ends, counting `\n`, ` ` and NBSP as the same character,
+ *  and each aligned `\n` that came back as whitespace is restored one character at a time so the
+ *  marks around it are untouched. A break that moved, or one the writer selected and overtyped
+ *  (`\n` → `x`), aligns with nothing and is left as the change made it; the writer's own typed
+ *  text arrives through `softBreakTyping` and carries a meta that exempts it. */
+function restoreSoftBreaks(transactions, _oldState, newState) {
+  let tr = null;
+  for (const transaction of transactions) {
+    if (!transaction.docChanged || transaction.getMeta(softBreakKey) === SOFT_BREAK_TYPED) continue;
+    transaction.steps.forEach((step, i) => {
+      // The bundle exports no `ReplaceStep`; a step names its own kind, and this only reads the
+      // flat text replacements `readDOMChange` writes.
+      if (step.toJSON().stepType !== "replace" || step.slice.openStart || step.slice.openEnd) return;
+      const before = transaction.docs[i];
+      const oldText = before.textBetween(step.from, step.to, "\u0000");
+      if (!oldText.includes("\n")) return;
+      let newText = "";
+      step.slice.content.forEach((node) => {
+        newText += node.isText ? node.text : "\u0000";
+      });
+      const same = (a, b) =>
+        a === b ||
+        (isSoftBreakSubstitute(a) && isSoftBreakSubstitute(b)) ||
+        (a === "\n" && isSoftBreakSubstitute(b)) ||
+        (b === "\n" && isSoftBreakSubstitute(a));
+      let head = 0;
+      while (head < oldText.length && head < newText.length && same(oldText[head], newText[head])) head += 1;
+      let tail = 0;
+      while (
+        tail < oldText.length - head &&
+        tail < newText.length - head &&
+        same(oldText[oldText.length - 1 - tail], newText[newText.length - 1 - tail])
+      )
+        tail += 1;
+      const restore = (oldIndex, newIndex) => {
+        if (oldText[oldIndex] !== "\n" || !isSoftBreakSubstitute(newText[newIndex])) return;
+        // The step's own mapping carries positions across its later siblings in the transaction.
+        const pos = transaction.mapping.slice(i + 1).map(step.from + newIndex, -1);
+        if (newState.doc.textBetween(pos, pos + 1) !== newText[newIndex]) return;
+        tr ??= newState.tr;
+        tr.replaceWith(pos, pos + 1, newState.schema.text("\n", newState.doc.resolve(pos).marks()));
+      };
+      for (let k = 0; k < head; k += 1) restore(k, k);
+      for (let k = 0; k < tail; k += 1) restore(oldText.length - 1 - k, newText.length - 1 - k);
+    });
+  }
+  return tr;
+}
+
+/** Exported for the DOM-free half of its tests; `mountRichEditor` installs it. */
+export function softBreakPlugin() {
+  return new Plugin({
+    key: softBreakKey,
+    state: {
+      init: (_config, state) => softBreakDecorations(state.doc),
+      // Rebuilt from the whole document on every change rather than mapped: a manuscript is small,
+      // and a mapped set would still have to find the breaks a paste or a keypress just added.
+      apply: (tr, old) => (tr.docChanged ? softBreakDecorations(tr.doc) : old),
+    },
+    props: {
+      decorations(state) {
+        return softBreakKey.getState(state);
+      },
+      handleDOMEvents: { beforeinput: softBreakTyping },
+    },
+    appendTransaction: restoreSoftBreaks,
+  });
+}
 
 /** DOM-free halves of the editor, exported for tests: what the rich face parses and persists. */
 export function editorMarkdownLayout(source) {
@@ -1768,6 +1907,7 @@ export function mountRichEditor(
       keymap(editorKeymap(schema)),
       keymap(baseKeymap),
       history(),
+      softBreakPlugin(),
     ],
   });
 

@@ -3522,6 +3522,15 @@ input,
   white-space: pre-wrap;
 }
 
+/* A soft break — the `\n` the rich face keeps inside a paragraph (rich-editor.js, #173) — drawn as
+   the space Preview draws it as. `.ProseMirror` above has to stay `pre-wrap`, and under `pre-wrap`
+   a `\n` breaks the line, so a hand-wrapped paragraph re-wrapped at every source break on entering
+   Edit and grew by a line per break: the reflow in the mode switch. Inside this span `normal`
+   collapses the segment break to one space; the character underneath is untouched. */
+.glosa-rich-surface .glosa-soft-break {
+  white-space: normal;
+}
+
 .glosa-rich-surface .ProseMirror-selectednode {
   outline: 2px solid var(--primary);
 }

@@ -18,6 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **A hand-wrapped paragraph keeps its shape when it becomes editable.** The rich face keeps a
+  source line break inside a paragraph as a newline so the file's wrapping survives a save, but the
+  editor drew that newline as a line, so a paragraph wrapped at eighty columns re-wrapped at every
+  source break the moment it opened for editing and pushed the rest of the page down. The break is
+  now drawn as the space Preview shows, and typing or deleting beside it no longer lets the browser
+  turn it into a space.
 - **Fresh managed accounts reach the sign-in state.** Claude's valid signed-out response is
   recognized even when its CLI exits with status 1. Codex accepts the pinned runtime's exact
   serialized defaults while rejecting changed endpoints and inherited configuration overrides.
