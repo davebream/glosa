@@ -27,7 +27,6 @@ export function modelPresentation(model) {
   let label;
   if (claude) {
     label = `${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2].replaceAll("-", ".")}`;
-    if (/\[1m\]/i.test(model.id) || /\b1m\b/i.test(name)) label += " · 1M";
   } else if (/^(?:gpt-\d|o\d)/i.test(wire)) {
     label = wire
       .replace(/^gpt/i, "GPT")
@@ -49,11 +48,37 @@ export function modelPresentation(model) {
   return {
     label,
     description:
-      model.resolvedModel && model.resolvedModel !== model.id
+      (model.resolvedModel && model.resolvedModel !== model.id
         ? `At last model discovery, alias ${model.id} resolved to ${model.resolvedModel}.`
-        : `Model ID: ${wire}.`,
+        : `Model ID: ${wire}.`) + (/\[1m\]$/i.test(wire) ? " 1M context." : ""),
     versionKnown: true,
   };
+}
+
+/** Aliases are references, not extra model variants. Preserve the current wire selection. */
+export function modelChoices(models, selected) {
+  const groups = new Map();
+  for (const model of models) {
+    const identity = model.resolvedModel || model.id;
+    const group = groups.get(identity) ?? [];
+    group.push(model);
+    groups.set(identity, group);
+  }
+  return [...groups].map(([identity, aliases]) => {
+    const model =
+      aliases.find((entry) => entry.id === selected) ??
+      aliases.find((entry) => entry.id === identity) ??
+      aliases.find((entry) => entry.id !== "default") ??
+      aliases[0];
+    const display = modelPresentation(model);
+    const hasContextVariant = /\[1m\]$/i.test(identity) && groups.has(identity.replace(/\[1m\]$/i, ""));
+    const isDefault = aliases.some((entry) => entry.id === "default");
+    return {
+      id: model.id,
+      name: display.label + (hasContextVariant ? " · 1M" : ""),
+      description: display.description + (isDefault ? " Agent default at last model discovery." : ""),
+    };
+  });
 }
 
 /** One effort vocabulary for both providers; these are relative settings, never latency promises. */

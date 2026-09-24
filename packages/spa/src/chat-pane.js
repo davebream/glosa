@@ -2,7 +2,15 @@
 
 import { mountAgentLogin } from "./agent-login.js";
 import { mountMcpSettings } from "./agent-mcp-settings.js";
-import { actionMenu, agentIcon, agentName, effortIcon, effortPresentation, modelPresentation } from "./agent-ui.js";
+import {
+  actionMenu,
+  agentIcon,
+  agentName,
+  effortIcon,
+  effortPresentation,
+  modelChoices,
+  modelPresentation,
+} from "./agent-ui.js";
 import { loadChatMarkdown } from "./chat-markdown.js";
 import { confirmDialog } from "./dialog.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -702,9 +710,10 @@ export function createChatPane(
       state.profileId,
     );
     const models = catalog?.capabilities?.[state.profileId]?.models ?? [];
+    const choices = modelChoices(models, state.settings.model);
     pick(
       model,
-      models.map((entry) => ({ ...entry, name: modelPresentation(entry).label })),
+      choices,
       state.settings.model,
       modelPresentation({ id: state.settings.model, name: state.settings.model }).label,
     );
@@ -741,9 +750,13 @@ export function createChatPane(
     account.title = state.turns.length
       ? "Changing account starts a fresh chat. You can move your draft there."
       : "Choose the account for this chat";
-    const selectedModelDisplay = modelPresentation(
-      selectedModel ?? { id: state.settings.model, name: state.settings.model },
-    );
+    const choice = choices.find((entry) => entry.id === state.settings.model);
+    const selectedModelDisplay = choice
+      ? { label: choice.name, description: choice.description }
+      : modelPresentation(selectedModel ?? { id: state.settings.model, name: state.settings.model });
+    for (const option of model.options)
+      option.title =
+        choices.find((entry) => entry.id === option.value)?.description ?? selectedModelDisplay.description;
     modelTip.textContent = `${selectedModelDisplay.label} · ${selectedModelDisplay.description} Applies to your next message.`;
     const selectedEffort = effortPresentation(state.settings.effort);
     effortTip.textContent = `${selectedEffort.label} effort · ${selectedEffort.description} Applies to your next message.`;

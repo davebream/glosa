@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import MarkdownIt from "markdown-it";
 import { createSafeChatRenderer } from "../src/chat-markdown.js";
 import { createChatPane, applyChatEvent } from "../src/chat-pane.js";
-import { modelPresentation } from "../src/agent-ui.js";
+import { modelChoices, modelPresentation } from "../src/agent-ui.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
 let dom: DomEnv;
 beforeEach(() => {
@@ -18,7 +18,7 @@ test("model labels retain provider-reported versions and never infer a version f
   for (const [model, label] of [
     [{ id: "sonnet", name: "Sonnet", resolvedModel: "claude-sonnet-5" }, "Sonnet 5"],
     [{ id: "default", name: "Default (recommended)", resolvedModel: "claude-opus-5-5" }, "Opus 5.5"],
-    [{ id: "opus[1m]", name: "Opus (1M context)", resolvedModel: "claude-opus-5-5" }, "Opus 5.5 · 1M"],
+    [{ id: "opus[1m]", name: "Opus (1M context)", resolvedModel: "claude-opus-5-5[1m]" }, "Opus 5.5"],
     [{ id: "claude-sonnet-4-5-20250929", name: "Sonnet" }, "Sonnet 4.5"],
     [{ id: "gpt-6-astra", name: "Astra" }, "GPT-6 Astra"],
     [{ id: "gpt-5.6-sol", name: "Sol" }, "GPT-5.6 Sol"],
@@ -30,6 +30,67 @@ test("model labels retain provider-reported versions and never infer a version f
   expect(modelPresentation({ id: "sonnet", name: "Sonnet", resolvedModel: "claude-sonnet-5" }).description).toContain(
     "At last model discovery, alias sonnet resolved to claude-sonnet-5",
   );
+});
+
+test("model choices collapse known aliases but preserve distinct versions, contexts and unresolved references", () => {
+  const models = [
+    { id: "default", name: "Default", resolvedModel: "claude-opus-5-5[1m]" },
+    { id: "opus[1m]", name: "Opus 1M", resolvedModel: "claude-opus-5-5[1m]" },
+    { id: "claude-opus-4-8", name: "Opus" },
+    { id: "claude-opus-4-8[1m]", name: "Opus 1M" },
+    { id: "unknown-a", name: "Opus" },
+    { id: "unknown-b", name: "Opus" },
+  ];
+  expect(modelChoices(models, "default").map((choice) => [choice.id, choice.name])).toEqual([
+    ["default", "Opus 5.5"],
+    ["claude-opus-4-8", "Opus 4.8"],
+    ["claude-opus-4-8[1m]", "Opus 4.8 · 1M"],
+    ["unknown-a", "Opus · version not reported"],
+    ["unknown-b", "Opus · version not reported"],
+  ]);
+  expect(modelChoices(models, "other")[0]!.id).toBe("opus[1m]");
+  expect(modelChoices(models, "default")[0]!.description).toContain("Agent default at last model discovery");
+  expect(modelChoices(models, "default")[0]!.description).toContain("1M context");
+});
+
+test("the model picker shows one resolved choice without rewriting a saved default or alias", async () => {
+  for (const selected of ["default", "opus[1m]"]) {
+    const f = fixture();
+    await f.pane.ready;
+    f.catalog.capabilities.a.models = [
+      { id: "default", name: "Default", resolvedModel: "claude-opus-5-5[1m]", efforts: ["high", "low"] },
+      { id: "opus[1m]", name: "Opus 1M", resolvedModel: "claude-opus-5-5[1m]", efforts: ["high", "low"] },
+      { id: "haiku", name: "Haiku", resolvedModel: "claude-haiku-4-5-20251001", efforts: [] },
+    ];
+    f.state.settings.model = selected;
+    const changes: string[] = [];
+    f.dataAccess.changeChat = async (_slug: string, _id: string, input: { settings: typeof f.state.settings }) => {
+      changes.push(input.settings.model);
+      f.state.settings = input.settings;
+      f.state.configRevision++;
+    };
+    [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
+    await flush();
+    const select = f.host.querySelector('[aria-label="Model"]') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual(["Opus 5.5", "Haiku 4.5"]);
+    expect(select.value).toBe(selected);
+    expect(changes).toEqual([]);
+    const effort = f.host.querySelector('[aria-label="Effort"]') as HTMLSelectElement;
+    effort.value = "low";
+    effort.dispatchEvent(new Event("change"));
+    await flush();
+    expect(changes).toEqual([selected]);
+    select.value = "haiku";
+    select.dispatchEvent(new Event("change"));
+    await flush();
+    expect(select.options[0]!.value).toBe("opus[1m]");
+    select.value = "opus[1m]";
+    select.dispatchEvent(new Event("change"));
+    await flush();
+    expect(changes).toEqual([selected, "haiku", "opus[1m]"]);
+    expect(select.selectedOptions[0]!.textContent).toBe("Opus 5.5");
+    f.pane.destroy();
+  }
 });
 
 test("an unresolved send remains retryable after the selected account is disabled", async () => {
