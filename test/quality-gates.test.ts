@@ -133,6 +133,40 @@ describe("repository quality gates", () => {
       expect(ci).not.toContain(`secrets.${secret}`);
   });
 
+  // #371: the desktop app is built on every tag, but only a signed and notarized app may reach a
+  // release (Homebrew 5.0 deprecated unsigned casks; macOS 15.1+ refuses unsigned downloads). A
+  // job-level `if:` cannot read secrets, so one step decides and every publishing step is gated on
+  // its output. The signing secrets reach exactly one step.
+  test("the desktop app is uploaded only when it was signed, and a release without it is red", () => {
+    const yaml = workflows[1]!;
+    const app = job(yaml, "app");
+    expect(app).toContain("needs: [release]");
+    expect(app).toContain("if: always() && needs.release.result == 'success'");
+    expect(app).toContain("contents: write");
+    expect(app).toContain('APP_SIGNING_REQUIRED: "false"');
+    expect(app).toContain("bun run --cwd packages/shell package -- --arch all --smoke");
+    expect(app).toContain("bun run --cwd packages/shell package -- --arch all --unsigned --smoke");
+    for (const step of [
+      "Build, sign, notarize and smoke both architectures",
+      "Write SHA256SUMS",
+      "Upload signed app artifacts",
+      "Open the Homebrew tap pull request",
+    ]) {
+      expect(app, step).toContain(`- name: ${step}\n        if: steps.signing.outputs.enabled == 'true'`);
+    }
+    expect(app).toContain('gh release upload "$GITHUB_REF_NAME"');
+    expect(app).toContain("packages/shell/dist/SHA256SUMS --clobber");
+    expect(app).toContain("bun run scripts/cask-bump.ts");
+    for (const secret of ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]) {
+      expect(app.split(`\${{ secrets.${secret} }}`).length - 1, secret).toBe(1);
+    }
+    const released = job(yaml, "released");
+    expect(released).toContain("needs: [release, app]");
+    expect(released).toContain("needs.app.result");
+    // Both lockfiles are scanned: the shell's carries electron-builder and its dependencies.
+    for (const workflow of workflows) expect(job(workflow, "security")).toContain("--lockfile=packages/shell/bun.lock");
+  });
+
   // #316: git exports GIT_DIR into every hook's environment, so a spawned `git` that inherits the
   // ambient environment talks to whatever repository invoked the hook rather than the one `cwd`
   // names. That is how a test's throwaway `git init` reinitialized this repository and flipped its

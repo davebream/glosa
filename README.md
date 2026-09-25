@@ -209,6 +209,21 @@ A few commands worth knowing:
   `glosa dictation status` is local-only; `glosa dictation disable` turns egress off before removing
   the credential.
 
+### Desktop app
+
+From the first signed release, the desktop app installs through a Homebrew cask:
+
+```sh
+brew install --cask davebream/glosa/glosa
+brew upgrade --cask glosa
+```
+
+The app carries its own Bun, so it needs no install above. The cask links `glosa` into Homebrew's
+bin, so the terminal, the plugin and the app see one install; if you already installed glosa with
+bun or npm, that install stays the one the plugin uses, and `glosa doctor` says which one is recorded.
+The plugin step is the same, and the cask writes nothing into your agent's configuration. Until the
+first signed release, install with bun as above.
+
 ### Updating
 
 ```sh
