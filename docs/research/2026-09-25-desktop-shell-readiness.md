@@ -98,6 +98,23 @@ client, so the shell adds only pid tracking. launchd's one benefit, restart afte
 for with a plist the CLI does not know about and a respawn loop whenever the CLI's own restart
 path or a terminal-started daemon wins the lock. R-O6 in the ownership spec is closed with this.
 
+### 1d. Packaging spike (issue #361 item 3)
+
+A throwaway `packages/shell`-shaped workspace member outside the repo, electron 44.4.5
+(embedded Node 24.21.0), electron-vite 5.0.0, electron-builder 26.15.3, vite 8.3.1; 164 s from
+first install to last build, unsigned (`CSC_IDENTITY_AUTO_DISCOVERY=false`, `identity: null`).
+
+| Question | Result |
+|---|---|
+| electron-vite build of `src/main.ts` + `src/preload.ts` | Plain CommonJS, annotations gone; `out/main/main.js` 847 B, `out/preload/preload.js` 0 B. Output files are named after the entry, not `index.js`, so `"main": "out/main/main.js"`. |
+| electron-builder `--mac --dir` with a hoisted workspace sibling (`node_modules/@glosa/daemon -> ../../packages/daemon`, 50 MB dummy file) | Default `files` **fails hard** ("denied access to system or unsafe path … outside the package"), it does not silently package the sibling. `files: ["out/**/*", "package.json", "!node_modules/@glosa/**"]`, or the sibling in `devDependencies`, gives an asar holding exactly the shell's three files. The `.app` is 288 MB, all Electron; `app.asar` is 1.8 KB. |
+| Unbundled TypeScript as the packaged main | **Works with no flags**: `process.features.typescript === "strip"` in Electron 44's Node, `"main": "main.ts"` runs unpackaged and from inside `app.asar` (`"type": "module"` silences the only warning). `NODE_OPTIONS` is ignored in a packaged app, so the default is what counts. Erasable syntax only: `enum`, `namespace` and parameter properties fail with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. |
+
+So the "no build step" exception is narrower than §4 assumed: the shell's main and preload need
+no transpile at all. What remains a build is packaging itself (asar, `.app`, DMG, signing,
+notarization), which no `bun run` can replace. electron-vite is optional, not required; keep it
+out unless a bundler-only feature is needed.
+
 ## 2. Electrobun, re-evaluated
 
 Sources: GitHub releases and repository (checked 2026-09-25), Blackboard's v1 post (Feb 2026),
@@ -156,8 +173,8 @@ Node 22 type stripping), Apple notarytool guidance, electron-updater docs, Squir
 - **Bundle only the shell.** electron-vite for main and preload (small, plain JS output), electron-
   builder for DMG, signing, notarization and the update feed. The daemon and SPA stay unbundled and
   daemon-served; the "no build step" exception is the shell package alone, as feature-map decision 7
-  asks. Running the packaged main process as unbundled TypeScript is unproven inside Electron's
-  embedded Node; keep a build for the artifact, skip it for local iteration.
+  asks. Running the packaged main process as unbundled TypeScript works inside Electron 44's embedded
+  Node with no flags, packaged or not (§1d); electron-vite is optional.
 - **Signing is mandatory.** Since macOS 15.1 an unsigned, un-notarized download is unlaunchable
   without a Settings override. Needs a paid Developer ID, hardened runtime with the JIT and
   unsigned-memory entitlements, `notarytool`, stapling.
@@ -182,7 +199,7 @@ From feature-map §4, with what this note changes:
 | 4. Attention daemon-wide, workspace window-scoped | Untouched. |
 | 5. Face at registration | Untouched. |
 | 6. Origin `http://glosa.localhost:4646` | Confirmed secure context and Host fidelity under Electron. |
-| 7. No-build-step exception scoped to the shell | Confirmed feasible with electron-vite + electron-builder. |
+| 7. No-build-step exception scoped to the shell | Narrower than assumed: no transpile at all (§1d); the exception is packaging, signing and notarization only. |
 | 8. Keyboard ownership | Untouched; needs the accessibility matrix against native chords. |
 | New: launchd agent vs detached child | Decided: detached child (§1c). launchd's `KeepAlive` fights any daemon it did not spawn. |
 
@@ -193,5 +210,6 @@ From feature-map §4, with what this note changes:
 2. Land the ownership and pairing spec as the contract the shell is built against. Done (#359).
 3. Spike the four unexercised isolation checks from §1 in the same script. Done (§1b, §1c).
 4. Only then a `packages/shell` skeleton: window, deny-all handlers, egress gate, preload with the
-   three calls, compatibility check, explicit update action, signing pipeline.
+   three calls, compatibility check, explicit update action, signing pipeline. Unbundled `.ts`
+   main and preload, erasable syntax only; packaging is the one build.
 5. Re-check Electrobun in a quarter against the flip conditions in §2.
