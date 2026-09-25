@@ -82,3 +82,11 @@ Comparable-tools specifics unconfirmed (its sub-agents failed): Conductor's and 
 named Tauri↔Electron migrations, opcode's specific WKWebView issue threads, Claude Code desktop's
 shell. None are decision-critical: the two live-sourced deep-dives carry the verdict. Single-vendor
 claims flagged inline (PTY latency, idle-RAM figures from agents-ui.com).
+
+## Re-verified 2026-09-25
+
+Electron 44.4.5 (Chromium 152, Node 24.21.0). The class-F bridge, the preload boundary, the crash
+path and the `Host` allowlist were exercised in that version
+(`docs/research/2026-09-25-desktop-shell-readiness.md` §1–§1d); the skeleton in `packages/shell`
+pins it. Tauri and Electrobun remain as this document left them; Electrobun's flip conditions are
+in the readiness note §2.

@@ -80,9 +80,10 @@
 - `glosa dictation status [--json]` reads configuration and Keychain item presence only. It never
   contacts Wispr. `glosa dictation disable [--json]` commits inactive state before attempting to
   remove the Keychain item; removal failure is a warning because egress is already disabled.
-- The future Electron shell reuses the daemon-served SPA and browser-direct adapter. It must provide
-  macOS microphone usage metadata and surface permission failures, but owns no alternate dictation
-  transport.
+- The Electron shell (`packages/shell`) reuses the daemon-served SPA and browser-direct adapter. It must
+  provide macOS microphone usage metadata and surface permission failures when it is packaged, but owns
+  no alternate dictation transport. Its permission handler currently denies every permission request,
+  so dictation inside the shell waits on that metadata.
 
 ## F33 — `glosa update` self-update
 
@@ -334,7 +335,9 @@ success with remaining historical damage warns. Other doctor checks retain their
 
 The existing companion application floor remains Bun 1.2.7. Managed runtime installation/execution
 requires Bun 1.4.2 or newer on supported macOS architectures, including Bun.Terminal for native login.
-No application bundle/transpile step, Electron shell or native addon is introduced. Browser-ready
+No application bundle/transpile step or native addon is introduced for managed runtimes. The Electron
+shell is a separate, unpublished package (`packages/shell`, outside the root workspaces and the npm
+file list) whose only build is its own packaging (requirements §4 exception). Browser-ready
 xterm/Markdown assets and their licenses ship inside the existing package file list.
 
 Pinned provider candidates carry committed per-architecture dependency locks. Installation is an

@@ -63,13 +63,15 @@ the exit criteria that close it.
 - **Graduate the public alpha.** Close the undated [v1.0
   milestone](https://github.com/davebream/glosa/milestone/1) only after its release commitments pass
   their stated acceptance gates.
+- **Phase 5: the desktop shell.** An Electron window on the same daemon-served SPA, for pointing glosa
+  at a folder without a terminal; the browser mode stays. The unpackaged skeleton and its renderer
+  security suite exist; packaging, signing and a release are the remaining work. Track:
+  [#160](https://github.com/davebream/glosa/issues/160).
 - **Respond to public-alpha evidence.** Prioritize reliability and review-workflow improvements from
   reproducible user reports rather than expanding the surface speculatively.
 
 ## Later
 
-- A standalone desktop shell that preserves the local daemon and browser architecture
-  ([#160](https://github.com/davebream/glosa/issues/160)).
 - Whether glosa should ever launch an agent session itself, which it deliberately does not do today
   ([#157](https://github.com/davebream/glosa/issues/157)).
 - Support beyond macOS after the local-first security and lifecycle contracts are portable.

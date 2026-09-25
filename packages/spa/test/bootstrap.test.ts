@@ -10,6 +10,7 @@ import {
   focusHash,
   readRoute,
   rememberDaemonIdentity,
+  resolvePresentationToken,
   scrubSecrets,
   selectScreen,
   waitForOwnDaemon,
@@ -548,5 +549,60 @@ describe("waitForOwnDaemon", () => {
     );
     expect(outcome).toBe("recovered");
     expect(slept).toBe(0);
+  });
+});
+
+describe("presentation token under the desktop shell (ownership spec R-P1/R-P2)", () => {
+  const storage = (token: string | null) => ({ getItem: () => token, setItem() {}, removeItem() {} });
+  const route = (p: string | null, t: string | null = null) =>
+    ({
+      slug: "w",
+      artifact: null,
+      surface: null,
+      mode: null,
+      readLock: false,
+      durableToken: t,
+      presentationToken: p,
+    }) as const;
+
+  test("a p= in the fragment wins and the bridge is never asked", async () => {
+    let asked = 0;
+    const bridge = {
+      presentationToken: async () => {
+        asked += 1;
+        return "FROM-SHELL";
+      },
+    };
+    expect(await resolvePresentationToken(route("FROM-URL"), storage(null), bridge)).toBe("FROM-URL");
+    expect(asked).toBe(0);
+  });
+  test("with no secret in the fragment and no pairing, the shell's bridge supplies the token", async () => {
+    const bridge = { presentationToken: async () => "FROM-SHELL" };
+    expect(await resolvePresentationToken(route(null), storage(null), bridge)).toBe("FROM-SHELL");
+  });
+  test("an already-paired page never asks the shell", async () => {
+    let asked = 0;
+    const bridge = {
+      presentationToken: async () => {
+        asked += 1;
+        return "FROM-SHELL";
+      },
+    };
+    expect(await resolvePresentationToken(route(null), storage("durable"), bridge)).toBeNull();
+    expect(await resolvePresentationToken(route(null, "t-in-url"), storage(null), bridge)).toBeNull();
+    expect(asked).toBe(0);
+  });
+  test("no bridge (a plain browser) and a bridge that throws or returns nothing both mean no token", async () => {
+    expect(await resolvePresentationToken(route(null), storage(null), undefined)).toBeNull();
+    expect(
+      await resolvePresentationToken(route(null), storage(null), {
+        presentationToken: async () => {
+          throw new Error("x");
+        },
+      }),
+    ).toBeNull();
+    expect(
+      await resolvePresentationToken(route(null), storage(null), { presentationToken: async () => null }),
+    ).toBeNull();
   });
 });

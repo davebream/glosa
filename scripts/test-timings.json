@@ -255,6 +255,10 @@
     "packages/spa/test/soft-break-display.test.ts": {
       "seconds": 0.3,
       "reason": "Initial local Bun 1.4.2 estimate for the rich editor's soft-break display and restore guards (happy-dom mount plus state-level plugin tests); replace with measured CI medians."
+    },
+    "packages/shell/test/policy.test.ts": {
+      "seconds": 0.05,
+      "reason": "Initial local Bun 1.4.2 estimate for the desktop shell's pure policy rules (16 tests, 8 ms); replace with measured CI medians."
     }
   }
 }

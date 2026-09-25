@@ -24,6 +24,9 @@ const workspaceManifests = [
 
 function walk(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    // A package that installs on its own (packages/shell) has its own node_modules; nothing under
+    // any node_modules is first-party.
+    if (entry.isDirectory() && entry.name === "node_modules") return [];
     const path = join(dir, entry.name);
     return entry.isDirectory() ? walk(path) : [path];
   });
