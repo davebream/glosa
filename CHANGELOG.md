@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Desktop shell skeleton** (`packages/shell`, #160): an Electron window on the daemon-served SPA
+  with a native folder picker, pairing over a preload bridge instead of the URL fragment, a
+  loopback-only egress gate and a denied-by-default top frame. Unpackaged and unpublished; not a
+  root workspace member, so nothing else pulls Electron in. The SPA asks that bridge for a
+  presentation token only when it has none and is not already paired.
 - **Chats have their own workspace list and content tabs.** Existing terminal sessions open as
   explicitly selected external chats; pending message IDs survive the navigation migration.
 - **Managed Claude and Codex integration is implemented behind a closed release gate.** It includes

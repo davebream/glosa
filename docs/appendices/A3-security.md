@@ -197,6 +197,49 @@ are shaped so that no request can name one.
 - `stars.json` is written 0600 in `GLOSA_HOME`, like the token. A corrupt file is moved aside, not overwritten.
 - State-changing star routes use the strict Origin rule in the table above; `GET /api/stars` is an authed read.
 
+## 4b. Desktop shell (Electron, `packages/shell`; 2026-09-25, #160)
+
+The shell is a window on the same SPA at the same origin `glosa open` links to
+(`http://glosa.localhost:<port>`), so every rule above applies unchanged: Host allowlist, Origin
+binding, Bearer, class-F on its own origin with its CSP, `confinePath()`. What the shell adds is a
+trusted main process, and these rules bound it (spec: `docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md`;
+evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
+
+- **The renderer is sandboxed** (`sandbox`, `contextIsolation`, no Node) and the top frame may only
+  ever be the SPA origin: `will-navigate` is denied for any other origin, compared as parsed origins;
+  `window.open` is denied; downloads are denied; permission requests are denied. The class-F origin is
+  never loaded top level: a class-F document outside its iframe loses the iframe sandbox and may
+  navigate itself off loopback.
+- **Egress is a browser-process gate, not a CSP.** `session.webRequest.onBeforeRequest` cancels every
+  request whose host is not loopback; the daemon's CSP stays as defence in depth.
+- **The preload is a per-origin capability.** It exposes `window.glosaShell` only when the page origin
+  equals the SPA origin exactly, and every `ipcMain` handler re-checks `event.senderFrame.origin`
+  before acting; that handler check is the boundary (a class-F document reports a `null` origin under
+  its CSP sandbox and is refused even by a deliberately unscoped preload). The class-F frame receives
+  no preload. The bridge carries three calls: a one-shot presentation token, "open folder", and an OS
+  notification. No call takes a path from the page.
+- **The pairing token never travels in a URL the shell loads.** The main process runs the same
+  `glosa open <folder> --url --json` the CLI runs, strips `p=` from the fragment, loads the tokenless
+  URL and hands the token to the page over the bridge once per window load; the page redeems it as it
+  does today. A page already paired on the origin never asks. Session history, crash details and the
+  crash-dump directory therefore never hold a token (verified in Electron 44.4.5).
+- **Only the SPA origin is trusted, never a path.** "Open folder" runs `glosa open` on the folder the
+  native picker returned; the page can ask for the picker, not name a directory. Starred-workspace
+  routes keep their no-path shape.
+- **The main process reaches the daemon by IP.** Its own requests (the compatibility handshake) go to
+  `http://127.0.0.1:<port>`, on the Host allowlist. Chromium resolves `glosa.localhost` internally, so
+  the window loads that origin; Node's resolver in the main process may not (it did not on a macOS 14
+  CI runner), and a name it cannot resolve must never read as "the daemon is down".
+- **The daemon is the CLI's, not the shell's.** The shell delegates every spawn to `glosa open`, owns no
+  daemon and stops none on quit (A5 §F13); it checks compatibility against a minimum daemon version and
+  shows the exact CLI command when the daemon is too old or speaks another contract major. It makes no
+  update check of its own; "Check for Updates…" opens the releases page on click (A6 §F33).
+- **Test:** `packages/shell/test/shell-real-engine.electron.ts` runs the §5 posture inside the shell's own
+  renderer against a real daemon (pairing over the bridge, no secret in any URL or history, class-F
+  probe verdicts, denied navigation, daemon alive after quit); `packages/shell/test/policy.test.ts`
+  pins each rule as a pure function. CI runs the former in a dedicated `shell` job with Electron
+  installed; a skip there is a failed gate.
+
 ## 5. §5.5 attacks → defense → test
 1. Open class-F in new tab → origin split + CSP sandbox → test: direct-nav minted URL, assert storage empty + fetch throws.
 2. Remote img/fetch/WS/form in doc → connect-src/form-action none → test: fixture with each, assert 0 outbound + CSP violation.

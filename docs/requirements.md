@@ -46,7 +46,8 @@ review-before-submit dictation path in the writing workspace.
 rehearsal (T8) against an ignored copy of real past artifacts passes. The maintainer selects the
 private input and signs the sanitized report; an agent never signs on the maintainer's behalf.
 
-**Non-goals (v1)**: desktop shell (Electron/Tauri — v1 is daemon + browser);
+**Non-goals (v1)**: a packaged desktop app (v1 is daemon + browser; the unpackaged shell skeleton
+in `packages/shell` is a development surface, not a release);
 mobile/remote access; cloud sync; a second-agent provider *beyond* Claude Code + Codex; a public
 plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a non-Claude *idle* agent
 (honest limit — see R4).
@@ -370,7 +371,11 @@ registration epochs prevent filename collisions and restoration into a replaceme
 - **v1 invariant — swappable data layer**: the SPA reaches the daemon through ONE data-access module
   (same-origin fetch today). This is a v1 build constraint, not future scope: it is what makes a future
   hosted-shell/Electron topology a config change rather than a refactor (the L0→L3 distribution ladder).
-  No SPA component talks to the daemon except through that module.
+  No SPA component talks to the daemon except through that module. The desktop shell (`packages/shell`,
+  #160) is that ladder's next rung: one Electron window on the same daemon-served SPA at the same
+  origin `glosa open` links to, with the pairing token handed over a preload bridge instead of the URL
+  fragment (A3 "Desktop shell"). Which face a workspace shows is decided by who registered it, never
+  by the window (`docs/design/2026-09-25-desktop-shell-feature-map.md`).
 - **Document links and same-tab navigation**: a `surface=document` fragment renders one pane with
   the navigator hidden, without restoring or overwriting the workspace's saved tab layout. External
   fragment changes and history traversal re-enter bootstrap after every open pane's discard guard
@@ -553,7 +558,12 @@ registration epochs prevent filename collisions and restoration into a replaceme
   reconnect replays from cursor; watcher catch-up on restart). Any face (push/MCP/CLI) failing changes
   which mechanism delivers, never whether the entry survives.
 - **No build step** = no bundle/transpile + no native/compiled addons (`bun run` direct); Bun, system
-  git, a browser are required host software (A6 §F30). Scrub `ANTHROPIC_API_KEY` from every spawned
+  git, a browser are required host software (A6 §F30). **One scoped exception (2026-09-25, #160):**
+  the desktop shell in `packages/shell` is packaged (asar, `.app`, signing, notarization) when it
+  ships; that is a build. It still needs no transpile — Electron's Node strips types from the
+  unbundled main process — and it packages only itself: the daemon and SPA it shows are whatever the
+  CLI installed, served unbundled as always. The shell is not a root workspace member so Electron is
+  never a dependency of the CLI, daemon or SPA. Scrub `ANTHROPIC_API_KEY` from every spawned
   child env (the $1,800 footgun). Idle daemon < 100 MB RSS.
 
 ## 5. Task decomposition (epic order; each has a testable gate)
@@ -641,7 +651,8 @@ registration epochs prevent filename collisions and restoration into a replaceme
   (multi-machine, unlocks phone/iPad annotation via tila's Cloudflare Worker). Decision point after v1
   proves the loop. glosa v1 uses local files only.
 - **Hosted-shell / Electron / L2–L3 distribution**: the SPA-swappable-data-layer invariant (R6) is built
-  now so these are later deploys, but no shell/hosted mode ships in v1.
+  now so these are later deploys. The Electron shell skeleton exists (`packages/shell`, #160) but no
+  packaged app ships in v1; a hosted mode remains out.
 - **"Make it a git repo" promotion**: one-click promote a workspace to a real repo (seeded from the shadow
   history) + optional GitHub remote. Future; needs an explicit privacy-consent moment.
 - **Publishing an artifact externally** is an integration concern, not a glosa responsibility.

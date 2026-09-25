@@ -80,7 +80,7 @@ describe("repository quality gates", () => {
     for (const yaml of workflows) {
       const aggregate = job(yaml, "ci");
       expect(aggregate).toContain("if: always()");
-      expect(aggregate).toContain("needs: [prepare, quality, docs, tests, stability, full]");
+      expect(aggregate).toContain("needs: [prepare, quality, docs, tests, stability, shell, full]");
       expect(aggregate).toContain("TEST_PROFILE: ${{ needs.prepare.outputs.profile }}");
       expect(aggregate).toContain("TEST_WHOLE: ${{ needs.prepare.outputs.whole }}");
       expect(aggregate).toContain("TEST_RESULTS: ${{ toJSON(needs) }}");

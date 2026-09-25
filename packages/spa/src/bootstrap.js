@@ -298,6 +298,31 @@ function render(screen) {
   }
 }
 
+/**
+ * Where this load's presentation token comes from. In a browser it is the `p=` the CLI put in the
+ * fragment. Under the desktop shell the fragment carries no secret: the shell hands the token over
+ * its preload bridge once per window load (ownership spec R-P1/R-P2), and only when this page is
+ * not already paired on the origin — a paired page never asks, so a shell that minted for a
+ * navigation into an already-paired window simply lets that token expire. Pure over its inputs so
+ * a test can pass a fake bridge.
+ *
+ * @param {Route} route
+ * @param {TokenStorage} storage
+ * @param {{ presentationToken?: () => Promise<string | null> } | undefined} bridge
+ * @returns {Promise<string | null>}
+ */
+export async function resolvePresentationToken(route, storage, bridge) {
+  if (route.presentationToken) return route.presentationToken;
+  if (route.durableToken || storage.getItem("glosa_token")) return null;
+  if (typeof bridge?.presentationToken !== "function") return null;
+  try {
+    const token = await bridge.presentationToken();
+    return typeof token === "string" && token ? token : null;
+  } catch {
+    return null;
+  }
+}
+
 /** @param {string} presentationToken @returns {Promise<string | null>} */
 async function redeemPresentationToken(presentationToken) {
   const res = await fetch("/api/presentation-token/redeem", {
@@ -365,9 +390,16 @@ async function main() {
     reload: () => window.location.reload(),
   });
   let redeemed = null;
-  if (route.presentationToken) {
+  const presentation = await resolvePresentationToken(
+    route,
+    window.localStorage,
+    /** @type {{ presentationToken?: () => Promise<string | null> } | undefined} */ (
+      /** @type {any} */ (window).glosaShell
+    ),
+  );
+  if (presentation) {
     try {
-      redeemed = await redeemPresentationToken(route.presentationToken);
+      redeemed = await redeemPresentationToken(presentation);
     } catch {
       redeemed = null;
     }
