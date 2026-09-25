@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>class-F probe</title></head>
+<body>
+<h1>class-F probe</h1>
+<p id="out">booting</p>
+<img id="img" src="https://example.com/pixel.png" alt="egress probe">
+<script>
+  const out = [];
+  const say = (k, v) => { out.push(`${k}=${v}`); document.getElementById("out").textContent = out.join(" | "); };
+  say("origin", location.origin);
+  try { localStorage.setItem("x", "1"); say("storage", "ALLOWED"); } catch { say("storage", "blocked"); }
+  try { fetch("https://example.com/").then(() => say("fetch", "ALLOWED")).catch(() => say("fetch", "blocked")); } catch { say("fetch", "blocked-sync"); }
+  try { const w = window.open("https://example.com/"); say("open", w ? "ALLOWED" : "blocked"); } catch { say("open", "blocked"); }
+  try { top.location.href = "https://example.com/"; say("topnav", "ATTEMPTED"); } catch { say("topnav", "blocked"); }
+  document.getElementById("img").addEventListener("load", () => say("img", "ALLOWED"));
+  document.getElementById("img").addEventListener("error", () => say("img", "blocked"));
+</script>
+</body></html>
