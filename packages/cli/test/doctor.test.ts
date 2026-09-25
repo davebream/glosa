@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 17 enumerated checks. Uses REAL directories
+// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 18 enumerated checks. Uses REAL directories
 // and a REAL shadow-git repo (built the same way the daemon itself would, via `WorkspaceBus`) for
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
@@ -11,7 +11,14 @@ import { journalPath, tokenPath, WorkspaceBus } from "@glosa/daemon";
 import { headSha } from "../../daemon/src/git/shadow.ts";
 import { shadowGitDir } from "../../daemon/src/bus/paths.ts";
 import type { GlosaApiClient } from "../src/api-client.ts";
-import { type DoctorDeps, printDoctorResult, realDoctorDeps, runDoctor } from "../src/doctor.ts";
+import {
+  type DoctorDeps,
+  INSTALL_CHECK,
+  installCheck,
+  printDoctorResult,
+  realDoctorDeps,
+  runDoctor,
+} from "../src/doctor.ts";
 import { daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { useTempHome } from "./home.ts";
 import { captureStdout } from "./test-utils.ts";
@@ -64,10 +71,19 @@ function makeDeps(overrides: Partial<DoctorDeps> = {}): { deps: DoctorDeps; clie
       port: 4646,
       detail: "no glosa daemon is running and 127.0.0.1:4646 is free",
     }),
+    // The `install` row (#371): a bun-global install with nothing recorded, and nothing else on
+    // disk. Never reads the developer's real ~/.glosa, ~/.bun or /opt/homebrew.
+    packageRoot: () => BUN_ROOT,
+    readRecordedExecutable: () => ({ path: join(home, "bin", "glosa"), state: "none" as const }),
+    realpath: () => null,
     ...overrides,
   };
   return { deps, client, home };
 }
+
+const BUN_ROOT = "/Users/x/.bun/install/global/node_modules/@davebream/glosa";
+const APP_ROOT = "/Applications/glosa.app/Contents/Resources/glosa";
+const APP_LAUNCHER = "/Applications/glosa.app/Contents/Resources/bin/glosa";
 
 function findCheck(checks: { name: string; status: string; detail: string }[], name: string) {
   return checks.find((c) => c.name === name);
@@ -90,6 +106,126 @@ describe("glosa doctor", () => {
     expect(deps.runVersionProbe([join(home, "definitely-missing-binary"), "--version"])).toBeNull();
     expect(deps.claudeConfigDir()).toBeTruthy();
     expect(deps.claudeConfigRoots()).toContain(deps.claudeConfigDir());
+    expect(typeof deps.packageRoot).toBe("function");
+    expect(typeof deps.readRecordedExecutable).toBe("function");
+    expect(typeof deps.realpath).toBe("function");
+    expect(deps.realpath?.(join(home, "definitely-missing"))).toBeNull();
+  });
+
+  describe("install row (#371)", () => {
+    test("the row is named install and is the last one", async () => {
+      const { deps } = makeDeps();
+      const result = await runDoctor(freshDir(), deps);
+      expect(INSTALL_CHECK).toBe("install");
+      expect(result.data.checks.at(-1)?.name).toBe(INSTALL_CHECK);
+    });
+
+    test("install: pass when the recorded executable resolves to this install", () => {
+      const { deps, home } = makeDeps({
+        readRecordedExecutable: (h) => ({
+          path: join(h, "bin", "glosa"),
+          state: "symlink",
+          target: `${BUN_ROOT}/packages/cli/src/main.ts`,
+          resolved: `${BUN_ROOT}/packages/cli/src/main.ts`,
+        }),
+      });
+      const row = installCheck(deps);
+      expect(home).toBeTruthy();
+      expect(row.status).toBe("pass");
+      expect(row.detail).toBe(
+        `this glosa: bun-global at ${BUN_ROOT}; recorded: ${BUN_ROOT}/packages/cli/src/main.ts (this install)`,
+      );
+    });
+
+    test("install: warn and never fail when another install is recorded, and names what else is visible", async () => {
+      const { deps } = makeDeps({
+        readRecordedExecutable: (h) => ({
+          path: join(h, "bin", "glosa"),
+          state: "symlink",
+          target: APP_LAUNCHER,
+          resolved: APP_LAUNCHER,
+        }),
+        which: (cmd) =>
+          cmd === "git"
+            ? "/usr/bin/git"
+            : cmd === "open"
+              ? "/usr/bin/open"
+              : cmd === "glosa"
+                ? "/opt/homebrew/bin/glosa"
+                : null,
+        realpath: (p) => (p === "/opt/homebrew/bin/glosa" ? APP_LAUNCHER : null),
+      });
+      const row = installCheck(deps);
+      expect(row.status).toBe("warn");
+      expect(row.detail).toContain(`recorded: ${APP_LAUNCHER} (another install)`);
+      expect(row.detail).toContain(`also visible: /opt/homebrew/bin/glosa -> ${APP_LAUNCHER}`);
+      expect(row.detail).toContain("the Claude Code plugin and the desktop app run that one");
+      // A warn never degrades the exit code: the whole run stays OK.
+      const result = await runDoctor(freshDir(), deps);
+      expect(findCheck(result.data.checks, INSTALL_CHECK)?.status).toBe("warn");
+      expect(result.data.checks.filter((c) => c.status === "fail")).toEqual([]);
+      expect(result.exitCode).toBe(0);
+    });
+
+    test("install: warn when nothing is recorded, and when the link dangles", () => {
+      const none = installCheck(makeDeps().deps);
+      expect(none.status).toBe("warn");
+      expect(none.detail).toContain("recorded: none");
+      expect(none.detail).toContain("run any glosa command to record this install");
+
+      const dangling = installCheck(
+        makeDeps({
+          readRecordedExecutable: (h) => ({ path: join(h, "bin", "glosa"), state: "dangling", target: "/gone/glosa" }),
+        }).deps,
+      );
+      expect(dangling.status).toBe("warn");
+      expect(dangling.detail).toContain("recorded: /gone/glosa (dangling)");
+      expect(dangling.detail).toContain("the next glosa run replaces it");
+    });
+
+    test("install: a hand-pinned regular file is reported and never called a problem to fix", () => {
+      const row = installCheck(
+        makeDeps({ readRecordedExecutable: (h) => ({ path: join(h, "bin", "glosa"), state: "file" }) }).deps,
+      );
+      expect(row.status).toBe("warn");
+      expect(row.detail).toContain("(a regular file)");
+      expect(row.detail).toContain("glosa never replaces it");
+    });
+
+    test("install: an app-bundle CLI reports its kind and recognises its own launcher", () => {
+      const { deps } = makeDeps({
+        packageRoot: () => APP_ROOT,
+        readRecordedExecutable: (h) => ({
+          path: join(h, "bin", "glosa"),
+          state: "symlink",
+          target: APP_LAUNCHER,
+          resolved: APP_LAUNCHER,
+        }),
+        which: (cmd) =>
+          cmd === "git"
+            ? "/usr/bin/git"
+            : cmd === "open"
+              ? "/usr/bin/open"
+              : cmd === "glosa"
+                ? "/opt/homebrew/bin/glosa"
+                : null,
+        realpath: (p) => (p === "/opt/homebrew/bin/glosa" ? APP_LAUNCHER : null),
+      });
+      const row = installCheck(deps);
+      expect(row.status).toBe("pass");
+      expect(row.detail).toBe(
+        `this glosa: app-bundle at ${APP_ROOT}; recorded: ${APP_LAUNCHER} (this install); also visible: /opt/homebrew/bin/glosa (this install)`,
+      );
+    });
+
+    test("install: the detail never carries an em dash", () => {
+      for (const state of ["none", "file"] as const) {
+        const row = installCheck(
+          makeDeps({ readRecordedExecutable: (h) => ({ path: join(h, "bin", "glosa"), state }) }).deps,
+        );
+        expect(row.detail).not.toContain("\u2014");
+      }
+    });
   });
 
   test("realDoctorDeps scrubs ANTHROPIC_API_KEY from successful version probes", () => {
@@ -265,7 +401,7 @@ describe("glosa doctor", () => {
     const expectedBytes = statSync(journalPath(dir)).size;
     const result = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(result.data.checks, "workspace");
-    expect(result.data.checks).toHaveLength(17);
+    expect(result.data.checks).toHaveLength(18);
     expect(workspaceCheck?.status).toBe("pass");
     expect(workspaceCheck?.detail).toContain(`${expectedBytes} journal byte(s)`);
     expect(workspaceCheck?.detail).toContain("3 physical journal line(s)");
@@ -311,7 +447,7 @@ describe("glosa doctor", () => {
     mkdirSync(journalPath(dir));
     const unreadable = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(unreadable.data.checks, "workspace");
-    expect(unreadable.data.checks).toHaveLength(17);
+    expect(unreadable.data.checks).toHaveLength(18);
     expect(workspaceCheck?.status).toBe("warn");
     expect(workspaceCheck?.detail).toContain("journal metrics unavailable");
   });
@@ -339,6 +475,7 @@ describe("glosa doctor", () => {
       "orphaned-entries",
       "workspace-root",
       "legacy-config",
+      "install",
     ]);
     // The removed command may be NAMED (so a user recognises leftovers) but never prescribed.
     for (const check of result.data.checks) expect(check.detail).not.toMatch(/run `glosa init/);
@@ -587,7 +724,7 @@ describe("glosa doctor", () => {
     );
     expect(parsed.command).toBe("doctor");
     expect(Array.isArray(parsed.data.checks)).toBe(true);
-    expect(parsed.data.checks).toHaveLength(17);
+    expect(parsed.data.checks).toHaveLength(18);
   });
 
   test("pending-delivery: queued entries with no live session -> WARN; with a live bound session -> pass; daemon down -> SKIP", async () => {
