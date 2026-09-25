@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!--
+  Hardened-runtime entitlements for glosa.app, its Electron helpers (entitlementsInherit) and the
+  Bun runtime it carries at Contents/Resources/bin/bun (mac.binaries). Electron (V8) and Bun
+  (JavaScriptCore) both JIT. The microphone entitlement is required before macOS will even prompt
+  under the hardened runtime; the shell's permission handler still denies it (A6 §F30), so it is
+  inert until a dictation change enables it. No disable-library-validation: glosa loads no .node
+  addons. If a Developer ID signed Bun dies under the hardened runtime, the next candidate is
+  com.apple.security.cs.disable-executable-page-protection; record the finding before adding it.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

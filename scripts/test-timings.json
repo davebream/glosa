@@ -275,6 +275,10 @@
     "packages/shell/test/brand-electron.test.ts": {
       "seconds": 0.05,
       "reason": "Initial local Bun 1.4.2 estimate for the plist-rewrite unit tests of the shell's brand-electron script (3 tests, a few ms); replace with measured CI medians."
+    },
+    "packages/shell/test/package-app.test.ts": {
+      "seconds": 0.4,
+      "reason": "Initial local Bun 1.4.2 estimate for the app packaging unit tests (21 tests: checksum lookup, staged-tree fixtures, builder config, tree comparison, and two launcher spawns through symlinks), 0.27 s locally; replace with measured CI medians."
     }
   }
 }

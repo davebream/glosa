@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { packContentProblems } from "./package-manifest.ts";
 import { readSite, VERSION_SITES } from "./version-sync.ts";
 
 interface PackResult {
@@ -59,45 +60,8 @@ function readLock(): DaemonLock | undefined {
 }
 
 function assertPackContents(files: string[]): void {
-  const required = [
-    "package.json",
-    "packages/cli/src/main.ts",
-    "packages/daemon/src/index.ts",
-    "packages/providers/claude-code/src/index.ts",
-    "packages/providers/codex/src/index.ts",
-    "packages/providers/wispr-flow/src/index.ts",
-    "packages/providers/wispr-flow/src/browser.js",
-    "packages/providers/wispr-flow/src/wispr-flow-worklet.js",
-    "packages/spa/src/index.ts",
-    ".claude-plugin/marketplace.json",
-    "glosa-plugin/.claude-plugin/plugin.json",
-    "glosa-plugin/.mcp.json",
-    "glosa-plugin/monitors/monitors.json",
-    "glosa-plugin/skills/glosa-connect/SKILL.md",
-    "glosa-plugin/bin/glosa",
-    "README.md",
-    "ROADMAP.md",
-    "CHANGELOG.md",
-    "LICENSE",
-    "NOTICE",
-    "THIRD_PARTY_NOTICES.md",
-  ];
-  for (const path of required) {
-    if (!files.includes(path)) fail(`npm tarball is missing required file: ${path}`);
-  }
-
-  const forbidden = [
-    /(^|\/)test(s)?\//,
-    /^docs\//,
-    /^\.context\//,
-    /^\.agents\//,
-    /^\.codex\//,
-    /^\.impeccable\//,
-    /(^|\/)CLAUDE\.md$/,
-    /(^|\/)AGENTS\.md$/,
-  ];
-  const leaked = files.filter((path) => forbidden.some((pattern) => pattern.test(path)));
-  if (leaked.length > 0) fail(`npm tarball includes internal files:\n${leaked.join("\n")}`);
+  const [first] = packContentProblems(files);
+  if (first !== undefined) fail(first);
 }
 
 try {

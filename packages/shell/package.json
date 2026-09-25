@@ -9,10 +9,13 @@
     "postinstall": "bun scripts/brand-electron.ts",
     "brand": "bun scripts/brand-electron.ts",
     "start": "electron .",
+    "package": "bun scripts/package-app.ts",
+    "smoke": "bun scripts/app-smoke.ts",
     "test": "bun test"
   },
   "devDependencies": {
-    "electron": "44.4.5"
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
   },
   "trustedDependencies": [
     "electron"
@@ -25,9 +28,56 @@
   "build": {
     "appId": "dev.glosa.app",
     "productName": "glosa",
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "assets/**"
+    ],
+    "files": [
+      "src/**/*",
+      "assets/icon-512.png",
+      "assets/icon-dark-512.png",
+      "package.json",
+      "!node_modules{,/**/*}"
+    ],
+    "afterPack": "scripts/after-pack.cjs",
+    "artifactName": "glosa-${version}-${arch}.${ext}",
     "mac": {
       "icon": "assets/icon.icns",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "minimumSystemVersion": "13.0",
+      "hardenedRuntime": true,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist",
+      "binaries": [
+        "Contents/Resources/bin/bun"
+      ],
+      "notarize": true,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "glosa uses the microphone only when you click Dictate, and only if you configured a dictation provider."
+      }
+    },
+    "dmg": {
+      "sign": false
     }
   }
 }
