@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // glosa desktop shell — the Electron main process. A window on the daemon-served SPA and nothing
-// more: the daemon and SPA are what the CLI installed, served unbundled (requirements §4 exception
-// covers packaging only). Every rule here is a call into policy.ts; this file is wiring.
+// more: the daemon and SPA are whatever the recorded executable (~/.glosa/bin/glosa) is, served
+// unbundled. Packaged, the app also carries a CLI and a Bun of its own under Contents/Resources,
+// used only when nothing is recorded (#371). Every rule here is a call into policy.ts; this file
+// is wiring.
 //
 // Contracts: docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md (R-O*, R-P*),
 // docs/research/2026-09-25-desktop-shell-readiness.md §3 (what Electron's defaults leave open),
@@ -13,6 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, session, shell } from "electron";
 import {
+  cliCandidates,
   compatibility,
   egressDecision,
   loopbackApiOrigin,
@@ -37,19 +40,20 @@ const log = (line: string): void => {
   process.stderr.write(`[glosa-shell] ${line}\n`);
 };
 
-// ---------- the CLI is the install of truth (R-O1) ----------
+// ---------- the recorded executable is the install of truth (R-O1) ----------
 
-/** Where the CLI is when the app was launched from the Dock with a bare PATH. */
+/** Where the CLI is, also when the app was launched from the Dock with a bare PATH (#371). */
 function resolveCli(): string {
-  const override = process.env.GLOSA_SHELL_CLI;
-  if (override) return override;
-  const candidates = [
-    join(homedir(), ".glosa", "bin", "glosa"),
-    join(homedir(), ".bun", "bin", "glosa"),
-    "/opt/homebrew/bin/glosa",
-    "/usr/local/bin/glosa",
-  ];
-  for (const c of candidates) if (existsSync(c)) return c;
+  const candidates = cliCandidates({
+    override: process.env.GLOSA_SHELL_CLI,
+    glosaHome: process.env.GLOSA_HOME,
+    homeDir: homedir(),
+    resourcesPath: app.isPackaged ? process.resourcesPath : null,
+  });
+  // existsSync follows symlinks, so a dangling recorded executable reads as absent. An override is
+  // used as given: the harness names exactly what it wants run.
+  if (process.env.GLOSA_SHELL_CLI) return candidates[0] ?? "glosa";
+  for (const c of candidates) if (c === "glosa" || existsSync(c)) return c;
   return "glosa";
 }
 
