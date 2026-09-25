@@ -1,9 +1,14 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "erasableSyntaxOnly": true
   },
-  "include": ["src"],
+  "include": [
+    "src",
+    "scripts"
+  ],
   "exclude": []
 }
