@@ -208,6 +208,7 @@
 - **macOS-only v1** (Apple Silicon + Intel); Linux/Windows out of scope (non-Darwin → exit5). Pinned floors: macOS 13 (Ventura), Bun 1.2.7, Git 2.30, Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. (No cmux — glosa is cmux-decoupled; the SPA runs in any browser over localhost.)
 - API `protocol_version` describes wire compatibility (same major and supported minor); content-derived `build_id` identifies the exact runtime source plus root package semver. Compatibility permits an older client to reuse a newer daemon, but identity policy can still refresh an older or same-semver-different daemon. An incompatible newer daemon is never downgraded (exit10).
 - "No build step / zero native deps" = no bundle/transpile (`bun run` direct, no dist/) AND no native addons (no node-gyp/C/Rust/.node/postinstall-compile). Does NOT mean zero prerequisites: Bun, system git (child process, not a module), and a browser are required host software validated by doctor.
+- **The desktop app is the one channel with no Bun prerequisite, because it carries Bun** (#371). `glosa.app/Contents/Resources/` holds `bin/bun` at the toolchain pin above, a `bin/glosa` launcher that runs the CLI on that Bun, and `glosa/` with the published npm file set plus production dependencies, all unbundled. Packaging, signing and notarization are the shell's sole exception to "no build step" (requirements §4). Signing precedes the first public app artifact: Homebrew 5.0 deprecated unsigned casks and the `--no-quarantine` flag, and macOS 15.1 refuses unsigned downloads. System git and a browser remain host prerequisites.
 
 ## F31 — checkpoint query & restore (USER CHOSE FULL/3.B — history: compare + restore)
 - `glosa checkpoints <path> [--since <when>] [--limit N] [--json]` — list; `<when>` = yesterday|today|ISO|<checkpoint-id>; day-boundary words resolve in HOST LOCAL TZ, ISO honors offset. Rows `{checkpoint_id, at, by:human|session:<id>|unknown, summary, bytes_changed, origin:workspace|lineage, lineage_id?}`. A directory adopted from loose files lists imported lineage commits alongside its active history.
@@ -354,7 +355,8 @@ The existing companion application floor remains Bun 1.2.7. Managed runtime inst
 requires Bun 1.4.2 or newer on supported macOS architectures, including Bun.Terminal for native login.
 No application bundle/transpile step or native addon is introduced for managed runtimes. The Electron
 shell is a separate, unpublished package (`packages/shell`, outside the root workspaces and the npm
-file list) whose only build is its own packaging (requirements §4 exception). Browser-ready
+file list) whose only build is its own packaging (requirements §4 exception); the packaged app
+carries a Bun at the toolchain pin and the published sources, unbundled (§F30, #371). Browser-ready
 xterm/Markdown assets and their licenses ship inside the existing package file list.
 
 Pinned provider candidates carry committed per-architecture dependency locks. Installation is an

@@ -56,6 +56,20 @@ export const VERSION_SITES: readonly VersionSite[] = [
     label: "the release-metadata assertion's pinned version",
     pattern: /(?<=expect\(rootPackage\.version\)\.toBe\(")[^"]+(?="\))/g,
   },
+  // The desktop shell carries two sites in one file (#371). `version` is what electron-builder
+  // writes into the app's CFBundleShortVersionString and what About shows. `minimumDaemon` is the
+  // daemon floor: a packaged app carries the CLI and daemon of its own release, so the floor is
+  // that release. Each regex anchors on its own field name, so neither can match the other.
+  {
+    path: "packages/shell/package.json",
+    label: "the desktop shell's own version, shown in About and in the app bundle",
+    pattern: /(?<=^\s*"version":\s*")[^"]+(?="\s*,?\s*$)/gm,
+  },
+  {
+    path: "packages/shell/package.json",
+    label: "the daemon floor the shell was built for; a packaged app carries that same release",
+    pattern: /(?<=^\s*"minimumDaemon":\s*")[^"]+(?="\s*,?\s*$)/gm,
+  },
 ];
 
 export const SOURCE_SITE = VERSION_SITES[0]!;
@@ -211,7 +225,8 @@ export function syncWorktree(version: string, root = ROOT): string[] {
       );
     if (found[0] === version) continue;
     writeFileSync(file, writeSite(text, site, version));
-    changed.push(site.path);
+    // One file may carry several sites; name it once.
+    if (!changed.includes(site.path)) changed.push(site.path);
   }
   return changed;
 }
@@ -268,7 +283,7 @@ if (import.meta.main) {
   const write = flag("--write") || set !== undefined;
 
   if (flag("--list")) {
-    process.stdout.write(`${VERSION_SITES.map((site) => site.path).join("\n")}\n`);
+    process.stdout.write(`${[...new Set(VERSION_SITES.map((site) => site.path))].join("\n")}\n`);
     process.exit(0);
   }
   if (write && staged) usage("--write/--set cannot read the index; drop --staged");
