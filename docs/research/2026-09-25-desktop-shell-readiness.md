@@ -47,10 +47,73 @@ A second run with **no** main-process handlers at all (no `setWindowOpenHandler`
 holds without help. The handlers are still required, because they protect the **top** frame (the
 SPA) rather than the class-F frame; see §3.
 
-Not yet exercised, from the isolation report's checklist: a preload attached to the SPA window and
-navigated to the class-F origin (assert nothing is exposed there); a deliberate renderer crash with
-the fragment present (assert the crash payload carries no token); a forged `Host` header from
-outside Electron (the daemon's 400 is already unit-tested, but not under the shell).
+### 1b. The shell isolation spike (issue #361 item 1)
+
+Script: `docs/research/spikes/electron-shell-isolation.js`, run the same way with a fresh
+`glosa open … --url` per run (a presentation token redeems once). It adds a preload and an
+`ipcMain` handler to the setup above and exercises the four checks the first spike left open.
+
+| Check | Result (Electron 44.4.5, Chromium 152) |
+|---|---|
+| Scoped preload on the SPA window | `window.glosaShell` present; `ping()` answers `ok` with `senderFrame.origin` equal to the SPA origin |
+| Same preload seen from the class-F iframe inside the SPA | `undefined` (a preload runs in the main frame only) |
+| Same preload on a window navigated to the class-F origin | `undefined`: the origin guard in the preload holds |
+| An unscoped preload on the class-F origin, calling `ping()` | Exposed, and the `ipcMain` handler rejects: `senderFrame.origin` is `null` there (the CSP `sandbox` gives the document an opaque origin), so the handler's own origin check is the boundary even when the preload is wrong |
+| Renderer crashed after pairing (`forcefullyCrashRenderer`) | `render-process-gone` reports `killed`, exit 2; neither the presentation token nor the durable token appears in the details, the window URL, the session history, or the crash-dump directory (no dump written) |
+| Forged `Host` from the shell process | Chromium's own stack refuses to set it (`net.fetch` → `ERR_INVALID_ARGUMENT`); Node's `http` from the main process gets the daemon's 400, as `curl` does from outside |
+| Class-F handshake | Exactly one `MessageChannel` constructed per frame load; a second injected `glosa:init` with a fresh port and a wrong nonce hears nothing in 1.5 s and the bridge keeps serving |
+
+Two things the spike found that the shell must design for:
+
+- **A class-F capability URL loaded as a top-level document self-navigates to the internet.** The
+  probe's `location.href = "https://example.com/"` is blocked inside the iframe, but a sandboxed
+  document may always navigate itself, so in a window with no `will-navigate` handler the request
+  left loopback. With the handler that the readiness note already requires, it is denied and the
+  page stays. The shell must never let a window navigate to the class-F origin at the top level,
+  and the egress gate must cancel, not observe.
+- **A capability URL loads more than once.** The same `/doc/<capability>/probe.html` served three
+  windows in one run. That matches A3 §2 (a 10-minute TTL, fresh mint per iframe open, no
+  server-side single use), so it is not a shell defect, but it is why the token must never reach a
+  log: a leaked capability URL stays live for the rest of its TTL.
+
+Minor: a top-level request for the class-F root `/` gets a 404 with `content-type:
+application/octet-stream`, which Chromium reports as `ERR_INVALID_RESPONSE` and lands the window on
+an opaque-origin error page. Harmless, and the preload guard held there too.
+
+### 1c. Supervision spike (issue #361 item 2)
+
+Script: `docs/research/spikes/daemon-supervision.sh`, own `GLOSA_HOME` and ports, a throwaway
+launchd label bootstrapped from a scratch plist and booted out at the end. Entry point is the
+install's own `main.ts`, spawned as `<bun> <main> __daemon`, the CLI's argv.
+
+| Rule | Detached child (`nohup`, stdio ignored, pid kept) | launchd user agent (`RunAtLoad`, `KeepAlive`) |
+|---|---|---|
+| R-O3 spawn only when absent | Handshake answered within 0.25 s; lock pid equals the spawned pid; a later `glosa open` reused the instance and spawned nothing | Same, launchd pid equals the lock pid |
+| R-O4 daemon outlives the shell | Alive after the spawning script exited | Trivially, and respawned within 0.25 s after `SIGTERM` |
+| Stop | `SIGTERM` → graceful shutdown, lock removed | `launchctl bootout` |
+| Beside a CLI-spawned daemon | No conflict: the CLI's own `decideDaemonBuild` already reuses a healthy daemon | `KeepAlive` respawned four times in 7 s, each losing the singleton lock ("benign race: peer already serving"), and would keep doing so at the throttle interval for as long as both exist |
+
+**Decision: detached child.** The CLI already implements "spawn only when absent" for every
+client, so the shell adds only pid tracking. launchd's one benefit, restart after a crash, is paid
+for with a plist the CLI does not know about and a respawn loop whenever the CLI's own restart
+path or a terminal-started daemon wins the lock. R-O6 in the ownership spec is closed with this.
+
+### 1d. Packaging spike (issue #361 item 3)
+
+A throwaway `packages/shell`-shaped workspace member outside the repo, electron 44.4.5
+(embedded Node 24.21.0), electron-vite 5.0.0, electron-builder 26.15.3, vite 8.3.1; 164 s from
+first install to last build, unsigned (`CSC_IDENTITY_AUTO_DISCOVERY=false`, `identity: null`).
+
+| Question | Result |
+|---|---|
+| electron-vite build of `src/main.ts` + `src/preload.ts` | Plain CommonJS, annotations gone; `out/main/main.js` 847 B, `out/preload/preload.js` 0 B. Output files are named after the entry, not `index.js`, so `"main": "out/main/main.js"`. |
+| electron-builder `--mac --dir` with a hoisted workspace sibling (`node_modules/@glosa/daemon -> ../../packages/daemon`, 50 MB dummy file) | Default `files` **fails hard** ("denied access to system or unsafe path … outside the package"), it does not silently package the sibling. `files: ["out/**/*", "package.json", "!node_modules/@glosa/**"]`, or the sibling in `devDependencies`, gives an asar holding exactly the shell's three files. The `.app` is 288 MB, all Electron; `app.asar` is 1.8 KB. |
+| Unbundled TypeScript as the packaged main | **Works with no flags**: `process.features.typescript === "strip"` in Electron 44's Node, `"main": "main.ts"` runs unpackaged and from inside `app.asar` (`"type": "module"` silences the only warning). `NODE_OPTIONS` is ignored in a packaged app, so the default is what counts. Erasable syntax only: `enum`, `namespace` and parameter properties fail with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. |
+
+So the "no build step" exception is narrower than §4 assumed: the shell's main and preload need
+no transpile at all. What remains a build is packaging itself (asar, `.app`, DMG, signing,
+notarization), which no `bun run` can replace. electron-vite is optional, not required; keep it
+out unless a bundler-only feature is needed.
 
 ## 2. Electrobun, re-evaluated
 
@@ -110,8 +173,8 @@ Node 22 type stripping), Apple notarytool guidance, electron-updater docs, Squir
 - **Bundle only the shell.** electron-vite for main and preload (small, plain JS output), electron-
   builder for DMG, signing, notarization and the update feed. The daemon and SPA stay unbundled and
   daemon-served; the "no build step" exception is the shell package alone, as feature-map decision 7
-  asks. Running the packaged main process as unbundled TypeScript is unproven inside Electron's
-  embedded Node; keep a build for the artifact, skip it for local iteration.
+  asks. Running the packaged main process as unbundled TypeScript works inside Electron 44's embedded
+  Node with no flags, packaged or not (§1d); electron-vite is optional.
 - **Signing is mandatory.** Since macOS 15.1 an unsigned, un-notarized download is unlaunchable
   without a Settings override. Needs a paid Developer ID, hardened runtime with the JIT and
   unsigned-memory entitlements, `notarytool`, stapling.
@@ -136,16 +199,17 @@ From feature-map §4, with what this note changes:
 | 4. Attention daemon-wide, workspace window-scoped | Untouched. |
 | 5. Face at registration | Untouched. |
 | 6. Origin `http://glosa.localhost:4646` | Confirmed secure context and Host fidelity under Electron. |
-| 7. No-build-step exception scoped to the shell | Confirmed feasible with electron-vite + electron-builder. |
+| 7. No-build-step exception scoped to the shell | Narrower than assumed: no transpile at all (§1d); the exception is packaging, signing and notarization only. |
 | 8. Keyboard ownership | Untouched; needs the accessibility matrix against native chords. |
-| New: launchd agent vs detached child | Open. A detached child that the app tracks by PID satisfies "never kill what you did not spawn"; launchd gives supervision across logins at the cost of owning the plist. Spike, do not assume. |
+| New: launchd agent vs detached child | Decided: detached child (§1c). launchd's `KeepAlive` fights any daemon it did not spawn. |
 
 ## 6. Order of work
 
 1. Fix the stale-client eviction (the livelock) in `decideDaemonBuild`, with its ablation test.
-   Every long-lived client, and a shell most of all, hits it after any source change.
-2. Land the ownership and pairing spec as the contract the shell is built against.
-3. Spike the four unexercised isolation checks from §1 in the same script.
+   Every long-lived client, and a shell most of all, hits it after any source change. Done (#362).
+2. Land the ownership and pairing spec as the contract the shell is built against. Done (#359).
+3. Spike the four unexercised isolation checks from §1 in the same script. Done (§1b, §1c).
 4. Only then a `packages/shell` skeleton: window, deny-all handlers, egress gate, preload with the
-   three calls, compatibility check, explicit update action, signing pipeline.
+   three calls, compatibility check, explicit update action, signing pipeline. Unbundled `.ts`
+   main and preload, erasable syntax only; packaging is the one build.
 5. Re-check Electrobun in a quarter against the flip conditions in §2.
