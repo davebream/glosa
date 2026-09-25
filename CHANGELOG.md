@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Desk and companion are different surfaces.** A link now says which kind of surface it opens
+  (`kind=desk` from a plain `glosa open` or the desktop app's folder picker, `kind=companion` from
+  `glosa open --bind` and `glosa_present`). A companion surface shows the terminal agent's
+  connection, the margin and the inbox; a desk surface shows chats, stars and projects and no
+  connect control. A link without the parameter opens a companion surface, as every older link did.
+- Folder rows in the document tree carry a folder glyph, closed or open, instead of a chevron.
+- The desktop app's Dock icon follows the system appearance and the comma sits at 37% of the
+  squircle, centred.
+- `GLOSA_MANAGED_PREVIEW=1` in a daemon's environment opens managed chats for that daemon only, so
+  a maintainer can produce the attended evidence the release gates require. The public default is
+  unchanged.
 - **Desktop shell skeleton** (`packages/shell`, #160): an Electron window on the daemon-served SPA
   with a native folder picker, pairing over a preload bridge instead of the URL fragment, a
   loopback-only egress gate and a denied-by-default top frame. Unpackaged and unpublished; not a

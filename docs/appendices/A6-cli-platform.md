@@ -85,6 +85,13 @@
   no alternate dictation transport. Its permission handler currently denies every permission request,
   so dictation inside the shell waits on that metadata.
 
+- **`GLOSA_MANAGED_PREVIEW=1`** (2026-09-25) opens managed chats for the one daemon whose environment
+  carries it, read once at boot and logged as `managed chats open: preview for this daemon only`. It
+  exists so a maintainer can produce the attended evidence the ship gates in
+  `docs/design/2026-09-23-agent-chat-implementation.md` require (G2 native compatibility, G3 lifecycle
+  containment); it changes no public default, is never read from a request or the SPA, and an already
+  running daemon does not pick it up. Public managed execution stays closed until those gates pass.
+
 ## F33 — `glosa update` self-update
 
 - **One explicit external action under invariant 5.** `glosa update` is **explicitly invoked only** —

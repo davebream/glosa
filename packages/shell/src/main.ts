@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, session, shell } from "electron";
 import {
   compatibility,
   egressDecision,
@@ -283,8 +283,15 @@ function installEgressGate(): void {
 }
 
 app.whenReady().then(async () => {
-  // Unpackaged, Electron would show its own atom in the Dock; packaged, the .icns does this.
-  if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(join(here, "..", "assets", "icon-512.png"));
+  // The Dock image follows the system appearance: paper squircle in light, ink in dark. An .icns
+  // carries one image, so the Finder icon stays the light one; this is the Dock only.
+  const dockIcon = () => {
+    if (process.platform !== "darwin") return;
+    const name = nativeTheme.shouldUseDarkColors ? "icon-dark-512.png" : "icon-512.png";
+    app.dock?.setIcon(join(here, "..", "assets", name));
+  };
+  nativeTheme.on("updated", dockIcon);
+  dockIcon();
   installEgressGate();
   installIpc();
   buildMenu();

@@ -1853,12 +1853,26 @@ input,
   color: var(--muted);
 }
 
-.glosa-tree-disclosure {
-  transition: transform 160ms var(--ease-out);
+/* The folder glyph swaps between its closed and open drawing with the row's expanded state, the
+   way a Finder or editor tree does, instead of a chevron turning. */
+.glosa-tree-disclosure .glosa-folder-open {
+  display: none;
 }
 
-.glosa-artifact-list [role="treeitem"][data-expanded="true"] > .glosa-tree-row > .glosa-tree-disclosure {
-  transform: rotate(90deg);
+.glosa-artifact-list
+  [role="treeitem"][data-expanded="true"]
+  > .glosa-tree-row
+  > .glosa-tree-disclosure
+  .glosa-folder-closed {
+  display: none;
+}
+
+.glosa-artifact-list
+  [role="treeitem"][data-expanded="true"]
+  > .glosa-tree-row
+  > .glosa-tree-disclosure
+  .glosa-folder-open {
+  display: block;
 }
 
 .glosa-tree-disclosure svg {

@@ -45,6 +45,13 @@ const FOREIGN_DAEMON_TIMEOUT_MS = 10 * 60 * 1000;
 const FOREIGN_DAEMON_POLL_MS = 3000;
 
 const SURFACES = new Set(["document", "workspace"]);
+/** @typedef {"desk" | "companion"} SurfaceKind */
+/** Which kind of surface this tab or window is (decision 2026-09-25, "the face belongs to the
+ * surface"): a `companion` surface was presented by a terminal agent and shows that agent's
+ * connection, the margin and the inbox; a `desk` surface was opened by a person and shows chat,
+ * stars and projects. Fixed when the surface opens; never inferred from the folder. Absent means
+ * companion, which is the shape every link carried before the parameter existed. */
+const SURFACE_KINDS = new Set(["desk", "companion"]);
 const MODES = new Set(["read", "review", "edit"]);
 
 /** Modes were named Preview and Annotate before Review absorbed the agent's half of the margin.
@@ -75,6 +82,7 @@ export function canonicalMode(raw) {
  *   surface: Surface | null,
  *   mode: Mode | null,
  *   readLock: boolean,
+ *   kind: SurfaceKind | null,
  *   durableToken: string | null,
  *   presentationToken: string | null,
  * }} Route */
@@ -84,6 +92,7 @@ export function canonicalMode(raw) {
  *   surface?: Surface | null,
  *   mode?: Mode | null,
  *   readLock?: boolean,
+ *   kind?: SurfaceKind | null,
  * }} Focus */
 /** One definition, in the module that owns the daemon boundary — two copies of this shape drifted
  * apart the moment `install_id` was added to one of them.
@@ -96,6 +105,7 @@ export function canonicalMode(raw) {
  *   surface: Surface,
  *   initialMode: Mode,
  *   readLock: boolean,
+ *   surfaceKind: SurfaceKind,
  *   appearance: ReturnType<typeof createAppearanceController> | null,
  *   onFocusChange: (next: FocusChange) => void,
  * }} BootstrapMountOptions */
@@ -117,6 +127,10 @@ export function readRoute(loc) {
     surface: surfaceRaw !== null && SURFACES.has(surfaceRaw) ? /** @type {Surface} */ (surfaceRaw) : null,
     mode: /** @type {Mode | null} */ (canonicalMode(modeRaw)),
     readLock: lockRaw === "read" || lockRaw === "preview",
+    kind: (() => {
+      const raw = params.get("kind");
+      return raw !== null && SURFACE_KINDS.has(raw) ? /** @type {SurfaceKind} */ (raw) : null;
+    })(),
     durableToken: params.get("t"),
     presentationToken: params.get("p"),
   };
@@ -152,6 +166,7 @@ export function scrubSecrets(loc, storage, history, route = readRoute(loc), rede
       surface: route.surface,
       mode: route.mode,
       readLock: route.readLock,
+      kind: route.kind,
     });
     history.replaceState(null, "", loc.pathname + loc.search + nextHash);
   }
@@ -164,13 +179,14 @@ export function scrubSecrets(loc, storage, history, route = readRoute(loc), rede
  * re-expose pairing secrets that bootstrap deliberately stripped (A3 §3/F24).
  */
 /** @param {Focus} [focus] */
-export function focusHash({ slug, artifact, surface, mode, readLock } = {}) {
+export function focusHash({ slug, artifact, surface, mode, readLock, kind } = {}) {
   const params = new URLSearchParams();
   if (slug) params.set("w", slug);
   if (artifact) params.set("a", artifact);
   if (surface) params.set("surface", surface);
   if (mode) params.set("mode", mode);
   if (readLock) params.set("lock", "read");
+  if (kind) params.set("kind", kind);
   const query = params.toString();
   return query ? `#${query}` : "";
 }
@@ -453,11 +469,13 @@ async function main() {
       surface,
       initialMode,
       readLock,
+      surfaceKind: route.kind ?? "companion",
       appearance,
       onFocusChange: (next) =>
         navigation.reflectFocus({
           ...next,
           surface,
+          kind: route.kind,
           mode: next.mode ?? initialMode,
           readLock,
         }),

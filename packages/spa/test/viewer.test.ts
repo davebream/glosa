@@ -356,6 +356,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const legacy = dom.document.createElement("div");
     dom.document.body.append(legacy);
     mountApp(legacy, {
+      surfaceKind: "desk",
       dataAccess: fakeDataAccess({
         getWorkspaces: async () => [
           { slug: "ws-1", path: "/tmp/ws-1" },
@@ -372,7 +373,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     // Nothing starred yet: the section stays hidden, and the heading offers the first star.
     const fresh = dom.document.createElement("div");
     dom.document.body.append(fresh);
-    mountApp(fresh, { dataAccess: starringDataAccess().da });
+    mountApp(fresh, { dataAccess: starringDataAccess().da, surfaceKind: "desk" });
     await settle();
     const sidebar = fresh.querySelector(".glosa-sidebar") as any;
     expect(sidebar.firstElementChild.classList.contains("glosa-sidebar-scroll")).toBe(true);
@@ -393,7 +394,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const { da, calls } = starringDataAccess();
-    mountApp(root, { dataAccess: da });
+    mountApp(root, { dataAccess: da, surfaceKind: "desk" });
     await settle();
 
     const toggle = root.querySelector(".glosa-star-toggle") as any;
@@ -1218,7 +1219,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       }),
       openChatStream: () => () => {},
     });
-    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read", surfaceKind: "desk" });
     try {
       for (let i = 0; i < 30; i++) await Promise.resolve();
       (root.querySelector('[aria-label="New chat"]') as unknown as HTMLButtonElement).click();
@@ -1968,6 +1969,42 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       root.remove();
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(root.querySelector(".glosa-pane")).toBeNull();
+    });
+  });
+
+  describe("surface kind (decision 2026-09-25): desk and companion are different surfaces", () => {
+    test("a companion surface shows the agent connection and hides chats and stars", async () => {
+      const root = dom.document.createElement("div");
+      dom.document.body.append(root);
+      mountApp(root, {
+        dataAccess: fakeDataAccess({ getChats: async () => ({ chats: [], external: [] }) }),
+        surfaceKind: "companion",
+      });
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      expect(root.getAttribute("data-kind")).toBe("companion");
+      expect((root.querySelector(".glosa-agent-feedback") as any).hidden).toBe(false);
+      expect((root.querySelector(".glosa-sidebar-chats") as any).hidden).toBe(true);
+      expect((root.querySelector(".glosa-star-toggle") as any).hidden).toBe(true);
+      expect((root.querySelector(".glosa-starred") as any).hidden).toBe(true);
+    });
+    test("a desk surface shows chats and stars and has no agent connection chip", async () => {
+      const root = dom.document.createElement("div");
+      dom.document.body.append(root);
+      const { da } = starringDataAccess();
+      (da as any).getChats = async () => ({ chats: [], external: [] });
+      mountApp(root, { dataAccess: da, surfaceKind: "desk" });
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      expect(root.getAttribute("data-kind")).toBe("desk");
+      expect((root.querySelector(".glosa-agent-feedback") as any).hidden).toBe(true);
+      expect((root.querySelector(".glosa-sidebar-chats") as any).hidden).toBe(false);
+      expect((root.querySelector(".glosa-star-toggle") as any).hidden).toBe(false);
+    });
+    test("with no kind in the link the surface is companion, the shape every older link carried", async () => {
+      const root = dom.document.createElement("div");
+      dom.document.body.append(root);
+      mountApp(root, { dataAccess: fakeDataAccess() });
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      expect(root.getAttribute("data-kind")).toBe("companion");
     });
   });
 });

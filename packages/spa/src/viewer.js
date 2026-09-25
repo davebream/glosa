@@ -112,6 +112,7 @@ export { INTENTS, initialModeState, isParked, MODES, modeReducer, morphArtifactC
  *   surface?: string,
  *   initialMode?: string,
  *   readLock?: boolean,
+ *   surfaceKind?: "desk" | "companion",
  *   appearance?: any,
  *   onFocusChange?: (focus: any) => void,
  *   layoutStorage?: any,
@@ -128,6 +129,9 @@ export function mountApp(
     surface = "workspace",
     initialMode = "review",
     readLock = false,
+    // "desk" (a person opened this surface: chat, stars, projects) or "companion" (a terminal
+    // agent presented it: its connection, the margin, the inbox). Fixed for the surface's life.
+    surfaceKind = "companion",
     appearance,
     onFocusChange,
     layoutStorage,
@@ -139,6 +143,8 @@ export function mountApp(
   root.textContent = "";
   root.classList.add("glosa-app");
   root.setAttribute("data-surface", surface === "document" ? "document" : "workspace");
+  root.setAttribute("data-kind", surfaceKind);
+  const desk = surfaceKind === "desk";
   if (readLock) root.setAttribute("data-preview-lock", "true");
   let attentionEntries = [];
   /** Request ids already seen, so an arrival is distinguishable from a refresh. */
@@ -177,6 +183,10 @@ export function mountApp(
     dictationController,
   });
   const { attentionTray, agentFeedback, artifactNavigator } = shell;
+  // The connection chip is the companion surface's: it names the terminal agent that presented
+  // this surface. A desk surface has no such agent, and its chat pane says what its chat is doing.
+  const agentFeedbackHost = root.querySelector(".glosa-agent-feedback");
+  if (agentFeedbackHost && desk) agentFeedbackHost.hidden = true;
   const {
     navToggle,
     titleEl,
@@ -208,7 +218,11 @@ export function mountApp(
     chatsRefreshTimer,
     stopChatsStream,
     creatingChat = false;
-  const chatsHost = el("section", { className: "glosa-sidebar-chats", hidden: singlePane || !dataAccess.getChats });
+  // Chats belong to the desk surface: a companion surface already has its agent in a terminal.
+  const chatsHost = el("section", {
+    className: "glosa-sidebar-chats",
+    hidden: !desk || singlePane || !dataAccess.getChats,
+  });
   const chatsRows = el("div", { className: "glosa-chat-list" });
   const chatNotice = el("p", { role: "status", className: "glosa-sidebar-empty" });
   const listMenu = actionMenu("Chat list options");
@@ -626,6 +640,8 @@ export function mountApp(
     root,
     elements: { navToggle, sidebarEl, artifactList, starredToggle, starredSection, starredList },
     enabled: surface !== "document",
+    // Stars are a desk affordance (decision 2026-09-25); a companion surface never lists them.
+    desk,
   });
 
   function activePane() {
@@ -712,7 +728,7 @@ export function mountApp(
         detail: "Agents & accounts · Appearance",
         run: openAgentSettings,
       });
-    if (!singlePane && dataAccess.getChats)
+    if (desk && !singlePane && dataAccess.getChats)
       commands.push({
         id: "new-chat",
         label: "New chat",
@@ -1494,7 +1510,7 @@ export function mountApp(
   }
 
   function canStarCurrent() {
-    return starsSupported && !singlePane && currentWorkspace()?.kind === "directory";
+    return desk && starsSupported && !singlePane && currentWorkspace()?.kind === "directory";
   }
 
   function renderStarToggle() {
