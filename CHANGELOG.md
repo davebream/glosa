@@ -28,6 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **A glosa process that outlived a source change no longer evicts every daemon it spawns.** A
+  monitor or MCP server started before a merge kept the build id it computed at start, saw each
+  freshly spawned daemon as a different build, restarted it, and failed after its one spawn attempt.
+  The tree on disk now breaks the tie: a daemon that matches the install is used, and the stale
+  client says so once in the daemon log. (#360)
 - **A hand-wrapped paragraph keeps its shape when it becomes editable.** The rich face keeps a
   source line break inside a paragraph as a newline so the file's wrapping survives a save, but the
   editor drew that newline as a line, so a paragraph wrapped at eighty columns re-wrapped at every
