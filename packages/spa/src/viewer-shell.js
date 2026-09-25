@@ -22,7 +22,7 @@ export function createElement(tag, props = {}, children = []) {
   return node;
 }
 
-/** One section heading for every list in the navigator — Artifacts, Chats, Starred. The same
+/** One section heading for every list in the navigator — Documents, Chats, Starred. The same
  *  15px drawn chevron the tree's folders use, in the same slot at the same x, turning to face the
  *  state it will move to; the label beside it in the Section Label style. Built from parts rather
  *  than from `::before` text so the mark is one shape everywhere and never read aloud. `label`
@@ -75,7 +75,7 @@ export function createViewerShell(
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2"/><path d="M7.5 4v12"/><path class="glosa-nav-toggle-fill" d="M4.25 5h2.5v10h-2.5z"/></svg>';
   const brandMark = el("span", { className: "glosa-brand-mark", role: "img", "aria-label": "glosa" });
   brandMark.innerHTML =
-    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-under" transform="translate(1.6 1.4) scale(0.92)" d="M 10.94 3.21 C 11.23 3.19 11.78 3.21 12.09 3.21 L 14.15 3.21 C 17.28 3.2 22.41 3 25.19 4.31 C 26.19 4.78 27 5.56 27.37 6.61 C 28.33 9.35 26.38 14.58 25.2 17.08 C 22.68 22.39 17.31 26.56 11.85 28.51 C 11.34 28.69 10.77 28.85 10.25 29 C 10.13 28.75 10.02 28.5 9.91 28.24 C 11.77 27.37 13.39 26.34 14.72 24.75 C 15.04 24.36 15.38 23.97 15.65 23.55 C 20.86 15.29 9.97 16.08 5.24 17.56 C 4.57 17.77 3.82 17.28 3.71 16.56 C 3.67 16.33 3.7 16.1 3.79 15.89 C 3.92 15.57 4.34 15.09 4.57 14.79 C 4.81 14.46 5.05 14.12 5.27 13.78 C 6.77 11.48 8.15 8.87 8.94 6.23 C 9.33 4.9 9.17 3.49 10.94 3.21Z"/><path class="glosa-logo-accent" transform="scale(0.92)" d="M 10.94 3.21 C 11.23 3.19 11.78 3.21 12.09 3.21 L 14.15 3.21 C 17.28 3.2 22.41 3 25.19 4.31 C 26.19 4.78 27 5.56 27.37 6.61 C 28.33 9.35 26.38 14.58 25.2 17.08 C 22.68 22.39 17.31 26.56 11.85 28.51 C 11.34 28.69 10.77 28.85 10.25 29 C 10.13 28.75 10.02 28.5 9.91 28.24 C 11.77 27.37 13.39 26.34 14.72 24.75 C 15.04 24.36 15.38 23.97 15.65 23.55 C 20.86 15.29 9.97 16.08 5.24 17.56 C 4.57 17.77 3.82 17.28 3.71 16.56 C 3.67 16.33 3.7 16.1 3.79 15.89 C 3.92 15.57 4.34 15.09 4.57 14.79 C 4.81 14.46 5.05 14.12 5.27 13.78 C 6.77 11.48 8.15 8.87 8.94 6.23 C 9.33 4.9 9.17 3.49 10.94 3.21Z"/></svg>';
+    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-accent" transform="scale(0.92)" d="M 10.94 3.21 C 11.23 3.19 11.78 3.21 12.09 3.21 L 14.15 3.21 C 17.28 3.2 22.41 3 25.19 4.31 C 26.19 4.78 27 5.56 27.37 6.61 C 28.33 9.35 26.38 14.58 25.2 17.08 C 22.68 22.39 17.31 26.56 11.85 28.51 C 11.34 28.69 10.77 28.85 10.25 29 C 10.13 28.75 10.02 28.5 9.91 28.24 C 11.77 27.37 13.39 26.34 14.72 24.75 C 15.04 24.36 15.38 23.97 15.65 23.55 C 20.86 15.29 9.97 16.08 5.24 17.56 C 4.57 17.77 3.82 17.28 3.71 16.56 C 3.67 16.33 3.7 16.1 3.79 15.89 C 3.92 15.57 4.34 15.09 4.57 14.79 C 4.81 14.46 5.05 14.12 5.27 13.78 C 6.77 11.48 8.15 8.87 8.94 6.23 C 9.33 4.9 9.17 3.49 10.94 3.21Z"/></svg>';
   // The bar's title is the artifact in the active pane — the document the reader is looking at —
   // and falls back to the workspace when no pane is open.
   const titleEl = el("span", { className: "glosa-topbar-name", textContent: "glosa" });
@@ -147,7 +147,7 @@ export function createViewerShell(
   const artifactList = el("ul", { className: "glosa-artifact-list" });
   const { button: artifactToggle } = createSectionToggle({
     className: "glosa-artifact-list-toggle",
-    text: "Artifacts",
+    text: "Documents",
     controls: "glosa-artifacts-body",
   });
   const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [

@@ -218,7 +218,7 @@ export function createArtifactTreeNavigator(container, options) {
   const storage = options.storage ?? (typeof sessionStorage === "undefined" ? null : sessionStorage);
 
   container.setAttribute("role", "tree");
-  container.setAttribute("aria-label", "Artifacts");
+  container.setAttribute("aria-label", "Documents");
 
   function storageKey() {
     return `${EXPANSION_STORAGE_PREFIX}${workspace}`;
@@ -339,7 +339,7 @@ export function createArtifactTreeNavigator(container, options) {
       if (node.artifact.stale) {
         const stale = document.createElement("span");
         stale.className = "glosa-tree-stale";
-        stale.title = "Generated artifact is out of date";
+        stale.title = "Generated document is out of date";
         stale.setAttribute("aria-label", "Out of date");
         row.append(stale);
       }

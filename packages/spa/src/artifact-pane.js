@@ -624,7 +624,7 @@ export function createArtifactPane(host, deps) {
   // The writer's face for this artifact lives here, among the artifact's other settings, not in
   // the bar: a reading preference is chosen once and then left alone (face.js fills the group).
   const faceGroup = el("div", { className: "glosa-face-group" });
-  const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Artifact tools" }, [
+  const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Document tools" }, [
     historyMenuItem,
     editSourceButton,
     copySourceButton,
@@ -713,11 +713,11 @@ export function createArtifactPane(host, deps) {
     hidden: true,
   });
   blockTargetInstructions.id = `glosa-block-instructions-${Math.random().toString(36).slice(2, 9)}`;
-  const contentEl = el("div", { className: "glosa-content", role: "region", "aria-label": "Artifact preview" });
+  const contentEl = el("div", { className: "glosa-content", role: "region", "aria-label": "Document preview" });
   const emptyEl = el("div", { className: "glosa-empty", hidden: true, role: "status", "aria-live": "polite" });
   const skeletonEl = el("div", { className: "glosa-skeleton", hidden: true, "aria-hidden": "true" });
   for (let i = 0; i < 8; i++) skeletonEl.append(el("i"));
-  const editArea = el("textarea", { className: "glosa-edit-area", hidden: true, "aria-label": "Artifact source" });
+  const editArea = el("textarea", { className: "glosa-edit-area", hidden: true, "aria-label": "Document source" });
   const saveButton = el("button", { className: "glosa-save", type: "button", textContent: "Save" });
   // What the page says about the write, and it sits under the MANUSCRIPT rather than inside
   // `editWrap`.
@@ -763,7 +763,7 @@ export function createArtifactPane(host, deps) {
     className: "glosa-classf",
     hidden: true,
     role: "region",
-    "aria-label": "Artifact preview",
+    "aria-label": "Document preview",
   });
   const marginEl = el("aside", { className: "glosa-margin", "aria-label": "Annotations" });
   const markersEl = el("div", { className: "glosa-markers", "aria-hidden": "true" });
@@ -807,7 +807,7 @@ export function createArtifactPane(host, deps) {
   const trayEl = el("aside", {
     className: "glosa-annotations-tray",
     hidden: true,
-    "aria-label": "Annotations on this artifact",
+    "aria-label": "Annotations on this document",
   });
   trayEl.append(trayToggle, trayListEl);
 
@@ -833,7 +833,7 @@ export function createArtifactPane(host, deps) {
     composerLayerEl,
     askLayerEl,
   ]);
-  const paneEl = el("section", { className: "glosa-pane", "aria-label": "Artifact" }, [
+  const paneEl = el("section", { className: "glosa-pane", "aria-label": "Document" }, [
     artifactBar,
     noticeEl,
     paneMain,
@@ -1180,7 +1180,7 @@ export function createArtifactPane(host, deps) {
       const rows = await dataAccess.getCheckpoints(slug, { limit: 1 });
       const latest = rows?.[0]?.checkpoint_id;
       if (!latest) {
-        setToolsStatus("This artifact has no saved versions to compare with yet.");
+        setToolsStatus("This document has no saved versions to compare with yet.");
         return;
       }
       setToolsStatus("");
@@ -1277,7 +1277,7 @@ export function createArtifactPane(host, deps) {
       request.message ||
       (request.action && request.action !== "review"
         ? `Requested check: ${request.action}`
-        : "Review this artifact before approving its saved revision.");
+        : "Review this document before approving its saved revision.");
     const copy = el("div", { className: "glosa-approval-copy" }, [
       el("strong", { textContent: "Final approval requested" }),
       el("span", { textContent: supportingText }),
@@ -1331,7 +1331,7 @@ export function createArtifactPane(host, deps) {
         return;
       }
       const revisionId = currentArtifact?.source_sha256;
-      if (!revisionId) throw new Error("The saved artifact has no revision identifier.");
+      if (!revisionId) throw new Error("The saved document has no revision identifier.");
       const result = await dataAccess.respondToAttention(slug, request.id, { outcome: "approved", revisionId });
       const verdict = result?.detail ?? {};
       approvalResult = { path: currentArtifact.source_path, revisionId: verdict.revision_id ?? revisionId };
@@ -1340,7 +1340,7 @@ export function createArtifactPane(host, deps) {
     } catch (error) {
       const revisionChanged = String(error?.problem?.type ?? "").includes("artifact-revision-changed");
       approvalError = revisionChanged
-        ? "The artifact changed before approval. Review the latest revision and try again."
+        ? "The document changed before approval. Review the latest revision and try again."
         : error instanceof Error
           ? `Couldn’t approve this revision: ${error.message}`
           : "Couldn’t approve this revision. Try again.";
@@ -2597,7 +2597,7 @@ export function createArtifactPane(host, deps) {
     if (!force) {
       const proceed = await confirmDialog({
         title: "Undo this change?",
-        body: "Restores this artifact to how it read before the session applied this annotation. Anything written since is replaced.",
+        body: "Restores this document to how it read before the session applied this annotation. Anything written since is replaced.",
         confirmLabel: "Undo the change",
         danger: true,
       });
@@ -2612,7 +2612,7 @@ export function createArtifactPane(host, deps) {
         // The dirty-worktree guard (A6 §F31). The reader is told what is at stake in their own
         // words before a second, explicit confirmation — never a silent overwrite.
         const proceed = await confirmDialog({
-          title: "This artifact has unsaved changes",
+          title: "This document has unsaved changes",
           body: "It changed since its last saved version. Undoing now throws those changes away.",
           confirmLabel: "Undo anyway",
           danger: true,
@@ -4371,8 +4371,8 @@ export function createArtifactPane(host, deps) {
     } catch (error) {
       setEditStatus(
         error instanceof Error
-          ? `Couldn't save this artifact: ${error.message}`
-          : "Couldn't save this artifact. Try again.",
+          ? `Couldn't save this document: ${error.message}`
+          : "Couldn't save this document. Try again.",
         { error: true },
       );
       throw error;
@@ -4836,8 +4836,8 @@ export function createArtifactPane(host, deps) {
       loading = false;
       currentArtifact = null;
       setEmpty(
-        "This artifact couldn't be opened.",
-        el("p", { className: "glosa-empty-hint", textContent: err?.message ?? "Try again, or pick another artifact." }),
+        "This document couldn't be opened.",
+        el("p", { className: "glosa-empty-hint", textContent: err?.message ?? "Try again, or pick another document." }),
       );
       renderModeBar();
       renderContent();
@@ -4976,7 +4976,7 @@ export function createArtifactPane(host, deps) {
       // Says "this tab" rather than "leaving Edit": mode switches park drafts now, so closing
       // is the only remaining way to actually lose one, and the prompt should not imply
       // otherwise.
-      body: "This artifact has changes that haven't been saved. Closing this tab throws them away.",
+      body: "This document has changes that haven't been saved. Closing this tab throws them away.",
       confirmLabel: "Discard edits",
       danger: true,
     });
@@ -5034,7 +5034,7 @@ export function createArtifactPane(host, deps) {
         from = undefined;
       }
       if (!from) {
-        setEditStatus("This artifact has no saved versions to compare with yet.");
+        setEditStatus("This document has no saved versions to compare with yet.");
         return;
       }
     }
@@ -5113,7 +5113,7 @@ export function createArtifactPane(host, deps) {
     loading = false;
     paneEl.setAttribute("data-missing", "true");
     setEmpty(
-      "This artifact is gone.",
+      "This document is gone.",
       el("p", {
         className: "glosa-empty-hint",
         textContent:

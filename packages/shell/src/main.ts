@@ -18,6 +18,7 @@ import {
   loopbackApiOrigin,
   navigationDecision,
   parseOpenEnvelope,
+  representedFile,
   scrubChildEnv,
   splitPresentationToken,
 } from "./policy.ts";
@@ -82,6 +83,8 @@ async function handshake(origin: string): Promise<Record<string, unknown> | null
 
 const pendingTokens = new Map<number, string>();
 const spaOrigins = new Map<number, string>();
+/** The folder each window opened, for the represented file. */
+const openedFolders = new Map<number, string>();
 
 function blockingScreen(title: string, command: string): string {
   const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string);
@@ -126,6 +129,7 @@ async function openInWindow(
   }
   const { tokenlessUrl, token } = splitPresentationToken(opened.url);
   if (token) pendingTokens.set(win.webContents.id, token);
+  openedFolders.set(win.webContents.id, target);
   await win.loadURL(tokenlessUrl);
   return win;
 }
@@ -170,9 +174,18 @@ function createWindow(origin: string | null): BrowserWindow {
     if (choice === 1) event.preventDefault();
   });
   wc.on("render-process-gone", (_e, details) => log(`renderer gone: ${details.reason}`));
+  // The page owns the title (`<file> — <folder>`); the window adds the proxy icon an editor has.
+  const represent = () => {
+    const folder = openedFolders.get(wc.id);
+    if (!folder) return;
+    win.setRepresentedFilename(representedFile(wc.getURL(), folder) ?? "");
+  };
+  wc.on("page-title-updated", represent);
+  wc.on("did-navigate-in-page", represent);
   win.on("closed", () => {
     pendingTokens.delete(wc.id);
     spaOrigins.delete(wc.id);
+    openedFolders.delete(wc.id);
   });
   return win;
 }
@@ -270,6 +283,8 @@ function installEgressGate(): void {
 }
 
 app.whenReady().then(async () => {
+  // Unpackaged, Electron would show its own atom in the Dock; packaged, the .icns does this.
+  if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(join(here, "..", "assets", "icon-512.png"));
   installEgressGate();
   installIpc();
   buildMenu();

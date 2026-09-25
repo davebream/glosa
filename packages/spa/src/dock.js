@@ -209,7 +209,7 @@ export function createDock(host, deps) {
           badges.append(
             el("span", {
               className: "glosa-tab-stale",
-              title: "Generated artifact is out of date",
+              title: "Generated document is out of date",
               "aria-label": "Out of date",
             }),
           );

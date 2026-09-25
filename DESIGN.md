@@ -222,7 +222,7 @@ Density is calm and bookish in the manuscript (18px serif on a 68ch measure) and
 Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand and a graphite pencil. OKLCH is the source of truth.
 
 ### Primary
-- **The Hand, Burnt Vermilion** (`{colors.hand}`, about #b03f00; 5.7:1 on paper): every human mark. The translucent wash on annotated words in Review, the 2px underline in every mode, the § address in the gutter and on entries, the note's words, the caret, `::selection`, the focus ring, the unsaved-tab and parked-edit dots, the "delivered" state, the human attribution chip, the human's turn label in the conversation, the dock's drag target and active sash, and the logo's top layer. Hover deepens to Hand Hover. Dark: `{colors.dark-hand}` (6.9:1).
+- **The Hand, Burnt Vermilion** (`{colors.hand}`, about #b03f00; 5.7:1 on paper): every human mark. The translucent wash on annotated words in Review, the 2px underline in every mode, the § address in the gutter and on entries, the note's words, the caret, `::selection`, the focus ring, the unsaved-tab and parked-edit dots, the "delivered" state, the human attribution chip, the human's turn label in the conversation, the dock's drag target and active sash, and the logo (one ink below 48px; the desktop icon prints a second, misregistered ink layer under it at 64px and up). Hover deepens to Hand Hover. Dark: `{colors.dark-hand}` (6.9:1).
 - **Ink** (`{colors.ink}`; 17.6:1 on paper): body text, the primary button (Send to session, Save, Approve), the active mode segment, links, the active tab's 2px top edge, a session's entry rule and words, the session chip's edge. Hover lifts to Ink Hover. Ink is also the rule between the desk's regions (see Neutral).
 
 ### Secondary
@@ -330,7 +330,7 @@ One radius per role: focus 2px, micro 4px, tool 5px, control 6px, panel 8px, com
 
 Marks on the page are square or hairline. Margin entries open on a full-width 1px rule with no radius and no fill; tabs are square. State dots and drawn radios are circles; chips are pills. Borders are 1px; the 2px edges are the active tab's ink top, the composer's pencil top, the annotation underline, the focus ring and the drag target.
 
-The logo is the comma overprinted: an ink layer at 45% opacity offset down and right, with the vermilion comma printed opaquely on top, so the ink shows only as an offset edge. In dark the under layer is Muted at 60%.
+The logo is one vermilion comma wherever the app draws it (24px in the top bar, 40px on the screens, 16px and 32px as the favicon): at those sizes a second layer cannot read as anything but a smear. The two-ink print survives only where it has room, in the desktop app's icon at 64px and up (`packages/shell/assets/icon.svg`): an ink layer at 45% opacity shifted sideways under the comma, never down and right, because down and right reads as a shadow and sideways reads as a misregistered print.
 
 ## Components
 
@@ -350,7 +350,7 @@ Quiet and ink-led.
 - **Parked edit:** a hand dot on Edit marks an unsaved draft parked off screen.
 
 ### Go to Trigger
-- **Style:** the top bar's title, drawn as a quiet field: 30px, Quiet Border, 6px radius, Surface fill, the stable label “Search artifacts and chats” in 14px/600 ink on the left and a `⌘K` keycap (11px/600 Muted in a Quiet Border box on paper) on the right. Hover sharpens the edge to Strong Border on paper.
+- **Style:** the top bar's title, drawn as a quiet field: 30px, Quiet Border, 6px radius, Surface fill, the stable label “Search documents and chats” in 14px/600 ink on the left and a `⌘K` keycap (11px/600 Muted in a Quiet Border box on paper) on the right. Hover sharpens the edge to Strong Border on paper.
 - **Behaviour:** a button, not an input: clicking it opens the Go to palette, which searches artifacts and chats together. All, Artifacts, Chats and Commands filters share one query. Existing `#`, `/`, `@` and `>` prefixes still reach sections, files, workspaces and commands. Chat search includes older and archived conversations, with more results available inside the palette.
 
 ### Edit on the Page

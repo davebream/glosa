@@ -21,7 +21,7 @@ export const SHORTCUTS = [
   ["\u2318 / Ctrl + \u2325 + \u2190", "Focus the pane to the left"],
   ["\u2318 / Ctrl + \\", "Move this tab into a new split"],
   ["\u2318 / Ctrl + W", "Close this tab"],
-  ["Esc", "Close the artifact drawer"],
+  ["Esc", "Close the document drawer"],
 ];
 
 export function createContextSurfaceController({ elements, createElement, returnFocus }) {

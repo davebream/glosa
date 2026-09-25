@@ -163,7 +163,7 @@ export function mountClassFViewer(
   // matches exactly what A3 §2 specifies as the literal iframe markup.
   iframe.setAttribute("sandbox", interactive ? "allow-scripts" : "");
   iframe.setAttribute("referrerpolicy", "no-referrer");
-  iframe.setAttribute("title", "Artifact preview");
+  iframe.setAttribute("title", "Document preview");
   container.textContent = "";
   container.append(iframe);
 

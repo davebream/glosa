@@ -151,7 +151,7 @@ export function mountAttentionTray(
       if (answeredInTheMargin) {
         const isCurrent = targetPath && targetPath === getCurrentArtifact();
         const label =
-          entry.approval_mode === true ? (isCurrent ? "Continue review" : "Open artifact") : "Go to the passage";
+          entry.approval_mode === true ? (isCurrent ? "Continue review" : "Open document") : "Go to the passage";
         const button = node("button", {
           className: "glosa-primary-button",
           type: "button",
@@ -173,7 +173,7 @@ export function mountAttentionTray(
           } catch (error) {
             button.disabled = false;
             button.textContent = label;
-            status.textContent = error instanceof Error ? error.message : "The artifact could not be opened.";
+            status.textContent = error instanceof Error ? error.message : "The document could not be opened.";
           }
         });
         actions.append(button);

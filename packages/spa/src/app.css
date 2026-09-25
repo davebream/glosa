@@ -469,21 +469,13 @@ input,
   display: block;
 }
 
-/* The mark is a comma printed in two inks: a thin ink layer set a hair down and right, and the
-   hand printed opaquely over it, so the ink shows only as an offset edge and the comma reads as
-   the same vermilion as every human mark on the page. */
-.glosa-logo-under {
-  fill: var(--ink);
-  fill-opacity: 0.45;
-}
-
+/* The mark is a single comma in the hand's vermilion, the same ink as every human mark on the
+   page. Below about 48px a second layer cannot read as anything but a smear, and every mark in the
+   app is 24px to 40px, so the app draws one ink. The two-ink print, an ink layer misregistered
+   sideways under the hand, lives only where it has room: the desktop app's icon at 64px and up
+   (packages/shell/assets). */
 .glosa-logo-accent {
   fill: var(--hand);
-}
-
-:root[data-theme="dark"] .glosa-logo-under {
-  fill: var(--muted);
-  fill-opacity: 0.6;
 }
 
 /* The navigator's one control: show/hide, at every width and in every mode. It is pinned to the
