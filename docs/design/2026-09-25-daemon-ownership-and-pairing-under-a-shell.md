@@ -64,10 +64,13 @@ daemon below it produces a blocking screen with the exact CLI command to run; a 
 with an incompatible protocol produces the same screen the other way round. The shell never
 attempts a mutation to fix either.
 
-**R-O6. Supervision is a separate decision.** A launchd user agent would keep the daemon available
-across logins and let launchd own restarts; it also means the shell owns a plist in the user's
-`LaunchAgents`, which the CLI then has to know about. A detached child satisfies R-O3 and R-O4 with
-no new files. Spike both before choosing; the readiness note lists the trade.
+**R-O6. Supervision is the detached child, not launchd.** Spiked on 2026-09-25 (readiness note
+§1c): a detached `glosa __daemon` with its pid kept satisfies R-O3 and R-O4 with no new files, and
+the CLI's own `decideDaemonBuild` already reuses it. A launchd user agent works but its `KeepAlive`
+respawns against any daemon it did not start (four lost-lock attempts in 7 s beside a CLI-spawned
+daemon) and puts a plist in the user's `LaunchAgents` that the CLI would have to know about. The
+shell does not get restart-after-crash from the OS; a crashed daemon is re-spawned by the next
+client that finds no answer, the same as today.
 
 ## 3. Pairing rules
 
