@@ -953,7 +953,7 @@ export function createChatPane(
           }
           const free = el("textarea", {
             rows: 2,
-            "aria-label": `${question.question} — your answer`,
+            "aria-label": `${question.question}: your answer`,
             placeholder: "Your answer",
           });
           free.addEventListener("input", () => {

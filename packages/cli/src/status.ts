@@ -78,7 +78,7 @@ export function printStatusResult(result: CommandEnvelope<StatusData>, json: boo
   const wsCount = result.data.workspaces?.length ?? 0;
   const sessCount = result.data.sessions?.length ?? 0;
   process.stdout.write(
-    `glosa status: daemon ${result.data.daemon?.instance_id} — ${wsCount} workspace(s), ${sessCount} session(s)\n`,
+    `glosa status: daemon ${result.data.daemon?.instance_id}: ${wsCount} workspace(s), ${sessCount} session(s)\n`,
   );
   for (const w of result.data.workspaces ?? []) {
     const liveUpdates = w.live_updates

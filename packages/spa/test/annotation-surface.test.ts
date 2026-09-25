@@ -1005,7 +1005,7 @@ describe("the annotation surface", () => {
 
     const card = q(host, ".glosa-annotation");
     expect(card.getAttribute("data-state")).toBe("applied");
-    expect(q(card, ".glosa-annotation-state [role=status]").textContent).toBe("Couldn't clear — try again");
+    expect(q(card, ".glosa-annotation-state [role=status]").textContent).toBe("Couldn't clear: try again");
     expect(q(card, ".glosa-annotation-edit")).toBeNull();
   });
 

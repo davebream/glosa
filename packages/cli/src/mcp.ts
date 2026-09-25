@@ -826,11 +826,11 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       title: "Ask the human about a passage",
       description:
         "Mark a passage in an artifact and ask the human about it, in their margin, beside the words. BLOCKS " +
-        "until they answer — this is a real wait, not a queued notification, so use it when you genuinely " +
+        "until they answer: this is a real wait, not a queued notification, so use it when you genuinely " +
         "cannot proceed without the answer. Omit `question` to point at a passage without asking anything; " +
         "that returns immediately. Supply `options` when the answer is one of a few things you can name, and " +
         "leave them out when it is open-ended; the human always keeps a free-text field either way. " +
-        "If your call is cancelled before the human answers, the question is withdrawn from their margin — " +
+        "If your call is cancelled before the human answers, the question is withdrawn from their margin: " +
         "nobody is waiting on it any more. A wait that merely runs out leaves it in place.",
       inputSchema: askInputSchema,
       outputSchema: askOutputSchema,
@@ -923,7 +923,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       description:
         "Block until a tracked artifact changes on disk outside glosa (or the wait elapses), then return " +
         "the drift as external_edit entries this session has not yet seen. Requires the session to already " +
-        "be explicitly bound to the workspace — call glosa_session_bind first if it has not bound yet. " +
+        "be explicitly bound to the workspace: call glosa_session_bind first if it has not bound yet. " +
         "Self-echo is NOT filtered: a returned entry may be this session's own un-leased write, not " +
         "necessarily someone else's change. Marks entries presented for THIS session only; no other " +
         "session is nudged by it. When has_more is true, call again WITHOUT since to drain the rest.",

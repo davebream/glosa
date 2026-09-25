@@ -27,10 +27,10 @@ import { createAppearanceController } from "./appearance.js";
 const appearance = typeof window === "undefined" ? null : createAppearanceController();
 
 const MESSAGES = {
-  down: "glosa daemon isn't running — run `glosa open`.",
-  unpaired: "not paired — run `glosa open` to open this workspace.",
-  mismatch: "contract mismatch — reload the page.",
-  "foreign-daemon": "another glosa is serving this port — waiting for yours to come back.",
+  down: "glosa daemon isn't running: run `glosa open`.",
+  unpaired: "not paired: run `glosa open` to open this workspace.",
+  mismatch: "contract mismatch: reload the page.",
+  "foreign-daemon": "another glosa is serving this port: waiting for yours to come back.",
 };
 
 /** Which daemon the browser paired with on this origin, kept in the same store as the token so

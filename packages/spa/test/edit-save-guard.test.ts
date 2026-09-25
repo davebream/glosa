@@ -1043,7 +1043,7 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(modal()).toBeNull(); // reports and declines — never re-opens
     expect(da.put).toEqual([]);
     expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain(
-      "Not saved — this file changed again",
+      "Not saved: this file changed again",
     );
   });
 

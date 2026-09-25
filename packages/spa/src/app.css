@@ -3604,11 +3604,11 @@ input,
 }
 
 .glosa-rich-surface .glosa-raw[data-glosa-kind="metadata"]::before {
-  content: "Document metadata — hidden from Read/Review";
+  content: "Document metadata, hidden from Read/Review";
 }
 
 .glosa-rich-surface .glosa-raw[data-glosa-kind="comment"]::before {
-  content: "Private note — hidden from Read/Review";
+  content: "Private note, hidden from Read/Review";
 }
 
 .glosa-rich-surface .glosa-comment-inline {

@@ -142,7 +142,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   checks.push(
     platform === "darwin"
       ? check("platform", "pass", `${platform} (macOS-only v1, A6 §F30)`)
-      : check("platform", "fail", `${platform} is not supported — glosa v1 is macOS-only`),
+      : check("platform", "fail", `${platform} is not supported: glosa v1 is macOS-only`),
   );
   if (platform !== "darwin") return checks; // nothing else here is meaningful off-Darwin
 
@@ -175,7 +175,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
       check(
         "claude-code",
         "warn",
-        "claude not found on PATH — required for the live agent integration, not for glosa itself",
+        "claude not found on PATH: required for the live agent integration, not for glosa itself",
       ),
     );
   } else {
@@ -186,7 +186,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         ? check(
             "claude-code",
             "warn",
-            `${claudeVersionOut} is below the plugin floor 2.1.80 — install a newer Claude Code for the glosa plugin`,
+            `${claudeVersionOut} is below the plugin floor 2.1.80: install a newer Claude Code for the glosa plugin`,
           )
         : check("claude-code", "pass", claudeVersionOut ?? `found at ${claudePath}`),
     );
@@ -206,7 +206,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
       : check(
           "browser",
           "warn",
-          "macOS `open` launcher not found — `glosa open` will not be able to launch a browser automatically",
+          "macOS `open` launcher not found: `glosa open` will not be able to launch a browser automatically",
         ),
   );
 
@@ -245,7 +245,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
       check(
         "daemon+proto",
         "fail",
-        `daemon unreachable: ${(err as Error).message}${diagnosis ? ` — ${diagnosis.detail}` : ""}`,
+        `daemon unreachable: ${(err as Error).message}${diagnosis ? `; ${diagnosis.detail}` : ""}`,
       ),
     );
   }
@@ -253,7 +253,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   // 7. token/pairing (file exists + mode 0600)
   const tPath = tokenPath(deps.glosaHome());
   if (!existsSync(tPath)) {
-    checks.push(check("token/pairing", "warn", `${tPath} does not exist yet — not yet paired; run \`glosa open\``));
+    checks.push(check("token/pairing", "warn", `${tPath} does not exist yet: not yet paired; run \`glosa open\``));
   } else {
     const mode = statSync(tPath).mode & 0o777;
     checks.push(
@@ -315,9 +315,9 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
             `shadow ${health.state} (${health.reason}); ${census.missing_checkpoint_entries} entry/entries reference missing checkpoints; ` +
               `${census.unassessable_entries} unassessable; census ${census.complete ? "complete" : "incomplete"}` +
               (health.state === "invalid-head"
-                ? " — invalid shadow layout; baseline repair is refused"
+                ? "; invalid shadow layout; baseline repair is refused"
                 : health.state !== "healthy"
-                  ? ` — explicit repair: ${remedy}. Repair starts new history; it cannot restore lost checkpoints.`
+                  ? `; explicit repair: ${remedy}. Repair starts new history; it cannot restore lost checkpoints.`
                   : ""),
           ),
         );
@@ -337,7 +337,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     const glosaDir = join(dir, ".glosa");
     if (!existsSync(glosaDir)) {
       checks.push(
-        check("workspace", "warn", `${glosaDir} does not exist yet — workspace not yet opened; run \`glosa open\``),
+        check("workspace", "warn", `${glosaDir} does not exist yet: workspace not yet opened; run \`glosa open\``),
       );
     } else {
       const journal = journalMetrics(dir);
@@ -385,7 +385,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   // repeat check 6's fail). Connection state (#95) is the only wiring signal: a session that
   // registers (monitor, app-server, or MCP first tool call) drains the queue.
   if (!status) {
-    checks.push(check("pending-delivery", "skip", "daemon unreachable — pending-annotation count not checked"));
+    checks.push(check("pending-delivery", "skip", "daemon unreachable: pending-annotation count not checked"));
   } else {
     let canonicalDir = dir;
     try {
@@ -403,7 +403,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         check(
           "pending-delivery",
           "warn",
-          `${pending} entr${pending === 1 ? "y" : "ies"} queued, no live session — they wait until a session connects (plugin monitor, Codex app-server, or any glosa MCP tool call)`,
+          `${pending} entr${pending === 1 ? "y" : "ies"} queued, no live session: they wait until a session connects (plugin monitor, Codex app-server, or any glosa MCP tool call)`,
         ),
       );
     } else if (pending > 0) {
@@ -423,9 +423,9 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   // This is latency, never loss: every degraded reason falls back to the next reconcile's offline
   // catch-up. An N-1 daemon omits the additive field and is honestly SKIP rather than guessed live.
   if (!status) {
-    checks.push(check("live-updates", "skip", "daemon unreachable — artifact watcher state not checked"));
+    checks.push(check("live-updates", "skip", "daemon unreachable: artifact watcher state not checked"));
   } else if (!selected) {
-    checks.push(check("live-updates", "skip", "workspace is not registered — no artifact watcher state"));
+    checks.push(check("live-updates", "skip", "workspace is not registered: no artifact watcher state"));
   } else if (!selected.live_updates) {
     checks.push(check("live-updates", "skip", "daemon does not report artifact watcher state"));
   } else if (selected.live_updates.state === "live") {
@@ -447,7 +447,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   // entries with no live registration: user work stranded by a removed registration. Recovery is
   // re-opening the original path (deterministic registration ids reclaim the surviving bus).
   if (!status) {
-    checks.push(check("orphaned-state", "skip", "daemon unreachable — orphaned home-state not checked"));
+    checks.push(check("orphaned-state", "skip", "daemon unreachable: orphaned home-state not checked"));
   } else {
     const orphans = status.orphaned_state ?? [];
     const totalPending = orphans.reduce((sum, o) => sum + o.pending_count, 0);
@@ -457,7 +457,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         : check(
             "orphaned-state",
             "warn",
-            `${totalPending} pending annotation(s) in ${orphans.length} orphaned home-state dir(s) — re-open the original file/directory with \`glosa open <path>\` to recover, or \`glosa status --json\` for registration ids`,
+            `${totalPending} pending annotation(s) in ${orphans.length} orphaned home-state dir(s): re-open the original file/directory with \`glosa open <path>\` to recover, or \`glosa status --json\` for registration ids`,
           ),
     );
   }
@@ -484,7 +484,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
       : check(
           "transcript-root",
           "warn",
-          `${configDir} does not exist yet — Claude Code may not have run on this machine`,
+          `${configDir} does not exist yet: Claude Code may not have run on this machine`,
         ),
   );
 
@@ -501,7 +501,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
           "claude-config-roots",
           "warn",
           `${roots.length} Claude config roots found (${otherRoots.join(", ")} besides ${configDir}). ` +
-            "Transcripts from all of them are readable; a plugin is installed per config root — run " +
+            "Transcripts from all of them are readable; a plugin is installed per config root: run " +
             "`/plugin install glosa` in a session started under each of the others too",
         ),
   );
@@ -513,7 +513,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   // `glosa inbox dismiss <id>` — the supported human close; nothing here rewrites the journal or
   // synthesizes a payload (AGENTS.md invariant 2).
   if (!status) {
-    checks.push(check("orphaned-entries", "skip", "daemon unreachable — orphaned journal entries not checked"));
+    checks.push(check("orphaned-entries", "skip", "daemon unreachable: orphaned journal entries not checked"));
   } else {
     let canonicalDir = dir;
     try {
@@ -529,7 +529,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         : check(
             "orphaned-entries",
             "warn",
-            `${orphaned} journal entr${orphaned === 1 ? "y has" : "ies have"} no inbox payload (hand-removed?) — ` +
+            `${orphaned} journal entr${orphaned === 1 ? "y has" : "ies have"} no inbox payload (hand-removed?): ` +
               `run \`glosa inbox dismiss <id>\` to close them`,
           ),
     );
@@ -645,7 +645,7 @@ function claudeMonitorCheck(status: StatusSummary | null, canonicalDir: string, 
     : check(
         "claude-monitor",
         "warn",
-        `${bound.length} live session(s) bound here, none holding a push stream — entries queue until pulled. On Claude Code a session monitor starts the stream; run the glosa-connect skill, or restart the session if the plugin was installed after it began`,
+        `${bound.length} live session(s) bound here, none holding a push stream: entries queue until pulled. On Claude Code a session monitor starts the stream; run the glosa-connect skill, or restart the session if the plugin was installed after it began`,
       );
 }
 

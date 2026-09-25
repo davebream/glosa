@@ -259,6 +259,10 @@
     "packages/shell/test/policy.test.ts": {
       "seconds": 0.05,
       "reason": "Initial local Bun 1.4.2 estimate for the desktop shell's pure policy rules (16 tests, 8 ms); replace with measured CI medians."
+    },
+    "test/copy-rules.test.ts": {
+      "seconds": 0.2,
+      "reason": "Initial local Bun 1.4.2 estimate for the em-dash copy rule over three source trees (git ls-files plus a string scan of ~70 files); replace with measured CI medians."
     }
   }
 }

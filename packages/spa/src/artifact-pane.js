@@ -83,7 +83,7 @@ export const INTENTS = [
  * the state that means the passage moved out from under the note. */
 // One line in the rail's column: the full sentence wrapped to two lines of 12px semibold ochre,
 // which made the warning the heaviest thing on the card, above the note it was about.
-const LOST_ITS_PLACE = { text: "Lost its place — the passage has changed.", settled: false };
+const LOST_ITS_PLACE = { text: "Lost its place: the passage has changed.", settled: false };
 const SETTLED_ELSEWHERE = {
   applied: { text: "Applied. The passage now reads differently.", settled: true },
   rejected: { text: "The passage has changed since.", settled: true },
@@ -2335,7 +2335,7 @@ export function createArtifactPane(host, deps) {
       // A revision is complete only once the superseded entry is withdrawn. It runs AFTER the new
       // entry exists, so a failure here leaves two visible notes rather than none; the old card
       // stays with an honest label instead of quietly vanishing while still queued for delivery.
-      if (replacing) await removeAnnotation(replacing, { failureLabel: "Still queued — remove it by hand" });
+      if (replacing) await removeAnnotation(replacing, { failureLabel: "Still queued: remove it by hand" });
       const draftBox = composerLayerEl.querySelector(".glosa-composer")?.getBoundingClientRect() ?? null;
       closeComposer();
       settleIntoMargin(annotations.at(-1), draftBox);
@@ -2484,11 +2484,11 @@ export function createArtifactPane(host, deps) {
    * own Clear, so a failure lands on the card it belongs to and the rest still clear. */
   async function clearResolved() {
     for (const item of annotations.filter((entry) => isTerminalState(entry.state))) {
-      await removeAnnotation(item, { failureLabel: "Couldn't clear — try again" });
+      await removeAnnotation(item, { failureLabel: "Couldn't clear: try again" });
     }
   }
 
-  async function removeAnnotation(item, { failureLabel = "Couldn't remove — try again" } = {}) {
+  async function removeAnnotation(item, { failureLabel = "Couldn't remove: try again" } = {}) {
     closePreview();
     try {
       if (item.id) await dataAccess.withdrawAnnotation(slug, item.id);
@@ -2620,7 +2620,7 @@ export function createArtifactPane(host, deps) {
         if (proceed) await undoApplied(item, { force: true });
         return;
       }
-      item.error = err instanceof Error ? `Couldn't undo: ${err.message}` : "Couldn't undo — try again";
+      item.error = err instanceof Error ? `Couldn't undo: ${err.message}` : "Couldn't undo: try again";
       renderMargin();
     }
   }
@@ -3926,7 +3926,7 @@ export function createArtifactPane(host, deps) {
           textContent: settled ? "Clear" : "Remove",
           "aria-label": settled ? "Clear this annotation from the list" : "Remove this annotation",
           // A failure says the verb the reader pressed.
-          onClick: () => void removeAnnotation(item, settled ? { failureLabel: "Couldn't clear — try again" } : {}),
+          onClick: () => void removeAnnotation(item, settled ? { failureLabel: "Couldn't clear: try again" } : {}),
         }),
       );
       stateRow.append(actionGroup);
@@ -4322,7 +4322,7 @@ export function createArtifactPane(host, deps) {
       body: report.degraded
         ? "Glosa can't work out which parts of this file you changed, so saving rewrites the whole thing in its own formatting. Your words are kept; the layout around them may not be."
         : blocks === 1
-          ? "The block you edited can't be written back exactly as it stands — re-writing it changes the markup shown below. Everything outside that block is untouched either way."
+          ? "The block you edited can't be written back exactly as it stands: re-writing it changes the markup shown below. Everything outside that block is untouched either way."
           : `${blocks} of the blocks you edited can't be written back exactly as they stand. Everything outside them is untouched either way.`,
       detail: collateralDetail(report) ?? undefined,
       choices: [
@@ -4501,7 +4501,7 @@ export function createArtifactPane(host, deps) {
     // false (review round 8).
     if (conflict.carried === false) {
       const whose = conflict.side === "mine" ? "your" : "disk's";
-      return `• ${where}: ${whose} version of it is NOT kept — ${excerpt(conflict.dropped)} is dropped.`;
+      return `• ${where}: ${whose} version of it is NOT kept: ${excerpt(conflict.dropped)} is dropped.`;
     }
     if (conflict.reason === "unprovable-separator") return `• ${where}: glosa could not tell whose source to keep.`;
     if (conflict.reason === "unprovable-identity") return `• ${where}: your whole version is kept.`;
@@ -4512,7 +4512,7 @@ export function createArtifactPane(host, deps) {
     const result = await keepMineMerge(fresh);
     if (!result.baseAvailable) {
       const lines = [
-        "Glosa can't verify the version you opened, so every change on both sides is treated as a conflict — Keep mine will use your version everywhere and none of the disk change shown below.",
+        "Glosa can't verify the version you opened, so every change on both sides is treated as a conflict: Keep mine will use your version everywhere and none of the disk change shown below.",
         ...result.conflicts.map(conflictLine),
       ];
       return lines.join("\n");
@@ -4540,7 +4540,7 @@ export function createArtifactPane(host, deps) {
       if (blockCount) parts.push(`${blockCount} block${blockCount === 1 ? "" : "s"}`);
       if (regionCount) parts.push(`${regionCount} other source region${regionCount === 1 ? "" : "s"}`);
       if (parts.length) {
-        lines.push(`${parts.join(" and ")} changed on both sides — your version wins there:`);
+        lines.push(`${parts.join(" and ")} changed on both sides: your version wins there:`);
       }
       // D6/D9: a count tells the writer that something collided, not what. Name each one and show
       // the disk text their version is about to win over, bounded so a large block cannot push the
@@ -4579,7 +4579,7 @@ export function createArtifactPane(host, deps) {
       return await writeAndSettle(artifact, result.text, fresh.source_sha256);
     } catch (error) {
       if (error?.status === 409) {
-        setEditStatus("Not saved — this file changed again while you were deciding.", { error: true });
+        setEditStatus("Not saved: this file changed again while you were deciding.", { error: true });
         return SAVE_DECLINED;
       }
       throw error;
@@ -4599,7 +4599,7 @@ export function createArtifactPane(host, deps) {
     // would fill the editor from one, and Keep mine would splice onto it as a merge base.
     if (fresh.valid_utf8 === false) {
       setEditStatus(
-        "Not saved — this file is no longer valid UTF-8 on disk. glosa won't overwrite bytes it can't read.",
+        "Not saved: this file is no longer valid UTF-8 on disk. glosa won't overwrite bytes it can't read.",
         { error: true },
       );
       return SAVE_DECLINED;
@@ -4935,13 +4935,13 @@ export function createArtifactPane(host, deps) {
    * rejected lookup — reads the same honest default rather than inventing a name for any of them. */
   function diskChangeCopy(change) {
     if (change.attribution === "human") {
-      return `Changed on disk — last recorded change was an edit in glosa at ${formatClockTime(new Date(change.at))}.`;
+      return `Changed on disk: last recorded change was an edit in glosa at ${formatClockTime(new Date(change.at))}.`;
     }
     if (typeof change.attribution === "string" && change.attribution.startsWith("session:")) {
       const shortId = change.attribution.slice("session:".length).slice(0, 12);
-      return `Changed on disk — last recorded change by session ${shortId} at ${formatClockTime(new Date(change.at))}.`;
+      return `Changed on disk: last recorded change by session ${shortId} at ${formatClockTime(new Date(change.at))}.`;
     }
-    return `Changed on disk, seen at ${formatClockTime(change.seenAt)} — no checkpoint records who changed it.`;
+    return `Changed on disk, seen at ${formatClockTime(change.seenAt)}: no checkpoint records who changed it.`;
   }
 
   /** Scoped to Edit (D7): outside Edit, `.glosa-pane-main` is itself the scroller, and inserting a

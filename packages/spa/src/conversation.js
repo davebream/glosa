@@ -108,7 +108,7 @@ function renderItem(item) {
     case "subagent_group":
       return renderSubagentGroup(item);
     case "unknown":
-      return el("p", { className: "glosa-conv-unknown", textContent: "⚠ unrecognized transcript line — skipped" });
+      return el("p", { className: "glosa-conv-unknown", textContent: "⚠ unrecognized transcript line: skipped" });
     default:
       return el("p", { className: "glosa-conv-unknown", textContent: "⚠ unrecognized event" });
   }
@@ -317,7 +317,7 @@ export function mountConversationPane(
   function showMirrorUnavailable() {
     mirrorAvailable = false;
     mirrorStatusEl.hidden = false;
-    mirrorStatusEl.textContent = "mirror unavailable — use the terminal";
+    mirrorStatusEl.textContent = "mirror unavailable: use the terminal";
     render();
   }
 
