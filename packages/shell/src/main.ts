@@ -15,6 +15,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell
 import {
   compatibility,
   egressDecision,
+  loopbackApiOrigin,
   navigationDecision,
   parseOpenEnvelope,
   scrubChildEnv,
@@ -112,7 +113,7 @@ async function openInWindow(
   log(`glosa open answered in ${Date.now() - started} ms for ${opened.slug}`);
   const origin = new URL(opened.url).origin;
   const win = existing && spaOrigins.get(existing.webContents.id) === origin ? existing : createWindow(origin);
-  const compat = compatibility(await handshake(origin), pkg.glosa.minimumDaemon);
+  const compat = compatibility(await handshake(loopbackApiOrigin(origin)), pkg.glosa.minimumDaemon);
   if (compat.state !== "ok") {
     log(`compatibility: ${compat.state}`);
     const titles = {

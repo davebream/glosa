@@ -157,3 +157,15 @@ export function scrubChildEnv(env: Record<string, string | undefined>): Record<s
   }
   return out;
 }
+
+/**
+ * The main process talks to the daemon over the loopback IP, never the `glosa.localhost` name.
+ * Chromium resolves `*.localhost` internally (RFC 6761) so the window can load that origin, but
+ * the main process uses Node's resolver, and on a macOS 14 GitHub runner that name did not
+ * resolve at all: the compatibility check reported the daemon down while it was serving. The Host
+ * `127.0.0.1:<port>` is on the daemon's allowlist (A3 §4), so nothing is lost.
+ */
+export function loopbackApiOrigin(spaOrigin: string): string {
+  const parsed = new URL(spaOrigin);
+  return `http://127.0.0.1:${parsed.port}`;
+}

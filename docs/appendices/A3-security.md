@@ -226,6 +226,10 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
 - **Only the SPA origin is trusted, never a path.** "Open folder" runs `glosa open` on the folder the
   native picker returned; the page can ask for the picker, not name a directory. Starred-workspace
   routes keep their no-path shape.
+- **The main process reaches the daemon by IP.** Its own requests (the compatibility handshake) go to
+  `http://127.0.0.1:<port>`, on the Host allowlist. Chromium resolves `glosa.localhost` internally, so
+  the window loads that origin; Node's resolver in the main process may not (it did not on a macOS 14
+  CI runner), and a name it cannot resolve must never read as "the daemon is down".
 - **The daemon is the CLI's, not the shell's.** The shell delegates every spawn to `glosa open`, owns no
   daemon and stops none on quit (A5 §F13); it checks compatibility against a minimum daemon version and
   shows the exact CLI command when the daemon is too old or speaks another contract major. It makes no

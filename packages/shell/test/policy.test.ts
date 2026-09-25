@@ -6,6 +6,7 @@ import {
   compareVersions,
   compatibility,
   egressDecision,
+  loopbackApiOrigin,
   navigationDecision,
   parseOpenEnvelope,
   preloadShouldExpose,
@@ -137,5 +138,12 @@ describe("invariant 5: no API key reaches a child", () => {
       PATH: "/bin",
       HOME: "/h",
     });
+  });
+});
+
+describe("main-process requests use the loopback IP (A3 §4b)", () => {
+  test("the SPA origin's port on 127.0.0.1, never the glosa.localhost name", () => {
+    expect(loopbackApiOrigin("http://glosa.localhost:4646")).toBe("http://127.0.0.1:4646");
+    expect(loopbackApiOrigin("http://127.0.0.1:20000")).toBe("http://127.0.0.1:20000");
   });
 });
