@@ -3,6 +3,7 @@
 // policy.ts must turn the matching test red (AGENTS.md "ablate it").
 import { describe, expect, test } from "bun:test";
 import {
+  cliCandidates,
   compareVersions,
   compatibility,
   egressDecision,
@@ -160,5 +161,37 @@ describe("the represented file (an editor's proxy icon)", () => {
     expect(representedFile(`${SPA}/#a=..%2Fsecret`, "/Users/x/proj")).toBeNull();
     expect(representedFile(`${SPA}/#a=%2Fetc%2Fpasswd`, "/Users/x/proj")).toBeNull();
     expect(representedFile("garbage", "/Users/x/proj")).toBeNull();
+  });
+});
+
+describe("CLI lookup (R-O1, #371: the recorded executable first, the app's own CLI second)", () => {
+  const HOME = "/Users/u";
+  const RESOURCES = "/Applications/glosa.app/Contents/Resources";
+  const WELL_KNOWN = ["/Users/u/.bun/bin/glosa", "/opt/homebrew/bin/glosa", "/usr/local/bin/glosa", "glosa"];
+
+  test("GLOSA_SHELL_CLI is the only candidate when set", () => {
+    expect(cliCandidates({ override: "/t/cli", homeDir: HOME, resourcesPath: RESOURCES })).toEqual(["/t/cli"]);
+  });
+  test("the recorded executable comes first and honours GLOSA_HOME", () => {
+    expect(cliCandidates({ glosaHome: "/tmp/h", homeDir: HOME, resourcesPath: null })[0]).toBe("/tmp/h/bin/glosa");
+    expect(cliCandidates({ homeDir: HOME, resourcesPath: null })[0]).toBe("/Users/u/.glosa/bin/glosa");
+  });
+  test("a packaged app's own CLI is second, before every well-known bin", () => {
+    expect(cliCandidates({ homeDir: HOME, resourcesPath: RESOURCES })).toEqual([
+      "/Users/u/.glosa/bin/glosa",
+      "/Applications/glosa.app/Contents/Resources/bin/glosa",
+      ...WELL_KNOWN,
+    ]);
+  });
+  test("an unpackaged run has no bundle candidate and ends with the bare name", () => {
+    const candidates = cliCandidates({ homeDir: HOME, resourcesPath: null });
+    expect(candidates).toEqual(["/Users/u/.glosa/bin/glosa", ...WELL_KNOWN]);
+    expect(candidates.some((c) => c.includes("/Contents/Resources/"))).toBe(false);
+  });
+  test("no candidate is a hard-coded /Applications path: the bundle is wherever it was launched from", () => {
+    const moved = "/Users/u/Downloads/glosa.app/Contents/Resources";
+    const candidates = cliCandidates({ homeDir: HOME, resourcesPath: moved });
+    expect(candidates[1]).toBe(`${moved}/bin/glosa`);
+    expect(candidates.some((c) => c.startsWith("/Applications/"))).toBe(false);
   });
 });

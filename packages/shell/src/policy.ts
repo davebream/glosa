@@ -3,6 +3,7 @@
 // function here so it can be tested without a window, and so the main process stays a thin
 // wiring layer. Contracts: docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md
 // (R-O1…R-O6, R-P1…R-P5) and docs/research/2026-09-25-desktop-shell-readiness.md §3.
+import { join } from "node:path";
 
 /** The SPA contract major this shell was built against (A1: major mismatch → reload, never a fix). */
 export const SHELL_CONTRACT_MAJOR = "1";
@@ -188,4 +189,36 @@ export function representedFile(url: string, folder: string): string | null {
   if (!artifact) return folder;
   if (artifact.startsWith("/") || artifact.split("/").includes("..")) return null;
   return `${folder.replace(/\/+$/, "")}/${artifact}`;
+}
+
+/** What the shell needs to know to find a glosa CLI. The main process fills it; nothing here reads. */
+export interface CliLookup {
+  /** GLOSA_SHELL_CLI: the test harness's injection point. When set it is the only candidate. */
+  override?: string;
+  /** GLOSA_HOME, when set; otherwise the recorded executable lives under `<homeDir>/.glosa`. */
+  glosaHome?: string;
+  homeDir: string;
+  /** Electron's `process.resourcesPath` when the app is packaged, else null. */
+  resourcesPath: string | null;
+}
+
+/**
+ * The CLIs the shell tries, in order (R-O1, #371). The recorded executable is the install of
+ * truth, so it comes first: on a machine with a terminal install, the app runs that install. The
+ * CLI a packaged app carries comes second, which is what makes a downloaded app complete on a
+ * machine with nothing recorded; running it records it. The well-known bin directories cover a
+ * Dock launch with a bare PATH, and the bare name is last. The caller keeps the first candidate
+ * that exists; a dangling recorded link does not, so it falls through to the next one.
+ */
+export function cliCandidates(lookup: CliLookup): string[] {
+  if (lookup.override) return [lookup.override];
+  const candidates = [join(lookup.glosaHome ?? join(lookup.homeDir, ".glosa"), "bin", "glosa")];
+  if (lookup.resourcesPath !== null) candidates.push(join(lookup.resourcesPath, "bin", "glosa"));
+  candidates.push(
+    join(lookup.homeDir, ".bun", "bin", "glosa"),
+    "/opt/homebrew/bin/glosa",
+    "/usr/local/bin/glosa",
+    "glosa",
+  );
+  return candidates;
 }
