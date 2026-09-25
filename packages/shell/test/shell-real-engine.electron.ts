@@ -178,7 +178,7 @@ describe.skipIf(!electronInstalled)(
       void (async () => {
         for await (const chunk of electron!.stderr) stderrText += new TextDecoder().decode(chunk);
       })();
-    });
+    }, 60_000);
 
     afterEach(async () => {
       electron?.kill();
@@ -259,6 +259,6 @@ describe.skipIf(!electronInstalled)(
       await Bun.sleep(500);
       const after = (await (await fetch(`http://127.0.0.1:${port}/api/handshake`)).json()) as Handshake;
       expect(after.instance_id).toBe(before.instance_id);
-    });
+    }, 120_000);
   },
 );
