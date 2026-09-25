@@ -210,6 +210,7 @@ From feature-map §4, with what this note changes:
 2. Land the ownership and pairing spec as the contract the shell is built against. Done (#359).
 3. Spike the four unexercised isolation checks from §1 in the same script. Done (§1b, §1c).
 4. Only then a `packages/shell` skeleton: window, deny-all handlers, egress gate, preload with the
-   three calls, compatibility check, explicit update action, signing pipeline. Unbundled `.ts`
-   main and preload, erasable syntax only; packaging is the one build.
+   three calls, compatibility check, explicit update action. Done (#160 skeleton PR): unbundled
+   `.ts` main, erasable syntax only; the preload is plain CommonJS because a sandboxed preload is
+   loaded by Electron, not Node. Packaging and signing remain.
 5. Re-check Electrobun in a quarter against the flip conditions in §2.
