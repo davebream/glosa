@@ -124,6 +124,16 @@ command. Without `--wait`, the request waits in the inbox for later.
 
 ## Quick start
 
+### Platform support
+
+| Platform | Status |
+|---|---|
+| macOS 13 or newer, Apple Silicon and Intel | Supported. Every release is tested here. |
+| Linux | Not supported yet. Most of glosa is portable; the parts that are not (the agent runtimes glosa installs for its managed chats, and the macOS Keychain that optional Wispr Flow dictation uses) are being measured before a target is stated. See "Later" in [the roadmap](ROADMAP.md). |
+| Windows | Not supported and not planned for now. The local API socket, the file permission model and the Claude Code plugin launcher are POSIX only. |
+
+`glosa open`, `glosa doctor` and `glosa update` refuse other platforms with exit code 5 instead of failing halfway.
+
 Install the alpha CLI globally:
 
 ```sh
