@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- The desktop app finds its CLI in a fixed order: `GLOSA_SHELL_CLI`, the recorded executable under
+  `GLOSA_HOME` (or `~/.glosa`), the CLI a packaged app carries, then the well-known bin
+  directories. A terminal install keeps ownership; a packaged app on a machine with nothing
+  recorded runs the CLI it ships with (#371).
 - The desktop app is called glosa everywhere the system shows a name: the Dock, the app switcher, the
   menu bar and the About panel. Unpackaged runs get this from a post-install step that rebrands
   Electron's own bundle; packaged builds from the product name.
