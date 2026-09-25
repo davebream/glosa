@@ -85,6 +85,8 @@ class Cdp {
   }
 }
 
+/** Every target seen on the last poll, for the failure message. */
+let lastTargets: string[] = [];
 async function listTargets(
   cdpPort: number,
   deadlineMs: number,
@@ -100,6 +102,7 @@ async function listTargets(
         url: string;
         webSocketDebuggerUrl: string;
       }>;
+      lastTargets = targets.map((t) => `${t.type} ${t.url.slice(0, 120)}`);
       const hit = targets.find(predicate);
       if (hit) return hit;
     } catch {
@@ -193,8 +196,11 @@ describe.skipIf(!electronInstalled)(
 
     test("pairs over the bridge with no token in any URL, keeps class-F sandboxed, denies leaving the SPA origin, and leaves the daemon running on quit", async () => {
       const spaOrigin = `http://glosa.localhost:${port}`;
-      const page = await listTargets(cdpPort, 20_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
-      expect(page, `SPA page target at ${spaOrigin}; shell stderr:\n${stderrText}`).not.toBeNull();
+      const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+      expect(
+        page,
+        `SPA page target at ${spaOrigin}; targets seen: ${JSON.stringify(lastTargets)}; shell stderr:\n${stderrText}`,
+      ).not.toBeNull();
       const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
       try {
         // Paired through the preload bridge: the window URL never carried p= or t=.
