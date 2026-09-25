@@ -560,9 +560,12 @@ registration epochs prevent filename collisions and restoration into a replaceme
 - **No build step** = no bundle/transpile + no native/compiled addons (`bun run` direct); Bun, system
   git, a browser are required host software (A6 §F30). **One scoped exception (2026-09-25, #160):**
   the desktop shell in `packages/shell` is packaged (asar, `.app`, signing, notarization) when it
-  ships; that is a build. It still needs no transpile — Electron's Node strips types from the
-  unbundled main process — and it packages only itself: the daemon and SPA it shows are whatever the
-  CLI installed, served unbundled as always. The shell is not a root workspace member so Electron is
+  ships; that is a build. It still needs no transpile, because Electron's Node strips types from the
+  unbundled main process. It packages itself plus a copy of the CLI, daemon, SPA and a Bun
+  runtime under `Contents/Resources`, all unbundled and run with `bun run` direct (#371). The daemon
+  it shows is still whatever the recorded executable (`GLOSA_HOME/bin/glosa`) is; the app's own copy
+  is used, and records itself, only when nothing is recorded. The app is therefore the one channel
+  with no host prerequisite. The shell is not a root workspace member so Electron is
   never a dependency of the CLI, daemon or SPA. Scrub `ANTHROPIC_API_KEY` from every spawned
   child env (the $1,800 footgun). Idle daemon < 100 MB RSS.
 

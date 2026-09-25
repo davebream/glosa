@@ -230,7 +230,11 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   `http://127.0.0.1:<port>`, on the Host allowlist. Chromium resolves `glosa.localhost` internally, so
   the window loads that origin; Node's resolver in the main process may not (it did not on a macOS 14
   CI runner), and a name it cannot resolve must never read as "the daemon is down".
-- **The daemon is the CLI's, not the shell's.** The shell delegates every spawn to `glosa open`, owns no
+- **The daemon is the CLI's, not the shell's.** A packaged app carries its own CLI and Bun (#371); it
+  uses them only when no executable is recorded at `GLOSA_HOME/bin/glosa`, and the cask links that CLI
+  into Homebrew's bin, so the recorded executable stays the single owner and no path inside the app
+  bundle is ever written into an agent's configuration.
+  The shell delegates every spawn to `glosa open`, owns no
   daemon and stops none on quit (A5 §F13); it checks compatibility against a minimum daemon version and
   shows the exact CLI command when the daemon is too old or speaks another contract major. It makes no
   update check of its own; "Check for Updates…" opens the releases page on click (A6 §F33).

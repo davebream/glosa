@@ -59,6 +59,8 @@ describe("OSS release metadata", () => {
       "glosa-plugin/.claude-plugin/plugin.json",
       "README.md",
       "test/oss-release.test.ts",
+      "packages/shell/package.json",
+      "packages/shell/package.json",
     ]);
     expect(FORBIDDEN_VERSION_SITES.map((site) => site.path)).toEqual([".claude-plugin/marketplace.json"]);
 

@@ -33,9 +33,13 @@ longest-lived client glosa will ever have.
 
 ## 2. Ownership rules
 
-**R-O1. The install of truth is the CLI.** The daemon's version is whatever `bun install -g` (or
-the recorded executable in `GLOSA_HOME/bin`) put on disk. The shell never installs, upgrades or
-downgrades it. A6 §F30 holds because the shell never writes the install.
+**R-O1. The install of truth is the recorded executable** (`GLOSA_HOME/bin/glosa`). The daemon's
+version is whatever that executable runs. A packaged app carries a CLI and a Bun of its own (#371);
+it may become the install of truth only by running the CLI it carries, the same way any CLI does,
+and only when nothing is recorded (a dangling link counts as nothing). The shell therefore resolves
+the recorded executable first and its own copy second. It never installs, upgrades or downgrades an
+install, so A6 §F30's never-downgrade rule still holds. Amended 2026-09-26 for #371; the original
+text named the CLI's global install as the truth.
 
 **R-O2. Restart only what is proven stale, never what is merely different.** On the
 same-version-different-build path the client re-derives the install's current on-disk build id
