@@ -106,6 +106,62 @@ describe("daemon build decision", () => {
     });
   });
 
+  test("a client that outlived a source change uses the daemon that matches the disk (issue #360)", () => {
+    // The loop this rule ends: a monitor or MCP server started before a merge keeps the old hash,
+    // spawns a daemon that hashes the new tree, and then evicts it for being "different" — every
+    // time, until its single spawn attempt is spent. The tree on disk is the tiebreaker.
+    const withDisk = (onDisk: string | undefined, daemonBuild = `1.0.0-${hashB}`) =>
+      decideDaemonBuild({
+        clientBuildId: `1.0.0-${hashA}`,
+        clientInstallId: mine,
+        daemonBuildId: daemonBuild,
+        daemonInstallId: mine,
+        daemonProtocol: "1.0",
+        currentInstallBuildId: () => onDisk,
+      });
+    // The daemon matches the disk: the client is the stale side, and says so instead of evicting.
+    expect(withDisk(`1.0.0-${hashB}`)).toEqual({ action: "use", staleClient: true });
+    // The client matches the disk: the daemon is stale, restart as before.
+    expect(withDisk(`1.0.0-${hashA}`)).toEqual({ action: "restart", reason: "same-version-different-build" });
+    // Neither matches (a third state on disk), nothing known, or the hash cannot be read: restart.
+    expect(withDisk("1.0.0-2222222222222222").action).toBe("restart");
+    expect(withDisk(undefined).action).toBe("restart");
+    expect(
+      decideDaemonBuild({
+        clientBuildId: `1.0.0-${hashA}`,
+        clientInstallId: mine,
+        daemonBuildId: `1.0.0-${hashB}`,
+        daemonInstallId: mine,
+        daemonProtocol: "1.0",
+        currentInstallBuildId: () => {
+          throw new Error("unreadable tree");
+        },
+      }).action,
+    ).toBe("restart");
+    // The tiebreaker never reaches a foreign install: that path still refuses.
+    expect(
+      decideDaemonBuild({
+        clientBuildId: `1.0.0-${hashA}`,
+        clientInstallId: mine,
+        daemonBuildId: `1.0.0-${hashB}`,
+        daemonInstallId: theirs,
+        daemonProtocol: "1.0",
+        currentInstallBuildId: () => `1.0.0-${hashB}`,
+      }).action,
+    ).toBe("fail");
+    // And it never reaches an upgrade: a newer client restarts an older daemon whatever the disk says.
+    expect(
+      decideDaemonBuild({
+        clientBuildId: `2.0.0-${hashA}`,
+        clientInstallId: mine,
+        daemonBuildId: `1.0.0-${hashB}`,
+        daemonInstallId: mine,
+        daemonProtocol: "1.0",
+        currentInstallBuildId: () => `1.0.0-${hashB}`,
+      }),
+    ).toEqual({ action: "restart", reason: "newer-client" });
+  });
+
   test("never stops a daemon another install started", () => {
     // The storm this rule ends: a checkout and a release install of the same version each see the
     // other as "different build" and SIGTERM it, forever.

@@ -55,7 +55,7 @@ import {
 } from "../transport/http.ts";
 import { internalErrorResponse } from "../transport/problem.ts";
 import { type WorkspaceTarget, workspaceRegistrationId } from "../workspace.ts";
-import { BUILD_ID, parseBuildId } from "./build-id.ts";
+import { BUILD_ID, computeBuildId, parseBuildId } from "./build-id.ts";
 import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
 import {
   fetchHandshake,
@@ -1149,7 +1149,10 @@ function locklessHandshakeResult(
 }
 
 export type DaemonBuildDecision =
-  | { action: "use" }
+  /** `staleClient` marks a `use` reached because the DAEMON matches the install on disk and this
+   * process does not: it was started before the tree changed under it. The daemon is right; the
+   * client should be restarted when convenient, and says so once (issue #360). */
+  | { action: "use"; staleClient?: true }
   | { action: "restart"; reason: "legacy" | "newer-client" | "same-version-different-build" }
   /** `foreignInstall` marks the one failure a user can act on directly: another install owns the
    * daemon, so the fix is to stop that process rather than to change anything about this one. */
@@ -1164,6 +1167,14 @@ export interface DaemonBuildInputs {
   daemonBuildId: string | undefined;
   daemonInstallId: string | undefined;
   daemonProtocol: string;
+  /** The install's build identity as it is ON DISK NOW, re-derived on demand. Consulted only on the
+   * same-version-different-build path of a daemon this install owns, which is the one place the
+   * in-memory `BUILD_ID` cannot say which side is stale: a client that outlived a source change
+   * carries a hash the tree no longer has, and without this it evicted every daemon it spawned
+   * (issue #360). A thunk, because hashing the tree is the cost `install.ts` keeps off the
+   * handshake hot path; it runs only when the two hashes already disagree. `undefined` (or a
+   * throw) means "cannot tell", which keeps today's restart. */
+  currentInstallBuildId?: () => string | undefined;
 }
 
 const incompatibleVersionsReason = (daemonProtocol: string): string =>
@@ -1209,6 +1220,13 @@ export function decideDaemonBuild(inputs: DaemonBuildInputs): DaemonBuildDecisio
     if (daemonInstallId !== clientInstallId) {
       return { action: "fail", reason: foreignInstallReason(daemonBuildId), foreignInstall: true };
     }
+    // Same install, same version, different bytes: one of the two is stale, and only the tree on
+    // disk can say which. A daemon that matches the disk is current; the stale side is this
+    // process, and restarting the daemon would only spawn another one it disagrees with.
+    const onDisk = parseBuildId(readCurrentBuildId(inputs.currentInstallBuildId));
+    if (onDisk && onDisk.sourceHash === daemon.sourceHash && onDisk.version === daemon.version) {
+      return { action: "use", staleClient: true };
+    }
     return { action: "restart", reason: "same-version-different-build" };
   }
 
@@ -1218,9 +1236,24 @@ export function decideDaemonBuild(inputs: DaemonBuildInputs): DaemonBuildDecisio
   return { action: "use" };
 }
 
+/** `""` stands for "cannot tell" so `parseBuildId` returns null and the caller restarts as before:
+ * an absent thunk, a thunk that returns nothing, and a thunk that throws all land here. */
+function readCurrentBuildId(read: DaemonBuildInputs["currentInstallBuildId"]): string {
+  if (!read) return "";
+  try {
+    return read() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Said once per process: the log otherwise fills with the same line on every handshake. */
+let staleClientLogged = false;
+
 /** The decision for a peer this client has just handshaken with, using its own identity. */
 function decideForPeer(hs: HandshakeResponse): DaemonBuildDecision {
   return decideDaemonBuild({
+    currentInstallBuildId: () => computeBuildId(),
     clientBuildId: BUILD_ID,
     clientInstallId: INSTALL_ID,
     daemonBuildId: hs.build_id,
@@ -1480,6 +1513,15 @@ export async function ensureDaemonWithDependencies(
 
         const decision = decideForPeer(hs);
         if (decision.action === "use") {
+          if (decision.staleClient && !staleClientLogged) {
+            staleClientLogged = true;
+            log(
+              home,
+              `using ${hs.instance_id}: this client (build ${BUILD_ID}, pid ${process.pid}) predates ` +
+                `the tree it runs from; the daemon's build ${hs.build_id} matches the install on disk. ` +
+                "Restart this process when convenient.",
+            );
+          }
           // A daemon that serves no socket cannot be talked to by this client at all: every
           // authenticated request goes over `<GLOSA_HOME>/run/api.sock`, and there is deliberately
           // no fall back to the port (A3 §3.2 — a fallback would hand a squatter the entire
