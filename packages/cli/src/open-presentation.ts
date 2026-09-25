@@ -30,7 +30,12 @@ export interface PresentFragmentOptions {
   readLock: boolean;
   /** Durable pairing token (`t=`) or ephemeral presentation token (`p=`). Exactly one. */
   pairing: { kind: "durable"; token: string } | { kind: "presentation"; token: string };
+  /** Which kind of surface the link opens (decision 2026-09-25): `companion` when a terminal agent
+   * presents or binds, `desk` when a person opens the folder. Fixed for that tab or window. */
+  kind: SurfaceKind;
 }
+
+export type SurfaceKind = "desk" | "companion";
 
 export interface OpenPresentationData {
   slug?: string;
@@ -53,6 +58,9 @@ export interface OpenPresentationOptions {
   readLock?: boolean;
   mode?: PresentationMode;
   bindSessionId?: string;
+  /** Overrides the default: a bind makes a companion surface, no bind makes a desk one. MCP
+   * `glosa_present` always says companion, since an agent is presenting even in read mode. */
+  surfaceKind?: SurfaceKind;
 }
 
 export interface OpenPresentationDeps {
@@ -195,6 +203,7 @@ export function buildPresentationUrl(
   params.set("surface", opts.surface);
   params.set("mode", opts.mode);
   if (opts.readLock) params.set("lock", "read");
+  params.set("kind", opts.kind);
   return `http://${hostname}:${port}/#${params.toString()}`;
 }
 
@@ -346,6 +355,7 @@ export async function runOpenPresentation(
     mode,
     readLock,
     pairing,
+    kind: options.surfaceKind ?? (options.bindSessionId ? "companion" : "desk"),
   });
 
   if (options.launchBrowser !== false) deps.openBrowser(url);

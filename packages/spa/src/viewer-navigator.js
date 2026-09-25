@@ -52,9 +52,16 @@ function writeFlag(storage, key, value) {
  *   elements: any,
  *   storage?: any,
  *   enabled?: boolean,
+ *   desk?: boolean,
  * }} options
  */
-export function createNavigatorController({ root, elements, storage = defaultStorage(), enabled = true } = {}) {
+export function createNavigatorController({
+  root,
+  elements,
+  storage = defaultStorage(),
+  enabled = true,
+  desk = true,
+} = {}) {
   const { navToggle, sidebarEl, artifactList, starredToggle, starredSection, starredList } = elements;
 
   let starredExpanded = readFlag(storage, NAV_STARRED_STORAGE_KEY, true);
@@ -92,7 +99,7 @@ export function createNavigatorController({ root, elements, storage = defaultSto
   function applyStarred() {
     // Nothing starred, nothing shown: the star beside the Documents heading is how a first star is
     // taken, so an empty section would only be a label with nothing under it.
-    starredSection.hidden = !starredAvailable;
+    starredSection.hidden = !starredAvailable || !desk;
     starredToggle.setAttribute("aria-expanded", String(starredExpanded));
     starredList.hidden = !starredExpanded;
   }

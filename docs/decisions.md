@@ -1425,3 +1425,21 @@ work follows the maintainer's accepted implementation specification; it changes 
 Claude is built first internally, then Codex; both public paths remain unavailable until their joint
 native qualification and offering gates pass. The current implementation does not supply that
 attended evidence or T8 maintainer sign-off.
+
+
+## Desk and companion are surfaces, not folders (2026-09-25)
+
+Planning the desktop shell's top bar raised whether a folder's "face" (chat-first desk, or the
+margin-and-inbox companion) is fixed when the folder is first registered or follows whoever opened
+it last. The maintainer rejected both: "these should be 2 separate surfaces with their own agent
+connections … concurrent edits should be reconciled as any other app", and then: "companion and
+desk are inherently different surfaces, they should not co-exist in a single electron app window."
+
+So the kind belongs to the surface. A link carries `kind=companion` (from `glosa open --bind` and
+`glosa_present`) or `kind=desk` (from a plain `glosa open` and the app's folder picker); absent
+means companion, the shape every older link carried. The SPA gates chats, stars and the agent
+connection chip on it and records nothing on the folder. One folder may be open on both kinds at
+once, each surface with its own agent, reconciled by claims and human-save-wins; in the app that is
+two windows, never mixed tabs. Nothing is inferred from binding state: a companion surface whose
+session ended still offers reconnect. Supersedes the "face at registration" line in
+`docs/design/2026-09-25-desktop-shell-feature-map.md` §4.

@@ -1431,6 +1431,7 @@ describe("official TypeScript MCP SDK contract", () => {
         };
         expect(body.url).toContain("p=ephemeral-present-token");
         expect(body.url).toContain("lock=read");
+        expect(body.url).toContain("kind=companion");
         expect(body.url).not.toContain("t=");
         expect(body.preview).toBe(true);
         expect(body.surface).toBe("document");

@@ -312,6 +312,7 @@ describe("readRoute — surface/mode/lock + secrets", () => {
       surface: "document",
       mode: "review",
       readLock: true,
+      kind: null,
       durableToken: "SECRET",
       presentationToken: null,
     });
@@ -561,6 +562,7 @@ describe("presentation token under the desktop shell (ownership spec R-P1/R-P2)"
       surface: null,
       mode: null,
       readLock: false,
+      kind: null,
       durableToken: t,
       presentationToken: p,
     }) as const;
@@ -604,5 +606,27 @@ describe("presentation token under the desktop shell (ownership spec R-P1/R-P2)"
     expect(
       await resolvePresentationToken(route(null), storage(null), { presentationToken: async () => null }),
     ).toBeNull();
+  });
+});
+
+describe("surface kind (decision 2026-09-25: the face belongs to the surface)", () => {
+  test("kind= is read only when it names a surface kind, and focusHash keeps it", () => {
+    expect(readRoute({ hash: "#w=x&kind=desk" }).kind).toBe("desk");
+    expect(readRoute({ hash: "#w=x&kind=companion" }).kind).toBe("companion");
+    expect(readRoute({ hash: "#w=x&kind=other" }).kind).toBeNull();
+    expect(readRoute({ hash: "#w=x" }).kind).toBeNull();
+    expect(focusHash({ slug: "x", kind: "desk" })).toBe("#w=x&kind=desk");
+    expect(focusHash({ slug: "x" })).toBe("#w=x");
+  });
+  test("scrubbing a secret keeps the surface kind in the address", () => {
+    const location = new URL("http://127.0.0.1:9999/#p=SECRET&w=x&kind=desk");
+    const history = {
+      replaceState(_state: unknown, _title: string, url?: string | URL | null) {
+        location.href = new URL(String(url), location).href;
+      },
+    };
+    const storage = { getItem: () => null, setItem() {}, removeItem() {} };
+    scrubSecrets(location, storage, history, readRoute(location), "durable");
+    expect(location.hash).toBe("#w=x&kind=desk");
   });
 });

@@ -8,24 +8,31 @@ Electron spike is in `docs/research/2026-09-25-desktop-shell-readiness.md` §5.
 
 ## 1. The rule
 
-The shell is not a second product. The axis that decides what a workspace shows is **who brought
-the agent**, not which window renders it:
+The shell is not a second product. The axis that decides what a surface shows is **who brought
+the agent to that surface**, not which window renders it and not which folder it is:
 
 ```
-presented by an agent  -->  companion face   (terminal owns the conversation; glosa is margin + inbox)
-opened by the human    -->  desk face        (glosa owns the conversation; managed chat)
+presented by an agent  -->  companion surface   (terminal owns the conversation; glosa is margin + inbox)
+opened by the human    -->  desk surface        (glosa owns the conversation; managed chat)
 ```
 
-- The face is a **per-workspace** property, set at registration (`glosa open --bind` /
-  `glosa_present` vs. human open). A window can hold one of each.
+- The kind is a **per-surface** property, fixed when the tab or window opens and carried in its
+  link (`kind=companion` from `glosa open --bind` and `glosa_present`, `kind=desk` from a plain
+  `glosa open` and the app's folder picker; absent means companion). Nothing is recorded on the
+  folder, and the kind is never inferred from whether a session is bound (decision 2026-09-25,
+  revised the same day: "companion and desk are inherently different surfaces, they should not
+  co-exist in a single electron app window").
+- One folder may be open on a desk surface and a companion surface at once, each with its own
+  agent. Claims, the journal and human-save-wins reconcile the bytes; each surface shows only its
+  own agent. In the app that means two windows, never two tabs of different kinds in one window.
 - Browser and Electron render the same SPA against the same singleton daemon (R1). Electron adds
   OS affordances only. It forks no feature.
-- Crossing faces is an explicit act with its own ceremony (account, consent), never a default.
+- Crossing kinds is an explicit act with its own ceremony (account, consent), never a default.
 
 ## 2. Feature inventory
 
-Legend: **Both** = identical in either face. **Companion** = only when a session presented the
-workspace. **Desk** = only when the human opened it. **Shell** = needs the Electron main process.
+Legend: **Both** = identical in either face. **Companion** = only on a surface a session
+presented. **Desk** = only on a surface the human opened. **Shell** = needs the Electron main process.
 
 ### Reading and annotating (the core act)
 
@@ -110,8 +117,10 @@ Preload exposes at most `openFolder()`, `notify()`, `revealInFinder()`. No daemo
    a bound session. Replaces "kill children on quit" in #160.
 3. **Layout per window, not per workspace,** or the second window opens with a read-only layout.
 4. **Attention is daemon-wide;** the current workspace is window-scoped by fragment.
-5. **Face at registration:** `presented` vs `opened`, recorded on the registration, exposed on
-   `GET /api/workspaces` rows, read by the SPA to choose the face.
+5. **Kind at open, not at registration** (decided 2026-09-25): the link carries `kind=`, the SPA
+   gates chats, stars and the connection chip on it, and no workspace row or index field exists for
+   it. The shell keeps one kind per window; a presentation arriving for a folder a desk window shows
+   opens a second, companion window (the `glosa://` handler, not yet built).
 6. **Origin:** the shell loads `http://glosa.localhost:4646`, same as `glosa open` (#255).
 7. **No build step exception** is scoped to the shell package only; SPA and daemon stay served
    unbundled by the daemon so the two modes cannot drift.

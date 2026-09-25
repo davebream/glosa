@@ -782,6 +782,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
           readLock,
           mode,
           bindSessionId,
+          surfaceKind: "companion",
         },
       );
       if (!result.ok) {
