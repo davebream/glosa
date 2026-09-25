@@ -73,7 +73,10 @@ function splitName(name) {
 }
 
 const ICONS = {
-  chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
+  // A folder, closed and open, drawn with the tree's own stroke. The open one is the expanded
+  // state; the row's aria-expanded still says which, the glyph only shows it.
+  folder:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="glosa-folder-closed" d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path class="glosa-folder-open" d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5V10H6.2a1.5 1.5 0 0 0-1.4 1l-1.8 5z M3 17.5l2-6.5h16.5l-2.2 7.1a1.5 1.5 0 0 1-1.4 1H4.5A1.5 1.5 0 0 1 3 17.5z"/></svg>',
 };
 
 /** @param {string} path */
@@ -276,11 +279,11 @@ export function createArtifactTreeNavigator(container, options) {
 
     const disclosure = document.createElement("span");
     disclosure.className = "glosa-tree-disclosure";
-    if (node.kind === "directory") disclosure.innerHTML = ICONS.chevron;
+    if (node.kind === "directory") disclosure.innerHTML = ICONS.folder;
     else disclosure.setAttribute("aria-hidden", "true");
 
-    // No file or folder glyph: the chevron already says "folder", a file is a row without one, and
-    // the 21px the glyph took is 21px more of every name in a 232px column.
+    // A folder row carries a folder glyph (closed, or open when expanded); a file is a row without
+    // one, so the 15px slot is the only width the glyph costs a name in a 232px column.
     const label = document.createElement("span");
     label.className = "glosa-tree-label";
     // The name always sits in a head span, because the label is a flex row and `text-overflow`
@@ -306,7 +309,7 @@ export function createArtifactTreeNavigator(container, options) {
       if (isExpanded) item.setAttribute("data-expanded", "true");
       // A folded folder with an open document inside still says so: the tab strip shows the
       // document, so the tree must not show a plain folder. The mark sits at the row's end (the
-      // chevron owns the slot the file's dot uses) and the row names the count.
+      // folder glyph owns the slot the file's dot uses) and the row names the count.
       const inside = isExpanded ? 0 : openInside(node, openPaths);
       if (inside > 0) {
         const mark = document.createElement("span");
