@@ -27,6 +27,7 @@ import {
   validateTarballUrl,
   verifyIntegrity,
 } from "../src/update.ts";
+import { bundledLauncherPath, isAppBundlePath, targetsInstall } from "../src/install-kind.ts";
 import type { CommandEnvelope } from "../src/envelope.ts";
 import { captureStdout } from "./test-utils.ts";
 
@@ -49,6 +50,7 @@ function captureStderr(fn: () => void): string {
 const BUN = "/Users/x/.bun/install/global/node_modules/@davebream/glosa";
 const NPM = "/usr/local/lib/node_modules/@davebream/glosa";
 const VOLTA_PATH = "/Users/x/.volta/tools/image/packages/@davebream/glosa/lib/node_modules/@davebream/glosa";
+const APP = "/Applications/glosa.app/Contents/Resources/glosa";
 
 describe("classifyInstall", () => {
   test.each([
@@ -71,6 +73,13 @@ describe("classifyInstall", () => {
     // root, which carries no package-path suffix. Caught without any realpath comparison.
     ["/Users/x/code/glosa", "unknown"],
     ["/Users/x/somewhere/glosa", "unknown"],
+    // The desktop app's bundle (#371), wherever the app sits: /Applications, ~/Applications, or
+    // brew's Caskroom before the move.
+    [APP, "app-bundle"],
+    ["/Users/x/Applications/glosa.app/Contents/Resources/glosa", "app-bundle"],
+    ["/opt/homebrew/Caskroom/glosa/0.1.0-alpha.32/glosa.app/Contents/Resources/glosa", "app-bundle"],
+    // A directory merely named `app` is not a bundle.
+    ["/Users/x/app/Contents/Resources/glosa", "unknown"],
   ] as const)("%s -> %s", (path, kind) => {
     expect(classifyInstall(path).kind).toBe(kind);
   });
@@ -82,6 +91,26 @@ describe("classifyInstall", () => {
   test("a .git marker beats every managed marker — never write into a developer's own tree", () => {
     expect(classifyInstall(BUN, true).kind).toBe("source-checkout");
     expect(classifyInstall(NPM, true).kind).toBe("source-checkout");
+  });
+
+  test("app-bundle wins over a bun-global-looking suffix inside the bundle", () => {
+    // Whatever the bundle carries is brew's to replace, never ours to upgrade in place.
+    expect(classifyInstall(`${APP}/install/global/node_modules/@davebream/glosa`).kind).toBe("app-bundle");
+    expect(classifyInstall(`${APP}/lib/node_modules/@davebream/glosa`).kind).toBe("app-bundle");
+  });
+
+  test("a .git marker still beats the app-bundle marker", () => {
+    expect(classifyInstall(APP, true).kind).toBe("source-checkout");
+  });
+
+  test("app-bundle is refused with the brew command and no install dir", () => {
+    expect(classifyInstall(APP)).toEqual({
+      kind: "app-bundle",
+      managed: false,
+      installDir: null,
+      manualCommand: "brew upgrade --cask glosa",
+      reshimHint: null,
+    });
   });
 
   test("bun-global carries the install/global dir to pin", () => {
@@ -104,6 +133,7 @@ describe("classifyInstall", () => {
       "/Users/x/.yarn/berry/cache/@davebream-glosa-npm-0.1.0",
       "/Users/x/.bun/install/cache/@davebream/glosa@0.1.0-alpha.0",
       "/Users/x/somewhere/glosa",
+      APP,
     ]) {
       const c = classifyInstall(p);
       expect(c.managed).toBe(false);
@@ -121,6 +151,28 @@ describe("classifyInstall", () => {
     expect(
       classifyInstall("/Users/x/.local/share/mise/installs/node/22.0.0/lib/node_modules/@davebream/glosa"),
     ).toMatchObject({ kind: "npm-global", reshimHint: "mise reshim" });
+  });
+});
+
+describe("app bundle paths (#371)", () => {
+  test("isAppBundlePath matches any <name>.app/Contents/Resources/ run and nothing else", () => {
+    expect(isAppBundlePath(APP)).toBe(true);
+    expect(isAppBundlePath("/Applications/Other Name.app/Contents/Resources/glosa")).toBe(true);
+    expect(isAppBundlePath("/Users/x/app/Contents/Resources/glosa")).toBe(false);
+    expect(isAppBundlePath("/Applications/glosa.app/Contents/MacOS/glosa")).toBe(false);
+    expect(isAppBundlePath(BUN)).toBe(false);
+  });
+
+  test("bundledLauncherPath is Resources/bin/glosa, a sibling of the package root", () => {
+    expect(bundledLauncherPath(APP)).toBe("/Applications/glosa.app/Contents/Resources/bin/glosa");
+  });
+
+  test("targetsInstall recognises an install's main.ts or its bundled launcher, and nothing else", () => {
+    expect(targetsInstall(`${BUN}/packages/cli/src/main.ts`, BUN)).toBe(true);
+    expect(targetsInstall("/Applications/glosa.app/Contents/Resources/bin/glosa", APP)).toBe(true);
+    expect(targetsInstall(`${APP}/packages/cli/src/main.ts`, APP)).toBe(true);
+    expect(targetsInstall(`${BUN}/packages/cli/src/main.ts`, APP)).toBe(false);
+    expect(targetsInstall("/Applications/glosa.app/Contents/Resources/bin/glosa", BUN)).toBe(false);
   });
 });
 
@@ -813,6 +865,17 @@ describe("runUpdate — evaluation order", () => {
     expect(r.error?.code).toBe("update-unmanaged-install");
     expect(r.data.install_kind).toBe("volta");
     expect(r.data.manual_command).toBe("volta install @davebream/glosa");
+    expect(h.calls.fetchPackument).toBe(0);
+  });
+
+  test("an app-bundle install exits 2 with the brew command and never touches the network", async () => {
+    const h = makeDeps({ packageRoot: () => APP });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.code).toBe("update-unmanaged-install");
+    expect(r.data.install_kind).toBe("app-bundle");
+    expect(r.data.manual_command).toBe("brew upgrade --cask glosa");
+    expect(r.error?.hint).toBe("Upgrade it manually: brew upgrade --cask glosa");
     expect(h.calls.fetchPackument).toBe(0);
   });
 

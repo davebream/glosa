@@ -12,6 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `GLOSA_HOME` (or `~/.glosa`), the CLI a packaged app carries, then the well-known bin
   directories. A terminal install keeps ownership; a packaged app on a machine with nothing
   recorded runs the CLI it ships with (#371).
+- `glosa update` recognises a CLI running inside the desktop app (`app-bundle`) and answers with
+  `brew upgrade --cask glosa` instead of trying to upgrade brew's tree. That CLI records itself as
+  the machine's glosa at `~/.glosa/bin/glosa` only when no install is recorded yet, so a terminal
+  install keeps ownership, and it records the app's own launcher rather than a script that needs
+  `bun` on `PATH` (#371).
 - The desktop app is called glosa everywhere the system shows a name: the Dock, the app switcher, the
   menu bar and the About panel. Unpackaged runs get this from a post-install step that rebrands
   Electron's own bundle; packaged builds from the product name.

@@ -216,6 +216,10 @@
     "test/workspace.test.ts": 0.00926
   },
   "estimates": {
+    "packages/cli/test/install-link.test.ts": {
+      "seconds": 0.6,
+      "reason": "Initial local Bun 1.4.2 estimate for the recorded-executable link tests (temp homes plus one spawn of main.ts --version); replace with measured CI medians."
+    },
     "test/acceptance/daemon-identity-socket.test.ts": {
       "seconds": 0.4678,
       "reason": "One successful Bun 1.4.2 CI sample in run 35647662965; replace with the median after a second successful sample."
