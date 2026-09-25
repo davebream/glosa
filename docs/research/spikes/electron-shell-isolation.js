@@ -76,7 +76,9 @@ app.whenReady().then(async () => {
   let frame = null;
   for (let i = 0; i < 40 && !frame; i++) {
     await sleep(500);
-    frame = win.webContents.mainFrame.framesInSubtree.find((f) => f !== win.webContents.mainFrame && f.url.startsWith(classfOrigin));
+    frame = win.webContents.mainFrame.framesInSubtree.find(
+      (f) => f !== win.webContents.mainFrame && f.url.startsWith(classfOrigin),
+    );
   }
   if (!frame) return finish("no class-F frame");
   for (let i = 0; i < 20; i++) {
@@ -103,7 +105,9 @@ app.whenReady().then(async () => {
       iframe.contentWindow.postMessage({ type: "glosa:init", nonce: "forged" }, "*", [ch.port2]);
       setTimeout(() => resolve(heard), 1500);
     })`),
-    bridgeStillAlive: await frame.executeJavaScript("document.getElementById('out')?.textContent ?? ''").then((t) => t.includes("img=")),
+    bridgeStillAlive: await frame
+      .executeJavaScript("document.getElementById('out')?.textContent ?? ''")
+      .then((t) => t.includes("img=")),
   };
 
   // ---------- B: crash the paired renderer ----------
@@ -127,22 +131,40 @@ app.whenReady().then(async () => {
 
   // ---------- C: forged Host from the main process ----------
   const daemon = `http://127.0.0.1:${new URL(url).port}`;
-  const forged = await net.fetch(`${daemon}/api/handshake`, { headers: { Host: "evil.example" } }).catch((e) => ({ status: `error: ${e.message}` }));
+  const forged = await net
+    .fetch(`${daemon}/api/handshake`, { headers: { Host: "evil.example" } })
+    .catch((e) => ({ status: `error: ${e.message}` }));
   const honest = await net.fetch(`${daemon}/api/handshake`).catch((e) => ({ status: `error: ${e.message}` }));
   const nodeForged = await new Promise((resolve) => {
-    const req = require("node:http").request({ host: "127.0.0.1", port: Number(new URL(url).port), path: "/api/handshake", headers: { Host: "evil.example" } }, (res) => resolve(res.statusCode));
+    const req = require("node:http").request(
+      { host: "127.0.0.1", port: Number(new URL(url).port), path: "/api/handshake", headers: { Host: "evil.example" } },
+      (res) => resolve(res.statusCode),
+    );
     req.on("error", (e) => resolve(`error: ${e.message}`));
     req.end();
   });
-  result.C_forgedHost = { chromiumNetFetchForged: forged.status, nodeHttpForged: nodeForged, honestStatus: honest.status };
+  result.C_forgedHost = {
+    chromiumNetFetchForged: forged.status,
+    nodeHttpForged: nodeForged,
+    honestStatus: honest.status,
+  };
 
   // ---------- A: the same window navigated to the class-F origin ----------
   const loadOrTimeout = (w, u) => {
     const fails = [];
     // What the real shell does for every window (readiness note §3): deny top-frame navigation away.
-    w.webContents.on("will-navigate", (e, to) => { fails.push({ deniedNavigation: to }); e.preventDefault(); });
+    w.webContents.on("will-navigate", (e, to) => {
+      fails.push({ deniedNavigation: to });
+      e.preventDefault();
+    });
     w.webContents.on("did-fail-load", (_e, code, desc, failedUrl) => fails.push({ code, desc, failedUrl }));
-    return Promise.race([w.loadURL(u).then(() => "loaded", (e) => `rejected: ${e.message}`), sleep(8000).then(() => "timeout")]).then((r) => ({ r, fails }));
+    return Promise.race([
+      w.loadURL(u).then(
+        () => "loaded",
+        (e) => `rejected: ${e.message}`,
+      ),
+      sleep(8000).then(() => "timeout"),
+    ]).then((r) => ({ r, fails }));
   };
   const win2 = new BrowserWindow({ show: false, webPreferences: { preload: scopedPreload } });
   result.A_scopedLoad = await loadOrTimeout(win2, frameUrl);
