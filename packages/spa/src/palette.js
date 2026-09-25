@@ -82,8 +82,8 @@ export function createCommandPalette({
     type: "text",
     autocomplete: "off",
     spellcheck: false,
-    placeholder: "Search artifacts, chats and commands…",
-    "aria-label": "Search artifacts, chats and commands",
+    placeholder: "Search documents, chats and commands…",
+    "aria-label": "Search documents, chats and commands",
     maxLength: 256,
     role: "combobox",
     "aria-expanded": "true",
@@ -101,7 +101,7 @@ export function createCommandPalette({
   const filters = el("div", { className: "glosa-palette-filters", role: "group", "aria-label": "Search in" });
   for (const [value, label] of [
     ["all", "All"],
-    ["file", "Artifacts"],
+    ["file", "Documents"],
     ["chat", "Chats"],
     ["command", "Commands"],
   ]) {

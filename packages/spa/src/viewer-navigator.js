@@ -90,7 +90,7 @@ export function createNavigatorController({ root, elements, storage = defaultSto
   }
 
   function applyStarred() {
-    // Nothing starred, nothing shown: the star beside the Artifacts heading is how a first star is
+    // Nothing starred, nothing shown: the star beside the Documents heading is how a first star is
     // taken, so an empty section would only be a label with nothing under it.
     starredSection.hidden = !starredAvailable;
     starredToggle.setAttribute("aria-expanded", String(starredExpanded));

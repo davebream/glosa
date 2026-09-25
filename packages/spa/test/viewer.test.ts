@@ -299,8 +299,8 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(root.querySelector(".glosa-tab-label")?.textContent).toBe("notes.md");
     expect(root.querySelector('.glosa-tab[data-missing="true"]')).not.toBeNull();
     expect(activePane(root).getAttribute("data-missing")).toBe("true");
-    expect(inPane(root, ".glosa-empty-title")?.textContent).toBe("This artifact is gone.");
-    expect(dom.document.title).toBe("ws-1 — notes.md");
+    expect(inPane(root, ".glosa-empty-title")?.textContent).toBe("This document is gone.");
+    expect(dom.document.title).toBe("notes.md — ws-1");
   });
 
   const settle = async () => {
@@ -437,7 +437,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
     mountApp(root, { dataAccess: da, initialSlug: "ws-1", initialArtifact: "notes.md" });
     await settle();
-    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("Search artifacts and chats");
+    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("Search documents and chats");
 
     const rows = Array.from(root.querySelectorAll(".glosa-starred-row")) as any[];
     expect(
@@ -731,7 +731,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect((root.querySelectorAll(".glosa-tab-label")[1] as any).textContent).toBe("outline.md");
     expect(inPane(root, ".glosa-artifact-name").textContent).toBe("");
     expect(inPane(root, ".glosa-artifact-dir").textContent).toBe("drafts/");
-    expect(dom.document.title).toBe("ws-1 — outline.md"); // the active pane's file reaches the tab title
+    expect(dom.document.title).toBe("outline.md — ws-1"); // the active pane's file reaches the tab title
   });
 
   test("at desk widths the navigator is a column: opening an artifact leaves it in place", async () => {
@@ -849,7 +849,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(activePane(root).getAttribute("data-editor-face")).toBe("rich");
     const richTextbox = root.querySelector('.ProseMirror[role="textbox"]');
     if (richTextbox) {
-      expect(richTextbox.getAttribute("aria-label")).toBe("Artifact editor");
+      expect(richTextbox.getAttribute("aria-label")).toBe("Document editor");
       expect(richTextbox.getAttribute("aria-multiline")).toBe("true");
     }
     // The rich face is Edit's default (or the automatic fallback already picked Source in DOMs
@@ -1503,7 +1503,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect(dom.document.title).toBe("ws-1 — notes.md");
+    expect(dom.document.title).toBe("notes.md — ws-1");
   });
 
   test("the title is the way into Go to, and a journal apply lease pauses Edit in the open pane until it ends", async () => {

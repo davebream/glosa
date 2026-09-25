@@ -1917,7 +1917,7 @@ export function mountRichEditor(
       role: "textbox",
       // A block editor names the passage it opened on ("Editing §2.1"), because a screen reader
       // leaving a labelled region for an unnamed textbox is the moment the reader loses their place.
-      "aria-label": label ?? "Artifact editor",
+      "aria-label": label ?? "Document editor",
       "aria-multiline": "true",
     },
     dispatchTransaction(tr) {
