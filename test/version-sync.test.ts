@@ -25,6 +25,7 @@ import {
 
 const PLUGIN = "glosa-plugin/.claude-plugin/plugin.json";
 const MARKETPLACE = ".claude-plugin/marketplace.json";
+const SHELL = "packages/shell/package.json";
 
 function clean(): Record<string, string> {
   return {
@@ -32,6 +33,7 @@ function clean(): Record<string, string> {
     [PLUGIN]: `{\n  "name": "glosa",\n  "version": "1.2.3",\n  "license": "Apache-2.0"\n}\n`,
     "README.md": "bun add --global https://registry.npmjs.org/@davebream/glosa/-/glosa-1.2.3.tgz\n",
     "test/oss-release.test.ts": `    expect(rootPackage.version).toBe("1.2.3");\n`,
+    [SHELL]: `{\n  "name": "@glosa/shell",\n  "version": "1.2.3",\n  "glosa": {\n    "minimumDaemon": "1.2.3",\n    "releases": "https://example.invalid"\n  }\n}\n`,
     [MARKETPLACE]: `{\n  "plugins": [{ "name": "glosa", "source": "./glosa-plugin" }]\n}\n`,
   };
 }
@@ -107,9 +109,23 @@ describe("version site table", () => {
     }
   });
 
-  test("the table stays well formed as sites are added", () => {
-    const paths = VERSION_SITES.map((site) => site.path);
-    expect(new Set(paths).size).toBe(paths.length);
+  test("the shell's two sites in one file drift independently and are named apart", () => {
+    // Two sites share packages/shell/package.json (#371). Each must see only its own field:
+    // a stale daemon floor beside a correct version is still drift, and is reported once.
+    const files = clean();
+    files[SHELL] = files[SHELL]!.replace('"minimumDaemon": "1.2.3"', '"minimumDaemon": "1.2.2"');
+    expect(describeFailures(inspect(reader(files), "1.2.3"))).toEqual([`${SHELL}: expected 1.2.3, found 1.2.2`]);
+    const floor = VERSION_SITES.find((site) => site.path === SHELL && site.pattern.source.includes("minimumDaemon"));
+    expect(floor, "the daemon floor site").toBeDefined();
+    expect(readSite(files[SHELL]!, floor!)).toEqual(["1.2.2"]);
+  });
+
+  test("the table stays well formed: one file may carry several version fields, but a path and pattern pair never repeats", () => {
+    // Keyed on path AND pattern, not path alone: packages/shell/package.json legitimately carries
+    // `version` and `minimumDaemon` (#371). What must never happen is the same locus listed twice,
+    // which would make one drift look like two and one fix look like none.
+    const loci = VERSION_SITES.map((site) => `${site.path}\n${site.pattern.source}`);
+    expect(new Set(loci).size).toBe(loci.length);
     expect(SOURCE_SITE.path).toBe("package.json");
     for (const site of [...VERSION_SITES, ...FORBIDDEN_VERSION_SITES])
       expect(site.pattern.global, site.path).toBe(true);

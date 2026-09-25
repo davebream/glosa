@@ -1443,3 +1443,56 @@ once, each surface with its own agent, reconciled by claims and human-save-wins;
 two windows, never mixed tabs. Nothing is inferred from binding state: a companion surface whose
 session ended still offers reconnect. Supersedes the "face at registration" line in
 `docs/design/2026-09-25-desktop-shell-feature-map.md` §4.
+
+
+## The desktop app carries Bun and the CLI, and becomes the install of truth only when nothing is recorded (#371)
+
+Until now glosa reached a person through one channel, `bun add --global @davebream/glosa@alpha`,
+which needs Bun already on the machine. The desk surface is for people who may never open a
+terminal, and the shell assumed a CLI was installed: without one, opening a folder ended on a raw
+spawn error. A downloaded app has to be complete on its own, and the no-build-step rule rules out
+compiling the CLI, so the app is the one channel that can carry the runtime instead.
+
+**Decision.** The packaged app holds, under `glosa.app/Contents/Resources/`, a `bin/bun` at the
+toolchain pin, a `bin/glosa` launcher that self-locates through symlinks and runs the CLI on that
+Bun, and `glosa/` with the published npm file set plus production dependencies, all unbundled.
+The recorded executable at `GLOSA_HOME/bin/glosa` stays the install of truth for the whole machine:
+the Claude Code plugin's MCP shim, the shell and the daemon's install identity all resolve through
+it. The app's CLI records itself there only when nothing is recorded, and a dangling link counts as
+nothing; a live link to a terminal install is left alone, and a regular file is never touched. It
+records the launcher, never `main.ts`, because `main.ts` starts with `#!/usr/bin/env bun` and a desk
+user has no `bun` on PATH. The shell resolves the recorded executable first and its own copy
+second. `glosa update` classifies a CLI inside an app bundle as `app-bundle` and refuses it at exit
+2 with `brew upgrade --cask glosa`, because Homebrew owns that tree. `glosa doctor` names every
+install it can see and which one is recorded, and warns rather than fails when they differ. The
+Homebrew cask links the bundled launcher into Homebrew's bin and never writes into an agent's
+configuration (R4).
+
+**Signing comes first.** Homebrew 5.0 (2025-11-12) deprecated casks without code signing and the
+`--no-quarantine` flag, and disables casks that fail Gatekeeper in September 2026; macOS 15.1
+refuses unsigned downloads. So a Developer ID signature and notarization precede the first public
+app artifact. Until then the npm package stays the only public channel, and CI builds and smokes an
+ad-hoc signed app without publishing it.
+
+**Why not require the CLI, as the shell did.** Right for the companion window, wrong for the desk:
+its first run would be an install instruction for a runtime the person has never heard of.
+
+**Why not `bun build --compile`.** A single binary would drop the Bun prerequisite for the terminal
+channel too, but it is a bundle and a build, which A6 §F30 forbids. If that invariant is ever
+relaxed, this is the better shape for the npm channel.
+
+**Why not let the app own the CLI outright.** Every surveyed app that bundles its CLI (cmux, Zed,
+VS Code, Docker Desktop, Ollama) treats the bundle as the only copy and repairs its PATH link on
+launch. glosa keeps a second channel, the npm package, and two installs sharing one home refuse
+each other's daemon by design. An app that repointed the recorded executable to itself on every
+launch would flip the plugin's MCP server between installs and turn a terminal user's
+`glosa update` into a no-op. Docker's own repair leaves links it did not create alone; this is the
+same rule.
+
+**Why not last-writer-wins for the bundle.** That is today's rule for every other CLI, and it is
+harmless when there is one install. With two, the recorded executable would follow whichever ran
+last, including a daemon or MCP server the app started in the background.
+
+**What this leaves open.** Whether the bundled Bun needs entitlements beyond Electron's JIT pair is
+confirmed on the first signed build. A person with a stale terminal install sees the app's "too
+old" screen until they update or remove it; `glosa doctor` says why.

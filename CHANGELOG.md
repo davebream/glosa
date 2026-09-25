@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `GLOSA_HOME` (or `~/.glosa`), the CLI a packaged app carries, then the well-known bin
   directories. A terminal install keeps ownership; a packaged app on a machine with nothing
   recorded runs the CLI it ships with (#371).
+- `glosa doctor` gains an `install` row: which install this CLI is, which one is recorded at
+  `~/.glosa/bin/glosa` (the one the Claude Code plugin and the desktop app run), and every other
+  glosa it can see. It warns when another install is recorded or nothing is, and never fails
+  (#371).
 - `glosa update` recognises a CLI running inside the desktop app (`app-bundle`) and answers with
   `brew upgrade --cask glosa` instead of trying to upgrade brew's tree. That CLI records itself as
   the machine's glosa at `~/.glosa/bin/glosa` only when no install is recorded yet, so a terminal
@@ -51,6 +55,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- The desktop shell's version and its minimum daemon version are release-synced sites: a tag bumps
+  both to the release version, because a packaged app will carry the CLI and daemon of its own
+  release (#371). The contract for that bundle is recorded in `docs/decisions.md`: the recorded
+  executable stays the install of truth, and the app's own CLI records itself only when nothing is
+  recorded.
 - **The navigator's sections are one construction.** Artifacts, Chats and Starred share the tree's
   drawn chevron in the same slot at the same x, one label style and one hover; the Chats header no
   longer borrows the chat pane's bordered button, and its menu and New chat controls are drawn at the
