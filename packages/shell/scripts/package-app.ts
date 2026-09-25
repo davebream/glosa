@@ -178,6 +178,24 @@ export function renderBuilderConfig(build: Record<string, unknown>, options: Ren
   return config;
 }
 
+/**
+ * The environment electron-builder runs in. An unsigned build is signed ad hoc (`identity: "-"`),
+ * which uses no certificate and no secret. electron-builder skips ALL signing, ad hoc included, when
+ * it detects a pull request (GITHUB_BASE_REF on GitHub Actions), leaving Electron's own signature on
+ * a bundle whose resources changed, which `codesign --verify` rejects. So an unsigned build opts in
+ * with CSC_FOR_PULL_REQUEST; a signed build never does, and never runs on a pull request (#371).
+ */
+export function builderEnvironment(base: NodeJS.ProcessEnv, unsigned: boolean): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  if (unsigned) {
+    env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+    env.CSC_FOR_PULL_REQUEST = "true";
+  } else {
+    delete env.CSC_FOR_PULL_REQUEST;
+  }
+  return env;
+}
+
 /** Where electron-builder leaves the .app for an architecture on an arm64 or x64 host. */
 export function appPathFor(shellRoot: string, arch: Arch): string {
   const dir = arch === "arm64" ? "mac-arm64" : "mac";
@@ -366,8 +384,7 @@ function buildApp(arch: Arch, build: Record<string, unknown>, unsigned: boolean)
   const config = renderBuilderConfig(build, { arch, unsigned, notarize });
   const configPath = join(buildDir, `electron-builder.${arch}.json`);
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (unsigned) env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+  const env = builderEnvironment(process.env, unsigned);
   const args = [
     join(shellRoot, "node_modules", "electron-builder", "cli.js"),
     "--mac",

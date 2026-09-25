@@ -10,6 +10,7 @@ import { INSTALL_CHECK } from "../../cli/src/doctor.ts";
 import { listingDifferences, SMOKE_INSTALL_ROW, treeListing } from "../scripts/app-smoke.ts";
 import {
   appPathFor,
+  builderEnvironment,
   bunAsset,
   inspectStagedTree,
   LAUNCHER,
@@ -210,5 +211,17 @@ describe("package-app: the launcher", () => {
         "",
       ]);
     }
+  });
+});
+
+describe("builderEnvironment", () => {
+  test("an unsigned build signs ad hoc even when electron-builder sees a pull request", () => {
+    const env = builderEnvironment({ GITHUB_BASE_REF: "main" }, true);
+    expect(env.CSC_FOR_PULL_REQUEST).toBe("true");
+    expect(env.CSC_IDENTITY_AUTO_DISCOVERY).toBe("false");
+  });
+  test("a signed build never opts in to signing a pull request", () => {
+    const env = builderEnvironment({ GITHUB_BASE_REF: "main", CSC_FOR_PULL_REQUEST: "true" }, false);
+    expect(env.CSC_FOR_PULL_REQUEST).toBeUndefined();
   });
 });
