@@ -300,7 +300,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(root.querySelector('.glosa-tab[data-missing="true"]')).not.toBeNull();
     expect(activePane(root).getAttribute("data-missing")).toBe("true");
     expect(inPane(root, ".glosa-empty-title")?.textContent).toBe("This document is gone.");
-    expect(dom.document.title).toBe("notes.md — ws-1");
+    expect(dom.document.title).toBe("notes.md · ws-1");
   });
 
   const settle = async () => {
@@ -732,7 +732,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect((root.querySelectorAll(".glosa-tab-label")[1] as any).textContent).toBe("outline.md");
     expect(inPane(root, ".glosa-artifact-name").textContent).toBe("");
     expect(inPane(root, ".glosa-artifact-dir").textContent).toBe("drafts/");
-    expect(dom.document.title).toBe("outline.md — ws-1"); // the active pane's file reaches the tab title
+    expect(dom.document.title).toBe("outline.md · ws-1"); // the active pane's file reaches the tab title
   });
 
   test("at desk widths the navigator is a column: opening an artifact leaves it in place", async () => {
@@ -1504,7 +1504,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect(dom.document.title).toBe("notes.md — ws-1");
+    expect(dom.document.title).toBe("notes.md · ws-1");
   });
 
   test("the title is the way into Go to, and a journal apply lease pauses Edit in the open pane until it ends", async () => {

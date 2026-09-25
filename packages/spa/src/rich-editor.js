@@ -336,7 +336,7 @@ export const editorSchema = new Schema({
         {
           class: "glosa-comment-inline",
           "data-glosa-kind": RAW_KIND.COMMENT,
-          title: "Private note — hidden from Read/Review",
+          title: "Private note, hidden from Read/Review",
         },
         0,
       ],

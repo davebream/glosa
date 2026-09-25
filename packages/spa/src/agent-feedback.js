@@ -326,7 +326,7 @@ export function mountAgentFeedback(host, { overlayHost = host, clipboard } = {})
         popover.append(
           el("p", {
             className: "glosa-agent-feedback-waiting",
-            textContent: "No session connected — annotations wait here.",
+            textContent: "No session connected: annotations wait here.",
           }),
         );
       }

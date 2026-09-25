@@ -934,7 +934,7 @@ export function mountApp(
       return {
         kind: "diff",
         label: `${filename} · ${describeVersion(from)}…${describeVersion(to)}`,
-        tooltip: `${path} — comparing ${describeVersion(from)} with ${describeVersion(to)}`,
+        tooltip: `${path}: comparing ${describeVersion(from)} with ${describeVersion(to)}`,
       };
     }
     const path = decodePanelId(id)[1];
@@ -981,7 +981,7 @@ export function mountApp(
       el("p", {
         className: "glosa-empty-hint",
         textContent:
-          "Its rendered manuscript opens here — switch to Annotate and select any passage to comment on it. Drag a tab to a pane edge to read two artifacts side by side.",
+          "Its rendered manuscript opens here: switch to Annotate and select any passage to comment on it. Drag a tab to a pane edge to read two artifacts side by side.",
       }),
     );
     return wrap;
@@ -1239,7 +1239,7 @@ export function mountApp(
       : null;
     if (!pane) return folder ?? "glosa";
     const name = pane.title ?? pane.path?.split("/").pop() ?? "glosa";
-    return surface === "document" || !folder ? name : `${name} — ${folder}`;
+    return surface === "document" || !folder ? name : `${name} · ${folder}`;
   }
 
   // ---------- keyboard (§9) ----------

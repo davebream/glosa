@@ -133,7 +133,7 @@ describe("Gunshi command surface", () => {
   test("no-args and version output preserve their contracts", () => {
     expect(runCli([])).toEqual({
       exitCode: 0,
-      stdout: "glosa — writing-first workspace for AI coding agents\n",
+      stdout: "glosa: writing-first workspace for AI coding agents\n",
       stderr: "",
     });
     expect(runCli(["--version"])).toEqual({

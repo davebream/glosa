@@ -102,10 +102,17 @@ never been built. Validate an issue's factual claims against current code before
 state the delta in the PR when they differ. `file:line` references in issues, reports and reviews
 are leads, not facts — open the file before citing one.
 
-## Naming
+## Naming and copy
 
 `glosa` — a *glosa* is a marginal commentary on an authoritative text; the product's core act. Never
 shorten to "gloss" in user-facing copy.
+
+**No em dashes in anything a person sees.** Not in the SPA, the desktop shell or the CLI: no string
+literal, template, HTML text, attribute or CSS `content:` carries U+2014. Use a colon for an
+explanation, a period for a new sentence, a comma or a middle dot (`·`) for a pairing. Comments may
+use them. `test/copy-rules.test.ts` enforces this over `packages/spa/src`, `packages/shell/src` and
+`packages/cli/src`; the same restraint applies to README, ROADMAP, CHANGELOG and issue or PR copy
+even though nothing checks those mechanically.
 
 ## graphify
 

@@ -176,7 +176,7 @@ export function printRequestReviewResult(result: CommandEnvelope<RequestReviewDa
   const outcome = typeof result.data.detail?.outcome === "string" ? `: ${result.data.detail.outcome}` : "";
   const response =
     result.data.detail && "response" in result.data.detail && typeof result.data.detail.response === "string"
-      ? ` — ${result.data.detail.response}`
+      ? `; ${result.data.detail.response}`
       : "";
   process.stdout.write(`glosa request-review: ${result.data.id} (${result.data.status}${outcome})${response}\n`);
 }

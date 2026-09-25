@@ -55,7 +55,7 @@ export async function runClaim(args: ClaimArgs, deps: ClaimDeps): Promise<Comman
   if (invalid) {
     return usageEnvelope(
       "claim",
-      `claim: ${JSON.stringify(invalid)} is not a resource — use entry:<id> or artifact:<workspace-relative path>`,
+      `claim: ${JSON.stringify(invalid)} is not a resource: use entry:<id> or artifact:<workspace-relative path>`,
     );
   }
   if (!args.session) return usageEnvelope("claim", "claim: --session <sid> is required");

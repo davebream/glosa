@@ -181,7 +181,7 @@ export function mountHistoryPane(
         renderDiff(lostHtml);
         const proceed = await confirmDialog({
           title: "Discard the changes shown behind this dialog?",
-          body: "This document changed since its latest saved version. Restoring will throw those changes away — the diff pane shows exactly what would be lost.",
+          body: "This document changed since its latest saved version. Restoring will throw those changes away: the diff pane shows exactly what would be lost.",
           confirmLabel: "Restore anyway",
           danger: true,
         });

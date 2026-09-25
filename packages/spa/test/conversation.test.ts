@@ -171,7 +171,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
 
     const status = root.querySelector(".glosa-conv-mirror-status") as any;
     expect(status.hidden).toBe(false);
-    expect(status.textContent).toBe("mirror unavailable — use the terminal");
+    expect(status.textContent).toBe("mirror unavailable: use the terminal");
   });
 
   test("a later transcript frame after mirror_unavailable clears the fallback message (mirror recovered)", () => {

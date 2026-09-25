@@ -140,7 +140,7 @@ async function resolveCommandDir(
       warnings: [
         {
           code: "not-repository-root",
-          message: `${explicitDir} is inside the git repository ${root} but is not its root — agent configuration written here is not what Claude Code loads for the project. Did you mean \`${root}\`?`,
+          message: `${explicitDir} is inside the git repository ${root} but is not its root: agent configuration written here is not what Claude Code loads for the project. Did you mean \`${root}\`?`,
         },
       ],
     };
@@ -837,7 +837,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         process.stderr.write(`glosa monitor: session ${sessionId} already has a live monitor${holder}; exiting\n`);
         return;
       }
-      if (!lock.held) process.stderr.write(`glosa monitor: singleton guard unavailable, continuing — ${lock.detail}\n`);
+      if (!lock.held) process.stderr.write(`glosa monitor: singleton guard unavailable, continuing: ${lock.detail}\n`);
       const { runClaudeMonitor } = await import("../../providers/claude-code/src/monitor.ts");
       const shutdown = new AbortController();
       const stop = () => shutdown.abort();
@@ -1073,7 +1073,7 @@ async function noticeDevDefaults(argv: readonly string[]): Promise<void> {
   const { glosaHome } = await import("../../daemon/src/lifecycle/home.ts");
   devNoticeShown = true;
   process.stderr.write(
-    `glosa: running from a source checkout — using GLOSA_HOME=${glosaHome()} and GLOSA_PORT=${glosaPort()} ` +
+    `glosa: running from a source checkout: using GLOSA_HOME=${glosaHome()} and GLOSA_PORT=${glosaPort()} ` +
       "so this checkout cannot disturb an installed glosa. Set either variable to override.\n",
   );
 }
@@ -1094,7 +1094,7 @@ export async function run(argv: readonly string[], deps: CliRunDependencies = {}
     description: DESCRIPTION,
     args: GLOBAL_ARGS,
     run() {
-      process.stdout.write("glosa — writing-first workspace for AI coding agents\n");
+      process.stdout.write("glosa: writing-first workspace for AI coding agents\n");
     },
   });
 
