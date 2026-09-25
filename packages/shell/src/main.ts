@@ -24,6 +24,10 @@ import {
 } from "./policy.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// The name the app menu, About panel and userData path use. The Dock and the app switcher read the
+// bundle instead: packaged, that is productName in package.json; unpackaged, scripts/brand-electron.ts
+// rewrites node_modules/electron's bundle after install so a `bun run start` also says glosa.
+app.setName("glosa");
 const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")) as {
   version: string;
   glosa: { minimumDaemon: string; releases: string };
@@ -281,6 +285,8 @@ function installEgressGate(): void {
   });
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
 }
+
+app.setAboutPanelOptions({ applicationName: "glosa", applicationVersion: pkg.version });
 
 app.whenReady().then(async () => {
   // The Dock image follows the system appearance: paper squircle in light, ink in dark. An .icns

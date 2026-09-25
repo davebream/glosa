@@ -6,6 +6,8 @@
   "type": "module",
   "main": "src/main.ts",
   "scripts": {
+    "postinstall": "bun scripts/brand-electron.ts",
+    "brand": "bun scripts/brand-electron.ts",
     "start": "electron .",
     "test": "bun test"
   },
@@ -18,5 +20,14 @@
   "glosa": {
     "minimumDaemon": "0.1.0-alpha.31",
     "releases": "https://github.com/davebream/glosa/releases"
+  },
+  "productName": "glosa",
+  "build": {
+    "appId": "dev.glosa.app",
+    "productName": "glosa",
+    "mac": {
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.productivity"
+    }
   }
 }

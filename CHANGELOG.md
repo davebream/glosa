@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- The desktop app is called glosa everywhere the system shows a name: the Dock, the app switcher, the
+  menu bar and the About panel. Unpackaged runs get this from a post-install step that rebrands
+  Electron's own bundle; packaged builds from the product name.
 - **Desk and companion are different surfaces.** A link now says which kind of surface it opens
   (`kind=desk` from a plain `glosa open` or the desktop app's folder picker, `kind=companion` from
   `glosa open --bind` and `glosa_present`). A companion surface shows the terminal agent's

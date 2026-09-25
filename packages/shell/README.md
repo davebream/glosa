@@ -9,10 +9,15 @@ This package is deliberately **not** a member of the root workspaces: Electron i
 download that the CLI, the daemon and the SPA must never pull in. Install it on its own.
 
 ```sh
-bun install --cwd packages/shell          # downloads Electron 44
+bun install --cwd packages/shell          # downloads Electron 44 and brands its bundle as glosa
 bun run --cwd packages/shell start -- ~/some/folder   # or omit the folder to get the picker
 bun test packages/shell                    # policy tests; the Electron suite skips if Electron is absent
 ```
+
+The Dock, the app switcher and the menu bar take an app's name and icon from its bundle, so the
+install's `postinstall` (`scripts/brand-electron.ts`) rewrites node_modules/electron's Electron.app
+to say glosa and carry glosa's icon, then re-signs it ad hoc. Run `bun run --cwd packages/shell
+brand` again after reinstalling Electron. Packaged, `productName` in package.json does the same.
 
 Contracts: `docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md`,
 `docs/research/2026-09-25-desktop-shell-readiness.md`, A3 "Desktop shell". The main process is
