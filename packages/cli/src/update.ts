@@ -20,116 +20,20 @@ import {
   printJsonEnvelope,
 } from "./envelope.ts";
 import { CLI_VERSION } from "./version.ts";
+import { classifyInstall, type InstallClassification, type InstallKind, PKG } from "./install-kind.ts";
 
-const PKG = "@davebream/glosa";
+// Install classification lives in install-kind.ts so the entrypoint can classify its own install
+// without loading this module; re-exported here for callers and tests that import it from update.ts.
+export {
+  classifyInstall,
+  type InstallClassification,
+  type InstallKind,
+  isEphemeralPackageRunnerPath,
+} from "./install-kind.ts";
 
-/** A package-runner cache (`npx`/`bunx`/`pnpm dlx`) is never upgradeable in place. */
-export function isEphemeralPackageRunnerPath(path: string): boolean {
-  const normalized = path.replaceAll("\\", "/");
-  return (
-    normalized.includes("/.npm/_npx/") ||
-    normalized.includes("/_npx/") ||
-    normalized.includes("/install/cache/") ||
-    normalized.includes("/.pnpm/dlx/")
-  );
-}
 export const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const REGISTRY_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
-
-// ---------------------------------------------------------------------------------------------
-// Install classification
-// ---------------------------------------------------------------------------------------------
-
-export type InstallKind =
-  | "bun-global"
-  | "npm-global"
-  | "ephemeral"
-  | "source-checkout"
-  | "project-local"
-  | "volta"
-  | "pnpm"
-  | "yarn"
-  | "unknown";
-
-export interface InstallClassification {
-  kind: InstallKind;
-  /** True only for kinds we can actually upgrade. */
-  managed: boolean;
-  /** bun-global: the `install/global` dir to pin via BUN_INSTALL_GLOBAL_DIR.
-   *  npm-global: the `--prefix` value (NOT the lib dir). Null for refused kinds. */
-  installDir: string | null;
-  /** Exact copy-pasteable command for a refused kind; null when managed. */
-  manualCommand: string | null;
-  /** Appended to the output when the install lives behind a version-manager shim. */
-  reshimHint: string | null;
-}
-
-function norm(p: string): string {
-  return p.replaceAll("\\", "/");
-}
-
-/** Pure over its arguments — zero filesystem access, so every branch is a table test.
- *  `hasGitMarker` is passed in (the caller does the `pathExists` check) for the same reason.
- *
- *  Takes ONE path, not two. Bun's `import.meta.url` is already symlink-resolved — measured through
- *  a module symlink AND a symlinked ancestor — so a `logical` vs `realpath` comparison could never
- *  differ and would be dead code. A `bun link`ed dev copy therefore arrives here as the checkout
- *  root itself, which carries no package-path suffix and falls through to `unknown`; the caller's
- *  `.git` probe is what promotes it to `source-checkout`. */
-export function classifyInstall(packagePath: string, hasGitMarker = false): InstallClassification {
-  const p = norm(packagePath);
-
-  const refuse = (kind: InstallKind, manualCommand: string): InstallClassification => ({
-    kind,
-    managed: false,
-    installDir: null,
-    manualCommand,
-    reshimHint: null,
-  });
-
-  // ORDER IS LOAD-BEARING.
-  // 1. A .git marker beats everything: whatever the path looks like, we are inside a developer's
-  //    own tree and must never write over it.
-  if (hasGitMarker) return refuse("source-checkout", "git pull && bun install");
-  // 2. Ephemeral — a package-runner cache is never upgradeable, whatever else the path resembles.
-  if (isEphemeralPackageRunnerPath(p)) return refuse("ephemeral", `bun add --global ${PKG}@alpha`);
-  // 3. Volta BEFORE the /lib/node_modules/ marker. Volta's layout matches it, but writing there
-  //    bypasses the shim, so a naive classify would report success while `glosa --version` still
-  //    printed the old version.
-  if (p.includes("/.volta/")) return refuse("volta", `volta install ${PKG}`);
-  // 4. pnpm / yarn — refused. Yarn Berry removed `yarn global add` entirely, and pnpm's
-  //    content-addressed store is where path-pinned verification is least reliable. These run
-  //    before the marker tests because import.meta.url resolves pnpm's symlink farm into the
-  //    store, whose path still carries `/pnpm/`.
-  if (p.includes("/pnpm/") || p.includes("/.pnpm/")) return refuse("pnpm", `pnpm add --global ${PKG}@alpha`);
-  if (p.includes("/.yarn/") || p.includes("/yarn/")) return refuse("yarn", `yarn global add ${PKG}@alpha`);
-
-  const bunSuffix = `/install/global/node_modules/${PKG}`;
-  if (p.endsWith(bunSuffix)) {
-    return {
-      kind: "bun-global",
-      managed: true,
-      installDir: p.slice(0, p.length - `/node_modules/${PKG}`.length),
-      manualCommand: null,
-      reshimHint: null,
-    };
-  }
-
-  const npmSuffix = `/lib/node_modules/${PKG}`;
-  if (p.endsWith(npmSuffix)) {
-    return {
-      kind: "npm-global",
-      managed: true,
-      installDir: p.slice(0, p.length - npmSuffix.length),
-      manualCommand: null,
-      reshimHint: p.includes("/.asdf/") ? "asdf reshim nodejs" : p.includes("/mise/installs/") ? "mise reshim" : null,
-    };
-  }
-
-  if (p.includes(`/node_modules/${PKG}`)) return refuse("project-local", `bun add --global ${PKG}@alpha`);
-  return refuse("unknown", `bun add --global ${PKG}@alpha`);
-}
 
 // ---------------------------------------------------------------------------------------------
 // URL trust boundary
