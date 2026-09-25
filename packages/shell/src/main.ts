@@ -100,17 +100,21 @@ async function openInWindow(
   focus: string | null = null,
 ): Promise<BrowserWindow> {
   let opened: { url: string; slug: string };
+  const started = Date.now();
   try {
     opened = await runOpen(target, focus);
   } catch (e) {
+    log(`glosa open failed after ${Date.now() - started} ms via ${resolveCli()}: ${(e as Error).message}`);
     const win = existing ?? createWindow(null);
     await win.loadURL(blockingScreen("glosa could not open that folder", (e as Error).message));
     return win;
   }
+  log(`glosa open answered in ${Date.now() - started} ms for ${opened.slug}`);
   const origin = new URL(opened.url).origin;
   const win = existing && spaOrigins.get(existing.webContents.id) === origin ? existing : createWindow(origin);
   const compat = compatibility(await handshake(origin), pkg.glosa.minimumDaemon);
   if (compat.state !== "ok") {
+    log(`compatibility: ${compat.state}`);
     const titles = {
       down: "The glosa daemon is not answering",
       "too-old": `This app needs glosa ${pkg.glosa.minimumDaemon} or newer`,
