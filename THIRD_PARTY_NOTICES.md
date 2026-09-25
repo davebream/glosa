@@ -55,3 +55,40 @@ PERFORMANCE OF THIS SOFTWARE.
   "Source". Shipped complete and unmodified apart from WOFF2 compression.
 
 The full license text for both families is in `packages/spa/src/fonts/OFL.txt`.
+
+## Managed chat rendering and native login
+
+- **xterm.js 6.0.0** (`@xterm/xterm`, MIT): unmodified published browser module and stylesheet in `packages/spa/src/vendor/`; license in `xterm-license.txt`. Used only for explicitly opened native login terminals. Source: https://github.com/xtermjs/xterm.js.
+- **markdown-it 14.3.1** (MIT): unmodified published browser distribution in `packages/spa/src/vendor/markdown-it.js`; license in `markdown-it-license.txt`. Chat rendering disables raw HTML and remote images. Source: https://github.com/markdown-it/markdown-it.
+
+## Agent identity marks
+
+The locally embedded monochrome marks in `packages/spa/src/agent-ui.js` identify the selected
+coding agent. They are third-party trademarks, not Glosa branding or an endorsement.
+
+- Claude and OpenAI (used for Codex, matching the selected UI reference): [Lobe Icons](https://github.com/lobehub/lobe-icons), MIT, commit
+  `5c1ecb4fb06b92519a39102482d4e8273f000422`. Static SVG geometry and viewBox are unchanged;
+  fill follows the interface foreground. Source assets: `packages/static-svg/icons/claude.svg`
+  and `packages/static-svg/icons/openai.svg`. The marks belong to Anthropic and OpenAI respectively.
+
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

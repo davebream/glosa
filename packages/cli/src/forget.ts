@@ -56,7 +56,7 @@ async function defaultConfirm(question: string): Promise<boolean> {
 function previewQuestion(slug: string, entries: ForgetBusEntry[]): string {
   const paths = entries.map((entry) => `  ${entry.bus_path}`).join("\n");
   return (
-    `glosa forget: this permanently deletes workspace '${slug}' — its registration, journal, ` +
+    `glosa forget: this permanently deletes workspace '${slug}': its registration, journal, ` +
     `inbox, and shadow-git history (work-tree files are never touched):\n${paths}\nProceed?`
   );
 }
@@ -89,7 +89,7 @@ function mapForgetFailure(err: unknown): CommandEnvelope<ForgetData> {
           kind: "lease_conflict",
           message:
             err.problem?.title ??
-            "the previewed member set changed before confirmation — re-run `glosa forget` to preview again",
+            "the previewed member set changed before confirmation: re-run `glosa forget` to preview again",
         },
       };
     }
@@ -215,7 +215,7 @@ export function printForgetResult(result: CommandEnvelope<ForgetData>, json: boo
   }
   if (result.data.requestedSlug) {
     process.stdout.write(
-      `glosa forget: '${result.data.requestedSlug}' is a sealed source adopted into workspace '${result.data.slug}' — forgetting the complete workspace instead\n`,
+      `glosa forget: '${result.data.requestedSlug}' is a sealed source adopted into workspace '${result.data.slug}': forgetting the complete workspace instead\n`,
     );
   }
   if (result.data.cancelled) {

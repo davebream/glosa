@@ -10,8 +10,8 @@
   the launcher resolves a local glosa without a `PATH` lookup or download (A2 §F06, A3 §3). Monitor
   availability is session-scoped; MCP pull remains available when Claude suppresses monitors.
 - **Codex** installs with `codex mcp add glosa -- glosa mcp`. Push additionally needs a separately
-  running app-server control socket (A2 F07 "Codex app-server transport"); glosa never starts it.
-- glosa writes **no agent configuration** — no hooks, no `.mcp.json`, no `config.toml` entries, no
+  running app-server control socket (A2 F07 "Codex app-server transport"); glosa never starts that external session.
+- The companion installation writes **no agent configuration** — no hooks, no `.mcp.json`, no `config.toml` entries, no
   ownership manifest, no backups. `glosa open` creates only the `.glosa/` scaffold. `glosa init`,
   `--print/--force/--uninstall/--restore-backup`, `open --init/--no-init` and the
   `not-initialized`/`init-drifted` warnings do not exist.
@@ -80,9 +80,17 @@
 - `glosa dictation status [--json]` reads configuration and Keychain item presence only. It never
   contacts Wispr. `glosa dictation disable [--json]` commits inactive state before attempting to
   remove the Keychain item; removal failure is a warning because egress is already disabled.
-- The future Electron shell reuses the daemon-served SPA and browser-direct adapter. It must provide
-  macOS microphone usage metadata and surface permission failures, but owns no alternate dictation
-  transport.
+- The Electron shell (`packages/shell`) reuses the daemon-served SPA and browser-direct adapter. It must
+  provide macOS microphone usage metadata and surface permission failures when it is packaged, but owns
+  no alternate dictation transport. Its permission handler currently denies every permission request,
+  so dictation inside the shell waits on that metadata.
+
+- **`GLOSA_MANAGED_PREVIEW=1`** (2026-09-25) opens managed chats for the one daemon whose environment
+  carries it, read once at boot and logged as `managed chats open: preview for this daemon only`. It
+  exists so a maintainer can produce the attended evidence the ship gates in
+  `docs/design/2026-09-23-agent-chat-implementation.md` require (G2 native compatibility, G3 lifecycle
+  containment); it changes no public default, is never read from a request or the SPA, and an already
+  running daemon does not pick it up. Public managed execution stays closed until those gates pass.
 
 ## F33 — `glosa update` self-update
 
@@ -328,3 +336,22 @@ unassessable entries warns. With no registered target available, the local read-
 No unknown registration is created and there is no offline Git repair. The command starts new history
 from current tracked files; it cannot restore lost checkpoints. Refusals fail the workspace check;
 success with remaining historical damage warns. Other doctor checks retain their existing behavior.
+
+
+## Managed runtime distribution (2026-09-23)
+
+The existing companion application floor remains Bun 1.2.7. Managed runtime installation/execution
+requires Bun 1.4.2 or newer on supported macOS architectures, including Bun.Terminal for native login.
+No application bundle/transpile step or native addon is introduced for managed runtimes. The Electron
+shell is a separate, unpublished package (`packages/shell`, outside the root workspaces and the npm
+file list) whose only build is its own packaging (requirements §4 exception). Browser-ready
+xterm/Markdown assets and their licenses ship inside the existing package file list.
+
+Pinned provider candidates carry committed per-architecture dependency locks. Installation is an
+explicit foreground action using a private install home/cache, fixed npm registry, frozen lock,
+copy-file backend and disabled lifecycle scripts. Glosa checks the complete installed tree and
+selected executable/SDK hashes before launching. Repair preserves the invalid tuple in quarantine
+until the replacement is verified. It does not overwrite the user's system CLI or import its config.
+Candidate installation never means qualified support. There is no public override to bypass the
+joint release gate; native compatibility is separately recorded against the exact tuple. A custom
+system executable is not an initial supported runtime path.

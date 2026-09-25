@@ -15,5 +15,6 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["packages", "test", "scripts"]
+  "include": ["packages", "test", "scripts"],
+  "exclude": ["packages/shell"]
 }

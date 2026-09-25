@@ -40,7 +40,7 @@ export function apiError(status: number, problem: ApiProblem | null): ApiError {
   // in `.message` never reaches the one reader who most needs it — the agent deciding what to do
   // next. The title stays first and unchanged; the remedy follows it.
   const title = problem?.title ?? `glosa daemon request failed with status ${status}`;
-  const err = new Error(problem?.detail ? `${title} — ${problem.detail}` : title) as ApiError;
+  const err = new Error(problem?.detail ? `${title}: ${problem.detail}` : title) as ApiError;
   err.code = "API_ERROR";
   err.status = status;
   err.problem = problem;
@@ -451,7 +451,7 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
   const conn = await ensureDaemon();
   if (!conn.ok) {
     throw unreachableError(
-      conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason} — see ${conn.logPath}` : conn.reason,
+      conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason}: see ${conn.logPath}` : conn.reason,
     );
   }
   // The WHOLE resolved connection, not just its port (issue #207) — see `daemon-client.ts` for

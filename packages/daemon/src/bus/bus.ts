@@ -1066,6 +1066,7 @@ export class WorkspaceBus {
     session: string;
     entryId?: string;
     excludeEntryIds?: ReadonlySet<string>;
+    includeEntryIds?: ReadonlySet<string>;
   }): Array<[string, DerivedState["entries"][string], unknown]> {
     const reserved = new Set(
       Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries),
@@ -1073,6 +1074,7 @@ export class WorkspaceBus {
     const eligible: Array<[string, DerivedState["entries"][string], unknown]> = [];
     for (const [id, entry] of Object.entries(this.state.entries)) {
       if (opts.entryId && id !== opts.entryId) continue;
+      if (opts.includeEntryIds && !opts.includeEntryIds.has(id)) continue;
       if (opts.excludeEntryIds?.has(id)) continue;
       if (reserved.has(id)) continue;
       const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
@@ -1134,11 +1136,18 @@ export class WorkspaceBus {
    * surfaced them. A later acknowledgement records the actual transport outcome. */
   prepareDelivery(
     limit: number,
-    opts: { via: DeliveryVia; session: string; entryId?: string },
+    opts: {
+      via: DeliveryVia;
+      session: string;
+      entryId?: string;
+      includeEntryIds?: ReadonlySet<string>;
+      assertActive?: () => void;
+    },
     build: DeliveryBuilder,
   ): Promise<PreparedDelivery> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
+      opts.assertActive?.();
       this.pruneDeliveryReservationsLocked();
       const eligible = this.eligibleDeliveryEntriesLocked(opts);
 
@@ -1178,6 +1187,7 @@ export class WorkspaceBus {
         batchBytes += separatorBytes + presentationBytes;
       }
 
+      opts.assertActive?.();
       const deliveryId = presentations.length > 0 ? this.ulidFn() : null;
       if (deliveryId) {
         this.deliveryReservations.set(deliveryId, {
@@ -1196,9 +1206,15 @@ export class WorkspaceBus {
     });
   }
 
-  acknowledgeDelivery(deliveryId: string, outcome: "presented" | "failed", error?: string): Promise<boolean> {
+  acknowledgeDelivery(
+    deliveryId: string,
+    outcome: "presented" | "failed",
+    error?: string,
+    assertActive?: () => void,
+  ): Promise<boolean> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.assertWritable();
+      assertActive?.();
       this.pruneDeliveryReservationsLocked();
       const reservation = this.deliveryReservations.get(deliveryId);
       if (!reservation) return false;
@@ -1449,7 +1465,9 @@ export class WorkspaceBus {
     sessionId: string,
     principal: string,
     ttlMs?: number,
+    assertActive?: () => void,
   ): Promise<ClaimResult> {
+    assertActive?.();
     const request = this.normalizeClaimRequestLocked(resources);
     const now = this.nowFn();
     const cap = mode === "presence" ? PRESENCE_CLAIM_TTL_MS : EXCLUSIVE_CLAIM_TTL_MS;
@@ -1517,6 +1535,7 @@ export class WorkspaceBus {
 
     // Read, never re-derived: the next fence is strictly greater than any this resource has ever
     // issued, and the number the holder is handed is the number the journal records.
+    assertActive?.();
     const fence = 1 + maxFenceOver(this.state.claims, request.resources);
     const since = this.nowFn().toISOString();
     const expiresAt = new Date(now.getTime() + ttl).toISOString();
@@ -1607,13 +1626,14 @@ export class WorkspaceBus {
     mode: ClaimMode,
     sessionId: string,
     principal: string,
-    opts: { ttlMs?: number } = {},
+    opts: { ttlMs?: number; assertActive?: () => void } = {},
   ): Promise<ClaimResult> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
+      opts.assertActive?.();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      return this.claimLocked(resources, mode, sessionId, principal, opts.ttlMs);
+      return this.claimLocked(resources, mode, sessionId, principal, opts.ttlMs, opts.assertActive);
     });
   }
 
@@ -1641,14 +1661,17 @@ export class WorkspaceBus {
     claimId: string,
     by: "human" | "session",
     sessionId?: string,
+    assertActive?: () => void,
   ): Promise<{ released: boolean; claim: ClaimHolderSnapshot | null }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
+      assertActive?.();
       const claim = this.heldClaimByIdLocked(claimId);
       if (!claim) return { released: false, claim: null };
       if (by === "session" && claim.holder_session !== sessionId) throw claimHeldError(holderSnapshot(claim));
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      assertActive?.();
       await this.releaseClaimLocked(claim, by, by === "human" ? "released_by_human" : "released_by_holder");
       return { released: true, claim: holderSnapshot(claim) };
     });
@@ -1829,10 +1852,11 @@ export class WorkspaceBus {
     entry: string,
     outcome: "applied" | "rejected" | "stale",
     sessionId: string,
-    opts: { note?: string; fence?: number } = {},
+    opts: { note?: string; fence?: number; assertActive?: () => void } = {},
   ): Promise<{ leaseId: string; postSha: string; fence: number | null; replayed: boolean }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
+      opts.assertActive?.();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
 
       // Rungs 0–2.
@@ -1918,6 +1942,7 @@ export class WorkspaceBus {
           )
         : [];
 
+      opts.assertActive?.();
       const at = this.nowFn().toISOString();
       this.appendClaimEventLocked({
         v: 1,

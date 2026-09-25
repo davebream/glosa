@@ -43,11 +43,40 @@
 const TYPEAHEAD_RESET_MS = 650;
 const EXPANSION_STORAGE_PREFIX = "glosa:artifact-tree:expanded:";
 
+/** How many of `openPaths` sit anywhere under a folder.
+ *  @param {{ children: Array<any> }} node
+ *  @param {Set<string>} openPaths
+ *  @returns {number} */
+function openInside(node, openPaths) {
+  let count = 0;
+  for (const child of node.children) {
+    if (child.kind === "directory") count += openInside(child, openPaths);
+    else if (openPaths.has(child.path)) count += 1;
+  }
+  return count;
+}
+
+/** Where a long hyphenated name may clip: the head takes the ellipsis, the tail (after the last
+ *  hyphen, extension included) stays visible, so siblings that share a prefix keep their names. Short
+ *  names, and names whose tail would be most of the name, are left whole.
+ *  @param {string} name
+ *  @returns {{ head: string, tail: string } | null} */
+function splitName(name) {
+  if (name.length < 24) return null;
+  const at = name.lastIndexOf("-");
+  if (at <= 0) return null;
+  // The hyphen travels with the tail, so the join after the head's ellipsis still reads as one
+  // word ("underfive-t…-comparison.md"), and a tail as long as "-preregistration.md" still fits.
+  const tail = name.slice(at);
+  if (tail.length < 2 || tail.length > 21) return null;
+  return { head: name.slice(0, at), tail };
+}
+
 const ICONS = {
-  chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
-  file: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  // A folder, closed and open, drawn with the tree's own stroke. The open one is the expanded
+  // state; the row's aria-expanded still says which, the glyph only shows it.
   folder:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="glosa-folder-closed" d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path class="glosa-folder-open" d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5V10H6.2a1.5 1.5 0 0 0-1.4 1l-1.8 5z M3 17.5l2-6.5h16.5l-2.2 7.1a1.5 1.5 0 0 1-1.4 1H4.5A1.5 1.5 0 0 1 3 17.5z"/></svg>',
 };
 
 /** @param {string} path */
@@ -192,7 +221,7 @@ export function createArtifactTreeNavigator(container, options) {
   const storage = options.storage ?? (typeof sessionStorage === "undefined" ? null : sessionStorage);
 
   container.setAttribute("role", "tree");
-  container.setAttribute("aria-label", "Artifacts");
+  container.setAttribute("aria-label", "Documents");
 
   function storageKey() {
     return `${EXPANSION_STORAGE_PREFIX}${workspace}`;
@@ -250,23 +279,45 @@ export function createArtifactTreeNavigator(container, options) {
 
     const disclosure = document.createElement("span");
     disclosure.className = "glosa-tree-disclosure";
-    if (node.kind === "directory") disclosure.innerHTML = ICONS.chevron;
+    if (node.kind === "directory") disclosure.innerHTML = ICONS.folder;
     else disclosure.setAttribute("aria-hidden", "true");
 
-    const icon = document.createElement("span");
-    icon.className = "glosa-tree-icon";
-    icon.innerHTML = node.kind === "directory" ? ICONS.folder : ICONS.file;
-
+    // A folder row carries a folder glyph (closed, or open when expanded); a file is a row without
+    // one, so the 15px slot is the only width the glyph costs a name in a 232px column.
     const label = document.createElement("span");
     label.className = "glosa-tree-label";
-    label.textContent = node.name;
+    // The name always sits in a head span, because the label is a flex row and `text-overflow`
+    // does nothing for a flex container's bare text: a whole name that overflowed was cut mid-glyph
+    // with no ellipsis at all. Split names add the tail beside it.
+    const split = splitName(node.name);
+    const head = document.createElement("span");
+    head.className = "glosa-tree-label-head";
+    head.textContent = split ? split.head : node.name;
+    label.append(head);
+    if (split) {
+      const tail = document.createElement("span");
+      tail.className = "glosa-tree-label-tail";
+      tail.textContent = split.tail;
+      label.append(tail);
+    }
 
-    row.append(disclosure, icon, label);
+    row.append(disclosure, label);
 
     if (node.kind === "directory") {
       const isExpanded = expanded.has(node.id);
       item.setAttribute("aria-expanded", String(isExpanded));
       if (isExpanded) item.setAttribute("data-expanded", "true");
+      // A folded folder with an open document inside still says so: the tab strip shows the
+      // document, so the tree must not show a plain folder. The mark sits at the row's end (the
+      // folder glyph owns the slot the file's dot uses) and the row names the count.
+      const inside = isExpanded ? 0 : openInside(node, openPaths);
+      if (inside > 0) {
+        const mark = document.createElement("span");
+        mark.className = "glosa-tree-open-inside";
+        mark.setAttribute("aria-hidden", "true");
+        row.append(mark);
+        row.setAttribute("aria-label", `${node.name}, ${inside} open inside`);
+      }
       item.append(row);
       if (isExpanded) {
         const group = document.createElement("ul");
@@ -291,7 +342,7 @@ export function createArtifactTreeNavigator(container, options) {
       if (node.artifact.stale) {
         const stale = document.createElement("span");
         stale.className = "glosa-tree-stale";
-        stale.title = "Generated artifact is out of date";
+        stale.title = "Generated document is out of date";
         stale.setAttribute("aria-label", "Out of date");
         row.append(stale);
       }

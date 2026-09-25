@@ -22,6 +22,29 @@ export function createElement(tag, props = {}, children = []) {
   return node;
 }
 
+/** One section heading for every list in the navigator — Documents, Chats, Starred. The same
+ *  15px drawn chevron the tree's folders use, in the same slot at the same x, turning to face the
+ *  state it will move to; the label beside it in the Section Label style. Built from parts rather
+ *  than from `::before` text so the mark is one shape everywhere and never read aloud. `label`
+ *  is the span callers rewrite; the chevron is never touched. */
+export function createSectionToggle({ id, className, text, controls, expanded = true }) {
+  const chevron = createElement("span", { className: "glosa-sidebar-section-chevron", "aria-hidden": "true" });
+  chevron.innerHTML = '<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>';
+  const label = createElement("span", { className: "glosa-sidebar-section-label", textContent: text });
+  const button = createElement(
+    "button",
+    {
+      ...(id ? { id } : {}),
+      className: `glosa-sidebar-section-toggle${className ? ` ${className}` : ""}`,
+      type: "button",
+      "aria-expanded": String(expanded),
+      "aria-controls": controls,
+    },
+    [chevron, label],
+  );
+  return { button, label };
+}
+
 export function createViewerShell(
   root,
   {
@@ -42,7 +65,7 @@ export function createViewerShell(
   const navToggle = el("button", {
     className: "glosa-nav-toggle",
     type: "button",
-    "aria-label": "Show artifacts",
+    "aria-label": "Show navigator",
     "aria-expanded": "false",
     "aria-controls": "glosa-sidebar",
   });
@@ -52,7 +75,7 @@ export function createViewerShell(
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2"/><path d="M7.5 4v12"/><path class="glosa-nav-toggle-fill" d="M4.25 5h2.5v10h-2.5z"/></svg>';
   const brandMark = el("span", { className: "glosa-brand-mark", role: "img", "aria-label": "glosa" });
   brandMark.innerHTML =
-    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-under" transform="translate(1.6 1.4) scale(0.92)" d="M 10.94 3.21 C 11.23 3.19 11.78 3.21 12.09 3.21 L 14.15 3.21 C 17.28 3.2 22.41 3 25.19 4.31 C 26.19 4.78 27 5.56 27.37 6.61 C 28.33 9.35 26.38 14.58 25.2 17.08 C 22.68 22.39 17.31 26.56 11.85 28.51 C 11.34 28.69 10.77 28.85 10.25 29 C 10.13 28.75 10.02 28.5 9.91 28.24 C 11.77 27.37 13.39 26.34 14.72 24.75 C 15.04 24.36 15.38 23.97 15.65 23.55 C 20.86 15.29 9.97 16.08 5.24 17.56 C 4.57 17.77 3.82 17.28 3.71 16.56 C 3.67 16.33 3.7 16.1 3.79 15.89 C 3.92 15.57 4.34 15.09 4.57 14.79 C 4.81 14.46 5.05 14.12 5.27 13.78 C 6.77 11.48 8.15 8.87 8.94 6.23 C 9.33 4.9 9.17 3.49 10.94 3.21Z"/><path class="glosa-logo-accent" transform="scale(0.92)" d="M 10.94 3.21 C 11.23 3.19 11.78 3.21 12.09 3.21 L 14.15 3.21 C 17.28 3.2 22.41 3 25.19 4.31 C 26.19 4.78 27 5.56 27.37 6.61 C 28.33 9.35 26.38 14.58 25.2 17.08 C 22.68 22.39 17.31 26.56 11.85 28.51 C 11.34 28.69 10.77 28.85 10.25 29 C 10.13 28.75 10.02 28.5 9.91 28.24 C 11.77 27.37 13.39 26.34 14.72 24.75 C 15.04 24.36 15.38 23.97 15.65 23.55 C 20.86 15.29 9.97 16.08 5.24 17.56 C 4.57 17.77 3.82 17.28 3.71 16.56 C 3.67 16.33 3.7 16.1 3.79 15.89 C 3.92 15.57 4.34 15.09 4.57 14.79 C 4.81 14.46 5.05 14.12 5.27 13.78 C 6.77 11.48 8.15 8.87 8.94 6.23 C 9.33 4.9 9.17 3.49 10.94 3.21Z"/></svg>';
+    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-accent" transform="scale(0.92)" d="M 10.94 3.21 C 11.23 3.19 11.78 3.21 12.09 3.21 L 14.15 3.21 C 17.28 3.2 22.41 3 25.19 4.31 C 26.19 4.78 27 5.56 27.37 6.61 C 28.33 9.35 26.38 14.58 25.2 17.08 C 22.68 22.39 17.31 26.56 11.85 28.51 C 11.34 28.69 10.77 28.85 10.25 29 C 10.13 28.75 10.02 28.5 9.91 28.24 C 11.77 27.37 13.39 26.34 14.72 24.75 C 15.04 24.36 15.38 23.97 15.65 23.55 C 20.86 15.29 9.97 16.08 5.24 17.56 C 4.57 17.77 3.82 17.28 3.71 16.56 C 3.67 16.33 3.7 16.1 3.79 15.89 C 3.92 15.57 4.34 15.09 4.57 14.79 C 4.81 14.46 5.05 14.12 5.27 13.78 C 6.77 11.48 8.15 8.87 8.94 6.23 C 9.33 4.9 9.17 3.49 10.94 3.21Z"/></svg>';
   // The bar's title is the artifact in the active pane — the document the reader is looking at —
   // and falls back to the workspace when no pane is open.
   const titleEl = el("span", { className: "glosa-topbar-name", textContent: "glosa" });
@@ -69,16 +92,6 @@ export function createViewerShell(
     },
     [titleEl, el("kbd", { className: "glosa-goto-key", "aria-hidden": "true", textContent: "⌘K" })],
   );
-  const conversationToggle = el("button", {
-    id: "glosa-conversation-toggle",
-    className: "glosa-conversation-toggle",
-    type: "button",
-    "aria-expanded": "false",
-    "aria-controls": "glosa-conversation",
-  });
-  conversationToggle.setAttribute("aria-label", "Conversation");
-  conversationToggle.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v9H8l-4.5 3v-3H3v-9Z"/></svg><span>Conversation</span>';
   const topbarOverlays = el("div", { className: "glosa-topbar-overlays" });
   const appearanceHost = el("div", { className: "glosa-appearance" });
   const attentionHost = el("div", { className: "glosa-attention" });
@@ -115,7 +128,7 @@ export function createViewerShell(
   const toolsMenu = el(
     "div",
     { id: "glosa-tools-menu", className: "glosa-tools-menu", role: "group", "aria-label": "Workspace tools" },
-    [attentionHost, conversationToggle, appearanceHost, shortcutsToggle],
+    [attentionHost, appearanceHost, shortcutsToggle],
   );
   const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
 
@@ -132,8 +145,13 @@ export function createViewerShell(
   });
   starToggle.innerHTML = STAR_SVG;
   const artifactList = el("ul", { className: "glosa-artifact-list" });
+  const { button: artifactToggle } = createSectionToggle({
+    className: "glosa-artifact-list-toggle",
+    text: "Documents",
+    controls: "glosa-artifacts-body",
+  });
   const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [
-    el("h2", { textContent: "Artifacts" }),
+    el("h2", {}, [artifactToggle]),
     starToggle,
   ]);
   const artifactListEmpty = el("p", {
@@ -141,18 +159,19 @@ export function createViewerShell(
     textContent: "Markdown, HTML, and text files in this workspace appear here.",
     hidden: true,
   });
+  const artifactsBody = el("div", { id: "glosa-artifacts-body" }, [artifactList, artifactListEmpty]);
+  artifactToggle.addEventListener("click", () => {
+    artifactsBody.hidden = !artifactsBody.hidden;
+    artifactToggle.setAttribute("aria-expanded", String(!artifactsBody.hidden));
+  });
   // The writer's starred folders sit at the navigator's foot, collapsible, out of the tree's way:
   // the tree is what the navigator is for, and a list you come back to is not what you read.
-  const starredToggle = el("button", {
+  const { button: starredToggle } = createSectionToggle({
     id: "glosa-starred-toggle",
-    className: "glosa-sidebar-section-toggle",
-    type: "button",
-    "aria-expanded": "true",
-    "aria-controls": "glosa-starred-list",
+    text: "Starred",
+    controls: "glosa-starred-list",
   });
-  const starredCount = el("span", { className: "glosa-starred-count" });
-  starredToggle.innerHTML =
-    '<span class="glosa-sidebar-section-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span><span>Starred</span>';
+  const starredCount = el("span", { className: "glosa-starred-count", "aria-hidden": "true" });
   starredToggle.append(starredCount);
   const starredList = el("ul", { id: "glosa-starred-list", className: "glosa-starred-list" });
   const starredSection = el("section", { className: "glosa-sidebar-section glosa-starred", hidden: true }, [
@@ -164,12 +183,6 @@ export function createViewerShell(
   const bannerEl = el("div", { className: "glosa-banner", hidden: true, role: "status", textContent: "Reconnecting…" });
   const dockHost = el("div", { className: "glosa-dock-host" });
   const mainEl = el("div", { className: "glosa-main" }, [dockHost]);
-  const conversationEl = el("section", {
-    id: "glosa-conversation",
-    className: "glosa-conversation",
-    hidden: true,
-    "aria-labelledby": "glosa-conversation-toggle",
-  });
   const shortcutsEl = el("section", {
     id: "glosa-shortcuts",
     className: "glosa-shortcuts",
@@ -179,11 +192,11 @@ export function createViewerShell(
   const sidebarEl = el(
     "nav",
     { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" },
-    [
-      el("div", { className: "glosa-sidebar-scroll" }, [artifactHeading, artifactList, artifactListEmpty]),
-      starredSection,
-    ],
+    [el("div", { className: "glosa-sidebar-scroll" }, [artifactHeading, artifactsBody]), starredSection],
   );
+  // The foot strip holds the navigator's toggle and, while the navigator is shown, Settings: one
+  // 44px row under one rule, instead of a Settings row on its own rule stacked on the strip.
+  const navFoot = el("div", { className: "glosa-nav-foot" }, [navToggle]);
   const agentFeedbackHost = el("div", { className: "glosa-agent-feedback" });
   const agentFeedback = mountAgentFeedback(agentFeedbackHost, { overlayHost: topbarOverlays });
 
@@ -199,9 +212,8 @@ export function createViewerShell(
     // The navigator's toggle lives in the desk's bottom-left corner, not in the top bar: on a footer
     // strip at the foot of the navigator while it is shown, and in the same spot once it is hidden,
     // so the control that brings it back never moves and never pushes the mark around.
-    el("div", { className: "glosa-nav-foot" }, [navToggle]),
+    navFoot,
     mainEl,
-    conversationEl,
     shortcutsEl,
   );
   if (surface === "document") {
@@ -217,9 +229,9 @@ export function createViewerShell(
     starIcon: STAR_SVG,
     elements: {
       navToggle,
+      navFoot,
       titleEl,
       goToTrigger,
-      conversationToggle,
       shortcutsToggle,
       topbarOverlays,
       appearanceHost,
@@ -234,7 +246,6 @@ export function createViewerShell(
       starredList,
       artifactList,
       artifactListEmpty,
-      conversationEl,
       shortcutsEl,
       bannerEl,
       dockHost,

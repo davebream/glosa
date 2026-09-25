@@ -8,6 +8,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Desk and companion are different surfaces.** A link now says which kind of surface it opens
+  (`kind=desk` from a plain `glosa open` or the desktop app's folder picker, `kind=companion` from
+  `glosa open --bind` and `glosa_present`). A companion surface shows the terminal agent's
+  connection, the margin and the inbox; a desk surface shows chats, stars and projects and no
+  connect control. A link without the parameter opens a companion surface, as every older link did.
+- Folder rows in the document tree carry a folder glyph, closed or open, instead of a chevron.
+- The desktop app's Dock icon follows the system appearance and the comma sits at 37% of the
+  squircle, centred.
+- `GLOSA_MANAGED_PREVIEW=1` in a daemon's environment opens managed chats for that daemon only, so
+  a maintainer can produce the attended evidence the release gates require. The public default is
+  unchanged.
+- **Desktop shell skeleton** (`packages/shell`, #160): an Electron window on the daemon-served SPA
+  with a native folder picker, pairing over a preload bridge instead of the URL fragment, a
+  loopback-only egress gate and a denied-by-default top frame. Unpackaged and unpublished; not a
+  root workspace member, so nothing else pulls Electron in. The SPA asks that bridge for a
+  presentation token only when it has none and is not already paired.
+- **Chats have their own workspace list and content tabs.** Existing terminal sessions open as
+  explicitly selected external chats; pending message IDs survive the navigation migration.
+- **Managed Claude and Codex integration is implemented behind a closed release gate.** It includes
+  private account profiles, pinned runtime installation, native login terminals, durable chat
+  history and drafts, tool decisions, workspace feedback and MCP configuration. Public managed
+  execution remains unavailable until both providers pass native account-isolation and lifecycle
+  qualification and the Claude subscription-integration release determination is recorded.
+
+### Changed
+
+- **The navigator's sections are one construction.** Artifacts, Chats and Starred share the tree's
+  drawn chevron in the same slot at the same x, one label style and one hover; the Chats header no
+  longer borrows the chat pane's bordered button, and its menu and New chat controls are drawn at the
+  star's size. The Chats rule sits directly under the tree with its heading on it, Settings rides the
+  foot strip beside the navigator's toggle, tree rows drop their file and folder glyphs and indent
+  12px per depth so long names keep more of the column, chat rows take the tree row's shape, and a
+  failed chat action says what it was doing before the reason.
+
+### Fixed
+
+- **A glosa process that outlived a source change no longer evicts every daemon it spawns.** A
+  monitor or MCP server started before a merge kept the build id it computed at start, saw each
+  freshly spawned daemon as a different build, restarted it, and failed after its one spawn attempt.
+  The tree on disk now breaks the tie: a daemon that matches the install is used, and the stale
+  client says so once in the daemon log. (#360)
+- **A hand-wrapped paragraph keeps its shape when it becomes editable.** The rich face keeps a
+  source line break inside a paragraph as a newline so the file's wrapping survives a save, but the
+  editor drew that newline as a line, so a paragraph wrapped at eighty columns re-wrapped at every
+  source break the moment it opened for editing and pushed the rest of the page down. The break is
+  now drawn as the space Preview shows, and typing or deleting beside it no longer lets the browser
+  turn it into a space.
+- **Fresh managed accounts reach the sign-in state.** Claude's valid signed-out response is
+  recognized even when its CLI exits with status 1. Codex accepts the pinned runtime's exact
+  serialized defaults while rejecting changed endpoints and inherited configuration overrides.
+- **An artifact whose name has a space, an accent, or a character such as `+`, `#` or `%` now
+  opens.** Clicking it in the tree, or opening the link glosa prints for it, answered "This
+  artifact couldn't be opened", because the daemon never undid the escaping the app applied to the
+  name. That covered every such path, including any non-ASCII name. A Markdown or text file with
+  one of these names now also saves from Edit mode, and a rendered HTML preview embeds.
+- **A file with more than one hard link opens under the name you gave it.** macOS sometimes
+  reports a hard-linked file by one of its other names, possibly in another directory. `glosa open`
+  then registered or focused that other path, and `glosa open <dir> <file>` could refuse the file
+  as outside the workspace. glosa now takes the directory from the path you opened and keeps the
+  file's own name in it.
+
+## [0.1.0-alpha.31] — 2026-09-23
+
+### Added
+
 - **Two agents can work on two different files in one workspace at the same time.** A workspace
   allowed one agent to apply a change at a time, whatever it was touching, so a second agent on an
   unrelated file waited for nothing. An agent now claims the entry or the file it is working on, and
@@ -52,6 +117,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   text was wider, so the row shifted every time you picked. They are now radios in one row: one
   filled dot says which is chosen, and nothing moves. The keyboard gets one stop instead of three,
   the arrow keys move between the choices, and a screen reader announces "1 of 3, checked".
+- **A session's question is marked beside its paragraph, and its words are highlighted.** The mark
+  was an outline squeezed around the exact words. It ran into your underline on the line above,
+  its "asks" label covered that line's words, and the answer box opened over the rest of the
+  paragraph. Now a bracket in the left margin spans the paragraph, a tab on it sits at the line the
+  question starts, and the words themselves are highlighted in the session's colour (a dotted
+  underline when it only points). The "Claude Code asks" label sits in the page margin when there
+  is room. The answer box opens under the paragraph instead of over it.
 
 ### Fixed
 
@@ -1232,7 +1304,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.30...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.31...HEAD
+[0.1.0-alpha.31]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.30...v0.1.0-alpha.31
 [0.1.0-alpha.30]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.29...v0.1.0-alpha.30
 [0.1.0-alpha.29]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.28...v0.1.0-alpha.29
 [0.1.0-alpha.28]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.27...v0.1.0-alpha.28

@@ -142,7 +142,7 @@ describe("attention tray", () => {
     expect(host.querySelector(".glosa-attention-response")).toBeNull();
     expect(
       Array.from(host.querySelectorAll(".glosa-attention-actions button")).map((button) => button.textContent),
-    ).toEqual(["Open artifact"]);
+    ).toEqual(["Open document"]);
     (host.querySelector(".glosa-primary-button") as any).click();
     await flush();
     expect(opened).toEqual(["draft.md"]);

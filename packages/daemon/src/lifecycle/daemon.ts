@@ -5,9 +5,13 @@
 // role (bootDaemon, never imported by the SPA) and by every client role (ensureDaemon).
 
 import { randomUUID } from "node:crypto";
+import { isAbsolute, relative } from "node:path";
+import { getArtifact } from "../services/artifact.ts";
+import { createManagedTools } from "../agents/managed-tools.ts";
 import { connect } from "node:net";
 import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AdapterRegistry } from "../adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "../adapters/workspace-metadata.ts";
@@ -15,6 +19,16 @@ import { AdoptionCoordinator, resumePendingAdoptions } from "../adoption.ts";
 import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/interface.ts";
 import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
+import {
+  type ManagedAgentAdapter,
+  ManagedAgentRegistry,
+  ManagedAgentError,
+  type RuntimeManifest,
+} from "../agents/interface.ts";
+import { RuntimeSupervisor } from "../agents/supervisor.ts";
+import { RuntimeCatalog, type RuntimeCandidate } from "../agents/runtimes.ts";
+import { AgentStore } from "../chats/store.ts";
+import { ManagedChatService } from "../chats/service.ts";
 import { type DictationProvider, DictationProviderRegistry } from "../dictation/interface.ts";
 import { ArtifactWatcherAllocation } from "../artifact-watcher-allocation.ts";
 import { ClaimSweeper } from "../claim-sweeper.ts";
@@ -31,6 +45,7 @@ import { CapabilityStore } from "../security/capability.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
 import { PresentationTokenStore } from "../security/presentation-token.ts";
 import { TokenAuthority } from "../security/token.ts";
+import { authedRequest } from "../security/authed-request.ts";
 import {
   type ApiContext,
   type BunServer,
@@ -39,8 +54,8 @@ import {
   createRejectionRecorder,
 } from "../transport/http.ts";
 import { internalErrorResponse } from "../transport/problem.ts";
-import type { WorkspaceTarget } from "../workspace.ts";
-import { BUILD_ID, parseBuildId } from "./build-id.ts";
+import { type WorkspaceTarget, workspaceRegistrationId } from "../workspace.ts";
+import { BUILD_ID, computeBuildId, parseBuildId } from "./build-id.ts";
 import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
 import {
   fetchHandshake,
@@ -122,6 +137,7 @@ export interface DaemonBackend {
   metadataRegistry: WorkspaceMetadataRegistry;
   providerRegistry: AgentProviderRegistry;
   dictationRegistry: DictationProviderRegistry;
+  managedChats?: ManagedChatService;
   pushRegistry: SessionPushRegistry;
   signalRegistry: SignalRegistry;
   watchEmissions: WatchEmissionRegistry;
@@ -159,6 +175,13 @@ export interface BuildBackendOptions {
   gcThrottleMs?: number;
   providerFactories?: Array<(deps: ProviderFactoryDeps) => AgentProvider>;
   dictationProviderFactories?: Array<(deps: DictationProviderFactoryDeps) => DictationProvider>;
+  managedAgentFactories?: Array<() => ManagedAgentAdapter>;
+  /** Injected by a qualified composition root; absence leaves managed execution unavailable. */
+  managedRuntime?: {
+    released: boolean;
+    manifest?(provider: string): RuntimeManifest | undefined;
+    candidates?: RuntimeCandidate[];
+  };
   /** Explicit acceptance-test dependency. The packaged CLI never supplies one. */
   writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
   /** Test-only override for what counts as the user's home directory. Production reads the real
@@ -201,6 +224,90 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
   const dictationRegistry = new DictationProviderRegistry();
+  const managedRegistry = new ManagedAgentRegistry();
+  for (const factory of opts.managedAgentFactories ?? []) managedRegistry.register(factory());
+  const supervisor = new RuntimeSupervisor(join(home, "agents"));
+  const runtimes = new RuntimeCatalog(join(home, "agents"), opts.managedRuntime?.candidates ?? []);
+  let managedChats: ManagedChatService | undefined;
+  try {
+    managedChats = new ManagedChatService({
+      store: new AgentStore(join(home, "agents")),
+      registry: managedRegistry,
+      launcher: supervisor,
+      tools: createManagedTools(
+        async (chat) => {
+          const entry = workspaceIndex.getWorkspaceByRegistration(chat.workspaceId);
+          if (!entry || entry.first_seen !== chat.workspaceEpoch) throw new Error("Workspace changed");
+          const bus = busRegistry.get(entry);
+          await bus.reconcileOnce();
+          return bus;
+        },
+        (chat, path) => {
+          const entry = workspaceIndex.getWorkspaceByRegistration(chat.workspaceId);
+          if (!entry || entry.first_seen !== chat.workspaceEpoch) throw new Error("Workspace changed");
+          const artifact = getArtifact(
+            { workspaceIndex, getWorkspaceBus: (workspace) => busRegistry.get(workspace), adapterRegistry },
+            entry.slug,
+            isAbsolute(path) ? relative(entry.worktree_path, path) : path,
+            false,
+          );
+          return { slug: entry.slug, path: artifact.source_path, class: artifact.class };
+        },
+      ),
+      bindSession: async (chat) => {
+        await sessionRegistry.register({
+          session_id: chat.sessionId,
+          provider: chat.provider,
+          cwd: chat.workspacePath,
+          workspace_binding: chat.workspacePath,
+          source: "managed-chat",
+        });
+        const release = sessionRegistry.holdConnection(chat.sessionId, "managed-chat");
+        return async () => {
+          release();
+          await sessionRegistry.deregister(chat.sessionId);
+        };
+      },
+      ownershipUnknown: () => {
+        supervisor.recover();
+        return supervisor.recoveryRequired;
+      },
+      releaseEnabled: opts.managedRuntime?.released ?? false,
+      manifest:
+        opts.managedRuntime?.manifest ??
+        ((provider) =>
+          opts.managedRuntime?.candidates?.some((candidate) => candidate.provider === provider)
+            ? runtimes.manifest(provider)
+            : undefined),
+      installRuntime: (provider, launcher) => runtimes.install(provider, launcher),
+      runtimeIdentity: opts.managedRuntime?.manifest
+        ? (provider) => opts.managedRuntime?.manifest?.(provider)?.id
+        : (provider) =>
+            opts.managedRuntime?.candidates?.some((candidate) => candidate.provider === provider)
+              ? runtimes.identity(provider)
+              : undefined,
+      runtimeStatus: opts.managedRuntime?.manifest
+        ? undefined
+        : (provider) =>
+            opts.managedRuntime?.candidates?.some((candidate) => candidate.provider === provider)
+              ? runtimes.status(provider)
+              : { installed: false, qualified: false },
+      workspace(id, epoch) {
+        const entry = workspaceIndex.getWorkspaceByRegistration(id);
+        if (
+          !entry ||
+          entry.first_seen !== epoch ||
+          (entry.lifecycle && entry.lifecycle.state !== "active") ||
+          workspaceIndex.activeForgetOperationForCanonicalPath(entry.canonical_path)
+        ) {
+          throw new ManagedAgentError("workspace-changed", "This workspace registration is unavailable.");
+        }
+        return { id, epoch, path: entry.canonical_path, managedExecution: entry.kind === "directory" };
+      },
+    });
+  } catch {
+    log(home, "Managed agent state is unavailable; document review remains available.");
+  }
   const pushRegistry = new SessionPushRegistry();
   // Issue #155: session signals, derived from each bus's claim events as they are appended. Routed
   // with the same R2 predicate as delivery, pushed on the session's own stream when it has one, and
@@ -254,7 +361,28 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     adoptionId: string,
     targetRegistrationId: string,
   ): Promise<void> => {
-    await busRegistry.sealForAdoption(sources, adoptionId, targetRegistrationId);
+    const fenced: { id: string; epoch: string; path: string }[] = [];
+    try {
+      for (const source of sources) {
+        const entry = workspaceIndex.getWorkspaceByRegistration(workspaceRegistrationId(source));
+        if (entry) {
+          if (managedChats?.workspaceBlockers(entry.registration_id).length)
+            throw new ManagedAgentError(
+              "workspace-stopping",
+              "Stop or cancel managed chats before adopting this workspace.",
+            );
+          const workspace = { id: entry.registration_id, epoch: entry.first_seen, path: entry.canonical_path };
+          await managedChats?.fenceWorkspace(workspace);
+          fenced.push(workspace);
+        }
+      }
+      await busRegistry.sealForAdoption(sources, adoptionId, targetRegistrationId);
+    } catch (error) {
+      // The bus/registry still rejects sources already sealed. Restore admission for any
+      // untouched source when a claim or another participant refused the transaction.
+      for (const workspace of fenced) managedChats?.unfenceWorkspace(workspace);
+      throw error;
+    }
     await Promise.all(sources.map((source) => artifactWatcherRegistry.evict(source)));
   };
   const createAdoptionStagingBus = (workspace: WorkspaceTarget) =>
@@ -263,11 +391,15 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
       resolveTrackedFilesSync: opts.resolveTrackedFilesSync,
     });
   const closeWorkspaceResources = async (): Promise<void> => {
+    await managedChats?.close();
+    await supervisor.close();
     await claimSweeper.stop();
     await artifactWatcherAllocation.stop();
     await Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]);
   };
   const releaseWorkspaceResourcesForExit = async (): Promise<void> => {
+    await managedChats?.close();
+    await supervisor.close();
     // Watchers first and synchronously, so no quiet-window capture can start against a bus that
     // is closing, and no warm-up step opens a new watch that nothing will ever use. The claim
     // sweeper stops first for the same reason: no expiry may start against a closing bus.
@@ -322,6 +454,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     metadataRegistry,
     providerRegistry,
     dictationRegistry,
+    managedChats,
     pushRegistry,
     signalRegistry,
     watchEmissions,
@@ -417,6 +550,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // ONE context object, deliberately: `createApiFetch` keys the daemon's composite-delivery
   // registry and adoption coordinator on this object's identity, so the two listeners below must
   // be built from this exact reference rather than from a copy.
+  backend.managedChats?.setMcpOrigin(`http://127.0.0.1:${port}`);
   const apiContext: ApiContext = {
     port,
     classFPort,
@@ -436,6 +570,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     metadataRegistry: backend.metadataRegistry,
     providerRegistry: backend.providerRegistry,
     dictationRegistry: backend.dictationRegistry,
+    managedChats: backend.managedChats,
     pushRegistry: backend.pushRegistry,
     signalRegistry: backend.signalRegistry,
     watchEmissions: backend.watchEmissions,
@@ -611,6 +746,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   } else {
     markStartupReady();
     log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
+    if (opts.managedRuntime?.released) log(home, `${instanceId} managed chats open: preview for this daemon only`);
     // Warm the artifact watchers only now — after both binds, the lock, and the handshake gate.
     // Deliberately not awaited: warm-up is not readiness, and on a machine with a large index it
     // takes far longer than a client is willing to wait for `glosa open`. Failures are logged and
@@ -1014,7 +1150,10 @@ function locklessHandshakeResult(
 }
 
 export type DaemonBuildDecision =
-  | { action: "use" }
+  /** `staleClient` marks a `use` reached because the DAEMON matches the install on disk and this
+   * process does not: it was started before the tree changed under it. The daemon is right; the
+   * client should be restarted when convenient, and says so once (issue #360). */
+  | { action: "use"; staleClient?: true }
   | { action: "restart"; reason: "legacy" | "newer-client" | "same-version-different-build" }
   /** `foreignInstall` marks the one failure a user can act on directly: another install owns the
    * daemon, so the fix is to stop that process rather than to change anything about this one. */
@@ -1029,6 +1168,14 @@ export interface DaemonBuildInputs {
   daemonBuildId: string | undefined;
   daemonInstallId: string | undefined;
   daemonProtocol: string;
+  /** The install's build identity as it is ON DISK NOW, re-derived on demand. Consulted only on the
+   * same-version-different-build path of a daemon this install owns, which is the one place the
+   * in-memory `BUILD_ID` cannot say which side is stale: a client that outlived a source change
+   * carries a hash the tree no longer has, and without this it evicted every daemon it spawned
+   * (issue #360). A thunk, because hashing the tree is the cost `install.ts` keeps off the
+   * handshake hot path; it runs only when the two hashes already disagree. `undefined` (or a
+   * throw) means "cannot tell", which keeps today's restart. */
+  currentInstallBuildId?: () => string | undefined;
 }
 
 const incompatibleVersionsReason = (daemonProtocol: string): string =>
@@ -1074,6 +1221,13 @@ export function decideDaemonBuild(inputs: DaemonBuildInputs): DaemonBuildDecisio
     if (daemonInstallId !== clientInstallId) {
       return { action: "fail", reason: foreignInstallReason(daemonBuildId), foreignInstall: true };
     }
+    // Same install, same version, different bytes: one of the two is stale, and only the tree on
+    // disk can say which. A daemon that matches the disk is current; the stale side is this
+    // process, and restarting the daemon would only spawn another one it disagrees with.
+    const onDisk = parseBuildId(readCurrentBuildId(inputs.currentInstallBuildId));
+    if (onDisk && onDisk.sourceHash === daemon.sourceHash && onDisk.version === daemon.version) {
+      return { action: "use", staleClient: true };
+    }
     return { action: "restart", reason: "same-version-different-build" };
   }
 
@@ -1083,9 +1237,24 @@ export function decideDaemonBuild(inputs: DaemonBuildInputs): DaemonBuildDecisio
   return { action: "use" };
 }
 
+/** `""` stands for "cannot tell" so `parseBuildId` returns null and the caller restarts as before:
+ * an absent thunk, a thunk that returns nothing, and a thunk that throws all land here. */
+function readCurrentBuildId(read: DaemonBuildInputs["currentInstallBuildId"]): string {
+  if (!read) return "";
+  try {
+    return read() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Said once per process: the log otherwise fills with the same line on every handshake. */
+let staleClientLogged = false;
+
 /** The decision for a peer this client has just handshaken with, using its own identity. */
 function decideForPeer(hs: HandshakeResponse): DaemonBuildDecision {
   return decideDaemonBuild({
+    currentInstallBuildId: () => computeBuildId(),
     clientBuildId: BUILD_ID,
     clientInstallId: INSTALL_ID,
     daemonBuildId: hs.build_id,
@@ -1345,6 +1514,15 @@ export async function ensureDaemonWithDependencies(
 
         const decision = decideForPeer(hs);
         if (decision.action === "use") {
+          if (decision.staleClient && !staleClientLogged) {
+            staleClientLogged = true;
+            log(
+              home,
+              `using ${hs.instance_id}: this client (build ${BUILD_ID}, pid ${process.pid}) predates ` +
+                `the tree it runs from; the daemon's build ${hs.build_id} matches the install on disk. ` +
+                "Restart this process when convenient.",
+            );
+          }
           // A daemon that serves no socket cannot be talked to by this client at all: every
           // authenticated request goes over `<GLOSA_HOME>/run/api.sock`, and there is deliberately
           // no fall back to the port (A3 §3.2 — a fallback would hand a squatter the entire
@@ -1377,6 +1555,45 @@ export async function ensureDaemonWithDependencies(
           return { ok: false, reason: decision.reason, logPath: logPath(home) };
         }
 
+        if (hs.managed_control) {
+          if (hs.managed_busy)
+            return {
+              ok: false,
+              reason: "Stop managed agent chats and account operations before updating the running daemon.",
+              logPath: logPath(home),
+            };
+          // A handshake is only an observation. The acknowledged fence closes the start-after-
+          // handshake race before this client is allowed to signal the existing daemon.
+          try {
+            const response = await authedRequest(
+              toConnection(lock.port, hs, home),
+              {
+                path: "/api/agents/quiesce",
+                method: "POST",
+                body: JSON.stringify({ instanceId: hs.instance_id }),
+                signal: AbortSignal.timeout(Math.max(1, Math.min(3000, remainingMs(deadline, deps.now)))),
+              },
+              home,
+            );
+            if (
+              !response.ok ||
+              ((await response.json()) as { instanceId?: string }).instanceId !== hs.instance_id ||
+              !sameLockInstance(readLock(lockFile), lock)
+            )
+              return {
+                ok: false,
+                reason:
+                  "The daemon could not confirm that managed agents are stopped. Finish agent work before restarting.",
+                logPath: logPath(home),
+              };
+          } catch {
+            return {
+              ok: false,
+              reason: "Managed-agent replacement fence was not acknowledged; the existing daemon was left running.",
+              logPath: logPath(home),
+            };
+          }
+        }
         log(home, `refreshing ${hs.instance_id}: ${decision.reason} (${hs.build_id ?? "legacy"} -> ${BUILD_ID})`);
         try {
           process.kill(hs.pid, "SIGTERM");

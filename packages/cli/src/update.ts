@@ -827,7 +827,7 @@ export function interpretProbe(output: string | null, target: string, path: stri
     exitCode: 9,
     code: "update-unverified",
     message: `installed ${target}, but ${path} still reports ${reported}`,
-    hint: "Another glosa earlier on your PATH is shadowing the upgraded one. Note that a shell alias or function cannot be detected here — check with `type glosa`.",
+    hint: "Another glosa earlier on your PATH is shadowing the upgraded one. Note that a shell alias or function cannot be detected here: check with `type glosa`.",
   };
 }
 
@@ -1014,7 +1014,7 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
     return fail(data, warnings, EXIT_CODES.PLATFORM_UNSUPPORTED, {
       code: "platform-unsupported",
       kind: "platform",
-      message: `${deps.platform()} is not supported — glosa v1 is macOS-only`,
+      message: `${deps.platform()} is not supported: glosa v1 is macOS-only`,
       hint: "See A6 §F30. Linux and Windows are out of scope for v1.",
     });
   }
@@ -1072,7 +1072,7 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   if (classification.reshimHint) {
     warnings.push({
       code: "reshim-required",
-      message: `This install sits behind a version-manager shim — run \`${classification.reshimHint}\` after the update.`,
+      message: `This install sits behind a version-manager shim: run \`${classification.reshimHint}\` after the update.`,
     });
   }
 
@@ -1103,7 +1103,7 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
       message: resolved.message,
       hint: isUsage
         ? `Pick a published target.${tagList}`
-        : "The registry's dist-tags and published versions disagree — this usually follows an `npm unpublish`. Retry later or pin an exact version with --to.",
+        : "The registry's dist-tags and published versions disagree: this usually follows an `npm unpublish`. Retry later or pin an exact version with --to.",
     });
   }
   data.target_version = resolved.version;
@@ -1168,7 +1168,7 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   if (daemonLock) {
     warnings.push({
       code: "daemon-restart-required",
-      message: `A glosa daemon (pid ${daemonLock.pid}) is running the old build — run \`glosa open\` to restart it.`,
+      message: `A glosa daemon (pid ${daemonLock.pid}) is running the old build: run \`glosa open\` to restart it.`,
     });
   }
 

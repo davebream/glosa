@@ -262,6 +262,8 @@ interface PaneState {
   liveModeBar: boolean;
   modeLabel: string;
   classFError: string;
+  text: string;
+  errorTitle: string;
 }
 
 interface PageState {
@@ -291,6 +293,10 @@ const pageStateExpression = (slug: string) => `(() => {
       liveModeBar: Boolean(bar) && bar.offsetParent !== null,
       modeLabel: pane.querySelector('.glosa-pane-mode-label')?.textContent ?? '',
       classFError: pane.querySelector('.glosa-classf-status[data-error="true"]')?.textContent ?? '',
+      // issue #337: what the pane actually rendered — the ONE observation that distinguishes
+      // "opened the right document" from "opened nothing" or "opened the wrong one".
+      text: pane.querySelector('.glosa-content')?.textContent ?? '',
+      errorTitle: pane.querySelector('.glosa-empty-title')?.textContent ?? '',
     };
   });
   let layout = null;
@@ -580,6 +586,20 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
     if (!found) throw new Error(`no navigator row for ${path}`);
   };
 
+  /** issue #337: a document under `My Folder/` starts with its ancestor collapsed (only the
+   * INITIALLY-open artifact's ancestors auto-expand) — click the folder row first, same
+   * synchronous DOM toggle `openFromNavigator` relies on for files. */
+  const expandFolderInTree = async (client: CdpClient, dirPath: string) => {
+    const found = await client.evaluate<boolean>(`(() => {
+      const item = document.querySelector('[data-node-id="d:' + ${JSON.stringify(dirPath)} + '"]');
+      const row = item?.querySelector('.glosa-tree-row');
+      if (!item || !row) return false;
+      if (item.getAttribute('aria-expanded') !== 'true') row.click();
+      return true;
+    })()`);
+    if (!found) throw new Error(`no navigator directory row for ${dirPath}`);
+  };
+
   /** Moves the ACTIVE tab into a tab group of its own, through the same single-pointer menu
    * command WCAG 2.2 SC 2.5.7 requires glosa to offer beside the drag (§9). */
   const moveActiveTabToNewGroup = async (client: CdpClient, path: string) => {
@@ -612,9 +632,11 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       const before = await waitForState(tab, "alpha edits", (state) => paneFor(state, ALPHA)?.mode === "edit");
 
       // The arrangement on disk names both panels and carries a mode for each.
-      expect(Object.keys(before.layout?.panels ?? {}).sort()).toEqual([ALPHA, BETA]);
-      expect(before.layout?.panels[BETA]?.params?.mode).toBe("read");
-      expect(before.layout?.panels[ALPHA]?.params?.mode).toBe("edit");
+      expect(Object.keys(before.layout?.panels ?? {}).sort()).toEqual(
+        [ALPHA, BETA].map((path) => JSON.stringify(["artifact", path])),
+      );
+      expect(before.layout?.panels[JSON.stringify(["artifact", BETA])]?.params?.mode).toBe("read");
+      expect(before.layout?.panels[JSON.stringify(["artifact", ALPHA])]?.params?.mode).toBe("edit");
 
       await tab.reload();
       await waitForReady(tab, "after reload");
@@ -743,6 +765,462 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       // A second `load` is what `classf-viewer.js` reads as the document navigating itself; that
       // path ends in a torn-down frame and this message. Its absence is the reader-facing half.
       expect(paneFor(moved, PREVIEW)?.classFError).toBe("");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // issue #337's own path: an artifact whose name needs percent-encoding. Cost kept small — ONE
+  // browser process, THREE tabs total (one initial + two fragment-form navigations), and the
+  // non-ASCII document is exercised by tree click only: it has no space, so the `+`/`%20`
+  // distinction the OTHER two tabs exist to prove is not a distinct case for it (that decode path
+  // is already pinned by the GET name-table unit coverage in http-routes.test.ts).
+  test(
+    "issue #337: a document in a spaced folder, and a non-ASCII-named document, open and render — by tree click, and (the spaced one) by both the `+` and `%20` fragment forms",
+    async () => {
+      const FOLDER_PATH = "My Folder/doc.md";
+      const FOLDER_TEXT = "This document lives inside a folder whose name has a space.";
+      const NON_ASCII_PATH = "café.md";
+      const NON_ASCII_TEXT = "This document's own name is not ASCII.";
+      mkdirSync(join(workspaceRoot, "My Folder"), { recursive: true });
+      writeFileSync(join(workspaceRoot, "My Folder", "doc.md"), `# Folder doc\n\n${FOLDER_TEXT}\n`);
+      writeFileSync(join(workspaceRoot, "café.md"), `# Café\n\n${NON_ASCII_TEXT}\n`);
+
+      const { browser, cdpPort } = await launchBrowser();
+
+      // (a) tree click, both documents, one tab.
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "initial open");
+
+      await expandFolderInTree(tab, "My Folder");
+      await openFromNavigator(tab, FOLDER_PATH);
+      const folderByClick = await waitForState(
+        tab,
+        "folder doc opened by tree click",
+        // `active` flips synchronously on open, before the fetched content mounts — wait for the
+        // text itself so this doesn't pass on a still-empty pane.
+        (state) => paneFor(state, FOLDER_PATH)?.active === true && paneFor(state, FOLDER_PATH)!.text.length > 0,
+      );
+      expect(paneFor(folderByClick, FOLDER_PATH)?.text).toContain(FOLDER_TEXT);
+      expect(paneFor(folderByClick, FOLDER_PATH)?.errorTitle).toBe("");
+
+      await openFromNavigator(tab, NON_ASCII_PATH);
+      const nonAsciiByClick = await waitForState(
+        tab,
+        "non-ASCII doc opened by tree click",
+        (state) => paneFor(state, NON_ASCII_PATH)?.active === true && paneFor(state, NON_ASCII_PATH)!.text.length > 0,
+      );
+      expect(paneFor(nonAsciiByClick, NON_ASCII_PATH)?.text).toContain(NON_ASCII_TEXT);
+      expect(paneFor(nonAsciiByClick, NON_ASCII_PATH)?.errorTitle).toBe("");
+
+      // (b) the `+` form `glosa_present` emits (URLSearchParams' space spelling).
+      const plusUrl = `${origin()}/#t=${TOKEN}&w=${slug}&a=My+Folder%2Fdoc.md&surface=document&mode=review`;
+      const plusTab = await openTab(browser, cdpPort, plusUrl);
+      const afterPlus = await waitForState(
+        plusTab,
+        "`+`-form fragment open",
+        (state) => state.screens.includes("ready") && Boolean(paneFor(state, FOLDER_PATH)?.text.length),
+      );
+      expect(paneFor(afterPlus, FOLDER_PATH)?.text).toContain(FOLDER_TEXT);
+      expect(paneFor(afterPlus, FOLDER_PATH)?.errorTitle).toBe("");
+      // After the app rewrites its own fragment (scrubSecrets strips `t=`), the view is still
+      // this document — the rewrite is a hash replace, never a navigation away from it.
+      const plusHash = new URLSearchParams((await plusTab.evaluate<string>("location.hash")).slice(1));
+      expect(plusHash.get("a")).toBe(FOLDER_PATH);
+      expect(plusHash.has("t")).toBe(false);
+
+      // (c) the `%20` form — same artifact, the other space spelling.
+      const percentUrl = `${origin()}/#t=${TOKEN}&w=${slug}&a=My%20Folder%2Fdoc.md&surface=document&mode=review`;
+      const percentTab = await openTab(browser, cdpPort, percentUrl);
+      const afterPercent = await waitForState(
+        percentTab,
+        "`%20`-form fragment open",
+        (state) => state.screens.includes("ready") && Boolean(paneFor(state, FOLDER_PATH)?.text.length),
+      );
+      expect(paneFor(afterPercent, FOLDER_PATH)?.text).toContain(FOLDER_TEXT);
+      expect(paneFor(afterPercent, FOLDER_PATH)?.errorTitle).toBe("");
+      const percentHash = new URLSearchParams((await percentTab.evaluate<string>("location.hash")).slice(1));
+      expect(percentHash.get("a")).toBe(FOLDER_PATH);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "ended native logins remove browser links, reject terminal input and explain recovery",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "before native login");
+      // Real xterm/DOM/input; synthetic operation responses avoid real provider credentials.
+      for (const outcome of ["expired", "completed", "failed", "stopping"]) {
+        await tab.evaluate(`(async () => {
+          const { mountAgentLogin } = await import('/app/agent-login.js');
+          const host = document.createElement('main'); document.body.replaceChildren(host);
+          const fixture = window.loginFixture = { writes: [], reads: 0 };
+          fixture.mounted = await mountAgentLogin(host, {
+            profile: { id: 'fixture', label: 'Test account' },
+            dataAccess: {
+              loginAgent: async () => ({ id: 'operation', secret: 'test-only', authHosts: ['auth.example.test'] }),
+              readAgentLogin: async () => {
+                if (!fixture.reads++) return { state: 'running', output: btoa('https://auth.example.test/authorize?state=fixture\\r\\n'), offset: 1 };
+                return new Promise((resolve, reject) => { fixture.resolve = resolve; fixture.reject = reject; });
+              },
+              resizeAgentLogin: async () => {},
+              writeAgentLogin: async (_id, _secret, data) => fixture.writes.push(data),
+              finishAgentLogin: async () => {},
+            },
+          });
+          await new Promise((resolve, reject) => {
+            const deadline = Date.now() + 3000;
+            const check = () => fixture.resolve ? resolve() : Date.now() > deadline ? reject(new Error('login poll missing')) : requestAnimationFrame(check);
+            check();
+          });
+        })()`);
+        expect(await tab.evaluate<boolean>("!document.querySelector('main a').hidden")).toBe(true);
+        await tab.evaluate(`(() => {
+          if (${JSON.stringify(outcome)} === 'expired') loginFixture.reject(Object.assign(new Error('login unavailable'), {problem:{type:'https://glosa.local/errors/login-not-found'}}));
+          else loginFixture.resolve({state:${JSON.stringify(outcome)},output:'',offset:1});
+        })()`);
+        const ended = await tab.evaluate<{ hidden: boolean; href: string | null; status: string; button: string }>(
+          `new Promise(resolve => requestAnimationFrame(() => resolve({
+            hidden:document.querySelector('main a').hidden, href:document.querySelector('main a').getAttribute('href'),
+            status:document.querySelector('[role=status]').textContent, button:document.querySelector('main > button').textContent
+          })))`,
+        );
+        expect(ended.hidden).toBe(true);
+        expect(ended.href).toBeNull();
+        expect(ended.button).toBe("Close terminal");
+        expect(ended.status).toContain(
+          outcome === "expired"
+            ? "choose Sign in again"
+            : outcome === "completed"
+              ? "check the account"
+              : outcome === "stopping"
+                ? "wait for cleanup"
+                : "try again",
+        );
+        await tab.evaluate("document.querySelector('.xterm-helper-textarea').focus()");
+        await tab.send("Input.insertText", { text: "late authentication code" });
+        expect(
+          await tab.evaluate<number>(
+            "new Promise(resolve => requestAnimationFrame(() => resolve(loginFixture.writes.length)))",
+          ),
+        ).toBe(0);
+        await tab.evaluate("loginFixture.mounted.destroy()");
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "managed chat renders safely, preserves selection while streaming, and sends real keyboard input",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "before managed pane");
+      // Real renderer/input/layout, deterministic transport. This is not a native-provider claim.
+      await tab.evaluate(`(async () => {
+      const { createChatPane } = await import('/app/chat-pane.js');
+      const host = document.createElement('main'); host.style.cssText = 'height:100vh;width:100%;padding:12px;box-sizing:border-box';
+      document.body.replaceChildren(host);
+      const state = { id:'fixture', profileId:'a', provider:'claude-code', title:'Review the outline', revision:1,
+        configRevision:1, draftRevision:0, draft:'', draftAttachments:[], archived:false,
+        settings:{model:'model',effort:'high',permissionMode:'default'},
+        turns:[{id:'first',text:'Review my outline',status:'completed'}],
+        content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:'A **clear opening**. <img src=x onerror=alert(1)>'}], decisions:[] };
+      window.chatFixture = { state, sends:[], answers:[], uploads:[], moves:[] };
+      const access = {
+        getAgentStatus: async () => ({available:true,profiles:[{id:'a',provider:'claude-code',label:'Personal',enabled:true}],capabilities:{a:{models:[{id:'model',name:'Model',efforts:['high']}]}}}),
+        getChat: async (_s,id) => structuredClone(id==='source' ? {...state, id:'source',draft:'Source draft',draftRevision:3} : state),
+        openChatStream: (_slug,_id,callbacks) => { window.chatFixture.stream=callbacks; return () => {}; },
+        saveChatDraft: async (_s,_i,input) => { state.draft=input.text; state.draftAttachments=input.attachments; state.draftRevision++; return structuredClone(state); },
+        sendChatTurn: async (_s,_i,input) => { window.chatFixture.sends.push(input); state.turns.push({id:input.turnId,text:input.text,status:'completed'}); state.draft=''; state.draftRevision++; state.revision++; return {}; },
+        answerChatDecision: async (_s,_i,input) => { window.chatFixture.answers.push(input); state.decisions[0].status='answered'; state.revision++; },
+        previewChatTranscript: async () => ({title:'Previous outline',turnCount:2,text:'# Previous outline\\n\\nA public answer.'}),
+        uploadChatAttachment: async (_s,_i,file) => { chatFixture.uploads.push({name:file.name,text:await file.text()});return {name:file.name,mime:file.type,size:file.size,hash:'a'.repeat(64)}; },
+        moveChatDraft: async (_s,_i,input) => {chatFixture.moves.push(input);state.draft='Source draft';state.draftRevision++;state.revision++;return {sourceCleared:true};},
+      };
+      window.chatFixture.pane=createChatPane(host,{dataAccess:access,slug:'fixture',chatId:'fixture',sourceChatId:'source',onChange(){},onSettings(){}});
+      await window.chatFixture.pane.ready;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    })()`);
+      expect(
+        await tab.evaluate<number>(
+          "document.querySelectorAll('.glosa-chat-history img, .glosa-chat-history script').length",
+        ),
+      ).toBe(0);
+      expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-history strong')?.textContent")).toBe(
+        "clear opening",
+      );
+      // Native selects keep keyboard behavior, while their shared custom tooltip stays dismissible.
+      expect(
+        await tab.evaluate<{ visible: boolean; clearance: number; text: string }>(`(()=>{
+        const select=document.querySelector('[aria-label=Effort]');select.focus();
+        const tip=document.getElementById(select.getAttribute('aria-describedby'));
+        const icon=select.parentElement.querySelector('svg').getBoundingClientRect();
+        return {visible:getComputedStyle(tip).visibility==='visible',text:tip.textContent,
+          clearance:select.getBoundingClientRect().left+parseFloat(getComputedStyle(select).paddingLeft)-icon.right};
+      })()`),
+      ).toEqual({
+        visible: true,
+        clearance: expect.any(Number),
+        text: expect.stringContaining("High effort · More reasoning"),
+      });
+      expect(
+        await tab.evaluate<number>(
+          `(()=>{const select=document.querySelector('[aria-label=Effort]');return parseFloat(getComputedStyle(select).paddingLeft)-26})()`,
+        ),
+      ).toBeGreaterThan(0);
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+      expect(
+        await tab.evaluate<{ focused: boolean; hidden: boolean }>(
+          `(()=>{const select=document.querySelector('[aria-label=Effort]');return {focused:document.activeElement===select,hidden:getComputedStyle(document.getElementById(select.getAttribute('aria-describedby'))).visibility==='hidden'}})()`,
+        ),
+      ).toEqual({ focused: true, hidden: true });
+      const effortBox = await tab.evaluate<{ x: number; y: number }>(
+        `(()=>{const select=document.querySelector('[aria-label=Effort]');select.blur();const box=select.getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2}})()`,
+      );
+      await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...effortBox });
+      const tipBox = await tab.evaluate<{ x: number; y: number; visible: boolean }>(
+        `(()=>{const tip=document.querySelector('.glosa-chat-effort-field [role=tooltip]'),box=tip.getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2,visible:getComputedStyle(tip).visibility==='visible'}})()`,
+      );
+      expect(tipBox.visible).toBe(true);
+      await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: tipBox.x, y: tipBox.y });
+      expect(
+        await tab.evaluate<string>(
+          "getComputedStyle(document.querySelector('.glosa-chat-effort-field [role=tooltip]')).visibility",
+        ),
+      ).toBe("visible");
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+      expect(
+        await tab.evaluate<string>(
+          "getComputedStyle(document.querySelector('.glosa-chat-effort-field [role=tooltip]')).visibility",
+        ),
+      ).toBe("hidden");
+      const selected = await tab.evaluate<string>(`(() => {
+      const text = document.querySelector('.glosa-chat-history strong').firstChild;
+      const range=document.createRange(); range.selectNodeContents(text); const selection=getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      chatFixture.stream.onEvent({event:'chat_event',data:{seq:2,data:{type:'content',content:{id:'reply',turnId:'first',kind:'text',role:'assistant',text:' More context.'}}}});
+      return selection.toString();
+    })()`);
+      expect(selected).toBe("clear opening");
+      await tab.evaluate("getSelection().removeAllRanges(); document.querySelector('[aria-label=Message]').focus()");
+      await tab.send("Input.insertText", { text: "Please expand this section" });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      const submitted = await tab.evaluate<string>(`new Promise((resolve,reject) => { const deadline=Date.now()+3000;
+      const check=()=>{if(chatFixture.sends.length) resolve(chatFixture.sends[0].text); else if(Date.now()>deadline) reject(new Error('keyboard send not observed')); else requestAnimationFrame(check)}; check(); })`);
+      expect(submitted).toBe("Please expand this section");
+      await tab.evaluate(`(async()=>{
+        document.querySelector('[aria-label="Chat actions"]').click();
+        [...document.querySelectorAll('.glosa-agent-menu button')].find(b=>b.textContent==='Move previous draft here').click();
+        const deadline=Date.now()+3000;
+        while(document.querySelector('[aria-label="Message"]').value!=='Source draft') {
+          if(Date.now()>deadline) throw new Error('Moved draft did not reach composer');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        document.querySelector('[aria-label="Chat actions"]').click();
+        [...document.querySelectorAll('.glosa-agent-menu button')].find(b=>b.textContent==='Attach previous conversation').click();
+        while(!document.querySelector('dialog[open]')) {
+          if(Date.now()>deadline) throw new Error('Transcript preview did not open');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      const preview = await tab.evaluate<string>("document.querySelector('dialog[open]').textContent");
+      expect(preview).toContain("Previous outline");
+      expect(preview).toContain("2 turns");
+      expect(preview).toContain("bytes");
+      expect(preview).toContain("Claude Code · Personal");
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(1);
+      await tab.evaluate(`(async()=>{
+        [...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Attach transcript').click();
+        const deadline=Date.now()+3000;
+        while(!document.querySelector('[aria-label="Remove previous-conversation.md"]')) {
+          if(Date.now()>deadline) throw new Error('Frozen transcript not attached');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      expect(await tab.evaluate<string>("chatFixture.uploads[0].text")).toBe("# Previous outline\n\nA public answer.");
+      expect(await tab.evaluate<number>("chatFixture.moves[0].sourceRevision")).toBe(3);
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(1);
+      await tab.send("Emulation.setDeviceMetricsOverride", {
+        width: 480,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await tab.evaluate(`new Promise(resolve => requestAnimationFrame(resolve))`);
+      const layout = await tab.evaluate<{
+        viewport: number;
+        width: number;
+        buttons: number;
+        history: number;
+        height: number;
+        composerRight: number;
+      }>(
+        `({viewport:innerWidth,width:document.body.scrollWidth,buttons:[...document.querySelectorAll('.glosa-chat-pane button')].filter(b=>b.getBoundingClientRect().width>0).length,history:document.querySelector('.glosa-chat-history').clientHeight,height:innerHeight,composerRight:document.querySelector('.glosa-chat-composer').getBoundingClientRect().right})`,
+      );
+      expect(layout.width).toBeLessThanOrEqual(layout.viewport);
+      expect(layout.buttons).toBeGreaterThan(5);
+      expect(layout.history).toBeGreaterThan(layout.height * 0.4);
+      expect(layout.composerRight).toBeLessThanOrEqual(layout.viewport);
+      const screenshot = await tab.send("Page.captureScreenshot", { format: "png" });
+      mkdirSync(".context/test-results", { recursive: true });
+      writeFileSync(
+        `.context/test-results/managed-chat-browser-${Date.now()}.png`,
+        Buffer.from(screenshot.result.data, "base64"),
+      );
+      // Account controls use the same real browser: test the low-on-screen menu, not a DOM shim.
+      await tab.evaluate(`(async () => {
+        chatFixture.pane.destroy();
+        const { mountAgentSettings } = await import('/app/agent-settings.js');
+        const profiles = Array.from({length:4}, (_,i)=>({id:'p'+i,provider:'claude-code',label:'Account '+(i+1),enabled:true,revision:1,isDefault:i===0,auth:{state:'authenticated',plan:'Max',observedAt:new Date().toISOString()},mcpServers:[]}));
+        profiles[0].auth.state='probe_failed';profiles[0].isDefault=false;profiles[1].auth.state='identity_mismatch';
+        window.accountFixture={updates:[],probes:[]};
+        const capabilities=Object.fromEntries(profiles.map(p=>[p.id,{models:[{id:'model',name:'Model',efforts:['high']}]}]));
+        accountFixture.pane=mountAgentSettings(document.querySelector('main'), {dataAccess:{
+          getAgentStatus:async()=>structuredClone({available:true,providers:[{id:'claude-code',name:'Claude Code',installed:true,qualified:true},{id:'codex',name:'Codex',installed:true,qualified:true}],profiles,capabilities}),
+          updateAgentProfile:async(id,input)=>{accountFixture.updates.push({id,...input});const profile=profiles.find(p=>p.id===id);Object.assign(profile,input,{revision:profile.revision+1});}
+          ,probeAgent:async(id)=>{accountFixture.probes.push(id);profiles.find(p=>p.id===id).auth.state='authenticated';}
+        }});
+        await accountFixture.pane.ready;
+        document.querySelector('[data-account-choice="p3"]').click();
+        const last=document.querySelector('[data-profile-id="p3"]');
+        last.scrollIntoView({block:'end'});
+        last.querySelector('.glosa-agent-menu-trigger').click();
+        await new Promise(resolve=>requestAnimationFrame(resolve));
+      })()`);
+      const menuBounds = await tab.evaluate<{ top: number; bottom: number; height: number; menuHeight: number }>(
+        `(()=>{const rect=document.querySelector('.glosa-agent-menu:popover-open').getBoundingClientRect();return {top:rect.top,bottom:rect.bottom,height:innerHeight,menuHeight:rect.height}})()`,
+      );
+      expect(menuBounds.top).toBeGreaterThanOrEqual(0);
+      expect(menuBounds.bottom).toBeLessThanOrEqual(menuBounds.height);
+      // This short action list must remain compact, not stretch to the 900px fixture viewport.
+      expect(menuBounds.menuHeight).toBeLessThan(400);
+      expect(
+        await tab.evaluate<string>("document.querySelector('[data-profile-id=p0] .glosa-agent-state').textContent"),
+      ).toBe("Could not verify");
+      expect(
+        await tab.evaluate<string>("document.querySelector('[data-profile-id=p1] .glosa-agent-recovery').textContent"),
+      ).toContain("different account");
+      await tab.evaluate("document.querySelector('.glosa-agent-menu:popover-open button').focus()");
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+      expect(
+        await tab.evaluate<boolean>(
+          "document.activeElement === document.querySelector('[data-profile-id=\"p3\"] .glosa-agent-menu-trigger')",
+        ),
+      ).toBe(true);
+      expect(await tab.evaluate<number>("document.querySelectorAll('.glosa-agent-menu:popover-open').length")).toBe(0);
+      await tab.evaluate(`(async()=>{
+        const card=document.querySelector('[data-profile-id="p3"]');
+        [...card.querySelectorAll('.glosa-agent-account-actions > button')].find(b=>b.textContent==='Make default').click();
+        const deadline=Date.now()+3000;
+        while(!document.querySelector('[data-profile-id="p3"] .glosa-agent-default')) {
+          if(Date.now()>deadline) throw new Error('Default account did not update');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      expect(
+        await tab.evaluate<{ id: string; revision: number; isDefault: boolean }>(
+          "({id:accountFixture.updates[0].id,revision:accountFixture.updates[0].revision,isDefault:accountFixture.updates[0].isDefault})",
+        ),
+      ).toEqual({ id: "p3", revision: 1, isDefault: true });
+      await tab.evaluate(`(async()=>{
+        document.querySelector('[data-account-choice=p0]').click();
+        [...document.querySelectorAll('[data-profile-id=p0] button')].find(b=>b.textContent==='Retry verification').click();
+        const deadline=Date.now()+3000;
+        while(document.querySelector('[data-profile-id=p0] .glosa-agent-state').textContent!=='Connected') {
+          if(Date.now()>deadline) throw new Error('Account verification did not recover');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      expect(await tab.evaluate<string[]>("accountFixture.probes")).toEqual(["p0"]);
+      await tab.evaluate(
+        `{ [...document.querySelectorAll('.glosa-agent-tabs button')].find(b=>b.textContent==='Codex').click(); }`,
+      );
+      expect(
+        await tab.evaluate<string>(
+          "document.querySelector('[data-provider-panel]:not([hidden])').dataset.providerPanel",
+        ),
+      ).toBe("codex");
+      await tab.evaluate(`(async()=>{
+        accountFixture.pane.destroy();
+        const { mountAgentSettings } = await import('/app/agent-settings.js');
+        window.installFixture = {installed:false,calls:0};
+        installFixture.pane=mountAgentSettings(document.querySelector('main'),{dataAccess:{
+          getAgentStatus:async()=>({available:true,providers:[{id:'claude-code',name:'Claude Code',installed:installFixture.installed,qualified:true,
+            installation:installFixture.calls&&!installFixture.installed?{phase:'downloading',startedAt:Date.now()-72000,updatedAt:Date.now()-35000,packagesCompleted:2,bytesCompleted:2612000}:undefined
+          }],profiles:[]}),
+          installAgent:async()=>{installFixture.calls++;await new Promise(resolve=>installFixture.finish=resolve);installFixture.installed=true;}
+        }});
+        await installFixture.pane.ready;
+      })()`);
+      expect(
+        await tab.evaluate<boolean>("document.querySelector('.glosa-agent-add-account button').matches(':disabled')"),
+      ).toBe(true);
+      expect(
+        await tab.evaluate<boolean>("document.querySelector('.glosa-agent-add-account input').matches(':disabled')"),
+      ).toBe(true);
+      await tab.evaluate("document.querySelector('.glosa-agent-runtime button').click()");
+      await tab.evaluate("document.querySelector('dialog .glosa-save').click()");
+      await tab.evaluate(`new Promise(resolve=>requestAnimationFrame(resolve))`);
+      const installing = await tab.evaluate<{ disabled: boolean; label: string; busy: string; calls: number }>(
+        `(()=>{const b=document.querySelector('.glosa-agent-runtime button');b.click();return {disabled:b.disabled,label:b.textContent,busy:b.getAttribute('aria-busy'),calls:installFixture.calls}})()`,
+      );
+      expect(installing).toEqual({ disabled: true, label: "Installing runtime…", busy: "true", calls: 1 });
+      expect(
+        await tab.evaluate<{
+          phase: string;
+          metrics: string;
+          visible: boolean;
+          indeterminate: boolean;
+          quiet: boolean;
+        }>(`(()=>{
+        const card=document.querySelector('.glosa-agent-runtime'),bar=card.querySelector('progress'),metrics=card.querySelector('.glosa-runtime-metrics');
+        return {phase:card.querySelector('strong').textContent,metrics:metrics.textContent,
+          visible:bar.getBoundingClientRect().height>0&&metrics.getBoundingClientRect().height>0,
+          indeterminate:!bar.hasAttribute('value'),quiet:card.textContent.includes('No installer update for')};
+      })()`),
+      ).toEqual({
+        phase: "Claude Code runtime · Downloading runtime",
+        metrics: expect.stringMatching(/elapsed · 2 packages downloaded · ≈ 2[.,]6 MB received · Last update/),
+        visible: true,
+        indeterminate: true,
+        quiet: true,
+      });
+      await tab.evaluate(`(async()=>{
+        installFixture.finish();
+        const deadline=Date.now()+3000;
+        while(document.querySelector('.glosa-agent-add-account button').matches(':disabled')) {
+          if(Date.now()>deadline) throw new Error('Account setup stayed locked after installation');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        installFixture.pane.destroy();
+      })()`);
     },
     TEST_TIMEOUT_MS,
   );

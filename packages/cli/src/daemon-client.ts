@@ -158,7 +158,7 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
   const conn = await ensureDaemon({ timeoutMs: options.ensureTimeoutMs });
   if (!conn.ok) {
     throw unreachableError(
-      conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason} — see ${conn.logPath}` : conn.reason,
+      conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason}: see ${conn.logPath}` : conn.reason,
     );
   }
   // The WHOLE resolved connection, not just its port (issue #207). `socketPath` is where every

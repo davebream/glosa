@@ -114,7 +114,7 @@ describe("mountAgentFeedback", () => {
     // #152: connection state is the only signal. Unbound says where the entries are, and never
     // offers an installation step — there is no wiring to run.
     expect(overlays.querySelector(".glosa-agent-feedback-waiting")?.textContent).toBe(
-      "No session connected — annotations wait here.",
+      "No session connected: annotations wait here.",
     );
     expect(Array.from(overlays.querySelectorAll("button")).some((button) => button.textContent === "Wire it now")).toBe(
       false,

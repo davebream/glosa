@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // The production watch plus a promise that settles once it is ARMED. A native watch's kernel stream
-// (FSEvents on macOS) comes up asynchronously after `fs.watch` returns and does not replay earlier
-// events, so a write made in that gap produces no event at all. That write is reconcile's offline
-// catch-up's to report, never the watcher's. A case that writes and then waits for the watcher
-// awaits `armed()`: it saves a probe file beside what is watched until the watch reports it.
+// (FSEvents on macOS) comes up asynchronously after `fs.watch` returns, so a write made in that gap
+// can produce no event at all. That write is reconcile's offline catch-up's to report, never the
+// watcher's. A case that writes and then waits for the watcher awaits `armed()`: it saves a probe
+// file beside what is watched until the watch reports it.
+//
+// The start is not a clean cut the other way either (#349): a write made BEFORE `fs.watch` can
+// still be reported by the new watch. Measured on macOS 26.2 with Bun 1.4.2, a write made just
+// before the watch was reported in most trials, and under heavy file churn a fixture's creation
+// events arrived 2.3 s after the watch started, behind a probe written later. No barrier that waits
+// for a later write can rule that out. A case that asserts silence therefore makes no write naming a
+// tracked file under the watched root before it asserts. Such cases move their tracked fixture in by
+// renaming the fixture's directory, which is reported as the directory alone.
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {

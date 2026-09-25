@@ -29,67 +29,39 @@ describe("viewer contextual surfaces", () => {
     return { conversationEl, shortcutsEl, conversationToggle, shortcutsToggle };
   }
 
-  test("a delayed conversation mount receives the current workspace and mode through injected state", async () => {
+  test("closing the keyboard sheet returns focus without controlling chat panels", () => {
     const controls = elements();
-    const dataAccess = { marker: "one shared instance" };
-    let state = { slug: "workspace", mode: "read" };
-    let releaseLoader: ((mount: unknown) => void) | undefined;
-    const mounted: unknown[] = [];
+    let focused = 0;
     const controller = createContextSurfaceController({
-      dataAccess,
       elements: controls,
-      getState: () => state,
-      loadConversationPane: () => new Promise((resolve) => (releaseLoader = resolve)),
       createElement,
-      returnFocus: () => {},
+      returnFocus: () => {
+        focused++;
+      },
     });
-
-    controls.conversationToggle.click();
-    state = { slug: "workspace", mode: "review" };
-    releaseLoader?.((_container: unknown, options: unknown) => {
-      mounted.push(options);
-      return () => {};
-    });
-    await Promise.resolve();
-
-    // Preview exposes the transcript read-only; composition requires an explicit mode transition.
-    expect(mounted).toHaveLength(1);
-    expect(mounted[0]).toMatchObject({ dataAccess, slug: "workspace", readOnly: false });
+    controls.shortcutsToggle.click();
+    expect(controls.shortcutsEl.hidden).toBe(false);
+    expect(controls.conversationEl.hidden).toBe(true);
+    (controls.shortcutsEl.querySelector("button") as unknown as HTMLButtonElement).click();
+    expect(controls.shortcutsEl.hidden).toBe(true);
+    expect(focused).toBe(1);
     controller.destroy();
   });
 
-  test("opening the keyboard sheet closes and disposes the injected conversation surface", async () => {
+  test("destroying the context controller closes its sheet and removes its listeners", () => {
     const controls = elements();
-    let stopped = 0;
-    const controller = createContextSurfaceController({
-      dataAccess: {},
-      elements: controls,
-      getState: () => ({ slug: "workspace", mode: "review" }),
-      loadConversationPane: async () => () => {
-        stopped += 1;
-      },
-      createElement,
-      returnFocus: () => {},
-    });
-
-    controls.conversationToggle.click();
-    await Promise.resolve();
-    expect(controls.conversationEl.hidden).toBe(false);
-
+    const controller = createContextSurfaceController({ elements: controls, createElement, returnFocus() {} });
     controls.shortcutsToggle.click();
-    await Promise.resolve();
-    expect(controls.conversationEl.hidden).toBe(true);
-    expect(stopped).toBe(1);
     controller.destroy();
+    controls.shortcutsToggle.click();
+    expect(controls.shortcutsEl.hidden).toBe(true);
+    expect(controls.shortcutsToggle.getAttribute("aria-expanded")).toBe("false");
   });
 
   test("the keyboard sheet documents every workbench binding, including the equivalents to dragging", () => {
     const controls = elements();
     const controller = createContextSurfaceController({
-      dataAccess: {},
       elements: controls,
-      getState: () => ({ slug: "workspace", mode: "read" }),
-      loadConversationPane: async () => () => {},
       createElement,
       returnFocus: () => {},
     });

@@ -17,13 +17,14 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fsyncContainingDir, type WriteSync, writeAllSync } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
 import { peekJournalAt, retentionPendingCount } from "../bus/peek.ts";
@@ -555,9 +556,39 @@ function redirectedBusPath(home: string, id: string): string {
   return join(home, "state", id);
 }
 
-function canonicalPath(path: string): string {
-  const real = realpathSync(path).normalize("NFC");
+function canonicalPath(path: string, realpath: (path: string) => string = realpathSync): string {
+  const real = realpath(path).normalize("NFC");
   return real.length > 1 && real.endsWith("/") ? real.slice(0, -1) : real;
+}
+
+/** Canonical path of an existing regular file: its canonical parent directory joined with the name
+ * it has in that directory. realpath(3) alone cannot name the leaf of a multiply-linked file: macOS
+ * answers with whichever link the kernel has cached for the inode, which may sit in another
+ * directory entirely. Its answer is kept only when it names exactly the entry asked for. Anything
+ * else, including a mere letter-case correction, is settled by the directory's own listing, since
+ * on a case-sensitive volume a second link may differ from the first only in case. Callers must
+ * already have rejected a symlink leaf. */
+function canonicalFilePath(path: string, realpath: (path: string) => string = realpathSync): string {
+  const dir = canonicalPath(dirname(path), realpath);
+  const requested = basename(path).normalize("NFC");
+  const real = realpath(path).normalize("NFC");
+  if (real === join(dir, requested)) return real;
+  return join(dir, onDiskLeafName(dir, requested) ?? requested);
+}
+
+/** The directory entry `requested` resolves to: an exact (NFC) match, else the one entry equal to
+ * it ignoring letter case, as a case-insensitive volume would resolve it. */
+function onDiskLeafName(dir: string, requested: string): string | null {
+  let names: string[];
+  try {
+    names = readdirSync(dir).map((name) => name.normalize("NFC"));
+  } catch {
+    return null;
+  }
+  if (names.includes(requested)) return requested;
+  const folded = requested.toLowerCase();
+  const matches = names.filter((name) => name.toLowerCase() === folded);
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 function relativeNfc(root: string, path: string): string {
@@ -674,6 +705,10 @@ export interface WorkspaceIndexDeps {
   aliasScanClock?: () => number;
   /** Test-only race seam for the one non-following snapshot used by exact/hardlink opens. */
   regularFileSnapshot?: (path: string) => RegularFileSnapshot | null;
+  /** `realpath(3)` behind open-target canonicalization. Test-only: macOS sometimes names a
+   * multiply-linked file by a different hard link than the one opened, and no test can make the
+   * real kernel do that on demand. Defaults to node:fs `realpathSync`. */
+  realpath?: (path: string) => string;
   /** Complete-list resolver seam used to prove which open paths genuinely require a full
    * traversal. Production uses the canonical matcher resolver; tests may poison it so a point
    * consumer cannot stay green merely because an ES-module export spy missed this module's lexical
@@ -705,6 +740,7 @@ export class WorkspaceIndex {
   private readonly aliasScanWorkerFactory: (url: string) => Worker;
   private readonly aliasScanClock: () => number;
   private readonly regularFileSnapshot: (path: string) => RegularFileSnapshot | null;
+  private readonly realpath: (path: string) => string;
   private readonly resolveTrackedFiles: typeof resolveTrackedFiles;
   // Whether SOMEONE (constructor deps or a later `setLiveSessionPredicate` call) ever actually
   // told this index whether live sessions exist. Distinct from `hasLiveSession` itself — a
@@ -763,6 +799,7 @@ export class WorkspaceIndex {
     this.aliasScanWorkerFactory = deps.aliasScanWorkerFactory ?? ((url) => new Worker(url));
     this.aliasScanClock = deps.aliasScanClock ?? (() => performance.now());
     this.regularFileSnapshot = deps.regularFileSnapshot ?? regularFileSnapshot;
+    this.realpath = deps.realpath ?? realpathSync;
     this.resolveTrackedFiles = deps.resolveTrackedFiles ?? resolveTrackedFiles;
   }
 
@@ -1131,7 +1168,9 @@ export class WorkspaceIndex {
 
       let canonical: string;
       try {
-        canonical = canonicalPath(rawPath);
+        canonical = leafStat.isFile()
+          ? canonicalFilePath(rawPath, this.realpath)
+          : canonicalPath(rawPath, this.realpath);
       } catch {
         throw new WorkspaceOpenError("invalid-path", "path could not be canonicalized");
       }
@@ -1382,7 +1421,7 @@ export class WorkspaceIndex {
         throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
       }
 
-      const worktree = canonicalPath(dirname(canonical));
+      const worktree = canonicalPath(dirname(canonical), this.realpath);
       const focus = relativeNfc(worktree, canonical);
       const entry = this.createEntry(index, {
         registration_id: looseId,
@@ -1575,7 +1614,7 @@ export class WorkspaceIndex {
 
     let focusCanonical: string;
     try {
-      focusCanonical = canonicalPath(candidate);
+      focusCanonical = canonicalFilePath(candidate, this.realpath);
     } catch {
       throw new WorkspaceOpenError("invalid-path", "focus path could not be canonicalized");
     }

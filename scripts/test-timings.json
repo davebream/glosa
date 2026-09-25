@@ -219,6 +219,50 @@
     "test/acceptance/daemon-identity-socket.test.ts": {
       "seconds": 0.4678,
       "reason": "One successful Bun 1.4.2 CI sample in run 35647662965; replace with the median after a second successful sample."
+    },
+    "packages/daemon/test/agents/managed-state.test.ts": {
+      "seconds": 0.1,
+      "reason": "Initial local Bun 1.4.2 estimate for managed-agent durability/process/admission checks; replace with measured CI medians."
+    },
+    "packages/daemon/test/agents/supervisor.test.ts": {
+      "seconds": 1.0,
+      "reason": "Initial local Bun 1.4.2 estimate for managed-agent durability/process/admission checks; replace with measured CI medians."
+    },
+    "packages/daemon/test/agents/chat-service.test.ts": {
+      "seconds": 0.2,
+      "reason": "Initial local Bun 1.4.2 estimate for managed-agent durability/process/admission checks; replace with measured CI medians."
+    },
+    "packages/daemon/test/agents/chat-routes.test.ts": {
+      "seconds": 0.2,
+      "reason": "Initial local Bun 1.4.2 estimate for managed-agent route and Claude protocol tests; replace with measured CI medians."
+    },
+    "packages/providers/claude-code/test/managed.test.ts": {
+      "seconds": 0.1,
+      "reason": "Initial local Bun 1.4.2 estimate for managed-agent route and Claude protocol tests; replace with measured CI medians."
+    },
+    "packages/daemon/test/agents/runtimes.test.ts": {
+      "seconds": 0.1,
+      "reason": "Initial local Bun 1.4.2 estimate for isolated runtime installation and integrity fixtures, without network or native inference."
+    },
+    "packages/spa/test/chat-pane.test.ts": {
+      "seconds": 0.2,
+      "reason": "Initial local Bun 1.4.2 estimate for managed chat rendering and native protocol fixtures; replace with measured CI medians."
+    },
+    "packages/providers/codex/test/managed.test.ts": {
+      "seconds": 0.1,
+      "reason": "Initial local Bun 1.4.2 estimate for managed chat rendering and native protocol fixtures; replace with measured CI medians."
+    },
+    "packages/spa/test/soft-break-display.test.ts": {
+      "seconds": 0.3,
+      "reason": "Initial local Bun 1.4.2 estimate for the rich editor's soft-break display and restore guards (happy-dom mount plus state-level plugin tests); replace with measured CI medians."
+    },
+    "packages/shell/test/policy.test.ts": {
+      "seconds": 0.05,
+      "reason": "Initial local Bun 1.4.2 estimate for the desktop shell's pure policy rules (16 tests, 8 ms); replace with measured CI medians."
+    },
+    "test/copy-rules.test.ts": {
+      "seconds": 0.2,
+      "reason": "Initial local Bun 1.4.2 estimate for the em-dash copy rule over three source trees (git ls-files plus a string scan of ~70 files); replace with measured CI medians."
     }
   }
 }

@@ -59,7 +59,7 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * `entry-resolved`, `no-claim`, `claim-limit`) carrying their facts as RFC 9457 extension members.
  * apply-begin's conflict moves from `lease-conflict` to `claim-held`; an N-1 CLI that matched only
  * `lease-conflict` falls back to its generic exit 8, and this CLI accepts both. */
-export const CONTRACT_VERSION = "1.17";
+export const CONTRACT_VERSION = "1.18";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

@@ -4,9 +4,9 @@
 // The report: a session asked about a paragraph near the top of a 250-line document while the
 // reader was scrolled near the end, and nothing told them where it was. The code it ran already
 // had a mark and an automatic scroll; the mark was a 2px grey rule nobody saw, and the scroll did
-// not fire. #308 replaces both: a band in session ink around the exact words, a notice with
-// "Go to it" whenever a question is not beside its words, and NO movement the reader did not ask
-// for.
+// not fire. #308 replaced both: a mark in session ink (now a bracket beside the block, with the
+// exact words washed), a notice with "Go to it" whenever a question is not beside its words, and
+// NO movement the reader did not ask for.
 //
 // Every claim below needs a layout engine, which is why it is here and not only in
 // `packages/spa/test/review-surface.test.ts`: happy-dom lays nothing out, so there "off screen",
@@ -21,7 +21,8 @@
 //   * ONE ACTION — "Go to it" brings the passage into the pane's viewport.
 //   * TOGETHER — below the rail floor, the question, its options and Send are on screen with the
 //     passage, with the tray closed.
-//   * EXACT WORDS — the band starts mid-line and ends mid-line: a stepped outline, not a block.
+//   * EXACT WORDS, BLOCK MARK — the words are washed exactly, starting mid-line, while the bracket
+//     spans their whole paragraph in the gutter and the tab sits level with the words' first line.
 //
 // Real, not simulated: one real `glosa __daemon` subprocess, one real registered workspace, real
 // attention requests through the daemon's own route, one installed Chromium driven over raw CDP.
@@ -255,7 +256,7 @@ class CdpClient {
 
 const DOC = "long.md";
 // Long enough to cross a line break wherever it starts, behind a lead-in short enough that it
-// cannot start at the column's left edge: the band has to step, whatever the face's metrics.
+// cannot start at the column's left edge, whatever the face's metrics.
 const ASKED =
   "The remedy is fewer tools, held longer, chosen once and then left alone, which the draft asserts flatly and never once stops to earn from the reader it is asking to change.";
 const POINTED = "switching costs";
@@ -266,7 +267,7 @@ function longDocument(): string {
   const parts = ["# A long document", ""];
   parts.push(filler(1), "");
   // The asked-about sentence sits in the MIDDLE of a paragraph: it starts mid-line and ends
-  // mid-line, which is what makes a block-shaped mark wrong and a stepped band right.
+  // mid-line, which is what tells marking the words apart from marking their block.
   parts.push(
     `The turn comes early. ${ASKED} Everything after this sentence depends on the reader having accepted it, and nothing before it has prepared them to, which is the whole difficulty with the section as it stands.`,
     "",
@@ -281,8 +282,8 @@ interface AskState {
   scrollTop: number;
   scrollMax: number;
   notice: { hidden: boolean; text: string; go: string; count: string; back: boolean } | null;
-  bands: Array<{
-    entry: string | null;
+  brackets: Array<{
+    entries: string[];
     kind: string | null;
     d: string;
     top: number;
@@ -290,11 +291,29 @@ interface AskState {
     left: number;
     right: number;
   }>;
-  labels: string[];
-  tabs: Array<{ kind: string | null; left: number; right: number; label: string | null }>;
+  /** The author labels a reader can see; a label with no margin to print in is hidden. */
+  labels: Array<{ text: string; left: number; right: number }>;
+  tabs: Array<{
+    entry: string | null;
+    kind: string | null;
+    label: string | null;
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+  }>;
+  /** What the session's highlight keys hold in this pane: each range's text and its line boxes. */
+  words: Record<string, Array<{ text: string; lines: Array<{ left: number; top: number; bottom: number }> }>>;
   view: { top: number; bottom: number; left: number; right: number };
-  column: { left: number; right: number } | null;
-  card: { top: number; bottom: number; options: number; hasInput: boolean; send: boolean } | null;
+  column: { left: number; right: number; top: number; bottom: number } | null;
+  card: {
+    top: number;
+    bottom: number;
+    left: number;
+    options: number;
+    hasInput: boolean;
+    send: boolean;
+  } | null;
   trayOpen: boolean;
   railCards: number;
 }
@@ -318,11 +337,22 @@ const askStateExpression = `(() => {
       count: noticeEl.querySelector('.glosa-ask-notice-count')?.textContent ?? '',
       back: Boolean(noticeEl.querySelector('.glosa-ask-notice-back')),
     } : null,
-    bands: [...pane.querySelectorAll('.glosa-band')].map((b) => ({ entry: b.getAttribute('data-entry'), kind: b.getAttribute('data-kind'), d: b.getAttribute('d') ?? '', ...box(b) })),
-    labels: [...pane.querySelectorAll('.glosa-band-label')].map((l) => l.textContent),
-    tabs: [...pane.querySelectorAll('.glosa-band-tab')].map((t) => ({ kind: t.getAttribute('data-kind'), label: t.getAttribute('aria-label'), left: box(t).left, right: box(t).right })),
+    brackets: [...pane.querySelectorAll('.glosa-session-bracket')].map((b) => ({ entries: (b.getAttribute('data-entries') ?? '').split(' ').filter(Boolean), kind: b.getAttribute('data-kind'), d: b.getAttribute('d') ?? '', ...box(b) })),
+    labels: [...pane.querySelectorAll('.glosa-session-by')].filter((l) => !l.hidden).map((l) => ({ text: l.textContent, left: box(l).left, right: box(l).right })),
+    tabs: [...pane.querySelectorAll('.glosa-session-tab')].map((t) => ({ entry: t.getAttribute('data-entry'), kind: t.getAttribute('data-kind'), label: t.getAttribute('aria-label'), ...box(t) })),
+    words: Object.fromEntries(['glosa-session-asks', 'glosa-session-points'].map((name) => [name, [...(CSS.highlights.get(name) ?? [])]
+      .filter((range) => pane.contains(range.startContainer))
+      .map((range) => {
+        const lines = [];
+        for (const r of range.getClientRects()) {
+          if (r.width < 0.5) continue;
+          const line = lines.find((l) => Math.abs((l.top + l.bottom) / 2 - (r.top + r.bottom) / 2) <= 6);
+          if (line) { line.left = Math.min(line.left, r.left); } else lines.push({ left: r.left, top: r.top, bottom: r.bottom });
+        }
+        return { text: range.toString(), lines: lines.sort((a, b) => a.top - b.top) };
+      })])),
     view: box(main),
-    column: para ? { left: box(para).left, right: box(para).right } : null,
+    column: para ? box(para) : null,
     card: cardEl ? {
       ...box(cardEl),
       options: cardEl.querySelectorAll('.glosa-agent-option').length,
@@ -515,8 +545,8 @@ describe("#308 — an agent's question in a real engine", () => {
       // the pane. Its scroll range is not the reader's range yet.
       await waitFor(
         page,
-        "the document laid out with its band",
-        (s) => s.bands.length === 1 && s.view.bottom > s.view.top && s.scrollMax > 1500,
+        "the document laid out with its mark",
+        (s) => s.brackets.length === 1 && s.view.bottom > s.view.top && s.scrollMax > 1500,
       );
 
       await scrollToEnd(page);
@@ -526,7 +556,7 @@ describe("#308 — an agent's question in a real engine", () => {
         (s) => s.scrollTop > 1500 && s.notice?.hidden === false,
       );
       // The reported case, exactly: the passage is far above the visible band…
-      expect(away.bands[0]!.bottom).toBeLessThan(away.view.top - 1000);
+      expect(away.brackets[0]!.bottom).toBeLessThan(away.view.top - 1000);
       // …and this time the reader is told, in words, with one action on offer.
       expect(away.notice!.text).toContain("is asking about a passage");
       expect(away.notice!.go).toBe("Go to it");
@@ -534,51 +564,65 @@ describe("#308 — an agent's question in a real engine", () => {
 
       // NEVER MOVED: a second request arrives while they are reading the end.
       await ask({ message: null, action: "point", target: { quote: { exact: POINTED } } });
-      const arrived = await waitFor(page, "the pointer's band appears", (s) => s.bands.length === 2);
+      const arrived = await waitFor(page, "the pointer's mark appears", (s) => s.tabs.length === 2);
       expect(arrived.scrollTop).toBe(away.scrollTop);
       expect(arrived.mode).toBe("read");
-      // A pointer earns a band and a tab, never a label and never the notice's count.
-      expect(arrived.bands.map((b) => b.kind).sort()).toEqual(["pointer", "question"]);
-      expect(arrived.labels).toHaveLength(1);
-      expect(arrived.labels[0]).toContain("asks");
+      // A pointer earns a bracket and a tab of its own (its paragraph is the next one), a dotted rule
+      // under its words rather than the wash, and never the notice's count.
+      expect(arrived.brackets.map((b) => b.kind).sort()).toEqual(["pointer", "question"]);
+      expect(arrived.tabs.map((t) => t.kind).sort()).toEqual(["pointer", "question"]);
+      expect(arrived.words["glosa-session-points"]!.map((w) => w.text)).toEqual([POINTED]);
       expect(arrived.notice!.count).toBe("");
 
       // ONE ACTION.
       await click(page, ".glosa-ask-notice-go");
       const there = await waitFor(page, "the passage and its card are on screen", (s) => {
-        const band = s.bands.find((b) => b.entry === first);
-        return Boolean(band && s.card && band.top > s.view.top && s.card.bottom < s.view.bottom && s.mode === "review");
+        const bracket = s.brackets.find((b) => b.entries.includes(first));
+        return Boolean(
+          bracket && s.card && bracket.top > s.view.top && s.card.bottom < s.view.bottom && s.mode === "review",
+        );
       });
-      const band = there.bands.find((b) => b.entry === first)!;
-      // TOGETHER: question, options, free text and Send, directly under the words, tray shut.
+      const bracket = there.brackets.find((b) => b.entries.includes(first))!;
+      const context = `bracket=${JSON.stringify(bracket)} column=${JSON.stringify(there.column)} card=${JSON.stringify(there.card)}`;
+      // TOGETHER: question, options, free text and Send, directly under the paragraph and hanging
+      // from its bracket, tray shut.
       expect(there.card!.options).toBe(2);
       expect(there.card!.hasInput).toBe(true);
       expect(there.card!.send).toBe(true);
-      expect(there.card!.top).toBeGreaterThanOrEqual(band.bottom);
-      expect(there.card!.top - band.bottom).toBeLessThan(40);
+      expect(there.card!.top, context).toBeGreaterThanOrEqual(bracket.bottom);
+      expect(there.card!.top - bracket.bottom, context).toBeLessThan(40);
+      expect(Math.abs(there.card!.left - bracket.left), context).toBeLessThanOrEqual(2);
       expect(there.trayOpen).toBe(false);
 
-      // EXACT WORDS: a stepped outline (two vertical runs on each side), starting right of the
-      // column's left edge because the sentence starts mid-line. A block-shaped mark fails both.
-      expect(
-        (band.d.match(/V/g) ?? []).length,
-        `band path: ${band.d} column=${JSON.stringify(there.column)} view=${JSON.stringify(there.view)}`,
-      ).toBe(3);
-      const startX = Number(band.d.match(/^M([\d.]+),/)![1]);
-      expect(startX - (there.column!.left - there.view.left)).toBeGreaterThan(40);
-      // The tab stands in the gutter, left of the text column, not over the words.
-      const tab = there.tabs.find((t) => t.kind === "question")!;
+      // BLOCK MARK: the bracket spans the paragraph the words are in, in the gutter left of it.
+      expect(Math.abs(bracket.top - there.column!.top), context).toBeLessThanOrEqual(4);
+      expect(Math.abs(bracket.bottom - there.column!.bottom), context).toBeLessThanOrEqual(4);
+      expect(bracket.right, context).toBeLessThan(there.column!.left);
+      // EXACT WORDS: the wash holds the sentence itself, not its paragraph. It crosses a line break
+      // and starts right of the column's left edge, because the sentence starts mid-line.
+      const asked = there.words["glosa-session-asks"]!;
+      expect(asked.map((w) => w.text)).toEqual([ASKED]);
+      const lines = asked[0]!.lines;
+      expect(lines.length, JSON.stringify(lines)).toBeGreaterThanOrEqual(2);
+      expect(lines[0]!.left - there.column!.left, JSON.stringify(lines)).toBeGreaterThan(40);
+      // The tab stands in the gutter, left of the text column, level with the words' first line.
+      const tab = there.tabs.find((t) => t.entry === first)!;
       expect(tab.right).toBeLessThanOrEqual(there.column!.left);
+      expect(
+        Math.abs((tab.top + tab.bottom) / 2 - (lines[0]!.top + lines[0]!.bottom) / 2),
+        JSON.stringify({ tab, line: lines[0] }),
+      ).toBeLessThanOrEqual(2);
       expect(tab.label).toContain("Question from");
 
-      // ANSWERED: the band goes, and the way back is offered and works.
+      // ANSWERED: the mark goes, words and all, and the way back is offered and works.
       await click(page, ".glosa-ask-layer .glosa-agent-option input");
       await click(page, ".glosa-ask-layer .glosa-agent-actions .glosa-primary-button");
       const answered = await waitFor(
         page,
-        "the question's band is gone",
-        (s) => !s.bands.some((b) => b.entry === first),
+        "the question's mark is gone",
+        (s) => !s.tabs.some((t) => t.entry === first) && !s.brackets.some((b) => b.entries.includes(first)),
       );
+      expect(answered.words["glosa-session-asks"]).toEqual([]);
       expect(answered.card).toBeNull();
       expect(answered.notice!.back).toBe(true);
       await click(page, ".glosa-ask-notice-back");
@@ -600,19 +644,29 @@ describe("#308 — an agent's question in a real engine", () => {
       const id = await ask({ message: "Is this earned?", target: { quote: { exact: ASKED } } });
       const page = await launch("1700,1000");
       await page.navigate(pairedUrl("review"));
-      const top = await waitFor(page, "band and rail card painted", (s) => s.bands.length === 1 && s.railCards === 1);
+      const top = await waitFor(
+        page,
+        "mark and rail card painted",
+        (s) => s.brackets.length === 1 && s.railCards === 1,
+      );
       // On screen, in Review, with a rail: the question IS beside its words. Saying so again in a
       // notice would be noise.
       expect(top.notice!.hidden).toBe(true);
       expect(top.card).toBeNull();
+      // A pane this wide has paper left of the gutter, so the mark names its author there: in the
+      // margin, clear of the words, never on them.
+      expect(top.labels).toHaveLength(1);
+      expect(top.labels[0]!.text).toMatch(/ asks$/);
+      expect(top.labels[0]!.right).toBeLessThanOrEqual(top.tabs[0]!.left);
+      expect(top.labels[0]!.left).toBeGreaterThanOrEqual(top.view.left);
 
       await scrollToEnd(page);
       const away = await waitFor(page, "scrolled away", (s) => s.scrollTop > 1000 && s.notice?.hidden === false);
       expect(away.notice!.go).toBe("Go to it");
       await click(page, ".glosa-ask-notice-go");
       await waitFor(page, "back at the passage", (s) => {
-        const band = s.bands.find((b) => b.entry === id);
-        return Boolean(band && band.top > s.view.top && band.bottom < s.view.bottom);
+        const bracket = s.brackets.find((b) => b.entries.includes(id));
+        return Boolean(bracket && bracket.top > s.view.top && bracket.bottom < s.view.bottom);
       });
     },
     TEST_TIMEOUT_MS,

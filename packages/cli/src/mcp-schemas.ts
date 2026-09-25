@@ -52,7 +52,7 @@ export const workspaceMetadataDescriptorSchema = z
       .describe("Ordered artifact descriptors for this workspace."),
   })
   .strict()
-  .describe("WorkspaceMetadataDescriptor v1 — durable declarative adapter input.");
+  .describe("WorkspaceMetadataDescriptor v1: durable declarative adapter input.");
 
 const presentationTruncationSchema = z
   .object({
@@ -104,7 +104,7 @@ const presentationBaseShape = {
     .max(4)
     .optional()
     .describe(
-      "Contract 1.17: live claims on this entry or its file, exclusive first. A claim is a fence, not a filter — the entry is still yours to read; this says who is already working on it.",
+      "Contract 1.17: live claims on this entry or its file, exclusive first. A claim is a fence, not a filter: the entry is still yours to read; this says who is already working on it.",
     ),
 };
 
@@ -291,7 +291,7 @@ export const releaseInputSchema = z
 export const releaseOutputSchema = z
   .object({
     claim_id: z.string().min(1),
-    released: z.boolean().describe("False when the claim had already ended — never an error."),
+    released: z.boolean().describe("False when the claim had already ended: never an error."),
   })
   .strict();
 
@@ -315,7 +315,7 @@ export const askInputSchema = z
       .string()
       .min(1)
       .max(4096)
-      .describe("Workspace-relative artifact the question concerns. Required — a question needs a document."),
+      .describe("Workspace-relative artifact the question concerns. Required: a question needs a document."),
     question: z
       .string()
       .min(1)
@@ -372,7 +372,7 @@ export const askInputSchema = z
         "How long to block waiting for the answer. Defaults to 600. The call returns as soon as the human " +
           "answers. On timeout it returns outcome 'unanswered' and the question STAYS in their margin, so a " +
           "later answer still reaches you through the inbox. If the call is CANCELLED instead, the question " +
-          "is withdrawn — cancelling means you stopped listening.",
+          "is withdrawn: cancelling means you stopped listening.",
       ),
   })
   .strict();
@@ -408,13 +408,13 @@ export const watchInputSchema = z
       .describe(
         "How long to hold the call waiting for a new external_edit, in milliseconds (cap 900000 = 15 " +
           "minutes). 0 or omitted returns immediately with whatever is already pending. Every entry this " +
-          "call returns is marked presented to THIS session only — no other session is nudged by it.",
+          "call returns is marked presented to THIS session only: no other session is nudged by it.",
       ),
     session_id: sessionId
       .optional()
       .describe(
         "Registered session to watch as. Must match the MCP host session when provided, and must already " +
-          "be explicitly bound to the target workspace (glosa_session_bind) — an unbound session cannot watch.",
+          "be explicitly bound to the target workspace (glosa_session_bind): an unbound session cannot watch.",
       ),
   })
   .strict();

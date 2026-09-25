@@ -15,8 +15,12 @@ export const DOC_FILES = [
   "test/oss-release.test.ts",
 ];
 export const STABILITY_FILES = ["packages/daemon/test/lifecycle.test.ts", "packages/daemon/test/helpers.test.ts"];
+/** Need the Electron that `packages/shell` installs on its own (it is not a root workspace member), so
+ * they are not in the partition inventory: a partition job without Electron would report a skip, and
+ * a skip is a failed gate. The `shell` CI job runs them with Electron present. */
+export const SHELL_FILES = ["packages/shell/test/shell-real-engine.electron.ts"];
 export const CI_PROFILES = ["ci-1", "ci-2", "ci-3"] as const;
-export type Profile = "acceptance" | (typeof CI_PROFILES)[number] | "docs" | "stability" | "full";
+export type Profile = "acceptance" | (typeof CI_PROFILES)[number] | "docs" | "stability" | "shell" | "full";
 type Estimate = { seconds: number; reason: string };
 export function validateTimings(
   inventory: string[],
@@ -69,6 +73,7 @@ export function discoverTests(root = ROOT): string[] {
           .split("/")
           .some((part) => part.startsWith(".") || ["node_modules", "dist", "build", "graphify-out"].includes(part)),
     )
+    .filter((path) => !SHELL_FILES.includes(path))
     .sort();
 }
 
@@ -116,6 +121,7 @@ export function buildPlan(
     "ci-3": groups[2],
     docs: [...DOC_FILES],
     stability: [...STABILITY_FILES],
+    shell: [...SHELL_FILES],
     full: inventory,
   };
 }
@@ -130,7 +136,8 @@ export function checkedFiles(profile: string, root = ROOT): string[] {
     const path = resolve(root, file);
     if (!existsSync(path) || relative(root, realpathSync(path)).startsWith(".."))
       throw new Error(`Missing or unconfined test: ${file}`);
-    if (!plan.full.includes(file)) throw new Error(`Selected file is outside test inventory: ${file}`);
+    if (!plan.full.includes(file) && !SHELL_FILES.includes(file))
+      throw new Error(`Selected file is outside test inventory: ${file}`);
   }
   return files;
 }
@@ -154,6 +161,7 @@ export function expectedJobs(profile: ChangeProfile, whole: boolean): Record<str
     docs: profile === "docs" ? "success" : "skipped",
     tests: profile === "full" ? "success" : "skipped",
     stability: profile === "full" ? "success" : "skipped",
+    shell: profile === "full" ? "success" : "skipped",
     full: whole ? "success" : "skipped",
   };
 }

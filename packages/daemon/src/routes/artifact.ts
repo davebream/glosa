@@ -19,9 +19,17 @@ import {
   saveArtifact,
   withdrawAnnotation,
 } from "../services/artifact.ts";
+import { decodePathCapture } from "../security/confine-path.ts";
 import { findWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
 import { problem, restoreConflictResponse } from "../transport/problem.ts";
 import type { RouteMatch } from "./types.ts";
+
+// issue #337: the one title/detail the main listener already uses for a confinement refusal
+// (`ArtifactError("invalid-path")` via `mapError`) — reused here so a malformed percent-escape,
+// caught before the path ever reaches confinement, answers identically.
+function invalidPathResponse(pathname: string): Response {
+  return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, pathname);
+}
 
 export interface ArtifactRouteDependencies extends ArtifactDependencies {
   classFPort: number;
@@ -156,8 +164,10 @@ function list(deps: ArtifactRouteDependencies, slug: string, pathname: string): 
 
 function get(deps: ArtifactRouteDependencies, slug: string, path: string, req: Request): Response {
   const url = new URL(req.url);
+  const decoded = decodePathCapture(path);
+  if (!decoded.ok) return invalidPathResponse(url.pathname);
   try {
-    return Response.json(getArtifact(deps, slug, path, url.searchParams.get("render") === "html"));
+    return Response.json(getArtifact(deps, slug, decoded.path, url.searchParams.get("render") === "html"));
   } catch (error) {
     return mapError(error, url.pathname, { notFound: "artifact" });
   }
@@ -165,9 +175,11 @@ function get(deps: ArtifactRouteDependencies, slug: string, path: string, req: R
 
 async function put(deps: ArtifactRouteDependencies, slug: string, path: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
+  const decoded = decodePathCapture(path);
+  if (!decoded.ok) return invalidPathResponse(url.pathname);
   let prepared: PreparedArtifactSave;
   try {
-    prepared = prepareArtifactSave(deps, slug, path, req.headers.get("If-Match") ?? undefined);
+    prepared = prepareArtifactSave(deps, slug, decoded.path, req.headers.get("If-Match") ?? undefined);
   } catch (error) {
     return mapError(error, url.pathname, { notFound: "artifact" });
   }
@@ -341,10 +353,15 @@ async function presentation(
 }
 
 function mint(deps: ArtifactRouteDependencies, slug: string, artifactPath: string, pathname: string): Response {
+  const decoded = decodePathCapture(artifactPath);
+  if (!decoded.ok) return invalidPathResponse(pathname);
   try {
-    const minted = mintArtifactCapability(deps, slug, artifactPath);
+    const minted = mintArtifactCapability(deps, slug, decoded.path);
+    // issue #337: the basename comes back as the real filesystem name (unencoded) — a browser
+    // requesting this URL literally needs it percent-encoded, or a space/`#`/`?` mangles or
+    // truncates the request before it reaches the class-F listener's route parse.
     return Response.json({
-      url: `http://${CLASSF_HOSTNAME}:${deps.classFPort}/doc/${minted.token}/${minted.artifactBasename}`,
+      url: `http://${CLASSF_HOSTNAME}:${deps.classFPort}/doc/${minted.token}/${encodeURIComponent(minted.artifactBasename)}`,
       nonce: minted.nonce,
       expires_in_s: CAPABILITY_TTL_MS / 1000,
     });

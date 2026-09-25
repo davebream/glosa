@@ -56,6 +56,70 @@ describe("the Go to palette", () => {
   });
   afterEach(() => dom.teardown());
 
+  test("chat search includes older content matches, paginates, and ignores stale responses", async () => {
+    const requests: { query: string; after?: string; resolve: (value: any) => void }[] = [];
+    const palette = createCommandPalette({
+      host,
+      getFiles: () => files,
+      getSections: () => null,
+      onOpenFile: () => {},
+      onOpenChat: (id) => opened.push(id),
+      searchChats: (query, after) => new Promise((resolve) => requests.push({ query, after, resolve })),
+    });
+    const flush = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    };
+    const waitForRequests = async (count: number) => {
+      const deadline = Date.now() + 1000;
+      while (requests.length < count && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(requests).toHaveLength(count);
+    };
+    try {
+      palette.open();
+      type("needle");
+      await waitForRequests(2);
+      requests[1]!.resolve({ chats: [{ id: "old", title: "Older conversation" }], next: "old" });
+      await flush();
+      expect(labels()).toEqual(["Older conversation"]); // Match is in its contents, not its title.
+      requests[0]!.resolve({ chats: [{ id: "stale", title: "Unrelated result" }] });
+      await flush();
+      expect(labels()).toEqual(["Older conversation"]);
+      one(".glosa-palette-more").click();
+      expect(requests[2]!.after).toBe("old");
+      requests[2]!.resolve({
+        chats: [
+          { id: "old", title: "Older conversation" },
+          { id: "older", title: "Another old chat" },
+        ],
+      });
+      await flush();
+      expect(labels()).toEqual(["Older conversation", "Another old chat"]);
+      expect(one(".glosa-palette-more").hidden).toBe(true);
+      key("ArrowDown");
+      key("Enter");
+      expect(opened).toEqual(["older"]);
+    } finally {
+      palette.destroy();
+    }
+  });
+
+  test("Enter on a search filter keeps native activation instead of opening the active result", () => {
+    const palette = mount();
+    palette.open();
+    const button = one('[data-filter="chat"]');
+    button.focus();
+    const event = new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    button.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(palette.isOpen()).toBe(true);
+    expect(opened).toEqual([]);
+    expect(jumps).toEqual([]);
+    button.click();
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(labels()).toEqual([]);
+    palette.destroy();
+  });
+
   test("commands follow sections and files, keep their order, narrow with > and run on Enter", () => {
     const ran: string[] = [];
     const palette = createCommandPalette({

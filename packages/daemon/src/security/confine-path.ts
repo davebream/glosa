@@ -12,6 +12,22 @@ import { dirname, resolve, sep } from "node:path";
 
 export type ConfineResult = { ok: true; realPath: string } | { ok: false };
 
+export type DecodeResult = { ok: true; path: string } | { ok: false };
+
+// issue #337: every `:path`/`<path...>` route capture arrives percent-encoded (A1's new
+// encoding rule) and must be decoded exactly once — BEFORE confinePath — so an encoded `..`,
+// encoded NUL or other encoded control character is confined as its real character instead of
+// passing through as a harmless-looking literal. `decodeURIComponent` throws `URIError` on a
+// malformed escape (a lone `%`, truncated/invalid UTF-8); callers refuse instead of letting that
+// throw become a 500. A double-encoded `%252e` decodes exactly once to the literal `%2e`, not `.`.
+export function decodePathCapture(raw: string): DecodeResult {
+  try {
+    return { ok: true, path: decodeURIComponent(raw) };
+  } catch {
+    return { ok: false };
+  }
+}
+
 // ASCII control chars (incl. NUL and \n) — A3 §5 attack #5.
 function hasAsciiControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

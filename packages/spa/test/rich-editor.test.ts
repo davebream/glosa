@@ -1552,7 +1552,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(736);
+    ).toBe(766);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1989,7 +1989,27 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // `## [x.y.z]` release heading and gains no link definition, so this is the bookkeeping case and
   // no numerator moved — metric 1's per-cause map still totals 48, `shipped` stays 1/1, `ablated`
   // stays 43/43, and missed/false alarms remain zero.
-  const BLOCKS = 736;
+  // The session-mark bracket adds one five-block section to docs/decisions.md (a heading and four
+  // paragraphs); its CHANGELOG bullet joins a list already there and its DESIGN.md changes rewrite
+  // paragraphs in place. 736 → 741 blocks / 668 → 673 edits, no link definition, so the bookkeeping
+  // case again: no numerator moved.
+  // Cutting alpha.31: a dated `## [0.1.0-alpha.31]` heading over the `[Unreleased]` entries, which
+  // are otherwise unchanged, so one new block: 741 → 742 blocks / 673 → 674 edits. The release case
+  // again — the heading's definition sits at the foot of the file, so it is a reference link:
+  // `link reference definition inlined` 27 → 28, `ablated` 43 → 44, and nothing else moved.
+  // `shipped` held at 1/1 and `missed` at 0.
+  // #337 reopens `## [Unreleased]` with a `### Fixed` heading and its list, the #333 shape: two
+  // blocks, one edit, 742 → 744 blocks / 674 → 675 edits. No release heading, no link definition,
+  // so the bookkeeping case: no numerator moved.
+  // Managed-chat documentation adds nine blocks and eight editable blocks. Re-measured:
+  // 753 blocks / 683 edits; per-cause 49, shipped 1/1, ablated 44/44 unchanged.
+  // Chat/settings refinements add three editable blocks to DESIGN.md: 756 blocks / 686 edits.
+  // Per-cause 49, shipped 1/1, ablated 44/44 and missed/false alarms stay unchanged.
+  // Settings critique follow-through adds one editable paragraph: 759 blocks / 689 edits.
+  // 2026-09-25, "Desk and companion are surfaces, not folders" in docs/decisions.md: one heading and
+  // two paragraphs, all editable: 762 blocks / 692 edits; then AGENTS.md's copy rule, one paragraph: 763 / 693; then README's platform-support section, three blocks: 766 / 696. Numerators unmoved.
+  // Re-measured per-cause 49, shipped 1/1 and ablated 44/44 remain unchanged.
+  const BLOCKS = 766;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -2025,7 +2045,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 48 of 725 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 49 of 766 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2047,7 +2067,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     ).toBe(BLOCKS);
     // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
     // per-cause record below is too brittle and relaxing it.
-    expect(misses).toBeLessThanOrEqual(48);
+    expect(misses).toBeLessThanOrEqual(49);
     // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
     // the 3 bracket/backslash-escaping blocks M1 removed (43 → 40), minus the one front-matter block
     // #143 removed (40 → 39), plus the one `## [0.1.0-alpha.18]` heading the alpha.18 release added
@@ -2065,10 +2085,10 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     expect(
       byCause,
       countNote(
-        "the per-cause record, a NUMERATOR totalling 48. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
+        "the per-cause record, a NUMERATOR totalling 49. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
       ),
     ).toEqual({
-      "link reference definition inlined": 27,
+      "link reference definition inlined": 28,
       "continuation-line indent dropped": 6,
       "soft break inside a code span collapsed": 5,
       "indented blockquote marker normalised": 5,
@@ -2087,7 +2107,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // to 4.9-5.1s run alone, and the unpartitioned CI suite runs it about three times slower than that:
   // 15.3s on main at d3a3626, which timed out against 15s. The measurements did not change; only the
   // runner's time limit did, and every edit is still swept.
-  test("metrics 2 and 3 — 1 dishonest write of 658; the guard fires on it and, ablated, on 43", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 696; the guard fires on it and, ablated, on 44", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2159,7 +2179,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     expect(
       tally,
       countNote(
-        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 43/43 ablated whatever `edits` becomes. If `ablated` grew by exactly one and the ONLY per-cause move in metric 1 is `link reference definition inlined`, a release was cut and that is the cause; anything else is not.",
+        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 44/44 ablated whatever `edits` becomes. If `ablated` grew by exactly one and the ONLY per-cause move in metric 1 is `link reference definition inlined`, a release was cut and that is the cause; anything else is not.",
       ),
       // A MOVED NUMERATOR IS THE REAL SIGNAL, and here it moved twice, both legitimately: `shipped`
       // fell 3 → 2 when #143 made front matter a verbatim node (no longer re-serialized, so it can
@@ -2169,7 +2189,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
       // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
       // restores. `edits` moved with BLOCKS each time documentation grew the corpus
-      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591 → 597 → 605 → 615 → 658 → 668) — bookkeeping, not drift, since `shipped` held steady across every
+      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591 → 597 → 605 → 615 → 658 → 668 → 673 → 674 → 675) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves. 488 → 500 is this PR's own CHANGELOG/README entries (see the BLOCKS
       // comment above). The last step is the #305/#311 + #310 merge, measured on the merged corpus
       // rather than summing the two branches' separate re-baselines (608 and 612), neither of which
@@ -2178,9 +2198,9 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // link definition, which the ablated path re-serializes and the shipped path restores, so
       // `shipped` held at 1/1 and metric 1's only per-cause move was the reference-link one.
     ).toEqual({
-      edits: 668,
+      edits: 696,
       shipped: { dishonest: 1, fired: 1 },
-      ablated: { dishonest: 43, fired: 43 },
+      ablated: { dishonest: 44, fired: 44 },
     });
   }, 30_000);
 

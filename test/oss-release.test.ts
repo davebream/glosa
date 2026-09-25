@@ -24,6 +24,9 @@ const workspaceManifests = [
 
 function walk(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    // A package that installs on its own (packages/shell) has its own node_modules; nothing under
+    // any node_modules is first-party.
+    if (entry.isDirectory() && entry.name === "node_modules") return [];
     const path = join(dir, entry.name);
     return entry.isDirectory() ? walk(path) : [path];
   });
@@ -34,7 +37,7 @@ describe("OSS release metadata", () => {
     expect(rootPackage.name).toBe("@davebream/glosa");
     // Machine-maintained by `bun run version:sync`; it records the release, it does not gate it.
     // The gate that a bump cannot bypass is the CHANGELOG heading asserted further down.
-    expect(rootPackage.version).toBe("0.1.0-alpha.30");
+    expect(rootPackage.version).toBe("0.1.0-alpha.31");
     expect(rootPackage.private).toBe(false);
     expect(rootPackage.license).toBe("Apache-2.0");
     expect(rootPackage.bin).toEqual({ glosa: "packages/cli/src/main.ts" });

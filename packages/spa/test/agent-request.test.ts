@@ -3,13 +3,15 @@ import { describe, expect, test } from "bun:test";
 import {
   agentIdentity,
   agentRequestSummary,
-  bandPath,
+  bracketPath,
   isQuestion,
   lineBoxes,
   locateQuote,
+  mergeSpans,
   openQuestions,
   requestsForArtifact,
   selectArrivals,
+  stackTabs,
 } from "../src/agent-request.js";
 
 const RENDERED =
@@ -179,7 +181,7 @@ describe("openQuestions — who is offered first", () => {
   });
 });
 
-describe("the band — a passage outlined the way a selection is shaped", () => {
+describe("a session's mark — a bracket beside the block, a tab at the words' line", () => {
   const rect = (left: number, top: number, right: number, bottom: number) => ({ left, top, right, bottom });
 
   test("inline boxes on one line fold into one line box", () => {
@@ -198,20 +200,48 @@ describe("the band — a passage outlined the way a selection is shaped", () => 
     expect(lines.map((l) => l.top)).toEqual([100, 130]);
   });
 
-  test("one line is a plain rectangle around the words, not the column", () => {
-    const d = bandPath([rect(50, 100, 120, 120)], { left: 0, right: 400 }, { padX: 0, padY: 0 });
-    expect(d).toBe("M50,100H120V120H50Z");
+  test("blocks apart keep a bracket each; blocks that overlap or touch share one", () => {
+    // Two requests in one paragraph (same span), one in the next paragraph after a gap, and one
+    // whose words run on into that next paragraph (touching it).
+    const spans = [
+      { top: 100, bottom: 200 },
+      { top: 300, bottom: 360 },
+      { top: 100, bottom: 200 },
+      { top: 360, bottom: 420 },
+    ];
+    expect(mergeSpans(spans)).toEqual([
+      { top: 100, bottom: 200, members: [0, 2] },
+      { top: 300, bottom: 420, members: [1, 3] },
+    ]);
   });
 
-  test("several lines step: start mid-line, span the column, stop mid-line", () => {
-    const lines = [rect(150, 100, 380, 120), rect(0, 130, 400, 150), rect(0, 160, 90, 180)];
-    const d = bandPath(lines, { left: 0, right: 400 }, { padX: 0, padY: 0 });
-    // from the first word, right to the column edge, down to the last line, in to the last word,
-    // along the bottom, up the left edge to under the first line, back in to the first word
-    expect(d).toBe("M150,100H400V160H90V180H0V120H150Z");
+  test("a span with no height, or no geometry at all, draws no bracket", () => {
+    expect(
+      mergeSpans([
+        { top: 50, bottom: 50 },
+        { top: Number.NaN, bottom: 10 },
+      ]),
+    ).toEqual([]);
   });
 
-  test("nothing located draws nothing", () => {
-    expect(bandPath([], { left: 0, right: 400 })).toBeNull();
+  test("the bracket is a [ with its ticks turned toward the text", () => {
+    expect(bracketPath(100, 180, 40)).toBe("M46,100H40V180H46");
+    expect(bracketPath(100, 180, 40, { tick: 4 })).toBe("M44,100H40V180H44");
+  });
+
+  test("nothing to span draws nothing", () => {
+    expect(bracketPath(100, 100, 40)).toBeNull();
+    expect(bracketPath(100, Number.NaN, 40)).toBeNull();
+  });
+
+  test("tabs whose words start on the same line are pushed apart, and keep the order given", () => {
+    // Two tabs on one line and a third just below them: the second is pushed under the first, and
+    // that push carries on into the third. Given out of order on purpose: the result keeps the
+    // caller's order rather than coming back sorted.
+    expect(stackTabs([130, 100, 100])).toEqual([148, 100, 124]);
+  });
+
+  test("tabs already apart stay level with their lines", () => {
+    expect(stackTabs([100, 160], { size: 20, gap: 4 })).toEqual([100, 160]);
   });
 });

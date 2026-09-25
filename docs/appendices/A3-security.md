@@ -22,7 +22,7 @@ the programmatic API now lives on a Unix socket instead.
 ## 1. F03 — class-F separate origin + CSP
 - Serve: `GET /doc/:token/<path...>` on class-F origin ONLY (the class-F listener's only route); never accepts Bearer — the capability IS the auth.
 - Mint on SPA origin: `POST /w/:slug/capability/:artifactPath` (Bearer + path-confined). Fresh capability per iframe open/reload; never reused.
-- Capability: 256-bit, in-memory `Map<capability,{workspace,artifactRealPath,mintedAt}>`, NOT persisted (restart invalidates — fine). TTL 10 min; expired → 404 (no ambient auth on this origin). One capability scopes one artifact's dir (sibling assets resolve under same capability + realpath check per request).
+- Capability: 256-bit, in-memory `Map<capability,{slug,artifactDirRealPath,artifactBasename,nonce,expiresAt}>` (A1 §7), NOT persisted (restart invalidates — fine). TTL 10 min; expired → 404 (no ambient auth on this origin). One capability scopes one artifact's dir (sibling assets resolve under same capability + realpath check per request).
 - CSP on EVERY class-F response:
   `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; frame-ancestors 'self' http://127.0.0.1:<SPA_PORT> http://glosa.localhost:<SPA_PORT>; base-uri 'none'; object-src 'none'; sandbox allow-scripts;` + `Referrer-Policy: no-referrer`.
   - `script-src 'self' 'unsafe-inline'` lets the artifact's inline `<script>` run; no eval, no third-party host.
@@ -197,6 +197,49 @@ are shaped so that no request can name one.
 - `stars.json` is written 0600 in `GLOSA_HOME`, like the token. A corrupt file is moved aside, not overwritten.
 - State-changing star routes use the strict Origin rule in the table above; `GET /api/stars` is an authed read.
 
+## 4b. Desktop shell (Electron, `packages/shell`; 2026-09-25, #160)
+
+The shell is a window on the same SPA at the same origin `glosa open` links to
+(`http://glosa.localhost:<port>`), so every rule above applies unchanged: Host allowlist, Origin
+binding, Bearer, class-F on its own origin with its CSP, `confinePath()`. What the shell adds is a
+trusted main process, and these rules bound it (spec: `docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md`;
+evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
+
+- **The renderer is sandboxed** (`sandbox`, `contextIsolation`, no Node) and the top frame may only
+  ever be the SPA origin: `will-navigate` is denied for any other origin, compared as parsed origins;
+  `window.open` is denied; downloads are denied; permission requests are denied. The class-F origin is
+  never loaded top level: a class-F document outside its iframe loses the iframe sandbox and may
+  navigate itself off loopback.
+- **Egress is a browser-process gate, not a CSP.** `session.webRequest.onBeforeRequest` cancels every
+  request whose host is not loopback; the daemon's CSP stays as defence in depth.
+- **The preload is a per-origin capability.** It exposes `window.glosaShell` only when the page origin
+  equals the SPA origin exactly, and every `ipcMain` handler re-checks `event.senderFrame.origin`
+  before acting; that handler check is the boundary (a class-F document reports a `null` origin under
+  its CSP sandbox and is refused even by a deliberately unscoped preload). The class-F frame receives
+  no preload. The bridge carries three calls: a one-shot presentation token, "open folder", and an OS
+  notification. No call takes a path from the page.
+- **The pairing token never travels in a URL the shell loads.** The main process runs the same
+  `glosa open <folder> --url --json` the CLI runs, strips `p=` from the fragment, loads the tokenless
+  URL and hands the token to the page over the bridge once per window load; the page redeems it as it
+  does today. A page already paired on the origin never asks. Session history, crash details and the
+  crash-dump directory therefore never hold a token (verified in Electron 44.4.5).
+- **Only the SPA origin is trusted, never a path.** "Open folder" runs `glosa open` on the folder the
+  native picker returned; the page can ask for the picker, not name a directory. Starred-workspace
+  routes keep their no-path shape.
+- **The main process reaches the daemon by IP.** Its own requests (the compatibility handshake) go to
+  `http://127.0.0.1:<port>`, on the Host allowlist. Chromium resolves `glosa.localhost` internally, so
+  the window loads that origin; Node's resolver in the main process may not (it did not on a macOS 14
+  CI runner), and a name it cannot resolve must never read as "the daemon is down".
+- **The daemon is the CLI's, not the shell's.** The shell delegates every spawn to `glosa open`, owns no
+  daemon and stops none on quit (A5 §F13); it checks compatibility against a minimum daemon version and
+  shows the exact CLI command when the daemon is too old or speaks another contract major. It makes no
+  update check of its own; "Check for Updates…" opens the releases page on click (A6 §F33).
+- **Test:** `packages/shell/test/shell-real-engine.electron.ts` runs the §5 posture inside the shell's own
+  renderer against a real daemon (pairing over the bridge, no secret in any URL or history, class-F
+  probe verdicts, denied navigation, daemon alive after quit); `packages/shell/test/policy.test.ts`
+  pins each rule as a pure function. CI runs the former in a dedicated `shell` job with Electron
+  installed; a skip there is a failed gate.
+
 ## 5. §5.5 attacks → defense → test
 1. Open class-F in new tab → origin split + CSP sandbox → test: direct-nav minted URL, assert storage empty + fetch throws.
 2. Remote img/fetch/WS/form in doc → connect-src/form-action none → test: fixture with each, assert 0 outbound + CSP violation.
@@ -234,3 +277,40 @@ or alternate Git directory is accepted from the request. The daemon validates re
 anchors, bounded loose-file tracking, and local or home-state bus placement before opening a writer,
 then repeats the validation under the shared bus mutex. Symlink bus/journal/HEAD/ref paths are refused.
 Repair requires singleton ownership and respects apply leases and adoption/forget seals (A4 F21).
+
+
+## Managed native execution boundary (2026-09-23)
+
+Managed execution is additional, consented native egress; class-F remains CSP-blocked and cannot call
+login/chat/account routes. The daemon’s ordinary routes retain Host/Origin/Bearer enforcement. Native
+MCP grants are separate, memory-only and limited to one run, session and registration epoch. Grants
+are removed before shutdown awaits and checked again at native writes and bus mutation boundaries.
+No native credential or operation secret belongs in argv, URLs, persistent browser storage, chat
+journals or logs. Login output is bounded and memory-only. OSC 52 and terminal link activation are
+disabled; screen-reader mode is enabled. The daemon serializes login and bounds it, including completed output retention, to ten minutes
+from admission. Polling neither renews nor shortens that deadline: signing in through another
+browser can suspend the controller. Closing its login/settings view cancels immediately when the
+controller is running; abrupt browser exit remains bounded by the absolute deadline. Expired or
+completed views remove sign-in links and disable terminal input; explicit verification is still
+required before the profile becomes authenticated.
+
+Every managed child receives an allowlisted environment. Ambient provider/API/cloud credentials,
+provider routing, CLI-home selectors, telemetry and auto-update configuration are not inherited.
+`ANTHROPIC_API_KEY` is always removed. Profile roots are private and never aliases to system CLI
+configuration. Native tools/subprocesses remain subject to the provider sandbox/approval mode; a
+process group is a lifetime boundary, not an operating-system filesystem/network sandbox. Provider
+escape/daemonization is a qualification risk and must not be advertised as contained without G3.
+
+Chat Markdown disables raw HTML and remote images; links allow only HTTP(S)/mailto. Text/image uploads
+are bounded, text is validated as UTF-8, and PNG/JPEG/WebP headers must declare bounded dimensions.
+This checks format/size rather than certifying that every image byte is valid. Native decoders can
+still reject a malformed attachment. Scope/digest changes require fresh consent; no automatic account
+rotation, quota evasion, API fallback, MCP OAuth token proxy or credential import is supported.
+
+Managed Codex uses neutral-cwd startup and audits the native effective configuration before
+account management and each thread start/resume. Project configuration (including the root
+checkout of a linked worktree) and unapproved inherited tools/routing cause a policy conflict;
+Glosa does not rewrite organizational configuration. Explicit CLI settings disable apps,
+plugins, hooks, analytics, feedback, OpenTelemetry, update checks and login-shell startup.
+Claude uses empty settings sources, strict MCP configuration and disabled account-connected
+tools. Native startup egress and OS-managed policy behavior still require G2/G3 qualification.

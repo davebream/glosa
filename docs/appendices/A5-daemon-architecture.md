@@ -2,6 +2,10 @@
 
 ## F13 — daemon lifecycle
 - **No entry point becomes the daemon in-process** (fixes "first shim wins the lock and becomes it"). Any client finding no live daemon **spawns a detached `glosa __daemon`** and acts purely as a client. Three roles, one binary: CLI (short client: ensureDaemon→1 HTTP call→exit), MCP shim `glosa mcp` (host-owned stdio client: ensureDaemon→proxy tool calls→exit on stdin EOF, SIGHUP, or its real parent process exiting, whichever comes first (issue #140); NEVER binds/locks), daemon `glosa __daemon` (singleton; only role that binds port + writes lock).
+- **The desktop shell is a client like any other** (`packages/shell`, #160): it runs `glosa open`, which
+  applies this section's ensure/spawn rules, so the shell itself never spawns, restarts or stops a
+  daemon and never becomes one. On quit it leaves the daemon exactly where it was; supervision is the
+  detached child the CLI already spawns, not a launchd agent (readiness note §1c, ownership spec R-O6).
 - Lock `<GLOSA_HOME>/daemon.lock` (daemon-only, written AFTER port bound): `{instance_id:gl-uuid, pid, port, protocol_version, build_id, install_id, started_at, host, bun}`. It carries no socket path: a client derives that from its own `GLOSA_HOME`, and putting an absolute home path in a world-readable file would publish it for nothing. Handshake and status expose the same required `build_id`; readers accept a missing field only as a legacy migration case. **`lock.port` = authoritative port for all clients**; GLOSA_PORT only seeds a fresh spawn. Readiness = a lock plus passing `/api/handshake`, with identity/PID/instance/protocol agreeing between them.
 - `build_id` is `<root-package-semver>-<first-16-hex-of-sha256>`. The hash covers every regular file under `packages/daemon/src`, `packages/cli/src`, `packages/spa/src`, and `packages/providers/*/src`, ordered by repository-relative POSIX path. Each path and its file bytes are independently framed as `<decimal-byte-length>:<bytes>\0`. Identity computation and semver parsing fail closed.
 - `install_id` is `<first-16-hex-of-sha256(realpath(<package root>))>` — which INSTALL a process belongs to, where `build_id` is which bytes. It is a hash rather than the path because `/api/handshake` is tokenless; it is an integrity signal against accident, **not** a secrecy boundary. The uid that sentence reasons about is the user's OWN: a process running as the user can read `<home>/token` directly, so `install_id` defends against a coexisting install — an accident — and never against that process. Against a DIFFERENT uid it is not a secret either, just a public value: `daemon.lock` is world-readable and the tokenless handshake republishes it, so anything local can say it. That is why a client never decides where to send a credential by comparing identity at all — it sends to `<GLOSA_HOME>/run/api.sock`, which the kernel will not let another uid open (A3 §3.2). A daemon predating the field reports it absent, which means UNKNOWN identity and never "the same install".
@@ -182,3 +186,27 @@ shared bus mutex. Canonical path and lifecycle checks run again after acquiring 
 parent adoption can mark a loose source under a different coordinator key. The singleton lock must
 prove this process owns Git writes. Watcher, human saves, leases, repair and journal writes therefore
 share one serialization boundary. Repair never runs as a CLI-side offline Git mutation (A4 F21).
+
+
+## Managed process ownership (2026-09-23)
+
+The one daemon owns a generic managed service and provider registry injected by the CLI composition
+root. Core imports no provider implementation. A transient Bun guardian verifies an execution host's
+fresh process group before releasing it to launch the native executable. The host, native agent and
+ordinary descendants share that owned group. Guardian stdin loss or heartbeat expiry triggers
+TERM/KILL cleanup. Writes/fences have explicit acknowledgments. A durable nonce-bound empty-group
+receipt releases capacity; missing proof blocks replacement and execution. Saved PIDs are never
+signalled after restart. A new macOS boot identity proves old processes no longer exist.
+
+Limits include starting/stopping/unknown reservations: six native processes globally, four managed
+turns, two turns per account and one active plus one queued user turn per chat. One management task
+(login, probe, discovery or installation) runs globally. Native handshake/probe is bounded to thirty
+seconds; control replies to fifteen seconds. Explicit runtime installation allows ten minutes.
+Native inference has no arbitrary wall-time cutoff. Cancellation first fences local authority, then
+native writes, then stops the owned group. An unconfirmed exit remains visibly unknown.
+
+Daemon replacement checks busy state then obtains an instance-bound quiesce acknowledgment and
+rechecks the lock before signalling. Authentication-token revocation fences managed work. Browser
+reconnection restores state only. Login has a short controller lease; chats have daemon ownership.
+Provider constructors, status reads, history reads and incoming background feedback perform no
+native discovery, update, login or inference.

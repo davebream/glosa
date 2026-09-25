@@ -67,8 +67,8 @@
   --hand: oklch(0.52 0.16 42); /* burnt vermilion, #b03f00 — ~5.8:1 on paper */
   --hand-hover: oklch(0.46 0.15 42);
   --pencil: oklch(0.56 0.01 65); /* warm graphite — ~4.6:1 on paper */
-  /* Session ink: blue-black, a session's MARK on the page (#308) — the band, its tab and label,
-     the notice's glyph, the question card's top rule. Never a button, never a panel fill, and a
+  /* Session ink: blue-black, a session's MARK on the page (#308) — the bracket, its tab and label,
+     the wash on its words, the notice's glyph, the question card's top rule. Never a button, never a panel fill, and a
      session's words stay printed in ordinary ink. ~8.9:1 on paper, so the label's paper-on-ink
      text clears AA with room. */
   --session: oklch(0.42 0.11 255);
@@ -469,21 +469,13 @@ input,
   display: block;
 }
 
-/* The mark is a comma printed in two inks: a thin ink layer set a hair down and right, and the
-   hand printed opaquely over it, so the ink shows only as an offset edge and the comma reads as
-   the same vermilion as every human mark on the page. */
-.glosa-logo-under {
-  fill: var(--ink);
-  fill-opacity: 0.45;
-}
-
+/* The mark is a single comma in the hand's vermilion, the same ink as every human mark on the
+   page. Below about 48px a second layer cannot read as anything but a smear, and every mark in the
+   app is 24px to 40px, so the app draws one ink. The two-ink print, an ink layer misregistered
+   sideways under the hand, lives only where it has room: the desktop app's icon at 64px and up
+   (packages/shell/assets). */
 .glosa-logo-accent {
   fill: var(--hand);
-}
-
-:root[data-theme="dark"] .glosa-logo-under {
-  fill: var(--muted);
-  fill-opacity: 0.6;
 }
 
 /* The navigator's one control: show/hide, at every width and in every mode. It is pinned to the
@@ -506,6 +498,8 @@ input,
   align-items: center;
   height: var(--nav-foot-height);
   padding: 0 var(--space-3);
+  gap: var(--space-1);
+  border-top: 1px solid transparent; /* the shown state's rule, kept as a size, so nothing drifts */
 }
 
 .glosa-app[data-nav-open="true"] .glosa-nav-foot {
@@ -524,7 +518,7 @@ input,
   width: 28px;
   height: 28px;
   border: 1px solid transparent;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-tool); /* the column's one radius for a 28px box */
   color: var(--muted);
   transition:
     background var(--dur-fast) var(--ease-out),
@@ -533,6 +527,11 @@ input,
 
 .glosa-nav-toggle:hover {
   background: var(--surface-sunken);
+}
+
+.glosa-nav-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px; /* drawn inside, like every other ring in the navigator */
 }
 
 .glosa-app[data-nav-open="false"] .glosa-nav-toggle {
@@ -1446,10 +1445,12 @@ input,
 .glosa-sidebar-section-toggle {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px; /* the tree row's gap, so a section label and a folder name start on one line */
+  min-width: 0;
   width: 100%;
+  min-height: 28px;
   margin-left: calc(var(--space-2) * -1);
-  padding: 2px var(--space-2) 2px 0;
+  padding: 0 var(--space-2) 0 var(--space-1); /* the row's 4px, so the chevron sits at the tree's x */
   border-radius: var(--radius-tool);
   color: inherit;
   /* The UA stylesheet forces `text-transform: none` on buttons, which `font: inherit` does not
@@ -1461,6 +1462,18 @@ input,
 
 .glosa-sidebar-section-toggle:hover {
   color: var(--ink);
+}
+
+.glosa-sidebar-section-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px; /* the tree row's, so every focus ring in the column is drawn the same way */
+}
+
+.glosa-sidebar-section-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .glosa-sidebar-section-chevron {
@@ -1642,9 +1655,10 @@ input,
   color: var(--ink);
 }
 
-.glosa-star-toggle svg,
+/* One stroke for every drawn tool (1.6, from the shared `.glosa-tree-tool svg` rule); the unstar
+   control is not a tree tool and says so itself. */
 .glosa-starred-unstar svg {
-  stroke-width: 1.4;
+  stroke-width: 1.6;
 }
 
 /* Scoped under the navigator so it outranks the tree tools' own unfilled icon rule below. */
@@ -1695,6 +1709,8 @@ input,
 }
 
 .glosa-sidebar-heading h2 {
+  flex: 1 1 auto;
+  min-width: 0;
   margin-bottom: 0;
 }
 
@@ -1704,26 +1720,12 @@ input,
   gap: 2px;
 }
 
-.glosa-tree-tool {
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-tool);
-  color: var(--muted);
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
-}
-
-.glosa-tree-tool:hover {
-  color: var(--ink);
-  background: var(--surface-sunken);
-}
-
-.glosa-tree-tool:focus-visible {
+/* Box, bed and hover come from the shared icon-button rule (search "One quiet icon-button"), so the
+   star, the chats menu and New chat are one control in three places. Only the stroke lives here. */
+.glosa-tree-tool:focus-visible,
+.glosa-sidebar .glosa-agent-menu-trigger:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 .glosa-tree-tool svg {
@@ -1770,11 +1772,11 @@ input,
 }
 
 .glosa-artifact-list {
-  margin-bottom: var(--space-6) !important;
+  margin-bottom: var(--space-3);
 }
 
 .glosa-artifact-list [role="group"] {
-  padding-left: 21px; /* disclosure (15) + gap (6): a child's mark sits under its parent's icon */
+  padding-left: 12px; /* the Go to palette's step per depth; a deep name keeps most of the column */
 }
 
 .glosa-artifact-list [role="treeitem"] {
@@ -1789,7 +1791,7 @@ input,
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 var(--space-2) 0 var(--space-1);
+  padding: 0 var(--space-1); /* 4px each side: an 8px inset cost a clipped name three glyphs */
   border-radius: var(--radius-tool);
   color: var(--ink);
   cursor: default;
@@ -1808,18 +1810,21 @@ input,
   outline-offset: -2px;
 }
 
-.glosa-artifact-list [role="treeitem"][aria-current="page"] > .glosa-tree-row {
-  background: var(--surface-sunken);
-  color: var(--primary);
-  font-weight: 600;
-}
-
 /* An open artifact is one the reader already has on screen in some pane; the active pane's is
    the one the URL and the top bar are talking about. Two states, told apart by weight and colour
    as well as by the mark, so the tree says what is open rather than only where you last clicked. */
 .glosa-artifact-list [role="treeitem"][data-open="true"] > .glosa-tree-row {
   color: var(--ink);
   font-weight: 500;
+}
+
+/* AFTER the open rule on purpose: the current artifact is always also open, the two selectors
+   weigh the same, and written the other way round the open rule's 500 silently replaced this 600
+   — measured, the current row lost the weight DESIGN.md gives it and kept only the dot's colour. */
+.glosa-artifact-list [role="treeitem"][aria-current="page"] > .glosa-tree-row {
+  background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
 }
 
 /* Open-in-a-pane is a dot in the disclosure slot a file never uses — inside the row's own
@@ -1839,8 +1844,7 @@ input,
   background: var(--primary);
 }
 
-.glosa-tree-disclosure,
-.glosa-tree-icon {
+.glosa-tree-disclosure {
   width: 15px;
   height: 15px;
   flex: 0 0 15px;
@@ -1849,26 +1853,31 @@ input,
   color: var(--muted);
 }
 
-.glosa-tree-disclosure {
-  transition: transform 160ms var(--ease-out);
+/* The folder glyph swaps between its closed and open drawing with the row's expanded state, the
+   way a Finder or editor tree does, instead of a chevron turning. */
+.glosa-tree-disclosure .glosa-folder-open {
+  display: none;
 }
 
-.glosa-artifact-list [role="treeitem"][data-expanded="true"] > .glosa-tree-row > .glosa-tree-disclosure {
-  transform: rotate(90deg);
+.glosa-artifact-list
+  [role="treeitem"][data-expanded="true"]
+  > .glosa-tree-row
+  > .glosa-tree-disclosure
+  .glosa-folder-closed {
+  display: none;
+}
+
+.glosa-artifact-list
+  [role="treeitem"][data-expanded="true"]
+  > .glosa-tree-row
+  > .glosa-tree-disclosure
+  .glosa-folder-open {
+  display: block;
 }
 
 .glosa-tree-disclosure svg {
   width: 13px;
   height: 13px;
-}
-
-.glosa-tree-icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-.glosa-tree-disclosure svg,
-.glosa-tree-icon svg {
   fill: none;
   stroke: currentColor;
   stroke-width: 1.6;
@@ -1878,9 +1887,39 @@ input,
 
 .glosa-tree-label {
   min-width: 0;
+  display: flex;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A long name clips in the middle, not at the end: the head takes the ellipsis and the tail (the
+   part after the last hyphen, with the extension) stays, so six underfive-* siblings read as six
+   names rather than one prefix. A name that is not split is the head alone and clips at its end,
+   with the ellipsis — the label itself is a flex row, and a flex row's bare text gets none. */
+.glosa-tree-label-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glosa-tree-label-tail {
+  flex: none;
+  /* No negative margin at the join. A clipped head leaves the air of the partial glyph the ellipsis
+     replaced, so "…" then "-preregistration" reads with a small space; pulling the tail back by a
+     fraction of an em was tried and made every UNclipped join collide ("self-driving-adoption" with
+     the hyphen on the g) while the clipped ones kept their air. The air is the ellipsis's own. */
+}
+
+/* A folded folder's open document: the file dot's size and colour, at the row's end. */
+.glosa-tree-open-inside {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--muted);
 }
 
 .glosa-tree-stale {
@@ -1895,10 +1934,14 @@ input,
 
 .glosa-sidebar-empty {
   color: var(--muted);
-  padding: 0 var(--space-2);
-  margin: 0 0 var(--space-6);
+  padding: 0 var(--space-2) 0 25px; /* the name line: the row's 4px, the 15px slot, the 6px gap */
+  margin: 0 0 var(--space-3);
   font-size: var(--text-xs);
   text-wrap: pretty;
+}
+
+.glosa-sidebar-empty:empty {
+  display: none;
 }
 
 /* Connection banner: a thin, honest strip across the whole workbench. One banner, never one per
@@ -2826,9 +2869,10 @@ input,
   pointer-events: none;
 }
 
-/* A session's tab stands where a hovered block would show its address, and says the address in its
-   accessible name; two labels on one spot help nobody. */
-.glosa-pane[data-mode="review"] .glosa-content > [data-session-mark]:not(h1, h2, h3, h4, h5, h6)::before {
+/* A session's bracket and tab stand where a block would show its address, and the tab says the
+   address in its accessible name; two marks on one spot help nobody. Headings too: a heading's
+   address is always shown, so it would sit on the bracket rather than only on hover. */
+.glosa-pane[data-mode="review"] .glosa-content > [data-session-mark]::before {
   display: none;
 }
 
@@ -3026,7 +3070,7 @@ input,
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: var(--space-1);
+  padding: var(--space-2);
 }
 
 .glosa-palette-group {
@@ -3407,8 +3451,8 @@ input,
    trying to read their own sentence.
 
    So the mark goes BESIDE the words, as a 2px rule down the block's left. (A session's attention
-   used to be drawn the same way; since #308 it is a band in session ink, so the rule in the gutter
-   now belongs to the writer alone.) An open block is the passage the writer's own hand is on,
+   used to be drawn the same way. It now stands in the gutter again as a bracket in session ink, but
+   only outside Edit, and this rule exists only inside it, so the two never share the gutter.) An open block is the passage the writer's own hand is on,
    so it takes the hand. Position carries it, which means it survives greyscale and costs the page
    no enclosed area at all. */
 .glosa-run-editor {
@@ -3421,7 +3465,7 @@ input,
 }
 
 /* The formatting actions, bound to the gesture that asks for them. Out of flow and translated clear
-   of the line above the selection, so showing it never moves a word — the same rule a session's band and
+   of the line above the selection, so showing it never moves a word — the same rule a session's mark and
    the margin follow. It is chrome, so it is the one thing on this page that wears the interface's
    sans face rather than the manuscript's serif: these are controls, not text. */
 .glosa-selection-toolbar {
@@ -3478,7 +3522,7 @@ input,
   text-decoration: line-through;
 }
 
-/* Drawn the way a session's band is drawn — out of flow, so the words do not move by a pixel when
+/* Drawn the way a session's mark is drawn — out of flow, so the words do not move by a pixel when
    it appears. It sits in the gutter the manuscript's measure already leaves, never over the text.
 
    `--focus`, which is the hand, not `--primary`, which is the ink. The comment above this block has
@@ -3521,6 +3565,15 @@ input,
   white-space: pre-wrap;
 }
 
+/* A soft break — the `\n` the rich face keeps inside a paragraph (rich-editor.js, #173) — drawn as
+   the space Preview draws it as. `.ProseMirror` above has to stay `pre-wrap`, and under `pre-wrap`
+   a `\n` breaks the line, so a hand-wrapped paragraph re-wrapped at every source break on entering
+   Edit and grew by a line per break: the reflow in the mode switch. Inside this span `normal`
+   collapses the segment break to one space; the character underneath is untouched. */
+.glosa-rich-surface .glosa-soft-break {
+  white-space: normal;
+}
+
 .glosa-rich-surface .ProseMirror-selectednode {
   outline: 2px solid var(--primary);
 }
@@ -3551,11 +3604,11 @@ input,
 }
 
 .glosa-rich-surface .glosa-raw[data-glosa-kind="metadata"]::before {
-  content: "Document metadata — hidden from Read/Review";
+  content: "Document metadata, hidden from Read/Review";
 }
 
 .glosa-rich-surface .glosa-raw[data-glosa-kind="comment"]::before {
-  content: "Private note — hidden from Read/Review";
+  content: "Private note, hidden from Read/Review";
 }
 
 .glosa-rich-surface .glosa-comment-inline {
@@ -3762,19 +3815,26 @@ input,
   -webkit-line-clamp: 1;
 }
 
-/* ---------- a session's mark on the page (#308) ----------
-   A band AROUND the words, in session ink, in its own layer. The reader's marks colour the words
-   (wash + underline); a session's mark outlines them, so a sentence carrying both still reads, and
-   the difference survives greyscale: outline + printed label + gutter tab, against wash + rule.
-   It is meant to be seen at once. A question holds its session until it is answered, so a mark
-   the reader has to hunt for costs more than one that is plain. */
-.glosa-bands {
+/* ---------- a session's mark on the page ----------
+   A proofreader's bracket in the gutter beside the block, in session ink, in its own layer, with a
+   tab on it at the line each request's words start on. The words themselves are marked through the
+   highlight registry: washed for a question, a dotted rule for a pointer. The reader's marks colour
+   the words in the hand (wash + solid rule); a session's are its own ink, and only a session's mark
+   has a bracket and a tab, so the difference survives greyscale.
+
+   The mark used to be an outline around the exact words, which had only the line's leading to live
+   in: it ran through the underline on the line above and its label sat on that line's words. The
+   gutter is empty, and the highlight needs no room, so neither collides with anything.
+
+   It is meant to be seen at once. A question holds its session until it is answered, so a mark the
+   reader has to hunt for costs more than one that is plain. */
+.glosa-session-marks {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 
-.glosa-band-svg {
+.glosa-session-svg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -3782,31 +3842,20 @@ input,
   overflow: visible;
 }
 
-.glosa-band {
+.glosa-session-bracket {
   fill: none;
   stroke: var(--session);
   stroke-width: 1.5;
-  stroke-linejoin: round;
-  transition:
-    fill var(--dur-fast) var(--ease-out),
-    stroke-width var(--dur-fast) var(--ease-out);
+  stroke-linejoin: miter;
+  transition: stroke-width var(--dur-fast) var(--ease-out);
 }
 
-.glosa-band[data-kind="question"]:not([data-overlapped]) {
-  fill: var(--session-wash);
-}
-
-.glosa-band[data-focused="true"],
-.glosa-band[data-hover] {
+.glosa-session-bracket[data-focused="true"],
+.glosa-session-bracket[data-hover] {
   stroke-width: 2;
 }
 
-.glosa-band[data-kind="question"][data-focused="true"]:not([data-overlapped]),
-.glosa-band[data-kind="question"][data-hover]:not([data-overlapped]) {
-  fill: var(--session-wash-strong);
-}
-
-.glosa-band-tab {
+.glosa-session-tab {
   position: absolute;
   width: 20px;
   height: 20px;
@@ -3826,20 +3875,16 @@ input,
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
-.glosa-band-tab:hover {
+.glosa-session-tab:hover {
   transform: scale(1.1);
 }
 
-.glosa-band-label {
+/* A note in the page's margin, beside the tab, printed in the mark's ink: it names the author of
+   the mark, not the words. Hidden by the pane where there is no margin to print it in. */
+.glosa-session-by {
   position: absolute;
-  /* Rides the band's top edge, mostly above it: the line's own leading is only a few pixels, and a
-     label centred on the edge sat on the ascenders of the words it labels. */
-  transform: translateY(-62%);
-  margin-left: var(--space-2);
-  padding: 2px 6px;
-  border-radius: var(--radius-micro);
-  background: var(--session);
-  color: var(--bg);
+  transform: translate(-100%, -50%);
+  color: var(--session);
   font-family: var(--font-sans);
   font-size: var(--text-2xs);
   font-weight: 600;
@@ -3847,24 +3892,41 @@ input,
   white-space: nowrap;
 }
 
-.glosa-band-label[data-align="end"] {
-  transform: translate(-100%, -62%);
-  margin-left: calc(-1 * var(--space-2));
+.glosa-session-by[hidden] {
+  display: none;
 }
 
-/* The one draw-in an arrival gets. From an already-visible mark: the band is there from the first
-   frame and thickens once, so a reader who glances late still finds it. */
-@keyframes glosa-band-arrive {
+::highlight(glosa-session-asks) {
+  background-color: var(--session-wash);
+}
+
+/* Painted over the first wash rather than instead of it, so the two together are the strong wash
+   and the words of the request the reader is on stand out from the others without a third colour. */
+::highlight(glosa-session-lit) {
+  background-color: var(--session-wash);
+}
+
+/* A pointer says "look here" and holds nothing, so its words take a rule, not a fill. Dotted, and
+   in the session's ink, so it is never mistaken for the reader's solid vermilion underline. */
+::highlight(glosa-session-points) {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--session);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 4px;
+}
+
+/* The one draw-in an arrival gets. From an already-visible mark: the bracket is there from the
+   first frame and thickens once, so a reader who glances late still finds it. */
+@keyframes glosa-session-arrive {
   0% {
     stroke-width: 4;
-    fill: var(--session-wash-strong);
   }
   100% {
     stroke-width: 1.5;
   }
 }
 
-@keyframes glosa-band-tab-arrive {
+@keyframes glosa-session-tab-arrive {
   0% {
     transform: scale(1);
   }
@@ -3876,12 +3938,12 @@ input,
   }
 }
 
-.glosa-band[data-arrived] {
-  animation: glosa-band-arrive 1.2s var(--ease-out);
+.glosa-session-bracket[data-arrived] {
+  animation: glosa-session-arrive 1.2s var(--ease-out);
 }
 
-.glosa-band-tab[data-arrived] {
-  animation: glosa-band-tab-arrive 0.6s var(--ease-out);
+.glosa-session-tab[data-arrived] {
+  animation: glosa-session-tab-arrive 0.6s var(--ease-out);
 }
 
 /* ---------- the notice: a session is waiting on a passage the reader cannot see ---------- */
@@ -4025,7 +4087,7 @@ input,
 .glosa-agent-card {
   background: transparent;
   border: 0;
-  border-top: 1.5px solid var(--session); /* the same ink as its band: one object, two places */
+  border-top: 1.5px solid var(--session); /* the same ink as its bracket: one object, two places */
   border-radius: 0;
   padding: var(--space-2) 0 var(--space-3);
   display: grid;
@@ -4071,8 +4133,8 @@ input,
   overflow: hidden;
 }
 
-/* The quoted words carry their band's ink rather than the annotation wash: the same faint
-   session-ink ground the passage has in the manuscript, so the quote reads as "those words". */
+/* The quoted words carry their mark's wash rather than the annotation wash: the same faint
+   session-ink ground the words have in the manuscript, so the quote reads as "those words". */
 .glosa-agent-quote[role="button"] {
   cursor: pointer;
 }
@@ -6255,8 +6317,8 @@ input,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .glosa-band,
-  .glosa-band-tab,
+  .glosa-session-bracket,
+  .glosa-session-tab,
   .glosa-ask-layer .glosa-agent-card,
   .glosa-sidebar li button.glosa-starred-unstar,
   .glosa-starred-row,
@@ -6292,8 +6354,8 @@ input,
 
   .glosa-composer,
   .glosa-ask-layer .glosa-agent-card,
-  .glosa-band[data-arrived],
-  .glosa-band-tab[data-arrived] {
+  .glosa-session-bracket[data-arrived],
+  .glosa-session-tab[data-arrived] {
     animation: none;
   }
 
@@ -6317,4 +6379,1619 @@ input,
     animation: none;
     opacity: 0.7;
   }
+}
+
+/* Managed agents share the paper, type and dock of the writing workspace. */
+/* The heading sits directly on its rule, as Artifacts sits on the top bar's: one 36px band, no
+   air between the hairline and the label it belongs to. The rule runs edge to edge, the length the
+   foot's rule runs, out through the scroll padding and back in for the content. */
+.glosa-sidebar-chats {
+  margin: var(--space-3) calc(var(--space-3) * -1) 0;
+  padding: 0 var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.glosa-sidebar-chats input {
+  width: 100%;
+  min-width: 0;
+}
+/* Agent conversations share the writing desk, with controls gathered around the draft. */
+.glosa-agent-mark {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--ink);
+}
+.glosa-chat-pane,
+.glosa-agent-settings {
+  color: var(--ink);
+  background: var(--bg);
+  font: var(--text-base) / 1.5 var(--font-sans);
+  min-width: 0;
+}
+/* The chat pane's button kit. The navigator's Chats section is NOT in this list on purpose: it is a
+   list in the navigator and wears the navigator's rules; a 32px bordered pill behind a 12px section
+   label was this selector reaching where it had no business. */
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-agent-menu) button {
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+  font: var(--text-sm) / 1.4 var(--font-sans);
+  cursor: pointer;
+}
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-agent-menu) button:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-agent-menu) button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+:is(.glosa-chat-pane, .glosa-agent-settings) button.glosa-agent-primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--bg);
+  font-weight: 600;
+}
+:is(.glosa-chat-pane, .glosa-agent-settings) button.glosa-agent-primary:hover:not(:disabled) {
+  background: var(--muted);
+  border-color: var(--muted);
+}
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-agent-menu) :focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+:is(.glosa-chat-pane, .glosa-agent-settings) :is(input, textarea, select) {
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font: inherit;
+  min-width: 0;
+  max-width: 100%;
+}
+.glosa-agent-menu-anchor {
+  display: inline-flex;
+  flex: none;
+}
+:is(.glosa-chat-pane, .glosa-agent-settings) .glosa-agent-menu-trigger {
+  border-color: transparent;
+  padding: 0 8px;
+  width: 32px;
+}
+/* The menu's dots are drawn; filled, since a dot has no stroke to speak of. */
+.glosa-agent-menu-trigger svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  stroke: none;
+}
+.glosa-agent-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 224px;
+  height: fit-content;
+  min-height: 0;
+  max-width: calc(100vw - 16px);
+  max-height: min(60vh, 28rem);
+  overflow: auto;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  padding: 5px;
+  box-shadow: var(--shadow-rest);
+}
+.glosa-agent-menu:popover-open {
+  display: grid;
+  align-content: start;
+  grid-auto-rows: min-content;
+  gap: 2px;
+}
+.glosa-agent-menu button {
+  text-align: left;
+  border-color: transparent;
+  width: 100%;
+  min-height: 36px;
+}
+.glosa-agent-menu hr {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.glosa-agent-menu-group {
+  display: grid;
+  gap: 2px;
+}
+.glosa-agent-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  font: var(--text-sm) / 1.4 var(--font-sans);
+}
+.glosa-agent-menu input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+/* Recent conversations: one title, quiet selection, actions on demand. */
+.glosa-sidebar-chats .glosa-sidebar-heading {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.glosa-sidebar-chats .glosa-sidebar-heading h2 {
+  flex: 1;
+}
+.glosa-chat-list {
+  display: grid;
+  gap: 1px;
+  margin-block: 0 var(--space-3);
+}
+.glosa-chat-list-row {
+  display: flex;
+  position: relative;
+  min-width: 0;
+  align-items: center;
+  border-radius: var(--radius-tool);
+}
+/* A chat row is a tree row: 28px, 13px ink, the tree's radius and bed, its title on the name line. */
+.glosa-sidebar-chats .glosa-chat-list-item {
+  display: block;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 0 28px 0 25px;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  border-radius: var(--radius-tool);
+  color: var(--ink);
+  font: var(--text-sm) / 1.4 var(--font-sans);
+  font-weight: 400;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.glosa-sidebar-chats .glosa-chat-list-item:hover:not([aria-current="page"]) {
+  background: var(--surface-sunken);
+}
+.glosa-sidebar-chats .glosa-chat-list-item[aria-current="page"] {
+  background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
+}
+.glosa-sidebar-chats .glosa-chat-list-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.glosa-chat-list-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.glosa-chat-list-row > .glosa-agent-menu-anchor {
+  position: absolute;
+  right: 0;
+  opacity: 0;
+}
+.glosa-chat-list-row:is(:hover, :focus-within) > .glosa-agent-menu-anchor {
+  opacity: 1;
+}
+.glosa-chat-list-row .glosa-agent-menu-trigger {
+  min-height: 26px;
+  height: 26px;
+  width: 26px;
+  min-width: 26px;
+  padding: 0;
+}
+/* Settings shares the foot strip with the navigator's toggle: a 28px row in the tree's vocabulary,
+   shown only while the navigator is, so the strip closes the column with one rule instead of three. */
+.glosa-sidebar-settings {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 1px solid transparent; /* the toggle's construction, so the two boxes fade alike */
+  border-radius: var(--radius-tool);
+  color: var(--muted);
+  background: transparent;
+  font: var(--text-sm) / 1.4 var(--font-sans);
+  padding: 0 var(--space-2) 0 var(--space-1);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.glosa-sidebar-settings svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.glosa-sidebar-settings:hover {
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+.glosa-sidebar-settings:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+/* With the navigator hidden, Settings stays on the desk as the gear alone, in the toggle's own
+   bordered box, so the one path to accounts never leaves the corner. */
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+  background: var(--desk);
+  border-color: var(--border);
+}
+
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings:hover {
+  background: var(--surface-sunken);
+  border-color: var(--border-strong);
+}
+
+.glosa-app[data-nav-open="false"] .glosa-sidebar-settings span {
+  display: none;
+}
+
+.glosa-app[data-surface="document"] .glosa-sidebar-settings {
+  display: none;
+}
+.glosa-chat-list-group,
+.glosa-chat-list-empty {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2) 0 25px; /* the name line, like every other line of quiet copy here */
+  margin: 0;
+  text-wrap: pretty;
+}
+.glosa-sidebar-chats > button {
+  border-color: transparent;
+  width: 100%;
+  text-align: left;
+}
+.glosa-sidebar-chats > p:empty {
+  display: none;
+}
+
+/* Settings: one provider, legible accounts, maintenance on demand. */
+.glosa-agent-settings {
+  height: 100%;
+  overflow: auto;
+  padding: clamp(18px, 3vw, 36px);
+  width: 100%;
+  max-width: 72rem;
+  margin: auto;
+  container-type: inline-size;
+}
+.glosa-agent-settings h1 {
+  font: 600 24px / 1.25 var(--font-sans);
+  margin: 0 0 24px;
+  letter-spacing: -0.02em;
+}
+.glosa-agent-intro {
+  color: var(--muted);
+  max-width: 43rem;
+  margin: 0 0 20px;
+}
+.glosa-agent-tabs {
+  display: flex;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.glosa-agent-tabs button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  border-radius: 0;
+  padding: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+.glosa-agent-tabs button[aria-pressed="true"] {
+  color: var(--ink);
+  box-shadow: inset 0 -2px var(--ink);
+}
+.glosa-agent-tabs .glosa-agent-mark {
+  width: 16px;
+  height: 16px;
+}
+.glosa-agent-settings .glosa-agent-status {
+  margin: 12px 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.glosa-agent-status:empty,
+.glosa-agent-login-host:empty {
+  display: none;
+}
+.glosa-agent-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.glosa-agent-notice:has(.glosa-agent-status:empty) {
+  display: none;
+}
+.glosa-agent-section-heading h2 {
+  font: 600 var(--text-md) / 1.4 var(--font-sans);
+  margin: 0 0 4px;
+}
+.glosa-agent-section-heading p {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.glosa-agent-account {
+  padding: 2px 0;
+}
+.glosa-agent-account[hidden] {
+  display: none;
+}
+.glosa-agent-account-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.glosa-agent-account-summary {
+  min-width: 0;
+  flex: 1 1 180px;
+}
+.glosa-agent-account-summary > input {
+  width: 100%;
+  max-width: 25rem;
+  border-color: transparent;
+  background: transparent;
+  font-weight: 600;
+  padding: 3px 4px;
+  margin-left: -4px;
+}
+.glosa-agent-account-summary > input:hover {
+  border-color: var(--border);
+}
+.glosa-agent-account-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin-top: 5px;
+}
+.glosa-agent-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.glosa-agent-state::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+.glosa-agent-state[data-connected="true"]::before {
+  background: currentColor;
+}
+.glosa-agent-default {
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-micro);
+  padding: 0 5px;
+}
+.glosa-agent-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.glosa-agent-account-details {
+  margin-top: 12px;
+  font-size: var(--text-sm);
+}
+.glosa-agent-account-details > summary {
+  color: var(--muted);
+  cursor: pointer;
+  width: fit-content;
+  padding-block: 8px;
+}
+.glosa-agent-connections > summary {
+  cursor: pointer;
+  padding-block: 8px;
+}
+.glosa-agent-help {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  max-width: 60ch;
+  margin-block: 12px;
+}
+.glosa-agent-account-details[open] > summary {
+  color: var(--ink);
+  margin-bottom: 14px;
+}
+.glosa-agent-facts {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(0, 3fr);
+  gap: 8px 16px;
+  margin: 0 0 20px;
+}
+.glosa-agent-facts dt {
+  color: var(--muted);
+}
+.glosa-agent-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.glosa-agent-add-account {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  padding-block: 20px 0;
+}
+.glosa-agent-add-account label {
+  display: grid;
+  gap: 7px;
+  flex: 1 1 200px;
+  max-width: 28rem;
+  font-size: var(--text-sm);
+}
+.glosa-agent-add-account input {
+  width: 100%;
+  height: 36px;
+}
+.glosa-agent-add-account button {
+  height: 36px;
+}
+.glosa-agent-runtime {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+  font-size: var(--text-sm);
+}
+.glosa-agent-runtime strong {
+  font-weight: 600;
+}
+.glosa-agent-runtime p {
+  grid-column: 1;
+  color: var(--muted);
+  margin: 0;
+}
+.glosa-agent-runtime > button {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+.glosa-runtime-progress {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 3px;
+  margin-block: var(--space-3) var(--space-1);
+  accent-color: var(--muted);
+}
+.glosa-agent-runtime .glosa-runtime-metrics {
+  grid-column: 1 / -1;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.glosa-agent-runtime[data-installed="false"] {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+.glosa-agent-runtime[data-installed="false"] > button {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}
+.glosa-agent-runtime-maintenance {
+  margin-bottom: 24px;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.glosa-agent-runtime-maintenance > summary {
+  padding-block: 8px;
+  width: fit-content;
+  cursor: pointer;
+}
+.glosa-agent-runtime-maintenance .glosa-agent-runtime:not([data-attention="true"]) {
+  border: 0;
+  padding: 12px 0 0;
+  margin: 0;
+}
+.glosa-agent-runtime-maintenance .glosa-agent-runtime[data-attention="true"] {
+  margin-block: 8px 0;
+  background: var(--surface);
+}
+.glosa-agent-settings [aria-busy="true"]::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: -2px;
+  animation: glosa-runtime-spin 800ms linear infinite;
+}
+@keyframes glosa-runtime-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glosa-agent-settings [aria-busy="true"]::before {
+    animation: none;
+    border-style: dotted;
+  }
+}
+.glosa-settings-layout {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 32px;
+}
+.glosa-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+}
+.glosa-settings-nav button {
+  text-align: left;
+  border: 0;
+  color: var(--muted);
+}
+.glosa-settings-nav button[aria-current="page"] {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+.glosa-settings-content {
+  min-width: 0;
+}
+.glosa-settings-content[hidden] {
+  display: none;
+}
+.glosa-settings-title {
+  margin: 0 0 8px;
+  font: 600 19px / 1.4 var(--font-sans);
+}
+.glosa-settings-appearance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.glosa-settings-appearance [aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--surface);
+}
+.glosa-agent-account-area {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  min-width: 0;
+}
+.glosa-agent-account-area:disabled {
+  opacity: 0.5;
+}
+.glosa-agent-account-area:disabled :is(button, input, select) {
+  cursor: not-allowed;
+}
+.glosa-agent-account-layout {
+  display: grid;
+  grid-template-columns: minmax(160px, 200px) minmax(0, 1fr);
+  gap: 20px;
+}
+.glosa-agent-account-list {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+.glosa-agent-account-list:empty {
+  display: none;
+}
+.glosa-agent-account-layout:has(.glosa-agent-account-list:empty) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.glosa-agent-account-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border-color: transparent;
+  min-width: 0;
+}
+.glosa-agent-account-list .glosa-agent-account-label {
+  width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.glosa-agent-account-identity {
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.glosa-agent-account-list-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.glosa-agent-account-list button small {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.glosa-agent-account-list [aria-current="page"] {
+  background: var(--surface-sunken);
+}
+.glosa-agent-account-detail {
+  min-width: 0;
+}
+.glosa-agent-account-browser {
+  min-width: 0;
+}
+.glosa-agent-settings .glosa-agent-account-chooser {
+  display: none;
+}
+@container (max-width: 750px) {
+  .glosa-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .glosa-settings-nav {
+    flex-direction: row;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+  }
+}
+@container (max-width: 500px) {
+  .glosa-agent-account-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .glosa-agent-account-list {
+    flex-direction: column;
+    padding-bottom: 8px;
+  }
+  .glosa-agent-account-list button {
+    width: 100%;
+    flex: none;
+  }
+  .glosa-agent-settings .glosa-agent-account-chooser {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    overflow-wrap: anywhere;
+    background: var(--surface-sunken);
+    border-color: transparent;
+  }
+  .glosa-agent-account-chooser::after {
+    content: "⌄";
+    flex: none;
+    color: var(--muted);
+  }
+  .glosa-agent-account-browser[data-expanded="false"] .glosa-agent-account-list {
+    display: none;
+  }
+  .glosa-agent-account-browser[data-expanded="true"] .glosa-agent-account-list {
+    max-height: 18rem;
+    overflow-y: auto;
+    margin-top: 8px;
+  }
+  .glosa-agent-runtime {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .glosa-agent-runtime > button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+    margin-top: 8px;
+  }
+}
+.glosa-agent-empty {
+  padding: 24px 0 8px;
+}
+.glosa-agent-empty h3 {
+  font-size: var(--text-md);
+  margin: 0 0 8px;
+}
+.glosa-agent-empty p {
+  color: var(--muted);
+  max-width: 36rem;
+  margin: 0;
+}
+.glosa-agent-recovery,
+.glosa-chat-queue-notice {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.glosa-agent-login-host:not(:empty) {
+  padding: 16px;
+  margin-block: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.glosa-agent-terminal {
+  background: #161616;
+  padding: 12px;
+  overflow: auto;
+  max-width: 100%;
+  border-radius: 5px;
+  margin-block: 12px;
+}
+
+/* Chat: the manuscript is the largest region, even in a split pane. */
+.glosa-chat-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  container-type: inline-size;
+  position: relative;
+}
+.glosa-chat-header {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.glosa-chat-identity {
+  display: flex;
+  align-items: center;
+}
+.glosa-chat-pane .glosa-chat-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  border-color: transparent;
+  background: transparent;
+  padding: 4px;
+}
+.glosa-chat-title:hover {
+  border-color: var(--border);
+}
+.glosa-chat-activity {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.glosa-chat-activity[data-working="true"] {
+  color: var(--ink);
+}
+.glosa-chat-transfer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.glosa-chat-transfer[hidden] {
+  display: none;
+}
+.glosa-chat-history {
+  flex: 1 1 auto;
+  min-height: 96px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 28px clamp(16px, 5cqw, 60px) 18px;
+  scroll-padding-block: 16px;
+}
+.glosa-chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+nav.glosa-chat-actions {
+  padding: 8px 20px 0;
+  justify-content: center;
+}
+nav.glosa-chat-actions[hidden] {
+  display: none;
+}
+.glosa-chat-empty {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  max-width: 32rem;
+  margin: auto;
+  padding-bottom: 20px;
+}
+.glosa-chat-empty[hidden] {
+  display: none;
+}
+.glosa-chat-empty h2 {
+  font: 400 clamp(21px, 4cqw, 28px) / 1.3 var(--font-serif);
+  margin: 0 0 12px;
+  letter-spacing: -0.015em;
+}
+.glosa-chat-empty p {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  margin: 0;
+  max-width: 27rem;
+}
+.glosa-chat-message {
+  max-width: 46rem;
+  margin: 0 auto 28px;
+  position: relative;
+}
+.glosa-chat-message h3,
+.glosa-chat-message summary {
+  font: 600 var(--text-xs) / 1.5 var(--font-sans);
+  color: var(--muted);
+  margin: 0 0 7px;
+}
+.glosa-chat-message summary {
+  cursor: pointer;
+}
+.glosa-chat-message[data-kind="human"] {
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 12px 16px;
+  width: fit-content;
+  max-width: min(80%, 36rem);
+  margin-block: 24px;
+  margin-left: auto;
+  margin-right: max(0px, calc((100% - 46rem) / 2));
+}
+.glosa-chat-message[data-kind="human"] .glosa-chat-text {
+  font: var(--text-base) / 1.6 var(--font-sans);
+}
+.glosa-chat-message[data-kind="detail"] {
+  margin-bottom: 10px;
+}
+.glosa-chat-message[data-kind="detail"] summary {
+  font-weight: 400;
+}
+.glosa-chat-message[data-kind="detail"] .glosa-chat-text {
+  font: var(--text-xs) / 1.6 var(--font-mono);
+  padding: 10px 12px;
+  background: var(--surface);
+  border-radius: 5px;
+}
+.glosa-chat-message[data-kind="error"] {
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+.glosa-chat-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--text-base) / 1.7 var(--font-serif);
+  user-select: text;
+}
+.glosa-chat-pane .glosa-chat-message > button {
+  font-size: var(--text-xs);
+  padding: 2px 5px;
+  min-height: 26px;
+  margin-top: 5px;
+  color: var(--muted);
+  border-color: transparent;
+}
+.glosa-chat-markdown {
+  white-space: normal;
+}
+.glosa-chat-markdown pre {
+  white-space: pre;
+  overflow: auto;
+  max-width: 100%;
+  padding: 12px;
+  background: var(--surface-sunken);
+  border-radius: 5px;
+  font: var(--text-xs) / 1.6 var(--font-mono);
+}
+.glosa-chat-markdown :is(p, ul, ol, pre, blockquote) {
+  margin-block: 0.6rem;
+}
+.glosa-chat-markdown :is(h1, h2, h3, h4) {
+  font-family: var(--font-sans);
+  color: var(--ink);
+  margin-block: 18px 8px;
+}
+.glosa-chat-composer,
+.glosa-chat-footer,
+.glosa-chat-utilities,
+.glosa-chat-readiness {
+  width: min(calc(100% - 40px), 48rem);
+  margin-inline: auto;
+  flex: none;
+}
+.glosa-chat-composer {
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 4px;
+}
+.glosa-chat-composer:focus-within {
+  border-color: var(--ink);
+}
+.glosa-chat-pane .glosa-chat-draft {
+  width: 100%;
+  display: block;
+  border: 0;
+  resize: none;
+  min-height: 68px;
+  max-height: 25vh;
+  padding: 12px 13px;
+  border-radius: 6px;
+  font: var(--text-base) / 1.55 var(--font-sans);
+  background: transparent;
+}
+.glosa-chat-draft:focus-visible {
+  outline-offset: -2px;
+}
+.glosa-chat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+  min-width: 0;
+}
+.glosa-model-picker-anchor {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+.glosa-chat-pane .glosa-model-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  min-height: 30px;
+  padding: var(--space-1) var(--space-2);
+  max-width: 100%;
+  color: var(--muted);
+}
+.glosa-model-picker-trigger > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.glosa-model-picker-trigger svg,
+.glosa-model-picker-accounts svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: inherit;
+}
+.glosa-picker-chevron {
+  font-size: 0;
+  width: 5px;
+  height: 5px;
+  margin: -3px 2px 0 1px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+  flex: none;
+}
+.glosa-model-picker {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 312px;
+  max-width: calc(100vw - 16px);
+  overflow: auto;
+  padding: 6px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 3px 8px #0002;
+  font: var(--text-sm) / 1.4 var(--font-sans);
+}
+.glosa-model-picker-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-model-picker-models {
+  max-height: min(40vh, 20rem);
+  overflow: auto;
+}
+.glosa-chat-pane .glosa-model-picker-back {
+  border: 0;
+  min-height: 28px;
+  padding: 0 4px;
+  margin: -4px;
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+.glosa-chat-pane .glosa-model-picker-models button,
+.glosa-chat-pane .glosa-model-picker-accounts button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.glosa-model-picker-models [aria-pressed="true"],
+.glosa-model-picker-accounts [aria-pressed="true"] {
+  background: var(--surface);
+}
+.glosa-model-picker-footer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px 8px;
+  margin-top: 6px;
+  padding: 8px 4px 2px;
+  border-top: 1px solid var(--border);
+}
+.glosa-model-picker-footer > span {
+  padding-left: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-chat-pane .glosa-model-picker-account {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  border: 0;
+  padding: 5px 6px;
+  min-height: 30px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.glosa-model-picker-account > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.glosa-model-picker-accounts {
+  max-height: min(42vh, 20rem);
+  overflow: auto;
+}
+.glosa-model-picker-accounts,
+.glosa-model-picker-note,
+.glosa-model-picker-manage {
+  grid-column: 1 / -1;
+}
+.glosa-model-picker-account-label {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.glosa-model-picker-account-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.glosa-model-picker-account-label small,
+.glosa-model-picker-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-model-picker-note {
+  margin: 6px;
+  line-height: 1.5;
+}
+.glosa-chat-pane .glosa-model-picker-manage {
+  border: 0;
+  text-align: left;
+  padding: 5px 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-model-picker-error {
+  margin: 8px 10px;
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+.glosa-chat-pane .glosa-model-picker button:focus-visible {
+  outline-offset: -2px;
+}
+.glosa-model-picker [hidden] {
+  display: none;
+}
+.glosa-chat-field {
+  position: relative;
+  min-height: 30px;
+  display: inline-grid;
+  flex: none;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+}
+.glosa-chat-pane .glosa-chat-field select {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  grid-area: 1 / 1;
+  width: 100%;
+  max-width: 100%;
+  color: var(--muted);
+  font: var(--text-sm) / 1.4 var(--font-sans);
+  height: 30px;
+  padding: 4px 18px 4px 6px;
+  border: 0;
+  background-color: transparent;
+  cursor: pointer;
+}
+.glosa-chat-pane .glosa-chat-field select:hover:not(:disabled) {
+  background-color: var(--surface-sunken);
+  color: var(--ink);
+}
+.glosa-chat-pane .glosa-chat-field select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.glosa-chat-field select option {
+  color: var(--ink);
+  background: var(--bg);
+}
+.glosa-chat-compose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+}
+.glosa-chat-compose-actions .glosa-chat-field > .glosa-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.glosa-chat-pane .glosa-chat-attach {
+  border: 0;
+  font-size: 23px;
+  padding: 0;
+  min-width: 30px;
+  min-height: 30px;
+}
+.glosa-chat-action-spacer {
+  flex: 1;
+}
+.glosa-chat-compose-actions .glosa-agent-primary {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px 9px;
+  white-space: nowrap;
+  border-radius: 16px;
+}
+.glosa-chat-pane .glosa-chat-send {
+  font-size: var(--text-base);
+}
+.glosa-chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-inline: 10px;
+}
+.glosa-chat-attachments button {
+  font-size: var(--text-xs);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.glosa-chat-readiness {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  padding: 8px 0;
+  color: var(--muted);
+}
+.glosa-chat-readiness[hidden] {
+  display: none;
+}
+.glosa-chat-readiness span {
+  flex: 1 1 160px;
+}
+.glosa-chat-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 3px 12px;
+  padding-block: 3px 10px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.glosa-chat-status {
+  margin: 0;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.glosa-chat-utilities {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 8px;
+}
+.glosa-chat-utilities > button {
+  margin-left: auto;
+  border-color: transparent;
+  font-size: var(--text-xs);
+  min-height: 24px;
+  padding: 0 4px;
+}
+.glosa-chat-mcp {
+  font-size: var(--text-xs);
+  max-height: 32vh;
+  overflow: auto;
+  width: 100%;
+}
+.glosa-chat-mcp:not([open]) {
+  width: auto;
+}
+.glosa-chat-mcp > summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding-block: 3px;
+}
+.glosa-chat-mcp[open] {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+.glosa-chat-mcp > button {
+  margin: 4px;
+}
+.glosa-chat-jump {
+  align-self: center;
+  position: absolute;
+  bottom: 290px;
+  background: var(--bg) !important;
+}
+.glosa-chat-decisions {
+  max-height: 36%;
+  overflow: auto;
+  flex: none;
+}
+.glosa-chat-decision {
+  max-width: 48rem;
+  margin: 8px auto;
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.glosa-chat-decision h3 {
+  font-size: var(--text-base);
+  margin: 0 0 8px;
+}
+.glosa-chat-decision pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 10rem;
+  overflow: auto;
+  font: var(--text-xs) / 1.5 var(--font-mono);
+}
+.glosa-chat-decision > button {
+  margin: 4px 6px 0 0;
+}
+.glosa-decision-expiry {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.glosa-mcp-settings fieldset,
+.glosa-chat-decision fieldset {
+  border: 1px solid var(--border);
+  margin-block: 12px;
+  padding: 12px;
+  min-width: 0;
+}
+.glosa-mcp-settings label,
+.glosa-chat-decision fieldset label {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-block: 8px;
+}
+.glosa-mcp-settings :is(input:not([type="checkbox"]), textarea, select),
+.glosa-chat-decision fieldset textarea {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 6px;
+  font: inherit;
+}
+.glosa-chat-decision fieldset small {
+  color: var(--muted);
+  flex-basis: 100%;
+}
+.glosa-external-chat {
+  height: 100%;
+  overflow: auto;
+  padding: 16px;
+}
+@container (max-width: 440px) {
+  .glosa-chat-header {
+    padding-inline: 12px;
+  }
+  .glosa-chat-composer,
+  .glosa-chat-footer,
+  .glosa-chat-utilities,
+  .glosa-chat-readiness {
+    width: calc(100% - 24px);
+  }
+  .glosa-chat-controls {
+    gap: 6px;
+  }
+  .glosa-chat-compose-actions {
+    gap: 3px;
+    padding-inline: 3px;
+  }
+  .glosa-chat-compose-actions select {
+    max-width: 145px;
+  }
+  .glosa-chat-key-hint {
+    display: none;
+  }
+  .glosa-agent-account-heading {
+    gap: 10px;
+  }
+  .glosa-agent-account-actions {
+    width: 100%;
+  }
+  .glosa-agent-account-actions .glosa-agent-menu-anchor {
+    margin-left: auto;
+  }
+}
+
+.glosa-tab-glyph .glosa-agent-mark {
+  width: 14px;
+  height: 14px;
+  stroke: none;
+}
+
+:is(.glosa-chat-pane, .glosa-agent-settings, .glosa-sidebar-chats) :is(input, textarea)::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+@container (max-width: 440px) {
+  /* Keep the fixed navigator toggle clear of chat actions and draft status. */
+  .glosa-app[data-nav-open="false"] .glosa-chat-footer {
+    min-height: 48px;
+    padding-inline-start: 48px;
+  }
+}
+
+.glosa-palette-filters {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.glosa-palette-filters button {
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  padding: var(--space-1) var(--space-2);
+  font: var(--text-sm) / 1.4 var(--font-sans);
+  cursor: pointer;
+}
+.glosa-palette-filters button[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+.glosa-palette-search-status {
+  color: var(--muted);
+  font: var(--text-xs) / 1.4 var(--font-sans);
+  margin: 8px 18px;
+}
+.glosa-palette-search-status:empty {
+  display: none;
+}
+.glosa-palette-more {
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  padding: 8px 18px;
+  font: var(--text-sm) / 1.4 var(--font-sans);
+  cursor: pointer;
+}
+
+/* One quiet icon-button treatment across navigation, chat and account controls. */
+:is(.glosa-app, .glosa-agent-settings, .glosa-chat-pane)
+button:is(
+  .glosa-icon-button,
+  .glosa-agent-menu-trigger,
+  .glosa-tree-tool,
+  .glosa-tools-trigger,
+  .glosa-agent-feedback-close
+) {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-tool);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+:is(.glosa-app, .glosa-agent-settings, .glosa-chat-pane)
+  button:is(
+    .glosa-icon-button,
+    .glosa-agent-menu-trigger,
+    .glosa-tree-tool,
+    .glosa-tools-trigger,
+    .glosa-agent-feedback-close
+  ):is(:hover, [aria-expanded="true"], [aria-pressed="true"]):not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+:is(.glosa-app, .glosa-agent-settings, .glosa-chat-pane)
+  button:is(
+    .glosa-icon-button,
+    .glosa-agent-menu-trigger,
+    .glosa-tree-tool,
+    .glosa-tools-trigger,
+    .glosa-agent-feedback-close
+  ):disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Settings trades a little density for comfortable account-management targets. */
+.glosa-agent-settings button,
+.glosa-agent-settings button.glosa-agent-menu-trigger {
+  min-height: 36px;
+}
+.glosa-agent-settings button.glosa-agent-menu-trigger {
+  width: 36px;
+  min-width: 36px;
+}
+@media (pointer: coarse) {
+  .glosa-agent-settings button,
+  .glosa-agent-settings summary,
+  .glosa-agent-settings button.glosa-agent-menu-trigger {
+    min-height: 44px;
+  }
+  .glosa-agent-settings button.glosa-agent-menu-trigger {
+    width: 44px;
+    min-width: 44px;
+  }
+}
+
+.glosa-chat-field::after {
+  content: attr(data-selection);
+  grid-area: 1 / 1;
+  font: var(--text-sm) / 1.4 var(--font-sans);
+  padding: 4px 26px 4px 6px;
+  max-width: 28ch;
+  white-space: nowrap;
+  visibility: hidden;
+  pointer-events: none;
+}
+.glosa-chat-field::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  right: 8px;
+  top: calc(50% - 4px);
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid var(--muted);
+  border-bottom: 1px solid var(--muted);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.glosa-chat-effort-field::after,
+.glosa-chat-pane .glosa-chat-effort-field select {
+  padding-left: 28px;
+}
+.glosa-effort-mark {
+  width: 20px;
+  height: 16px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.glosa-chat-effort-field > .glosa-effort-mark {
+  position: absolute;
+  left: 6px;
+  width: 16px;
+  height: 14px;
+}
+.glosa-chat-effort-field:has(select:disabled) .glosa-effort-mark {
+  opacity: 0.5;
+}
+.glosa-control-tooltip {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  bottom: calc(100% + var(--space-2));
+  width: max-content;
+  max-width: min(16rem, calc(100vw - 32px));
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
+  font: var(--text-sm) / 1.4 var(--font-sans);
+  box-shadow: var(--shadow-menu);
+  pointer-events: auto;
+  visibility: hidden;
+}
+.glosa-control-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: var(--space-2);
+}
+.glosa-chat-field:not([data-tooltip-dismissed]):is(:hover, :focus-within) .glosa-control-tooltip {
+  visibility: visible;
+}
+.glosa-chat-pane .glosa-chat-message > button[title="Copy message"] {
+  opacity: 0;
+  font-size: 17px;
+  line-height: 1;
+}
+.glosa-chat-pane .glosa-chat-message:is(:hover, :focus-within) > button[title="Copy message"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .glosa-chat-pane .glosa-chat-message > button[title="Copy message"] {
+    opacity: 1;
+  }
+}
+
+.glosa-chat-pane .glosa-chat-message[data-kind="human"] > button[title="Copy message"] {
+  position: absolute;
+  right: 4px;
+  bottom: -26px;
 }

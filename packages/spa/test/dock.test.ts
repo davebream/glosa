@@ -4,6 +4,54 @@
 
 import { describe, expect, test } from "bun:test";
 import { describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH, pruneGrid } from "../src/dock.js";
+import { artifactPanelId, chatPanelId, migratePanelLayout } from "../src/panel-identity.js";
+
+test("chat tab attention takes precedence over activity and clears when the reply is resolved", async () => {
+  const { installDom } = await import("./dom-env.ts");
+  const dom = installDom();
+  const { createDock } = await import("../src/dock.js");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const state = {
+    kind: "chat",
+    provider: "claude-code",
+    label: "Review",
+    attentionCount: 2,
+    activityLabel: "Working…",
+  };
+  const dock = createDock(host, {
+    slug: "fixture",
+    emptyState: () => document.createElement("div"),
+    storage: {
+      getItem() {
+        return null;
+      },
+      setItem() {},
+      removeItem() {},
+    },
+    createPane() {
+      return {};
+    },
+    destroyPane() {},
+    getTabState: () => state,
+  });
+  try {
+    dock.api.addPanel({ id: chatPanelId("a"), component: "pane", tabComponent: "pane" });
+    dock.refreshTabs();
+    expect(host.querySelector('[aria-label="2 awaiting reply"]')?.textContent).toBe("2 replies");
+    state.attentionCount = 0;
+    state.activityLabel = "Stop not confirmed";
+    dock.refreshTabs();
+    expect(host.querySelector('[aria-label="2 awaiting reply"]')).toBeNull();
+    expect(host.querySelector(".glosa-tab-count")?.textContent).toBe("Stop not confirmed");
+    state.activityLabel = "";
+    dock.refreshTabs();
+    expect(host.querySelector(".glosa-tab-count")).toBeNull();
+  } finally {
+    dock.destroy();
+    dom.teardown();
+  }
+});
 
 describe("disambiguateLabels — the shortest distinguishing parent segment (§5)", () => {
   test("a unique filename is just the filename", () => {
@@ -40,7 +88,7 @@ describe("disambiguateLabels — the shortest distinguishing parent segment (§5
 
 describe("diff tab identity (§5)", () => {
   test("the id is the pair, so asking twice focuses one tab instead of opening two", () => {
-    expect(diffPanelId("notes.md", "abc123", "working")).toBe("diff:notes.md:abc123:working");
+    expect(JSON.parse(diffPanelId("notes.md", "abc123", "working"))).toEqual(["diff", "notes.md", "abc123", "working"]);
     expect(diffPanelId("notes.md", "abc123", "working")).toBe(diffPanelId("notes.md", "abc123", "working"));
     expect(diffPanelId("notes.md", "abc123", "def456")).not.toBe(diffPanelId("notes.md", "abc123", "working"));
   });
@@ -49,6 +97,36 @@ describe("diff tab identity (§5)", () => {
     expect(describeVersion("working")).toBe("now");
     expect(describeVersion("0123456789abcdef")).toBe("0123456");
   });
+});
+
+test("typed panel migration preserves literal chat/diff filenames and rewrites grid references", () => {
+  const saved = {
+    panels: {
+      "chat:notes.md": { id: "chat:notes.md", params: { mode: "review" } },
+      "diff:notes.md": { id: "diff:notes.md", params: { kind: "artifact", path: "diff:notes.md" } },
+    },
+    grid: { root: { type: "leaf", data: { views: ["chat:notes.md", "diff:notes.md"], activeView: "chat:notes.md" } } },
+  };
+  const migrated = migratePanelLayout(saved, "registration-a:epoch-a");
+  expect(migrated.grid.root.data.views).toEqual([artifactPanelId("chat:notes.md"), artifactPanelId("diff:notes.md")]);
+  expect(migrated.panels[artifactPanelId("chat:notes.md")].params).toEqual({
+    kind: "artifact",
+    path: "chat:notes.md",
+    mode: "review",
+  });
+  expect(artifactPanelId("chat:notes.md")).not.toBe(chatPanelId("notes.md"));
+  expect(saved.grid.root.data.views[0]).toBe("chat:notes.md");
+});
+
+test("saved chat panels cannot migrate into a reused workspace registration", () => {
+  const id = chatPanelId("chat-a");
+  const saved = {
+    panels: { [id]: { id, params: { kind: "chat", chatId: "chat-a" } } },
+    glosa: { version: 2, workspaceIdentity: "registration:old" },
+    grid: { root: { type: "leaf", data: { views: [id], activeView: id } } },
+  };
+  expect(Object.keys(migratePanelLayout(saved, "registration:new").panels)).toEqual([]);
+  expect(Object.keys(migratePanelLayout(saved, "registration:old").panels)).toEqual([id]);
 });
 
 describe("pruneGrid — a corrupt or stale layout must never make a workspace unopenable (§10)", () => {

@@ -95,7 +95,7 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     const res = await fetch(apiUrl("/api/handshake"));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.contract_version).toBe("1.17");
+    expect(body.contract_version).toBe("1.18");
     expect(body.daemon_version).toBe(APP_VERSION);
     expect(body.build_id).toBe(BUILD_ID);
     expect(body.paired).toBe(true); // token file exists
@@ -445,9 +445,10 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     const body = await res.text();
     // The served bytes are the mark on disk, whatever the mark currently is.
     expect(body).toBe(readFileSync(new URL("../../spa/src/glosa-mark.svg", import.meta.url), "utf8"));
-    // Two inks: the under layer and the hand printed over it.
-    expect(body).toContain('class="under"');
+    // One ink at favicon sizes: the hand's comma alone (DESIGN.md, the logo). The two-ink print
+    // lives only in the desktop app's icon at 64px and up.
     expect(body).toContain('class="accent"');
+    expect(body).not.toContain('class="under"');
   });
 
   it("GET /app/fonts/*.woff2 serves the vendored faces byte-for-byte", async () => {

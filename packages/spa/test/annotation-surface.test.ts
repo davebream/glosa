@@ -134,7 +134,14 @@ describe("the annotation surface", () => {
 
     // Every name the module writes into the global registry...
     const declared = [...source.matchAll(/^const (HL_[A-Z_]+) = "([^"]+)";$/gm)].map((m) => m[2]);
-    expect(declared.sort()).toEqual(["glosa-anchor", "glosa-anchors", "glosa-composer-selection"]);
+    expect(declared.sort()).toEqual([
+      "glosa-anchor",
+      "glosa-anchors",
+      "glosa-composer-selection",
+      "glosa-session-asks",
+      "glosa-session-lit",
+      "glosa-session-points",
+    ]);
 
     // ...must be a name the stylesheet actually selects, or the highlight is invisible. This is the
     // whole failure mode: a random per-pane suffix kept the DOM identical and the paint empty.
@@ -998,7 +1005,7 @@ describe("the annotation surface", () => {
 
     const card = q(host, ".glosa-annotation");
     expect(card.getAttribute("data-state")).toBe("applied");
-    expect(q(card, ".glosa-annotation-state [role=status]").textContent).toBe("Couldn't clear — try again");
+    expect(q(card, ".glosa-annotation-state [role=status]").textContent).toBe("Couldn't clear: try again");
     expect(q(card, ".glosa-annotation-edit")).toBeNull();
   });
 

@@ -1362,3 +1362,84 @@ one; that write is attributed `unknown`, as before. The one daemon token means e
 one `principal` today; the field exists so conflicts read at the participant level once per-caller
 tokens do. Signals to the holder when a person overrides its claim, and the SPA naming the holder,
 land in the second half of #155.
+
+## A session's mark brackets the block and washes the words (amends #308)
+
+Maintainer decision, 2026-09-23. #308 drew a session's mark as a band: an outline around the exact
+words, shaped like a text selection, with its "… asks" label on the outline's top edge. Rendered
+against real prose it failed in the one place it had to live. Words that start and stop mid-line
+leave the outline only the line's leading, a few pixels, so its edge ran along the reader's own
+underline on the line above and the label sat on that line's words. The floating question card,
+placed under the words, covered the rest of the paragraph the reader was answering about. A list
+item's tab covered its bullet, because the tab was measured from the item rather than the column.
+
+**Decision.** The mark works at two levels. The *block* gets a proofreader's bracket in the gutter,
+`[` with its ticks turned toward the text, spanning the block or run of blocks the words are in, and
+one tab on it per request, level with the line the words start on. The *words* stay exact, but
+through the CSS highlight registry instead of an outline: Session Wash for a question, a dotted
+session-ink rule for a pointer. Requests whose blocks overlap or touch share one bracket and keep
+their own tabs. "{provider} asks" moves off the text into the page's margin beside the tab, and
+hides where the pane has no margin; the tab's accessible name already carries it. The floating card
+hangs under the block from the bracket, and is placed against where "Go to it" comes to rest rather
+than where the reader was, which is what had flipped it over the text above.
+
+**Why not the alternatives.** Six variants were rendered with the shipped stylesheet on the same
+passage. *Block only* (tint the whole block, mark no words) was the calmest, but in a six-line
+paragraph the reader could not tell which sentence was meant, and the card then had to quote it,
+which pushed the question further down. *A frame around the block* was heavy (a page of boxes reads
+as a form) and ran into the neighbouring items in a tight list; with the words underlined in session
+ink it also read as a link. *Keeping the band and fixing its collisions* would still have left an
+outline with nowhere to go between lines.
+
+**Consequences.** #308 argued that a session's mark had to outline the words so it would not "fight
+over one background" with the reader's wash. It no longer outlines them, and the two do share the
+words. They are told apart by hue (vermilion against blue-black), by the reader's solid rule, and by
+the bracket and tab that only a session's mark has. That still holds in greyscale. Overlapping
+questions no longer need the older-keeps-the-fill rule, because washes on the same words simply add
+up. The acceptance test that pinned "a stepped outline, not a block" now pins both levels: the
+bracket spans the paragraph, the wash holds exactly the asked sentence starting mid-line, and the
+tab sits level with that sentence's first line.
+
+
+## Launching sessions (2026-09-23)
+
+Historical invariant, preserved verbatim: “glosa never launches an agent, enumerates agent CLI
+processes, selects between candidate sessions, or persists a binding.”
+
+That invariant continues to describe external companion sessions. The accepted managed-chat design
+adds an explicit second topology: the user creates a chat, chooses a private subscription account,
+consents to its workspace and sends a message. Only then may a provider adapter launch an owned
+native runtime. It cannot adopt or interrupt an externally owned CLI. No process enumeration or
+heuristic candidate selection is added; a default is an explicit profile choice, not a discovered
+terminal identity. Logical managed session registration is pluginless and scoped to the chat.
+
+Prerequisites are Bun's built-in PTY, a verified process owner, pinned runtimes, account isolation,
+structured provider protocols and preserved workspace provenance. Electron/cmux are unnecessary.
+The native login ceremony uses the provider executable with the profile's private config root;
+the same root is used for status, inference, resume and logout. Secrets never become SPA settings.
+
+This is the historical decision requested in closed issue #157, not a claim to have newly closed
+that issue. The old connect-flow assumptions in #151/#160 apply to companion sessions; their scope
+is not silently widened. Managed onboarding and runtime ownership use a separate boundary. This
+work follows the maintainer's accepted implementation specification; it changes no ROADMAP order.
+Claude is built first internally, then Codex; both public paths remain unavailable until their joint
+native qualification and offering gates pass. The current implementation does not supply that
+attended evidence or T8 maintainer sign-off.
+
+
+## Desk and companion are surfaces, not folders (2026-09-25)
+
+Planning the desktop shell's top bar raised whether a folder's "face" (chat-first desk, or the
+margin-and-inbox companion) is fixed when the folder is first registered or follows whoever opened
+it last. The maintainer rejected both: "these should be 2 separate surfaces with their own agent
+connections … concurrent edits should be reconciled as any other app", and then: "companion and
+desk are inherently different surfaces, they should not co-exist in a single electron app window."
+
+So the kind belongs to the surface. A link carries `kind=companion` (from `glosa open --bind` and
+`glosa_present`) or `kind=desk` (from a plain `glosa open` and the app's folder picker); absent
+means companion, the shape every older link carried. The SPA gates chats, stars and the agent
+connection chip on it and records nothing on the folder. One folder may be open on both kinds at
+once, each surface with its own agent, reconciled by claims and human-save-wins; in the app that is
+two windows, never mixed tabs. Nothing is inferred from binding state: a companion surface whose
+session ended still offers reconnect. Supersedes the "face at registration" line in
+`docs/design/2026-09-25-desktop-shell-feature-map.md` §4.

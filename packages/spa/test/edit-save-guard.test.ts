@@ -733,7 +733,7 @@ describe("Edit mode — a save never invents an edit", () => {
     await paint();
 
     expect(modal()).toBeNull();
-    expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain("Couldn't save this artifact");
+    expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain("Couldn't save this document");
     expect(da.put).toEqual([]);
   });
 
@@ -1043,7 +1043,7 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(modal()).toBeNull(); // reports and declines — never re-opens
     expect(da.put).toEqual([]);
     expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain(
-      "Not saved — this file changed again",
+      "Not saved: this file changed again",
     );
   });
 
@@ -1156,7 +1156,7 @@ describe("Edit mode — a save never invents an edit", () => {
       await paint();
 
       expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain(
-        "This artifact has no saved versions to compare with yet.",
+        "This document has no saved versions to compare with yet.",
       );
     }
   });

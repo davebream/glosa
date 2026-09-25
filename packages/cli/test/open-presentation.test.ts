@@ -39,6 +39,7 @@ describe("open-presentation shared contract", () => {
         mode: "read",
         readLock: true,
         pairing: { kind: "presentation", token: "ephemeral-secret" },
+        kind: "companion",
       }),
     );
     const params = new URLSearchParams(url.hash.slice(1));
@@ -53,6 +54,7 @@ describe("open-presentation shared contract", () => {
       surface: "document",
       mode: "read",
       lock: "read",
+      kind: "companion",
     });
   });
 

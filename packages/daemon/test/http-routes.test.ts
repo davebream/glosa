@@ -122,7 +122,15 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual([
-      { slug, path: root, kind: "directory", last_seen: expect.any(String), has_attention: false },
+      {
+        slug,
+        path: root,
+        kind: "directory",
+        last_seen: expect.any(String),
+        has_attention: false,
+        registration_id: expect.stringMatching(/^[a-f0-9]{64}$/),
+        registration_epoch: expect.any(String),
+      },
     ]);
   });
 
@@ -732,6 +740,78 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(404);
   });
 
+  // --- issue #337: `:path` is percent-encoded per segment (the SPA's `encodePathSegments`,
+  // `encodeURIComponent` each `/`-split piece) and decoded exactly once, before confinement ---
+
+  /** Mirrors `packages/spa/src/data-access.js`'s `encodePathSegments` exactly, so these cases
+   * prove the route accepts what the SPA actually sends, not a hand-picked escape. */
+  function encodePathSegments(path: string): string {
+    return path
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
+  }
+
+  const ENCODING_NAME_TABLE: Array<[label: string, name: string]> = [
+    ["space", "My Folder/a b.md"],
+    ["literal plus", "a+b.md"],
+    ["percent", "100%.md"],
+    ["hash", "a#b.md"],
+    ["question mark", "a?b.md"],
+    ["non-ASCII (NFC)", "café.md"],
+  ];
+
+  for (const [label, name] of ENCODING_NAME_TABLE) {
+    test(`GET artifact whose path needs percent-encoding (${label}) resolves via the SPA's own encoding, returning the exact on-disk source_path`, async () => {
+      const dir = name.includes("/") ? join(root, name.split("/")[0] as string) : root;
+      if (dir !== root) mkdirSync(dir, { recursive: true });
+      writeFileSync(join(root, name), "# hi\n");
+      const res = await fetchFn(req(`/w/${slug}/artifacts/${encodePathSegments(name)}`));
+      expect(res.status).toBe(200);
+      expect((await res.json()).source_path).toBe(name);
+    });
+  }
+
+  const ADVERSARIAL_PATH_TABLE: Array<[label: string, capture: string]> = [
+    [
+      "encoded traversal, `..%2F` (a single segment: not exactly the dot-segment token, so the URL parser leaves it for the route to decode-then-confine)",
+      "..%2Fescape.md",
+    ],
+    ["encoded traversal, fully escaped `%2e%2e%2f` (same: one opaque segment)", "%2e%2e%2fescape.md"],
+    ["encoded NUL", "notes%00.md"],
+    ["encoded control character (LF)", "notes%0a.md"],
+    ["malformed escape: lone %", "notes%.md"],
+    ["malformed escape: truncated UTF-8", "notes%E0%A4%A.md"],
+    ["malformed escape: invalid UTF-8 byte", "notes%FF.md"],
+  ];
+
+  for (const [label, capture] of ADVERSARIAL_PATH_TABLE) {
+    test(`GET artifact — ${label} → 400 invalid-path, never 500, never reaches the filesystem outside the workspace`, async () => {
+      const res = await fetchFn(req(`/w/${slug}/artifacts/${capture}`));
+      expect(res.status).toBe(400);
+      expect((await res.json()).type).toContain("invalid-path");
+    });
+  }
+
+  test("GET artifact — encoded traversal `%2e%2e/` as its OWN segment never reaches the route at all: the WHATWG URL parser treats a percent-encoded dot-segment as equivalent to literal `..` and collapses it before routing, same as the literal-`..` case above → 404 no such route", async () => {
+    const res = await fetchFn(req(`/w/${slug}/artifacts/%2e%2e/escape.md`));
+    expect(res.status).toBe(404);
+    expect((await res.json()).type).toContain("not-found");
+  });
+
+  test("GET artifact — double-encoded %252e%252e.md is decoded ONCE: it opens the file literally named `%2e%2e.md` (a second decode would ask for `..md` and 404)", async () => {
+    writeFileSync(join(root, "%2e%2e.md"), "# literal\n");
+    const res = await fetchFn(req(`/w/${slug}/artifacts/%252e%252e.md`));
+    expect(res.status).toBe(200);
+    expect((await res.json()).source_path).toBe("%2e%2e.md");
+  });
+
+  test("GET artifact — an encoded C1 control (U+0080) is an ordinary decoded name, confined like any other → 404 when no such file, never 500", async () => {
+    const res = await fetchFn(req(`/w/${slug}/artifacts/notes%C2%80.md`));
+    expect(res.status).toBe(404);
+    expect((await res.json()).type).toContain("not-found");
+  });
+
   test("GET artifact via a symlink pointing outside the workspace → 400 invalid-path (the real, HTTP-reachable escape confinePath's realpath check exists to catch — A3 §5 #4)", async () => {
     const outside = mkdtempSync(join(tmpdir(), "glosa-routes-outside-"));
     writeFileSync(join(outside, "secret.md"), "top secret\n");
@@ -1003,6 +1083,37 @@ describe("A1 §5 route catalog", () => {
       }),
     );
     expect(res.status).toBe(404);
+  });
+
+  // --- issue #337: PUT decodes the same `:path` capture, exactly once, before confinement ---
+
+  test("PUT artifact whose path needs percent-encoding (a space, in a folder that also needs it) writes the EXACT on-disk bytes at the EXACT on-disk path — not a literal `My%20Folder`", async () => {
+    mkdirSync(join(root, "My Folder"), { recursive: true });
+    writeFileSync(join(root, "My Folder", "doc.md"), "original\n");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/${encodePathSegments("My Folder/doc.md")}`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "edited via glosa\n",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(root, "My Folder", "doc.md"), "utf8")).toBe("edited via glosa\n");
+    expect(existsSync(join(root, "My%20Folder"))).toBe(false);
+  });
+
+  test("PUT artifact — a malformed escape in the path → 400 invalid-path, nothing written", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes%.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "hacked\n",
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).type).toContain("invalid-path");
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("original\n");
   });
 
   test("PUT artifact via a symlink pointing outside the workspace → 400 invalid-path", async () => {
@@ -2430,6 +2541,26 @@ describe("A1 §5 route catalog", () => {
     const [body1, body2] = await Promise.all([res1.json(), res2.json()]);
     expect(body1.url).not.toBe(body2.url);
     expect(body1.nonce).not.toBe(body2.nonce);
+  });
+
+  // --- issue #337: mint decodes `:artifactPath` once (so a name needing escaping resolves at
+  // all), and percent-encodes the BASENAME it writes into the returned `url` (so a browser
+  // requesting exactly that URL doesn't mangle or truncate it on a space/`#`/`?`) ---
+
+  test("POST /w/:slug/capability/:artifactPath on a path that needs percent-encoding mints, and the returned url percent-encodes the basename — no raw space, `#` or `?`", async () => {
+    mkdirSync(join(root, "Pages"), { recursive: true });
+    writeFileSync(join(root, "Pages", "my page #1?.html"), "<html><body>hi</body></html>");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/capability/${encodePathSegments("Pages/my page #1?.html")}`, { method: "POST" }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.url).not.toContain(" ");
+    expect(body.url).not.toContain("#");
+    expect(body.url).not.toContain("?");
+    expect(body.url).toMatch(/\/doc\/[0-9a-f]{64}\/my%20page%20%231%3F\.html$/);
+    // this file only exercises createApiFetch in-process (no bound class-F socket) — the round
+    // trip through a real class-F listener over HTTP is classf-listener.test.ts's own case.
   });
 
   // --- Pipeline gates (A1 §1/§3/§4) still hold through the NEW routes ---

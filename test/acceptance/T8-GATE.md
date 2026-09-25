@@ -339,3 +339,13 @@ Write `docs/compatibility/YYYY-MM-DD-t8-manual-rehearsal.md` with:
 
 Any failed scenario produces a FAIL report and keeps the compatibility issue open. The agent never
 signs on the maintainer's behalf. Preview the rendered report for human review before committing it.
+
+
+## Managed-chat activation gate
+
+Managed execution is not certified by the existing companion rehearsal. Before joint Claude/Codex
+activation, run the implementation contract’s AC-01–AC-20 against the qualified production tuple,
+including two native accounts per provider, unchanged system CLI authentication, relogin/identity
+mismatch, native permissions/MCP, stop/crash during tools, managed/external claim overlap and browser
+reconnect. The local protocol/guardian/renderer fixtures do not replace these attended checks.
+G1 (Claude offering) and G2/G3 (native compatibility/containment) remain separately required.

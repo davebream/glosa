@@ -209,3 +209,30 @@ when an old external-edit frontier is missing or disconnected, restart scans fro
 baseline that is an ancestor of HEAD. Old entries remain unchanged. External writers do not take the
 mutex; final durable racing bytes reach either the staged baseline or later watcher/restart capture.
 Intermediate overwritten saves are subject to ordinary coalescing.
+
+
+## Managed chat journals and workspace authority (2026-09-23)
+
+Workspace inbox/journal authority is unchanged. Managed control and per-chat intent journals live
+under the daemon home, separately from workspace provenance. Their schema-1 sequence, request UUID,
+canonical-input digest, fsync-before-ack and replay validation decide what the UI accepted. Prompt
+and attachment blobs are content-addressed. Torn tails are quarantined; interior corruption blocks
+that chat. Corrupt control state disables managed execution while document review remains available.
+No cross-file atomicity is claimed: deletion writes a durable tombstone before repeatable directory
+cleanup; a crash cannot resurrect deleted chats. Orphaned unreferenced blob bytes count toward quota.
+
+A turn freezes account identity/epoch, native manifest, model/effort, MCP digest and attachments.
+Restart holds undispatched turns and marks potentially handed-off turns outcome-unknown. Never
+blindly resend. Decisions reserve their response durably before one native write; an uncertain
+response cannot be resubmitted as a new decision. Invalid multi-field answers are rejected before
+reservation. An unsuccessful turn holds queued work for explicit continuation.
+
+Managed feedback uses immutable inbox IDs and the existing delivery reservation/acknowledgment
+path. Grants cannot claim another chat's targeted feedback. Claims/resolve use the ordinary workspace
+mutex and proven pre/post interval; native tool events/diffs alone prove no authorship. Human saves
+retain precedence. Forget/adoption fence admission before async cleanup and refuse live/held/unknown
+work. Managed history remains tied to registration ID plus epoch, never rebound by matching a slug.
+
+Bounds: 64 KiB serialized journal records; 64 MiB per intent journal; 256 MiB blob bytes per chat;
+10 MiB per attachment, ten attachments and 20 MiB aggregate per send. Display/history paging does
+not delete original durable messages. Disk errors stop admission instead of acknowledging lost intent.

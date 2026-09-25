@@ -100,7 +100,7 @@ export function mountHistoryPane(
     className: "glosa-history-status",
     role: "status",
     "aria-live": "polite",
-    textContent: "Select one version to compare it with the current artifact, or select two earlier versions.",
+    textContent: "Select one version to compare it with the current document, or select two earlier versions.",
   });
   const compareCurrentButton = el("button", {
     className: "glosa-history-compare-current",
@@ -181,7 +181,7 @@ export function mountHistoryPane(
         renderDiff(lostHtml);
         const proceed = await confirmDialog({
           title: "Discard the changes shown behind this dialog?",
-          body: "This artifact changed since its latest saved version. Restoring will throw those changes away — the diff pane shows exactly what would be lost.",
+          body: "This document changed since its latest saved version. Restoring will throw those changes away: the diff pane shows exactly what would be lost.",
           confirmLabel: "Restore anyway",
           danger: true,
         });
@@ -206,7 +206,7 @@ export function mountHistoryPane(
       status.removeAttribute("data-error");
       status.textContent =
         selected.length === 1
-          ? "One version selected. Compare it with the current artifact or select a second version."
+          ? "One version selected. Compare it with the current document or select a second version."
           : "Two versions selected. Loading their comparison…";
     }
   }

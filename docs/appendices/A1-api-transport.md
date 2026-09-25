@@ -118,7 +118,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.17", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.18", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
@@ -235,8 +235,8 @@ reorder, R7).
 - **404 not-found** — unknown `:slug`.
 
 ### 5.4 `GET /w/:slug/artifacts/:path`
-Bearer required. `:path` is workspace-relative (§6 confinement). Query param `?render=html`
-requests server-rendered HTML with `data-line` stamps for class R; omit for raw source.
+Bearer required. `:path` is workspace-relative and follows §6's encoding rule and confinement.
+Query param `?render=html` requests server-rendered HTML with `data-line` stamps for class R; omit for raw source.
 Class F artifacts return metadata only — actual HTML is never served through this route (§7).
 - **200** (class R, `?render=html`)
 ```json
@@ -256,15 +256,16 @@ offering Edit at all.
 { "source_path": "output/document/rendered-preview-2026-07-20.html", "source_sha256": "…",
   "class": "F", "manifest_path": "output/document/chunks-2026…/manifest.json" }
 ```
-- **400 invalid-path** — path escapes workspace root or fails the tracked-artifact rule.
-- **404 not-found** — path within workspace but no such artifact.
+- **400 invalid-path** — the path is malformed or escapes the workspace root (§6).
+- **404 not-found** — path within workspace but no such artifact (including a file the
+  tracked-artifact rule excludes).
 
 ### 5.4a `PUT /w/:slug/artifacts/:path`
-Bearer required, Origin-gated (state-changing route, per R5). `:path` is workspace-relative (§6
-confinement). Body is bare source text, or JSON `{"content": "<source>"}`; either form is accepted,
-and an empty body is rejected. Optional `If-Match: <source_sha256>` header requests optimistic
-concurrency: when present and it no longer matches what is on disk, the write is refused rather
-than applied — this is what the Edit-mode stale-save dialog keys on (R6). The comparison is over
+Bearer required, Origin-gated (state-changing route, per R5). `:path` is workspace-relative and
+follows §6's encoding rule and confinement. Body is bare source text, or JSON `{"content": "<source>"}`; either form is accepted, and an empty body is rejected. Optional
+`If-Match: <source_sha256>` header requests optimistic concurrency: when present and it no longer
+matches what is on disk, the write is refused rather than applied — this is what the Edit-mode
+stale-save dialog keys on (R6). The comparison is over
 `source_sha256`, which normalizes `\r\n`→`\n` before hashing, so a disk change that alters only a
 file's line endings does NOT refuse the write; the body is still written verbatim (A4 §F05, #251).
 - **200**
@@ -272,6 +273,7 @@ file's line endings does NOT refuse the write; the body is still written verbati
 { "source_path": "07_manuscript.md", "source_sha256": "…", "class": "R",
   "content": "<saved source>", "rendered_html": "<div data-line=\"1\">…</div>" }
 ```
+- **400 invalid-path** — the path is malformed or escapes the workspace root (§6).
 - **400 validation-failed** — request body is empty.
 - **404 not-found** — path within workspace but no such artifact.
 - **409 source-changed** — `If-Match`'s `source_sha256` no longer matches what is on disk; nothing
@@ -726,8 +728,12 @@ Cancellation, replacement, credential revocation, and daemon shutdown release it
 stops refreshes rather than immediately ending the session; existing lease expiry remains the truth.
 
 ### 5.13 `POST /w/:slug/capability/:artifactPath`
-Bearer required, Origin-gated. Issues a capability URL for a class-F artifact. Full mechanics in §7.
-- **200** `{ "url": "http://127.0.0.1:4647/doc/<token>/<artifactBasename>", "expires_in_s": 600 }`
+Bearer required, Origin-gated. `:artifactPath` follows §6's encoding rule and confinement. Issues
+a capability URL for a class-F artifact. Full mechanics in §7.
+- **200** `{ "url": "http://127.0.0.1:4647/doc/<token>/<artifactBasename>", "nonce": "…",
+  "expires_in_s": 600 }`. `<artifactBasename>` in `url` is percent-encoded, so a browser requesting
+  exactly that URL never mangles or truncates a space, `#` or `?` in the name. `nonce` is the
+  bridge handshake secret (A3 §2).
 - **400 invalid-path** — path confinement failure, or artifact is not class F.
 - **404 not-found** — no such artifact.
 
@@ -1085,14 +1091,22 @@ wire formats remain in provider packages.
   `503 dictation-credential-unavailable`, and `504 dictation-timeout`; details never forward provider
   response bodies or credentials. Retry is a new foreground user action.
 
-## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`)
+## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`/`<path...>`)
 
-1. Reject any path containing a literal `..` segment, a NUL byte, or a leading `/` (must be
-   workspace-relative) before touching the filesystem — `400 invalid-path`.
+**Encoding.** A path capture in a URL is percent-encoded per RFC 3986, one `/`-delimited segment at
+a time (what `encodeURIComponent` per segment produces). The daemon decodes it exactly once, before
+step 1. A malformed escape (a lone `%`, a truncated or invalid UTF-8 sequence) is a path refusal,
+never a 500: `400 invalid-path` on the main listener, the plain `404` of §7 on the class-F
+listener. Because decoding happens once, `%252e%252e` names the literal file `%2e%2e`, not `..`.
+
+1. Before touching the filesystem, reject an empty path, a path longer than 4096 characters or
+   with more than 64 segments, a leading `/` (must be workspace-relative), any ASCII control
+   character (C0, including NUL, or DEL), and any `..` segment — `400 invalid-path`.
 2. Resolve `path.resolve(workspaceRoot, requestedPath)`.
-3. `fs.realpath()` both the resolved path and `workspaceRoot`; the resolved realpath MUST start
-   with `workspaceRoot realpath + path.sep` — this is what catches a symlink inside the
-   workspace pointing outside it (realpath-confine, per F24). Fails → `400 invalid-path`.
+3. `fs.realpath()` `workspaceRoot` and the resolved path, or, when the leaf does not exist yet, its
+   nearest existing ancestor. The result MUST equal the root's realpath or start with it plus
+   `path.sep`. This is what catches a symlink inside the workspace pointing outside it
+   (realpath-confine, per F24). Fails → `400 invalid-path`.
 4. Re-apply the tracked-artifact rule (R1 include/exclude globs, size ≤2 MB) — a path that
    resolves fine but isn't a tracked artifact is `404 not-found`, not `400`, since path
    validity and artifact-membership are different failure classes worth distinguishing in logs.
@@ -1104,10 +1118,11 @@ Locked decisions (F02/F03) require: no Bearer token ever reaches the class-F ori
 from a **separate loopback port** with no ambient credential.
 
 - The daemon runs a second `Bun.serve` listener on a second port (`GLOSA_CLASSF_PORT`, default
-  `<GLOSA_PORT>+1`), bound `127.0.0.1` only, serving `GET /doc/:token/<path...>`.
+  `<GLOSA_PORT>+1`), bound `127.0.0.1` only, serving `GET /doc/:token/<path...>`. `<path...>` follows §6's
+  encoding rule.
 - `POST /w/:slug/capability/:artifactPath` (§5.13, main origin, Bearer-authed and Origin-gated) mints a token:
   256-bit random, stored server-side in an in-memory map
-  `token → {slug, artifactDirRealPath, artifactBasename, expiresAt}`. **TTL 600s (10 min).**
+  `token → {slug, artifactDirRealPath, artifactBasename, nonce, expiresAt}`. **TTL 600s (10 min).**
   Restart invalidates all tokens (in-memory only — acceptable for a local tool).
 - **The capability is directory-scoped and multi-request, NOT single-use.** This is required
   for correctness: a class-F document (e.g. rendered-preview HTML) loads sibling assets — its own
@@ -1129,7 +1144,7 @@ from a **separate loopback port** with no ambient credential.
   source changed), the SPA discards the old iframe and requests a fresh capability for a fresh
   iframe; the old token simply expires. No renewal, no cross-origin state sync beyond mint.
 - This mint route only ever serves class-F artifacts; a capability request for a class-R path is
-  `400 invalid-path` (§5.12) — class R is served in-band via §5.4, never through this listener.
+  `400 invalid-path` (§5.13) — class R is served in-band via §5.4, never through this listener.
 
 ## 8. SSE protocol & resync (F17)
 
@@ -1258,3 +1273,59 @@ repair under the ownership coordinator and shared bus mutex (A4 F21). Unknown sl
 body is 400. Inactive registrations, unsafe paths, leases, unavailable singleton proof, invalid HEAD,
 and already-healthy stores are named 409 refusals. Missing history is not recovered; a new baseline
 only permits future capture. These additive routes do not change the protocol version.
+
+
+## Managed agents and chats — contract 1.18
+
+These routes use the existing Host/Origin/Bearer, body-size, token-revocation and contract-version
+pipeline. No native credentials are returned. Mutations are POST; reads are GET. JSON responses are
+`no-store`. Invalid input returns 422; stale revisions/identity/idempotency conflicts return 409;
+unavailable runtime/state returns 503. A UUID request ID is required for profile creation/update,
+chat creation/change/draft/send/decision. Repeating the same ID with changed input is refused.
+
+| Route | Contract |
+|---|---|
+| `/api/agents/status` | Local profiles, cached model catalogs, install/qualification status, recovery state. No native probe. |
+| `/api/agents/profiles` and `/profiles/:id` | Create and CAS-update account metadata. One eligible default per provider. |
+| `/api/agents/profiles/:id/{login,logout,probe,models,consent,mcp,mcp-login}` | Explicit foreground operation. MCP policy uses workspace query, revision and exact servers. MCP login binds a workspace incarnation and optional server ID to a separately owned native terminal. |
+| `/api/agents/runtimes/:provider/install` | Explicit pinned install or verified repair, never an inference warm-up. |
+| `/api/agents/logins/:id` and `/{input,resize,finish}` | Memory operation grant in `X-Glosa-Operation`; bounded base64 terminal output with offset/reset. No grant in URL or storage. |
+| `/api/agents/quiesce` | Instance-ID-bound replacement fence; refuses while owned/unknown work exists. |
+| `/w/:slug/chats` | Local metadata list or create draft. GET `q` searches title and stored messages, `archived=true` includes archived rows, `after` pages 50 matches. Registration epoch scopes every lookup. |
+| `/w/:slug/chats/events` | Coalesced sidebar invalidations; closing chat tabs does not lose background status. |
+| `/w/:slug/chats/external` | Remember an already registered external session; never revive its native lease. |
+| `/w/:slug/chats/:id` | Snapshot or CAS configuration update. GET `before` pages 100 logical messages with stable cursor. |
+| `.../:id/{draft,move-draft,turns,feedback,decisions,stop,resume,delete,attachments,mcp}` | Durable draft/send/answer; explicit feedback preview/send; stop/resume; stopped deletion; bounded upload; foreground native MCP status. Draft transfer durably copies the target before CAS-clearing an unchanged source. |
+| `.../:id/{events,export}` | SSE snapshot plus sequenced events; complete Markdown export. |
+| `.../:id/transfer` | Read-only frozen transcript preview: title, included turn count, UTF-8 byte count and text. Includes only user prompts and assistant text; excludes tool output, reasoning and control/approval events. Opening the preview never sends content to another account. |
+
+A same-provider subscription change uses the configuration CAS route and retains the chat ID. It
+requires an authenticated enabled profile, stopped owned runtime and no pending turns. The journal
+allocates a new Glosa session binding, clears the native ID and records a bounded message-text handoff;
+accepted turns retain their own profile and binding. The next explicitly accepted turn rechecks
+target-account consent before dispatch. Internal binding IDs and handoff hashes cannot be supplied
+through configuration requests. Changing provider after submission requires a new chat.
+
+Chat stream IDs are `<chat UUID>:1:<journal sequence>`. Snapshot and listener installation do not
+yield. Reconnect replaces local projection from a snapshot; it never replays a native send. Sequence
+gaps trigger another snapshot. Slow readers are disconnected; output/history remain durable.
+The `before` cursor also applies to stream snapshots. Individual displayed message text is capped
+at 128 Ki characters and marked shortened; export retains original stored text.
+
+`POST /api/managed-mcp` is a separate native-only boundary: no browser Origin; an in-memory bearer
+grant selects one active run/workspace/session. Only initialize, ping and scoped tools are allowed.
+The grant cannot authenticate ordinary APIs. Revocation is rechecked before native writes and under
+the workspace mutex before bus mutations. Tool arguments never widen scope. `glosa_present` returns
+an already-paired workspace link after the ordinary tracked-artifact check; no browser is launched.
+Managed runs append Glosa workflow instructions through the native agent's instruction channel and
+verify that the native `glosa` MCP connection exposes the complete managed tool catalog before
+submitting the user's message. Startup failure records an unsent failed turn; retry requires a new
+explicit send. Stop cancels readiness before draining and verifying owned process exit. Native
+startup disconnects are not classified as uncertain submissions; uncertainty begins at dispatch.
+
+Managed chat panes and the Chats list share the existing workspace SSE connection in the SPA.
+The advisory `chats_changed` frame has no journal cursor or transcript payload; notifications
+coalesce over 250 ms and each pane reloads its bounded durable snapshot. Reconnect also reloads
+snapshots. The direct per-chat event endpoint remains available, but opening more UI tabs does
+not allocate more long-lived browser connections. Document-only surfaces do not subscribe to the
+chat list. This prevents chat streams from starving document requests at the browser connection limit.

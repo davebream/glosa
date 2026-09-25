@@ -10,6 +10,7 @@ import {
   focusHash,
   readRoute,
   rememberDaemonIdentity,
+  resolvePresentationToken,
   scrubSecrets,
   selectScreen,
   waitForOwnDaemon,
@@ -214,6 +215,19 @@ describe("readRoute — the CLI deep-link half of the fragment", () => {
     expect(route.slug).toBeNull();
     expect(route.artifact).toBeNull();
   });
+
+  // --- issue #337: the `+`/`%20` spellings of a space are the SAME character to
+  // URLSearchParams, and a literal `+` survives ONLY because it's separately escaped as `%2B` ---
+
+  test("#a=My+Folder%2Fa%2Bb.md (the `+`-for-space spelling `glosa_present` emits) reads as a space AND a literal `+`, not confused with each other", () => {
+    const route = readRoute({ hash: "#w=essays-abc&a=My+Folder%2Fa%2Bb.md" });
+    expect(route.artifact).toBe("My Folder/a+b.md");
+  });
+
+  test("#a=My%20Folder%2Fa%2Bb.md (the `%20`-for-space spelling) reads IDENTICALLY to the `+` spelling above", () => {
+    const route = readRoute({ hash: "#w=essays-abc&a=My%20Folder%2Fa%2Bb.md" });
+    expect(route.artifact).toBe("My Folder/a+b.md");
+  });
 });
 
 describe("focusHash — the inverse of readRoute slug/artifact", () => {
@@ -224,6 +238,16 @@ describe("focusHash — the inverse of readRoute slug/artifact", () => {
   test("round-trips through readRoute slug/artifact projection", () => {
     const focus = { slug: "essays-abc", artifact: "07/manuscript.md" };
     const route = readRoute({ hash: focusHash(focus) });
+    expect({ slug: route.slug, artifact: route.artifact }).toEqual(focus);
+  });
+
+  // issue #337: an artifact path containing BOTH a space and a literal `+` — the case that
+  // distinguishes "space" from "the character +" — stays lossless end to end.
+  test("round-trips an artifact path with both a space and a literal `+` (My Folder/a+b.md), losing neither", () => {
+    const focus = { slug: "essays-abc", artifact: "My Folder/a+b.md" };
+    const hash = focusHash(focus);
+    expect(hash).toBe("#w=essays-abc&a=My+Folder%2Fa%2Bb.md"); // space → `+`, literal `+` → `%2B`
+    const route = readRoute({ hash });
     expect({ slug: route.slug, artifact: route.artifact }).toEqual(focus);
   });
 
@@ -288,6 +312,7 @@ describe("readRoute — surface/mode/lock + secrets", () => {
       surface: "document",
       mode: "review",
       readLock: true,
+      kind: null,
       durableToken: "SECRET",
       presentationToken: null,
     });
@@ -381,8 +406,8 @@ describe("scrubSecrets — preserves non-secret route state", () => {
 });
 
 describe("selectScreen", () => {
-  test("the bundled SPA advertises contract 1.15", () => {
-    expect(CONTRACT_VERSION).toBe("1.15");
+  test("the bundled SPA advertises contract 1.18", () => {
+    expect(CONTRACT_VERSION).toBe("1.18");
   });
 
   test("handshake null (fetch failed/threw) → down", () => {
@@ -525,5 +550,83 @@ describe("waitForOwnDaemon", () => {
     );
     expect(outcome).toBe("recovered");
     expect(slept).toBe(0);
+  });
+});
+
+describe("presentation token under the desktop shell (ownership spec R-P1/R-P2)", () => {
+  const storage = (token: string | null) => ({ getItem: () => token, setItem() {}, removeItem() {} });
+  const route = (p: string | null, t: string | null = null) =>
+    ({
+      slug: "w",
+      artifact: null,
+      surface: null,
+      mode: null,
+      readLock: false,
+      kind: null,
+      durableToken: t,
+      presentationToken: p,
+    }) as const;
+
+  test("a p= in the fragment wins and the bridge is never asked", async () => {
+    let asked = 0;
+    const bridge = {
+      presentationToken: async () => {
+        asked += 1;
+        return "FROM-SHELL";
+      },
+    };
+    expect(await resolvePresentationToken(route("FROM-URL"), storage(null), bridge)).toBe("FROM-URL");
+    expect(asked).toBe(0);
+  });
+  test("with no secret in the fragment and no pairing, the shell's bridge supplies the token", async () => {
+    const bridge = { presentationToken: async () => "FROM-SHELL" };
+    expect(await resolvePresentationToken(route(null), storage(null), bridge)).toBe("FROM-SHELL");
+  });
+  test("an already-paired page never asks the shell", async () => {
+    let asked = 0;
+    const bridge = {
+      presentationToken: async () => {
+        asked += 1;
+        return "FROM-SHELL";
+      },
+    };
+    expect(await resolvePresentationToken(route(null), storage("durable"), bridge)).toBeNull();
+    expect(await resolvePresentationToken(route(null, "t-in-url"), storage(null), bridge)).toBeNull();
+    expect(asked).toBe(0);
+  });
+  test("no bridge (a plain browser) and a bridge that throws or returns nothing both mean no token", async () => {
+    expect(await resolvePresentationToken(route(null), storage(null), undefined)).toBeNull();
+    expect(
+      await resolvePresentationToken(route(null), storage(null), {
+        presentationToken: async () => {
+          throw new Error("x");
+        },
+      }),
+    ).toBeNull();
+    expect(
+      await resolvePresentationToken(route(null), storage(null), { presentationToken: async () => null }),
+    ).toBeNull();
+  });
+});
+
+describe("surface kind (decision 2026-09-25: the face belongs to the surface)", () => {
+  test("kind= is read only when it names a surface kind, and focusHash keeps it", () => {
+    expect(readRoute({ hash: "#w=x&kind=desk" }).kind).toBe("desk");
+    expect(readRoute({ hash: "#w=x&kind=companion" }).kind).toBe("companion");
+    expect(readRoute({ hash: "#w=x&kind=other" }).kind).toBeNull();
+    expect(readRoute({ hash: "#w=x" }).kind).toBeNull();
+    expect(focusHash({ slug: "x", kind: "desk" })).toBe("#w=x&kind=desk");
+    expect(focusHash({ slug: "x" })).toBe("#w=x");
+  });
+  test("scrubbing a secret keeps the surface kind in the address", () => {
+    const location = new URL("http://127.0.0.1:9999/#p=SECRET&w=x&kind=desk");
+    const history = {
+      replaceState(_state: unknown, _title: string, url?: string | URL | null) {
+        location.href = new URL(String(url), location).href;
+      },
+    };
+    const storage = { getItem: () => null, setItem() {}, removeItem() {} };
+    scrubSecrets(location, storage, history, readRoute(location), "durable");
+    expect(location.hash).toBe("#w=x&kind=desk");
   });
 });

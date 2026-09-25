@@ -178,6 +178,8 @@ describe("glosa open", () => {
     expect(browserCalls[0]).not.toContain("test-token-abc");
     expect(browserCalls[0]).toContain("surface=workspace");
     expect(browserCalls[0]).toContain("mode=review");
+    // A person opened this folder: a desk surface (decision 2026-09-25).
+    expect(browserCalls[0]).toContain("kind=desk");
     expect(browserCalls[0]).toContain("a=01-first.md");
     expect(browserCalls[0]).not.toContain("lock=");
   });
@@ -326,6 +328,8 @@ describe("glosa open", () => {
     const result = await runOpen(dir, deps, { bindSessionId: "sess-1", launchBrowser: false });
     expect(result.ok).toBe(true);
     expect(result.data.bound_session).toBe("sess-1");
+    // An agent bound itself: the link opens a companion surface.
+    expect(String(result.data.url)).toContain("kind=companion");
     expect(client.calls.some((c) => c.method === "bindSession")).toBe(true);
   });
 

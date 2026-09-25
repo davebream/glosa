@@ -2,7 +2,12 @@
 // @glosa/daemon — RFC 9457 problem+json error envelope (A1 §1). One shared helper so every
 // route returns the same {type,title,status,detail?,instance?} shape with the right content
 // type, instead of each handler hand-rolling its own error body.
+import type { ManagedAgentCode } from "../agents/interface.ts";
+
 export type ProblemSlug =
+  | ManagedAgentCode
+  | "invalid-agent-request"
+  | "managed-operation-failed"
   | "shadow-unsafe-path"
   | "shadow-workspace-inactive"
   | "shadow-history-lost"
@@ -198,6 +203,7 @@ export function forgetBlockedResponse(
     | { kind: "live-session"; session_id: string }
     | { kind: "apply-lease"; lease_id: string; expires_at: string }
     | { kind: "adopting" }
+    | { kind: "managed-chat"; chat_id: string; state: string }
   >,
   /** The workspace the blockers apply to — always the resolved TARGET, never a sealed adopted
    * source (issue #156 revised approach: a source is never an independent provenance unit). */

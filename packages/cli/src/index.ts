@@ -140,7 +140,7 @@ async function resolveCommandDir(
       warnings: [
         {
           code: "not-repository-root",
-          message: `${explicitDir} is inside the git repository ${root} but is not its root — agent configuration written here is not what Claude Code loads for the project. Did you mean \`${root}\`?`,
+          message: `${explicitDir} is inside the git repository ${root} but is not its root: agent configuration written here is not what Claude Code loads for the project. Did you mean \`${root}\`?`,
         },
       ],
     };
@@ -837,7 +837,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         process.stderr.write(`glosa monitor: session ${sessionId} already has a live monitor${holder}; exiting\n`);
         return;
       }
-      if (!lock.held) process.stderr.write(`glosa monitor: singleton guard unavailable, continuing — ${lock.detail}\n`);
+      if (!lock.held) process.stderr.write(`glosa monitor: singleton guard unavailable, continuing: ${lock.detail}\n`);
       const { runClaudeMonitor } = await import("../../providers/claude-code/src/monitor.ts");
       const shutdown = new AbortController();
       const stop = () => shutdown.abort();
@@ -902,9 +902,23 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     const { bootDaemon } = await import("../../daemon/src/index.ts");
     const { isSourceCheckout } = await import("../../daemon/src/lifecycle/install.ts");
     const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
+    const { CodexManagedAdapter } = await import("../../providers/codex/src/managed.ts");
+    const { codexRuntimeCandidate } = await import("../../providers/codex/src/runtime.ts");
+    const { ClaudeManagedAdapter } = await import("../../providers/claude-code/src/managed.ts");
+    const { claudeRuntimeCandidate } = await import("../../providers/claude-code/src/runtime.ts");
     const { CodexProvider } = await import("../../providers/codex/src/index.ts");
     const { WisprFlowProvider } = await import("../../providers/wispr-flow/src/index.ts");
     await bootDaemon({
+      managedAgentFactories: [() => new ClaudeManagedAdapter(), () => new CodexManagedAdapter()],
+      // Public managed execution stays closed until the ship gates in
+      // docs/design/2026-09-23-agent-chat-implementation.md pass. GLOSA_MANAGED_PREVIEW=1 in the
+      // daemon's own environment opens it for that one daemon so a maintainer can produce the
+      // attended evidence those gates ask for; it is read once here, never from the SPA or a
+      // request, and never a default.
+      managedRuntime: {
+        released: process.env.GLOSA_MANAGED_PREVIEW === "1",
+        candidates: [claudeRuntimeCandidate(), codexRuntimeCandidate()],
+      },
       providerFactories: [
         ({ sessionRegistry, pushRegistry }) =>
           new ClaudeCodeProvider({
@@ -1059,7 +1073,7 @@ async function noticeDevDefaults(argv: readonly string[]): Promise<void> {
   const { glosaHome } = await import("../../daemon/src/lifecycle/home.ts");
   devNoticeShown = true;
   process.stderr.write(
-    `glosa: running from a source checkout — using GLOSA_HOME=${glosaHome()} and GLOSA_PORT=${glosaPort()} ` +
+    `glosa: running from a source checkout: using GLOSA_HOME=${glosaHome()} and GLOSA_PORT=${glosaPort()} ` +
       "so this checkout cannot disturb an installed glosa. Set either variable to override.\n",
   );
 }
@@ -1080,7 +1094,7 @@ export async function run(argv: readonly string[], deps: CliRunDependencies = {}
     description: DESCRIPTION,
     args: GLOBAL_ARGS,
     run() {
-      process.stdout.write("glosa — writing-first workspace for AI coding agents\n");
+      process.stdout.write("glosa: writing-first workspace for AI coding agents\n");
     },
   });
 
