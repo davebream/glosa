@@ -746,6 +746,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   } else {
     markStartupReady();
     log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
+    if (opts.managedRuntime?.released) log(home, `${instanceId} managed chats open: preview for this daemon only`);
     // Warm the artifact watchers only now — after both binds, the lock, and the handshake gate.
     // Deliberately not awaited: warm-up is not readiness, and on a machine with a large index it
     // takes far longer than a client is willing to wait for `glosa open`. Failures are logged and

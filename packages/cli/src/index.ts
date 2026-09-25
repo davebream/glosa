@@ -910,7 +910,15 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     const { WisprFlowProvider } = await import("../../providers/wispr-flow/src/index.ts");
     await bootDaemon({
       managedAgentFactories: [() => new ClaudeManagedAdapter(), () => new CodexManagedAdapter()],
-      managedRuntime: { released: false, candidates: [claudeRuntimeCandidate(), codexRuntimeCandidate()] },
+      // Public managed execution stays closed until the ship gates in
+      // docs/design/2026-09-23-agent-chat-implementation.md pass. GLOSA_MANAGED_PREVIEW=1 in the
+      // daemon's own environment opens it for that one daemon so a maintainer can produce the
+      // attended evidence those gates ask for; it is read once here, never from the SPA or a
+      // request, and never a default.
+      managedRuntime: {
+        released: process.env.GLOSA_MANAGED_PREVIEW === "1",
+        candidates: [claudeRuntimeCandidate(), codexRuntimeCandidate()],
+      },
       providerFactories: [
         ({ sessionRegistry, pushRegistry }) =>
           new ClaudeCodeProvider({
