@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `scripts/cask-bump.ts` renders the Homebrew cask for a signed desktop-app release from the
+  release's `SHA256SUMS` and opens a pull request against the `davebream/homebrew-glosa` tap. The
+  cask links the CLI the app carries, never writes into agent configuration and never removes
+  `~/.glosa`. `docs/release.md` describes the tap, the `HOMEBREW_TAP_TOKEN` secret and the manual
+  fallback (#371).
 - The desktop app finds its CLI in a fixed order: `GLOSA_SHELL_CLI`, the recorded executable under
   `GLOSA_HOME` (or `~/.glosa`), the CLI a packaged app carries, then the well-known bin
   directories. A terminal install keeps ownership; a packaged app on a machine with nothing
