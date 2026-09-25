@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Sixteen enumerated checks — A6's own
-// command-surface table names exactly 16 (platform, bun, git, claude-code, browser, daemon+proto,
-// token/pairing, workspace, pending-delivery, orphaned-state, claude-monitor, transcript-root,
-// claude-config-roots, orphaned-entries, workspace-root, legacy-config).
+// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Eighteen enumerated checks: platform,
+// bun, git, claude-code, browser, daemon+proto, token/pairing, workspace, pending-delivery,
+// live-updates, orphaned-state, claude-monitor, transcript-root, claude-config-roots,
+// orphaned-entries, workspace-root, legacy-config, install.
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,8 @@ import {
   tokenPath,
 } from "../../daemon/src/index.ts";
 import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
+import { classifyInstall, currentPackageRoot, targetsInstall } from "./install-kind.ts";
+import { type RecordedExecutable, readRecordedExecutable } from "./install-link.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -54,6 +56,24 @@ export interface DoctorDeps {
   /** The user's home, for the `legacy-config` scan of user-scope agent config. Defaults to
    * `os.homedir()`; injectable so a test can point it at a temp directory. */
   homeDir?: () => string;
+  /** The running CLI's package root, for the `install` row (#371). Defaults to this file's tree. */
+  packageRoot?: () => string;
+  /** What `<GLOSA_HOME>/bin/glosa` holds. Defaults to `readRecordedExecutable`. */
+  readRecordedExecutable?: (home: string) => RecordedExecutable;
+  /** `realpath`, or null when the path does not resolve. Also the existence probe for the other
+   * glosa executables the `install` row lists. */
+  realpath?: (path: string) => string | null;
+}
+
+/** The `install` row's name, exported so the desktop app's smoke test can find it (#371). */
+export const INSTALL_CHECK = "install";
+
+function realRealpath(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
 }
 
 function realRunVersionProbe(cmd: string[]): string | null {
@@ -80,6 +100,9 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     claudeConfigRoots,
     diagnoseDaemon: (home) => diagnoseDaemon(home),
     env: Bun.env,
+    packageRoot: currentPackageRoot,
+    readRecordedExecutable,
+    realpath: realRealpath,
   };
 }
 
@@ -556,7 +579,64 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         ),
   );
 
+  // 18. install (#371): which glosa this is, which one `<GLOSA_HOME>/bin/glosa` records, and
+  // every other glosa it can see. The recorded executable is what the Claude Code plugin and the
+  // desktop app run, so a mismatch is worth naming; it is a warn, never a fail.
+  checks.push(installCheck(deps));
+
   return checks;
+}
+
+/** The `install` row (#371). Reads nothing the deps do not hand it. */
+export function installCheck(deps: DoctorDeps): CheckResult {
+  const realpath = deps.realpath ?? realRealpath;
+  const rawRoot = (deps.packageRoot ?? currentPackageRoot)();
+  const root = realpath(rawRoot) ?? rawRoot;
+  const kind = classifyInstall(root, realpath(join(root, ".git")) !== null).kind;
+  const recorded = (deps.readRecordedExecutable ?? readRecordedExecutable)(deps.glosaHome());
+  const mine = (resolved: string) => targetsInstall(resolved, root);
+
+  let recordedText: string;
+  let hint: string | null = null;
+  switch (recorded.state) {
+    case "symlink":
+      if (mine(recorded.resolved)) {
+        recordedText = `${recorded.resolved} (this install)`;
+      } else {
+        recordedText = `${recorded.resolved} (another install)`;
+        hint = "Another install is recorded; the Claude Code plugin and the desktop app run that one.";
+      }
+      break;
+    case "dangling":
+      recordedText = `${recorded.target} (dangling)`;
+      hint = "The recorded executable points at a removed install; the next glosa run replaces it.";
+      break;
+    case "file":
+      recordedText = `${recorded.path} (a regular file)`;
+      hint = "A hand-pinned file; glosa never replaces it.";
+      break;
+    default:
+      recordedText = "none";
+      hint = "Nothing is recorded yet; run any glosa command to record this install.";
+  }
+
+  const home = deps.homeDir?.() ?? homedir();
+  const candidates = [join(home, ".bun", "bin", "glosa"), "/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+  const onPath = deps.which("glosa");
+  if (onPath !== null && !candidates.includes(onPath)) candidates.push(onPath);
+  const visible: string[] = [];
+  for (const candidate of candidates) {
+    const resolved = realpath(candidate);
+    if (resolved === null) continue;
+    visible.push(mine(resolved) ? `${candidate} (this install)` : `${candidate} -> ${resolved}`);
+  }
+
+  const detail = [
+    `this glosa: ${kind} at ${root}`,
+    `recorded: ${recordedText}`,
+    ...(visible.length > 0 ? [`also visible: ${visible.join(", ")}`] : []),
+  ].join("; ");
+  return hint === null ? check(INSTALL_CHECK, "pass", detail) : check(INSTALL_CHECK, "warn", `${detail}. ${hint}`);
 }
 
 /** Read-only scan of the files `glosa init` used to own, in both scopes. A file is listed once
@@ -674,7 +754,7 @@ export function printDoctorResult(result: CommandEnvelope<DoctorData>, json: boo
     return;
   }
   // Command-level warnings (e.g. #96's "this directory isn't the repo root") sit outside the
-  // 16 enumerated checks, so they get their own line rather than a 17th check.
+  // enumerated checks, so they get their own line rather than an extra check.
   for (const warning of result.warnings) {
     process.stderr.write(`glosa doctor: warning: ${warning.message}\n`);
   }
