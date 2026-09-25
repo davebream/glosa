@@ -29,6 +29,43 @@ brand` again after reinstalling Electron. Packaged, `productName` in package.jso
 Contracts: `docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md`,
 `docs/research/2026-09-25-desktop-shell-readiness.md`, A3 "Desktop shell". The main process is
 unbundled TypeScript (erasable syntax only, Electron's Node strips types); the preload is plain
-CommonJS because a sandboxed preload is not loaded by Node. Packaging (`.app`, signing,
-notarization) is the one build step glosa has, and it is not wired yet; the bundle will carry the
-sources unbundled and run them with the Bun it ships.
+CommonJS because a sandboxed preload is not loaded by Node.
+
+## Packaging
+
+Packaging (`.app`, signing, notarization) is the one build step glosa has. Nothing is bundled or
+transpiled: the app carries the published sources and runs them with the Bun it ships.
+
+```
+glosa.app/Contents/Resources/
+├── app.asar            the shell: src/, two icons, package.json
+├── bin/
+│   ├── bun             Bun at the root packageManager pin, checked against Bun's SHASUMS256.txt
+│   └── glosa           launcher: bin/bun --no-install glosa/packages/cli/src/main.ts "$@"
+├── glosa/              exactly what npm publishes, plus production node_modules
+└── licenses/           Electron's, Chromium's and Bun's license texts
+```
+
+```sh
+bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke   # what CI runs on pull requests
+bun run --cwd packages/shell package -- --arch all                        # both architectures, signed if CSC_* is set
+bun run --cwd packages/shell smoke -- --app dist/arm64/mac-arm64/glosa.app
+```
+
+- `scripts/package-app.ts` stages the sources with `npm pack`, installs production dependencies
+  from the lockfile beside the checkout, and refuses a tree with a test directory under
+  `packages/`, a `.git` entry, a symlink or a missing dependency. It then fetches and verifies Bun,
+  writes the launcher, and runs electron-builder.
+- `scripts/after-pack.cjs` copies that staged tree into the bundle before signing. electron-builder's
+  `extraResources` would drop the top-level `node_modules`.
+- The launcher passes `--no-install` so a bundle with a missing package fails instead of letting Bun
+  fetch it from the npm registry.
+- `scripts/app-smoke.ts` copies the app out of the checkout, so nothing above it can supply a
+  `node_modules`, and runs it with no Bun on `PATH`. It checks the bundle against the staged tree,
+  the version, the signature, what the CLI records at `GLOSA_HOME/bin/glosa`, `glosa doctor`'s
+  `install` row, the home directory, and that `glosa open` pairs with a daemon running on the bundled
+  Bun.
+- `--unsigned` builds are signed ad hoc and are for verification only. A release build needs a
+  Developer ID (`CSC_LINK`, `CSC_KEY_PASSWORD`) and, to notarize, `APPLE_ID`,
+  `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. Bun is re-signed under that identity with
+  `assets/entitlements.mac.plist`, which keeps its JIT.

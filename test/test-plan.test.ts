@@ -8,6 +8,7 @@ import {
   CI_PROFILES,
   validateTimings,
   changedPaths,
+  classifyApp,
   classifyChanges,
   discoverTests,
   gitEnvironment,
@@ -117,6 +118,43 @@ test("documentation consumers run for root/corpus/gate/docs changes; fixtures an
   expect(classifyChanges("pull_request", ["README.md"], true)).toBe("full");
   for (const event of ["push", "workflow_dispatch", "unknown"])
     expect(classifyChanges(event, ["README.md"])).toBe("full");
+});
+test("the unsigned desktop app is built for anything that shapes the bundle, and for every non-PR run", () => {
+  for (const path of [
+    "packages/shell/package.json",
+    "packages/shell/scripts/package-app.ts",
+    ".github/workflows/ci.yml",
+    "scripts/package-manifest.ts",
+    "scripts/version-sync.ts",
+    "scripts/test-plan.ts",
+    "package.json",
+    "bun.lock",
+    "glosa-plugin/bin/glosa",
+    ".claude-plugin/marketplace.json",
+    "packages/cli/src/main.ts",
+    "packages/cli/src/install-link.ts",
+    "packages/cli/src/install-kind.ts",
+    "packages/cli/src/doctor.ts",
+    "packages/daemon/src/lifecycle/daemon.ts",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+  ])
+    expect(classifyApp("pull_request", [path])).toBe(true);
+  for (const paths of [
+    ["packages/spa/src/app.js"],
+    ["packages/cli/src/open.ts"],
+    ["packages/daemon/src/transport/http.ts"],
+    ["docs/requirements.md"],
+    ["scripts/test-runner.ts"],
+    ["packages/cli/test/install-link.test.ts"],
+  ])
+    expect(classifyApp("pull_request", paths)).toBe(false);
+  expect(classifyApp("pull_request", ["packages/spa/src/app.js", "packages/shell/src/main.ts"])).toBe(true);
+  expect(classifyApp("pull_request", null)).toBe(true);
+  expect(classifyApp("pull_request", [])).toBe(true);
+  expect(classifyApp("pull_request", ["docs/requirements.md"], true)).toBe(true);
+  for (const event of ["push", "workflow_dispatch", "unknown"])
+    expect(classifyApp(event, ["docs/requirements.md"])).toBe(true);
 });
 test("every failed, cancelled, missing or unexpectedly skipped dependency blocks the aggregate", () => {
   for (const profile of ["docs", "full"] as const)

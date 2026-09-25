@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   cask links the CLI the app carries, never writes into agent configuration and never removes
   `~/.glosa`. `docs/release.md` describes the tap, the `HOMEBREW_TAP_TOKEN` secret and the manual
   fallback (#371).
+- The desktop app can be packaged: `bun run --cwd packages/shell package` builds `glosa.app`, a
+  DMG and a zip per architecture. The app carries Bun at the repository's pin, the CLI, the daemon
+  and the SPA exactly as npm publishes them, and their production dependencies, so it needs nothing
+  else installed (#371). Pull requests that change what the bundle is made of build it unsigned in
+  CI and smoke-test it from a copy outside the checkout with no Bun on `PATH`. No signed build is
+  published yet: that needs a Developer ID.
 - The desktop app finds its CLI in a fixed order: `GLOSA_SHELL_CLI`, the recorded executable under
   `GLOSA_HOME` (or `~/.glosa`), the CLI a packaged app carries, then the well-known bin
   directories. A terminal install keeps ownership; a packaged app on a machine with nothing

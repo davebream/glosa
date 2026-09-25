@@ -154,6 +154,30 @@ export function classifyChanges(event: string, paths: string[] | null, forced = 
   return paths.every(docs) ? "docs" : "full";
 }
 
+/**
+ * Whether CI builds and smoke-tests the unsigned desktop app (#371). Every push, manual and forced
+ * run does; a pull request does when it changes what the bundle is made of or how it starts: the
+ * shell package, the workflows, the packaging and version scripts, the root manifest and lockfile,
+ * the files npm ships alongside the sources, and the CLI and daemon code that decides which install
+ * runs (recording, install kind, home, spawn). Other source changes are covered by the npm channel's
+ * `package:check` and the suites; the bundle carries those sources byte for byte (smoke S0 and S3).
+ */
+export function classifyApp(event: string, paths: string[] | null, forced = false): boolean {
+  if (event !== "pull_request" || forced || !paths?.length) return true;
+  const shaping = (path: string) =>
+    path.startsWith("packages/shell/") ||
+    path.startsWith(".github/workflows/") ||
+    /^scripts\/(package-|version-sync|test-plan)/.test(path) ||
+    path === "package.json" ||
+    path === "bun.lock" ||
+    path.startsWith("glosa-plugin/") ||
+    path.startsWith(".claude-plugin/") ||
+    /^packages\/cli\/src\/(main|install-kind|install-link|doctor)\.ts$/.test(path) ||
+    path.startsWith("packages/daemon/src/lifecycle/") ||
+    /^(LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md|README\.md|ROADMAP\.md|CHANGELOG\.md)$/.test(path);
+  return paths.some(shaping);
+}
+
 export function expectedJobs(profile: ChangeProfile, whole: boolean): Record<string, string> {
   return {
     prepare: "success",
@@ -186,6 +210,7 @@ if (import.meta.main) {
     const base = process.env.TEST_DIFF_BASE ?? "";
     if (event === "pull_request") paths = changedPaths(base);
     const profile = classifyChanges(event, paths, process.env.TEST_FORCE_FULL === "true");
+    const app = classifyApp(event, paths, process.env.TEST_FORCE_FULL === "true");
     const whole = event !== "pull_request";
     const repetitions = process.env.TEST_STABILITY_REPETITIONS || "2";
     if (!["2", "10"].includes(repetitions)) throw new Error("Stability repetitions must be 2 or 10");
@@ -195,6 +220,7 @@ if (import.meta.main) {
         {
           profile,
           whole,
+          app,
           repetitions,
           partitions: buildPlan(inventory, acceptanceFiles(), validateTimings(inventory)),
         },
@@ -203,7 +229,10 @@ if (import.meta.main) {
       ),
     );
     if (process.env.GITHUB_OUTPUT)
-      appendFileSync(process.env.GITHUB_OUTPUT, `profile=${profile}\nwhole=${whole}\nrepetitions=${repetitions}\n`);
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
+        `profile=${profile}\nwhole=${whole}\napp=${app}\nrepetitions=${repetitions}\n`,
+      );
   } else if (command === "aggregate") {
     validateResults(
       process.env.TEST_PROFILE ?? "",

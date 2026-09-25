@@ -121,6 +121,18 @@ describe("repository quality gates", () => {
     expect(job(workflows[1]!, "release")).toContain("npm publish");
   });
 
+  test("pull requests that shape the desktop app build it unsigned and smoke it, and nothing in CI signs (#371)", () => {
+    const ci = workflows[0]!;
+    expect(job(ci, "prepare")).toContain("app: ${{ steps.plan.outputs.app }}");
+    const shell = job(ci, "shell");
+    expect(shell).toContain(
+      "- name: Build the unsigned app and smoke it\n        if: needs.prepare.outputs.app == 'true'\n        run: bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke",
+    );
+    expect(shell).toContain("uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830");
+    for (const secret of ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"])
+      expect(ci).not.toContain(`secrets.${secret}`);
+  });
+
   // #316: git exports GIT_DIR into every hook's environment, so a spawned `git` that inherits the
   // ambient environment talks to whatever repository invoked the hook rather than the one `cwd`
   // names. That is how a test's throwaway `git init` reinitialized this repository and flipped its

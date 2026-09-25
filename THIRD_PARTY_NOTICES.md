@@ -61,6 +61,20 @@ The full license text for both families is in `packages/spa/src/fonts/OFL.txt`.
 - **xterm.js 6.0.0** (`@xterm/xterm`, MIT): unmodified published browser module and stylesheet in `packages/spa/src/vendor/`; license in `xterm-license.txt`. Used only for explicitly opened native login terminals. Source: https://github.com/xtermjs/xterm.js.
 - **markdown-it 14.3.1** (MIT): unmodified published browser distribution in `packages/spa/src/vendor/markdown-it.js`; license in `markdown-it-license.txt`. Chat rendering disables raw HTML and remote images. Source: https://github.com/markdown-it/markdown-it.
 
+## Desktop app runtime
+
+The desktop app (`packages/shell`, built by `scripts/package-app.ts`) redistributes two runtimes as
+binaries. Their license texts ship inside the app, in `glosa.app/Contents/Resources/licenses/`.
+
+- **Electron 44** (MIT, copyright Electron contributors and GitHub Inc.), which includes Chromium and
+  the components listed in Chromium's own license file. Shipped as `electron-LICENSE.txt` and
+  `chromium-LICENSES.html`. Source: https://github.com/electron/electron.
+- **Bun** at the repository's `packageManager` pin (MIT, copyright Oven and contributors). Bun
+  statically links JavaScriptCore and WebKit, which are LGPL-2 licensed, and further components
+  under their own licenses. Bun's `LICENSE.md` lists them and says how to relink Bun against a
+  modified JavaScriptCore. Shipped as `bun-LICENSE.md`. Source:
+  https://github.com/oven-sh/bun, at the tag `bun-v<version>` for the version the app carries.
+
 ## Agent identity marks
 
 The locally embedded monochrome marks in `packages/spa/src/agent-ui.js` identify the selected
