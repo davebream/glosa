@@ -635,7 +635,7 @@ export function mountApp(
   /** The top bar names the document in the active pane, by its workspace-relative path, and the
    * workspace itself only while nothing is open. */
   function refreshTopbarTitle() {
-    titleEl.textContent = "Search artifacts and chats";
+    titleEl.textContent = "Search documents and chats";
     goToTrigger.title = `Search in ${currentSlug || "Glosa"} (⌘K)`;
   }
 
@@ -955,13 +955,13 @@ export function mountApp(
     const wrap = el("div", { className: "glosa-empty" });
     if (knownArtifacts.size === 0) {
       wrap.append(
-        el("p", { className: "glosa-empty-title", textContent: "No artifacts yet." }),
+        el("p", { className: "glosa-empty-title", textContent: "No documents yet." }),
         el("p", { className: "glosa-empty-hint", textContent: "Add a document to begin." }),
       );
       return wrap;
     }
     wrap.append(
-      el("p", { className: "glosa-empty-title", textContent: "Choose an artifact to review." }),
+      el("p", { className: "glosa-empty-title", textContent: "Choose a document to review." }),
       el("p", {
         className: "glosa-empty-hint",
         textContent:
@@ -1213,11 +1213,17 @@ export function mountApp(
     document.title = documentTitle();
   }
 
+  /** What a person reads in the tab or window title: the file, then the folder it lives in, the
+   *  way an editor's title bar reads. Never the slug: that is the registration's identity for URLs
+   *  and the CLI, not a name anyone chose. */
   function documentTitle() {
     const pane = activePane();
-    if (!pane) return currentSlug ?? "glosa";
+    const folder = currentSlug
+      ? folderName(workspaces.find((entry) => entry.slug === currentSlug)?.path, currentSlug)
+      : null;
+    if (!pane) return folder ?? "glosa";
     const name = pane.title ?? pane.path?.split("/").pop() ?? "glosa";
-    return surface === "document" || !currentSlug ? name : `${currentSlug} — ${name}`;
+    return surface === "document" || !folder ? name : `${name} — ${folder}`;
   }
 
   // ---------- keyboard (§9) ----------

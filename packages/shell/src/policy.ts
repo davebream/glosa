@@ -169,3 +169,23 @@ export function loopbackApiOrigin(spaOrigin: string): string {
   const parsed = new URL(spaOrigin);
   return `http://127.0.0.1:${parsed.port}`;
 }
+
+/**
+ * The file the window represents, for macOS's proxy icon and title-bar path popover, the way an
+ * editor's window does. Derived from the route the SPA is showing (`a=` in the fragment) under the
+ * folder the shell opened; a route with no document represents the folder itself. A relative path
+ * that escapes the folder represents nothing.
+ */
+export function representedFile(url: string, folder: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const hash = parsed.hash.startsWith("#") ? parsed.hash.slice(1) : parsed.hash;
+  const artifact = new URLSearchParams(hash).get("a");
+  if (!artifact) return folder;
+  if (artifact.startsWith("/") || artifact.split("/").includes("..")) return null;
+  return `${folder.replace(/\/+$/, "")}/${artifact}`;
+}

@@ -11,6 +11,7 @@ import {
   parseOpenEnvelope,
   preloadShouldExpose,
   quitDecision,
+  representedFile,
   scrubChildEnv,
   splitPresentationToken,
 } from "../src/policy.ts";
@@ -145,5 +146,19 @@ describe("main-process requests use the loopback IP (A3 §4b)", () => {
   test("the SPA origin's port on 127.0.0.1, never the glosa.localhost name", () => {
     expect(loopbackApiOrigin("http://glosa.localhost:4646")).toBe("http://127.0.0.1:4646");
     expect(loopbackApiOrigin("http://127.0.0.1:20000")).toBe("http://127.0.0.1:20000");
+  });
+});
+
+describe("the represented file (an editor's proxy icon)", () => {
+  test("the route's document under the opened folder; the folder itself with no document", () => {
+    expect(representedFile(`${SPA}/#w=s&a=docs%2Fplan.md&surface=document`, "/Users/x/proj")).toBe(
+      "/Users/x/proj/docs/plan.md",
+    );
+    expect(representedFile(`${SPA}/#w=s&surface=workspace`, "/Users/x/proj/")).toBe("/Users/x/proj/");
+  });
+  test("a route that escapes the folder represents nothing", () => {
+    expect(representedFile(`${SPA}/#a=..%2Fsecret`, "/Users/x/proj")).toBeNull();
+    expect(representedFile(`${SPA}/#a=%2Fetc%2Fpasswd`, "/Users/x/proj")).toBeNull();
+    expect(representedFile("garbage", "/Users/x/proj")).toBeNull();
   });
 });
