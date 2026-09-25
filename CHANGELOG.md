@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `GLOSA_HOME` (or `~/.glosa`), the CLI a packaged app carries, then the well-known bin
   directories. A terminal install keeps ownership; a packaged app on a machine with nothing
   recorded runs the CLI it ships with (#371).
+- `glosa doctor` gains an `install` row: which install this CLI is, which one is recorded at
+  `~/.glosa/bin/glosa` (the one the Claude Code plugin and the desktop app run), and every other
+  glosa it can see. It warns when another install is recorded or nothing is, and never fails
+  (#371).
 - `glosa update` recognises a CLI running inside the desktop app (`app-bundle`) and answers with
   `brew upgrade --cask glosa` instead of trying to upgrade brew's tree. That CLI records itself as
   the machine's glosa at `~/.glosa/bin/glosa` only when no install is recorded yet, so a terminal
