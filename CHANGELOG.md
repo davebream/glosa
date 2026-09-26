@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- The Intel build of the desktop app carries Bun's baseline x64 build, which needs no AVX. The
+  standard build crashed with "CPU lacks AVX support" when the release job ran the Intel app under
+  Rosetta on its macOS 14 runner, and would do the same for anyone running the Intel app under an
+  older Rosetta. v0.1.0-alpha.33 reached npm, but that crash stopped its app build, so it carries
+  no desktop app either (#371).
+
 ## [0.1.0-alpha.33] — 2026-09-26
 
 ### Fixed
