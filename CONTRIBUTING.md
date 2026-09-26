@@ -36,7 +36,11 @@ Two more before cutting a release:
 ```sh
 bun run version:sync                  # derive every version site from package.json, then review the diff
 bun test test/plugin-load.test.ts     # installs the plugin into a throwaway config and checks it loads
+bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke   # builds the desktop app and smokes it
 ```
+
+The desktop app build needs `bun install --cwd packages/shell --frozen-lockfile` first. See
+[docs/release.md](docs/release.md) for what a tag produces and the signing secrets.
 
 The plugin load test needs the `claude` CLI on your PATH. CI runners do not have it, so that test
 skips there and this is the one gate CI cannot run for you.

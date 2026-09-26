@@ -80,8 +80,9 @@ describe("parseArgs", () => {
   test("accepts a v-prefixed version and defaults the tap", () => {
     expect(parseArgs(["--version", `v${V}`, "--dry-run"])).toEqual({
       version: V,
+      notarized: false,
       sums: null,
-      tap: "davebream/homebrew-glosa",
+      tap: "davebream/homebrew-tap",
       dryRun: true,
     });
   });
@@ -99,4 +100,21 @@ test("the tap token reaches git only as a basic-auth header, never as a raw valu
   expect(env.GIT_CONFIG_KEY_0).toBe("http.https://github.com/.extraheader");
   const encoded = env.GIT_CONFIG_VALUE_0?.replace("AUTHORIZATION: basic ", "") ?? "";
   expect(Buffer.from(encoded, "base64").toString()).toBe("x-access-token:ghp_secretvalue");
+});
+
+describe("quarantine caveat (#371)", () => {
+  test("an ad-hoc cask tells people how to unblock the app and its command line", () => {
+    const cask = renderCask(V, ARM, INTEL);
+    expect(cask).toContain("xattr -dr com.apple.quarantine #{appdir}/glosa.app");
+    expect(cask).toContain("Open Anyway");
+  });
+  test("a notarized cask carries no quarantine step", () => {
+    const cask = renderCask(V, ARM, INTEL, { notarized: true });
+    expect(cask).not.toContain("com.apple.quarantine");
+    expect(cask).toContain("The glosa command line is linked");
+  });
+  test("--notarized is opt-in; the default is the ad-hoc cask", () => {
+    expect(parseArgs(["--version", V]).notarized).toBe(false);
+    expect(parseArgs(["--version", V, "--notarized"]).notarized).toBe(true);
+  });
 });

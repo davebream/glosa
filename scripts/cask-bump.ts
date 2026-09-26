@@ -1,20 +1,24 @@
 #!/usr/bin/env bun
 // SPDX-License-Identifier: Apache-2.0
-// Renders the Homebrew cask for a signed desktop-app release and opens a pull request against the
-// tap (#371). The release job runs it after uploading the DMGs and SHA256SUMS; `--dry-run` prints
+// Renders the Homebrew cask for a desktop-app release and opens a pull request against the tap
+// (#371). The release job runs it after uploading the DMGs and SHA256SUMS; `--dry-run` prints
 // the cask so a maintainer can bump the tap by hand (docs/release.md, "Homebrew cask").
 //
-//   bun run scripts/cask-bump.ts --version 0.1.0-alpha.32 [--sums <path>] [--tap davebream/homebrew-glosa] [--dry-run]
+//   bun run scripts/cask-bump.ts --version 0.1.0-alpha.32 [--notarized] [--sums <path>] [--tap davebream/homebrew-tap] [--dry-run]
+//
+// Without `--notarized` the cask describes an ad-hoc signed app, which macOS quarantines on install
+// and after every upgrade, so its caveats say how to unblock it. The release job passes
+// `--notarized` only when it signed with a Developer ID and notarized.
 //
 // The cask installs the app and links its bundled CLI. It never writes into an agent's
 // configuration and its zap stanza never lists ~/.glosa, which holds journals, history and the
 // pairing token.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitEnvironment } from "./git-env.ts";
 
-export const DEFAULT_TAP = "davebream/homebrew-glosa";
+export const DEFAULT_TAP = "davebream/homebrew-tap";
 
 /** The DMG asset name the release job uploads for one architecture. */
 export function dmgName(version: string, arch: "arm64" | "x64"): string {
@@ -49,7 +53,21 @@ export function dmgDigests(sums: Map<string, string>, version: string): { arm: s
 }
 
 /** The cask for one release. Pure over its arguments. */
-export function renderCask(version: string, armSha: string, intelSha: string): string {
+export interface CaskOptions {
+  /** Signed with a Developer ID and notarized. Without it the caveats explain the quarantine. */
+  notarized?: boolean;
+}
+
+/** The first-launch step an ad-hoc signed app needs, which Gatekeeper enforces on the app and on
+ *  the Bun inside it, so the command line is blocked too until it is done. */
+const QUARANTINE_CAVEAT = `glosa.app is signed ad hoc, not notarized by Apple, so macOS blocks it, and the glosa
+    command line inside it, until you allow it. After installing, and again after each upgrade, run:
+      xattr -dr com.apple.quarantine #{appdir}/glosa.app
+    Or open the app once, then choose Open Anyway in System Settings, Privacy & Security.
+
+    `;
+
+export function renderCask(version: string, armSha: string, intelSha: string, options: CaskOptions = {}): string {
   for (const [label, digest] of [
     ["arm64", armSha],
     ["x64", intelSha],
@@ -93,7 +111,7 @@ export function renderCask(version: string, armSha: string, intelSha: string): s
   ]
 
   caveats <<~EOS
-    The glosa command line is linked into #{HOMEBREW_PREFIX}/bin and runs on the Bun runtime
+    ${options.notarized ? "" : QUARANTINE_CAVEAT}The glosa command line is linked into #{HOMEBREW_PREFIX}/bin and runs on the Bun runtime
     inside the app, so no separate Bun install is needed. If another glosa install is already
     recorded for the Claude Code plugin, it keeps that role; \`glosa doctor\` lists every install
     it can see and says which one is recorded.
@@ -112,13 +130,14 @@ end
 
 interface Options {
   version: string;
+  notarized: boolean;
   sums: string | null;
   tap: string;
   dryRun: boolean;
 }
 
 export function parseArgs(argv: string[]): Options {
-  const options: Options = { version: "", sums: null, tap: DEFAULT_TAP, dryRun: false };
+  const options: Options = { version: "", notarized: false, sums: null, tap: DEFAULT_TAP, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => {
@@ -130,6 +149,7 @@ export function parseArgs(argv: string[]): Options {
     else if (arg === "--sums") options.sums = value();
     else if (arg === "--tap") options.tap = value();
     else if (arg === "--dry-run") options.dryRun = true;
+    else if (arg === "--notarized") options.notarized = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.version) throw new Error("--version <version> is required");
@@ -202,6 +222,7 @@ function openTapPullRequest(options: Options, cask: string, scratch: string): st
   const remote = `https://github.com/${options.tap}.git`;
   run(["git", "clone", "--depth", "1", "--branch", base, remote, checkout], scratch, gitEnv);
   run(["git", "checkout", "-b", branch], checkout, env);
+  mkdirSync(join(checkout, "Casks"), { recursive: true });
   writeFileSync(join(checkout, "Casks", "glosa.rb"), cask);
   run(["git", "add", "Casks/glosa.rb"], checkout, env);
   run(["git", "commit", "-m", `glosa ${options.version}`], checkout, env);
@@ -232,7 +253,7 @@ export function main(argv: string[]): number {
   const scratch = mkdtempSync(join(tmpdir(), "glosa-cask-"));
   try {
     const { arm, intel } = dmgDigests(parseSha256Sums(readSums(options, scratch)), options.version);
-    const cask = renderCask(options.version, arm, intel);
+    const cask = renderCask(options.version, arm, intel, { notarized: options.notarized });
     if (options.dryRun) {
       process.stdout.write(cask);
       return 0;

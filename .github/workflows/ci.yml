@@ -294,3 +294,4 @@ jobs:
         with:
           scan-args: |-
             --lockfile=bun.lock
+            --lockfile=packages/shell/bun.lock

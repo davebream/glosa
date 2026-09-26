@@ -1,20 +1,146 @@
 # Releasing glosa
 
-How a release reaches people. This page grows with #371; today it covers the Homebrew cask.
+How a release reaches people: what a tag produces, the secrets it needs, how to rehearse it, how to
+check a shipped build, and how the Homebrew cask is bumped.
+
+## What a tag produces
+
+Pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/release.yml`:
+
+1. The same test jobs as CI, with the full profile forced, plus the secret and dependency scans.
+2. `release`: publishes `@davebream/glosa` to npm with provenance and creates the GitHub release.
+3. `app`: builds the desktop app for Apple Silicon (`arm64`) and Intel (`x64`), smoke-tests it,
+   and uploads to the GitHub release: `glosa-<version>-arm64.dmg`, `glosa-<version>-arm64.zip`,
+   `glosa-<version>-x64.dmg`, `glosa-<version>-x64.zip` and `SHA256SUMS`. It then opens the
+   Homebrew tap pull request. With the Developer ID secrets the app is signed and notarized;
+   without them it is signed ad hoc (see "Ad hoc or notarized" below).
+4. `released`: fails the run unless both `release` and `app` succeeded, so a tag that published npm
+   but produced no app is red.
+
+The app carries the published npm file set, its production dependencies and a Bun runtime at the
+`packageManager` pin. Nothing is transpiled or bundled; packaging, signing and notarization are the
+desktop shell's one exception to the no-build-step rule.
+
+## Secrets
+
+Set these under the repository's Settings, Secrets and variables, Actions.
+
+| Secret | What it is |
+|---|---|
+| `NPM_TOKEN` | npm automation token for `@davebream/glosa`. Already in use. |
+| `CSC_LINK` | The Developer ID Application certificate and its private key, as a base64 `.p12`. |
+| `CSC_KEY_PASSWORD` | The password chosen when exporting that `.p12`. |
+| `APPLE_ID` | The Apple ID email of the developer account, used for notarization. |
+| `APPLE_APP_SPECIFIC_PASSWORD` | An app-specific password for that Apple ID. |
+| `APPLE_TEAM_ID` | The 10-character Team ID of the developer account. |
+| `HOMEBREW_TAP_TOKEN` | Fine-grained token for the tap; see "Homebrew cask" below. |
+
+Only the step that signs and notarizes receives the five Apple secrets. A test in
+`test/quality-gates.test.ts` pins that.
+
+### One-time Developer ID setup
+
+1. Enrol in the Apple Developer Program (paid).
+2. Create a **Developer ID Application** certificate: Xcode, Settings, Accounts, Manage Certificates,
+   then `+`. Or create a certificate signing request in Keychain Access and upload it at
+   developer.apple.com under Certificates.
+3. In Keychain Access, find the certificate, expand it to include its private key, select both and
+   export them as a `.p12` with a password.
+4. Copy it into `CSC_LINK` and its password into `CSC_KEY_PASSWORD`:
+
+   ```sh
+   base64 -i glosa-developer-id.p12 | pbcopy
+   ```
+
+5. At account.apple.com, under Sign-In and Security, App-Specific Passwords, generate one for
+   notarization. Put it in `APPLE_APP_SPECIFIC_PASSWORD`, and the Apple ID email in `APPLE_ID`.
+6. Copy the Team ID from the Membership page at developer.apple.com into `APPLE_TEAM_ID`.
+
+Delete the local `.p12` once the secret is saved.
+
+### Ad hoc or notarized
+
+glosa does not require the Apple Developer Program. Without its secrets the `app` job signs the app
+ad hoc, which uses no certificate, publishes it all the same, and leaves a notice saying so.
+
+An ad-hoc signed app runs, but macOS quarantines anything downloaded, and a cask install counts.
+Gatekeeper then blocks the app, and the `glosa` command line inside it, until the person allows it.
+That happens after the first install and again after every upgrade. There are two ways to allow it:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/glosa.app
+```
+
+Or open the app once, then choose Open Anyway in System Settings, Privacy & Security. The command
+above also clears the Bun runtime inside the app, which the command line runs on; Open Anyway is
+confirmed to unblock the app window, and whether it also clears the nested Bun is not verified.
+The cask's caveats and the README say the same.
+
+Homebrew 5.0 disables casks that fail Gatekeeper only in the official `Homebrew/homebrew-cask`
+repository, and deprecated the `--no-quarantine` flag everywhere. A personal tap may carry an
+ad-hoc signed cask; Homebrew still quarantines what it installs.
+
+A Developer ID removes the prompt: the app is signed and notarized, and the cask drops its
+quarantine instructions (the release job passes `--notarized` to `scripts/cask-bump.ts` only
+then). Once the secrets exist, set `APP_SIGNING_REQUIRED` in `release.yml` to `"true"`, so that a
+tag with a missing secret fails instead of falling back to an ad-hoc build.
+
+## Rehearsing locally
+
+An unsigned build of the current checkout, then its smoke test:
+
+```sh
+bun install --cwd packages/shell --frozen-lockfile
+bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke
+```
+
+The smoke runs the bundled CLI with no Bun on `PATH`, checks the app's version and signature,
+confirms the CLI records its launcher at `~/.glosa/bin/glosa` in a scratch home, and opens a scratch
+folder to prove the daemon it starts runs on the bundled Bun.
+
+## Checking a shipped release
+
+Download the DMG or zip for your architecture and `SHA256SUMS` from the release, then:
+
+```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+spctl --assess --type execute -vv /Applications/glosa.app
+xcrun stapler validate /Applications/glosa.app
+```
+
+For a notarized build, `spctl` should report `source=Notarized Developer ID`, and `stapler` should
+report that the validate action worked. An ad-hoc build is expected to fail both: `spctl` reports
+`rejected` and there is no ticket to staple. Its checksum is what you verify.
+
+## When notarization fails
+
+The build log names the submission id. Read Apple's report for it:
+
+```sh
+xcrun notarytool log <submission-id> --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
+```
+
+The usual causes are a binary without the hardened runtime or a missing entitlement. The app signs
+with `packages/shell/assets/entitlements.mac.plist`: `com.apple.security.cs.allow-jit` and
+`com.apple.security.cs.allow-unsigned-executable-memory` (Electron's V8 and Bun's JavaScriptCore
+both compile code at run time) and `com.apple.security.device.audio-input` (dictation). If the
+bundled Bun is killed at launch under the hardened runtime, the next candidate is
+`com.apple.security.cs.disable-executable-page-protection`. Record what the first signed build
+needed here.
 
 ## Homebrew cask
 
-The desktop app ships through a Homebrew cask in a separate tap repository,
-[`davebream/homebrew-glosa`](https://github.com/davebream/homebrew-glosa), at `Casks/glosa.rb`.
-The maintainer creates that repository once, by hand. People install with:
+The desktop app ships through a Homebrew cask in the maintainer's tap repository,
+[`davebream/homebrew-tap`](https://github.com/davebream/homebrew-tap), at `Casks/glosa.rb`. The
+tap also holds other formulae; the bump script touches only glosa's files. People install with:
 
 ```sh
-brew install --cask davebream/glosa/glosa
+brew install --cask davebream/tap/glosa
 brew upgrade --cask glosa
 ```
 
-The cask is a signed and notarized app only. Homebrew 5.0 deprecated casks that fail Gatekeeper
-and the `--no-quarantine` flag, so no cask is published for an unsigned build.
+The tap carries the ad-hoc signed app until a Developer ID exists (see "Ad hoc or notarized"),
+with caveats that tell people how to allow it. A notarized release renders the cask without them.
 
 What the cask does on a person's machine:
 
@@ -34,7 +160,7 @@ Once the release workflow builds the desktop app (the next step of #371), it run
 `glosa-<version>` branch to the tap and opens a pull request there.
 
 It needs one repository secret, `HOMEBREW_TAP_TOKEN`: a fine-grained personal access token scoped to
-`davebream/homebrew-glosa` only, with **Contents** and **Pull requests** set to read and write.
+`davebream/homebrew-tap` only, with **Contents** and **Pull requests** set to read and write.
 Without it the script refuses, and the release job leaves a warning asking for a manual bump.
 
 ### Bumping the cask by hand

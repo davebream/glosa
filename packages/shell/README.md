@@ -65,7 +65,8 @@ bun run --cwd packages/shell smoke -- --app dist/arm64/mac-arm64/glosa.app
   the version, the signature, what the CLI records at `GLOSA_HOME/bin/glosa`, `glosa doctor`'s
   `install` row, the home directory, and that `glosa open` pairs with a daemon running on the bundled
   Bun.
-- `--unsigned` builds are signed ad hoc and are for verification only. A release build needs a
-  Developer ID (`CSC_LINK`, `CSC_KEY_PASSWORD`) and, to notarize, `APPLE_ID`,
+- `--unsigned` builds are signed ad hoc. Releases publish them until a Developer ID exists, and
+  macOS asks each person to allow the app once (`docs/release.md`, "Ad hoc or notarized"). A
+  notarized build needs a Developer ID (`CSC_LINK`, `CSC_KEY_PASSWORD`) and `APPLE_ID`,
   `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. Bun is re-signed under that identity with
   `assets/entitlements.mac.plist`, which keeps its JIT.

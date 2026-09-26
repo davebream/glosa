@@ -11,8 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `glosa update` recognises an install made by a Homebrew formula (`homebrew`, anything under
   `Cellar/glosa/`) and answers with `brew upgrade glosa` instead of rewriting files inside brew's keg
   (#371).
-- `scripts/cask-bump.ts` renders the Homebrew cask for a signed desktop-app release from the
-  release's `SHA256SUMS` and opens a pull request against the `davebream/homebrew-glosa` tap. The
+- A tagged release builds the desktop app for Apple Silicon and Intel, smoke-tests it, and uploads a
+  DMG and a zip per architecture plus `SHA256SUMS` to the GitHub release, then opens the Homebrew
+  tap pull request. Without Developer ID secrets the app is signed ad hoc: it works, and macOS asks
+  each person to allow it once after install and each upgrade, which the cask caveats and the README
+  explain. With the secrets it is signed and notarized. The `released` gate now fails a tag whose app
+  did not build. `docs/release.md` lists the secrets, the one-time Developer ID setup, the signing switch
+  and how to check a shipped build (#371).
+- `scripts/cask-bump.ts` renders the Homebrew cask for a desktop-app release from the
+  release's `SHA256SUMS` and opens a pull request against the `davebream/homebrew-tap` tap. The
   cask links the CLI the app carries, never writes into agent configuration and never removes
   `~/.glosa`. `docs/release.md` describes the tap, the `HOMEBREW_TAP_TOKEN` secret and the manual
   fallback (#371).
