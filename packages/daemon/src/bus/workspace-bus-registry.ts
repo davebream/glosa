@@ -20,15 +20,38 @@ export class WorkspaceBusRegistry {
   // sure every bus in the process draws from the same keyed pool instead of each getting its own.
   private readonly mutex = new KeyedMutex<string>();
 
-  private onOpen: (bus: WorkspaceBus, workspace: WorkspaceTarget) => void = () => {};
+  private readonly onOpen = new Set<(bus: WorkspaceBus, workspace: WorkspaceTarget) => void>();
+  private readonly openedWith = new Map<string, WorkspaceTarget>();
 
   constructor(private readonly defaultDeps: Omit<WorkspaceBusDeps, "mutex"> = {}) {}
 
   /** Called once for each bus this registry constructs, before any caller gets it — the one place a
-   * daemon-lifetime consumer of a bus's event stream (issue #155's session signals) can subscribe
-   * without racing the first append. A throwing observer never fails the open. */
-  setOnOpen(fn: (bus: WorkspaceBus, workspace: WorkspaceTarget) => void): void {
-    this.onOpen = fn;
+   * daemon-lifetime consumer of a bus's event stream can subscribe without racing the first append.
+   * Several observers can attach (issue #155's session signals, #389's daemon-wide attention
+   * feed); each also runs at once for every bus already open, so an observer added after a bus
+   * opened still sees it. A throwing observer never fails the open and never stops the others.
+   * Returns a function that detaches the observer from future opens. */
+  addOnOpen(fn: (bus: WorkspaceBus, workspace: WorkspaceTarget) => void): () => void {
+    this.onOpen.add(fn);
+    for (const [id, bus] of this.buses) {
+      const workspace = this.openedWith.get(id);
+      if (workspace !== undefined) this.notifyOpen(fn, bus, workspace);
+    }
+    return () => {
+      this.onOpen.delete(fn);
+    };
+  }
+
+  private notifyOpen(
+    fn: (bus: WorkspaceBus, workspace: WorkspaceTarget) => void,
+    bus: WorkspaceBus,
+    workspace: WorkspaceTarget,
+  ): void {
+    try {
+      fn(bus, workspace);
+    } catch {
+      // Observers are optional axes; a bus that cannot be observed is still a working bus.
+    }
   }
 
   /** Returns the SAME `WorkspaceBus` instance for `canonicalRoot` every time — constructed at
@@ -48,11 +71,8 @@ export class WorkspaceBusRegistry {
     if (!bus) {
       bus = new WorkspaceBus(canonicalRoot, { ...this.defaultDeps, ...deps, mutex: this.mutex });
       this.buses.set(id, bus);
-      try {
-        this.onOpen(bus, canonicalRoot);
-      } catch {
-        // Signals are an optional axis; a bus that cannot be observed is still a working bus.
-      }
+      this.openedWith.set(id, canonicalRoot);
+      for (const fn of this.onOpen) this.notifyOpen(fn, bus, canonicalRoot);
     }
     return bus;
   }
@@ -89,6 +109,7 @@ export class WorkspaceBusRegistry {
     const bus = this.buses.get(id);
     if (!bus) return;
     this.buses.delete(id);
+    this.openedWith.delete(id);
     await bus.close();
   }
 
@@ -97,6 +118,7 @@ export class WorkspaceBusRegistry {
   async closeAll(): Promise<void> {
     const buses = [...this.buses.values()];
     this.buses.clear();
+    this.openedWith.clear();
     await Promise.all(buses.map((bus) => bus.close()));
   }
 
@@ -117,6 +139,7 @@ export class WorkspaceBusRegistry {
     const bus = this.buses.get(registrationId);
     if (!bus) return;
     this.buses.delete(registrationId);
+    this.openedWith.delete(registrationId);
     await bus.close();
   }
 }

@@ -47,7 +47,10 @@ export interface StreamOptions {
   subscribeArtifacts?: (listener: (event: ArtifactWatcherEvent) => void) => () => void;
   shutdownSignal?: AbortSignal;
   subscribeMetadata?: (listener: () => void) => () => void;
-  subscribeChats?: (listener: () => void) => () => void;
+  /** Chat changes daemon-wide. `slug` names the workspace when known (#389). */
+  subscribeChats?: (listener: (change?: { slug?: string }) => void) => () => void;
+  /** Attention changes daemon-wide, one call per workspace affected (#389). */
+  subscribeAttention?: (listener: (slug: string) => void) => () => void;
 }
 
 /** Builds the `GET /w/:slug/stream` response. `server` is used only to disable Bun's idle
@@ -83,7 +86,12 @@ export function createJournalStreamResponse(
   let shutdownListener: (() => void) | null = null;
   let unsubscribeMetadata: (() => void) | null = null;
   let unsubscribeChats: (() => void) | null = null;
+  let unsubscribeAttention: (() => void) | null = null;
   let chatTimer: ReturnType<typeof setTimeout> | undefined;
+  // Workspaces whose chats changed inside the current 250ms window (#389); `chatUnknown` when a
+  // change could not be tied to one, so the frame says "something, refetch" as it always did.
+  const chatSlugs = new Set<string>();
+  let chatUnknown = false;
 
   const teardown = (): void => {
     if (closed) return;
@@ -91,6 +99,7 @@ export function createJournalStreamResponse(
     unsubscribe?.();
     unsubscribeMetadata?.();
     unsubscribeChats?.();
+    unsubscribeAttention?.();
     clearTimeout(chatTimer);
     unsubscribeArtifacts?.();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -146,8 +155,11 @@ export function createJournalStreamResponse(
       // guarded above so this catch is belt-and-suspenders, not the primary defense against #1.
       try {
         unsubscribeChats =
-          opts.subscribeChats?.(() => {
-            if (closed || chatTimer) return;
+          opts.subscribeChats?.((change) => {
+            if (closed) return;
+            if (change?.slug !== undefined) chatSlugs.add(change.slug);
+            else chatUnknown = true;
+            if (chatTimer) return;
             chatTimer = setTimeout(() => {
               chatTimer = undefined;
               if (closed) return;
@@ -155,8 +167,26 @@ export function createJournalStreamResponse(
                 shutdownListener?.();
                 return;
               }
-              send(encodeSseFrame({ event: "chats_changed", data: {} }));
+              // Contract 1.19 (#389): `slugs` lists every workspace whose chats changed in this
+              // window, empty when one could not be told; `slug` repeats it when exactly one did.
+              // An N-1 client ignores both and refetches, exactly as before.
+              const slugs = chatUnknown ? [] : [...chatSlugs].sort();
+              chatSlugs.clear();
+              chatUnknown = false;
+              send(
+                encodeSseFrame({
+                  event: "chats_changed",
+                  data: slugs.length === 1 ? { slug: slugs[0], slugs } : { slugs },
+                }),
+              );
             }, 250);
+          }) ?? null;
+        // #389: attention is daemon-wide, so this stream forwards every workspace's changes, its
+        // own included; the page's own workspace also sees them as `journal` frames.
+        unsubscribeAttention =
+          opts.subscribeAttention?.((slug) => {
+            if (closed) return;
+            send(encodeSseFrame({ event: "attention_changed", data: { slug } }));
           }) ?? null;
         let replayedAny = false;
         if (sinceSeq === null) {

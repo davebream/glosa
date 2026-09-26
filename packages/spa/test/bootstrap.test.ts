@@ -406,8 +406,8 @@ describe("scrubSecrets — preserves non-secret route state", () => {
 });
 
 describe("selectScreen", () => {
-  test("the bundled SPA advertises contract 1.18", () => {
-    expect(CONTRACT_VERSION).toBe("1.18");
+  test("the bundled SPA advertises contract 1.19", () => {
+    expect(CONTRACT_VERSION).toBe("1.19");
   });
 
   test("handshake null (fetch failed/threw) → down", () => {

@@ -11,7 +11,7 @@ import {
 } from "../bus/bus.ts";
 import { readInboxEntry } from "../bus/inbox.ts";
 import { type EntryKind, isTerminal } from "../bus/lifecycle.ts";
-import { peekJournal } from "../bus/peek.ts";
+import { isOpenAttention, peekJournal } from "../bus/peek.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
 import { canonicalize } from "../registry/slug.ts";
 import type { WorkspaceIndex } from "../registry/workspace-index.ts";
@@ -136,7 +136,7 @@ export function listAttention(deps: AttentionDependencies, slug: string) {
   const workspace = findWorkspace(deps, slug);
   const { state, createdAt } = peekJournal(workspace);
   const attention = Object.entries(state.entries)
-    .filter(([, item]) => item.kind === "attention" && !isTerminal("attention", item.status))
+    .filter(([, item]) => isOpenAttention(item))
     .map(([id, item]) => {
       let payload: Record<string, unknown> = {};
       try {

@@ -111,8 +111,21 @@ export function badgePendingCount(state: DerivedState): number {
   return nonTerminalEntries(state).filter((entry) => !isExternalEditEntry(entry)).length;
 }
 
+/** An attention request still waiting on the person: every state short of terminal (`open`,
+ * `delivered`, `seen`). The ONE predicate behind the attention tray's `pending_count`
+ * (`services/attention.ts` `listAttention`), `has_attention`, and `attention_count` on
+ * `GET /api/workspaces` rows, so the Dock badge and the tray can never disagree (#389). */
+export function isOpenAttention(entry: DerivedEntryState): boolean {
+  return entry.kind === "attention" && !isTerminal("attention", entry.status);
+}
+
+/** How many attention requests are waiting on the person in this workspace (#389). */
+export function openAttentionCount(state: DerivedState): number {
+  return Object.values(state.entries).filter(isOpenAttention).length;
+}
+
 export function hasOpenAttention(state: DerivedState): boolean {
-  return Object.values(state.entries).some((e) => e.kind === "attention" && !isTerminal("attention", e.status));
+  return Object.values(state.entries).some(isOpenAttention);
 }
 
 /** Journal-derived count of orphaned entries — the reverse of A4 §F04's usual gap: a durably

@@ -128,6 +128,8 @@ describe("A1 §5 route catalog", () => {
         kind: "directory",
         last_seen: expect.any(String),
         has_attention: false,
+        attention_count: 0,
+        decision_count: 0,
         registration_id: expect.stringMatching(/^[a-f0-9]{64}$/),
         registration_epoch: expect.any(String),
       },

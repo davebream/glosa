@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   refuses anything that resolves outside the workspace folder. The window's folder is now the
   workspace's own folder from `glosa open`, so the title bar's proxy icon is right for a relative or
   single-file target and after the window switches workspace (#160).
+- The daemon reports attention across every workspace, for the desktop app's Dock badge and
+  notifications. `GET /api/workspaces` rows carry `attention_count`, the same number that
+  workspace's attention tray shows, and `decision_count`, its chats waiting on a decision. Every
+  workspace stream now also says when any workspace's attention changes (`attention_changed`), and
+  `chats_changed` names the workspaces whose chats changed. API contract 1.19 (#389).
 
 ### Fixed
 
