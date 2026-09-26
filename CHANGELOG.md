@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- The desktop app's Intel build is now smoke-tested where it can run. Bun's x64 build for macOS
+  needs AVX, and Bun publishes no build without it; the release job ran the Intel app under Rosetta on
+  a macOS 14 runner, which cannot execute AVX, and it crashed with "CPU lacks AVX support". The app
+  build and its smoke now run on macOS 15, whose Rosetta can, and pull requests that shape the bundle
+  smoke both architectures instead of arm64 alone. Every Intel Mac that runs macOS 13 has AVX, so the
+  Intel app itself was never the problem. v0.1.0-alpha.33 reached npm, but that crash stopped its app
+  build, so it carries no desktop app either (#371).
+
 ## [0.1.0-alpha.33] — 2026-09-26
 
 ### Fixed

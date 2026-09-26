@@ -47,7 +47,7 @@ glosa.app/Contents/Resources/
 ```
 
 ```sh
-bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke   # what CI runs on pull requests
+bun run --cwd packages/shell package -- --arch all --unsigned --smoke     # what CI runs on pull requests
 bun run --cwd packages/shell package -- --arch all                        # both architectures, signed if CSC_* is set
 bun run --cwd packages/shell smoke -- --app dist/arm64/mac-arm64/glosa.app
 ```

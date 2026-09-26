@@ -62,8 +62,10 @@ resources=$(cd -P -- "$(dirname -- "$self")/.." && pwd -P)
 exec "$resources/bin/bun" --no-install "$resources/glosa/packages/cli/src/main.ts" "$@"
 `;
 
-/** Bun's release asset for an architecture. x64 is the AVX2 build: every Mac that runs macOS 13 has
- *  it, so `-baseline` is not needed. */
+/** Bun's release asset for an architecture. The x64 build needs AVX, and Bun publishes no macOS build
+ *  without it: for 1.4.2, `bun-darwin-x64-baseline.zip` carries a byte-identical binary. Every Intel
+ *  Mac that runs macOS 13 has AVX2. Rosetta on macOS 14 cannot execute AVX, so the Intel app is
+ *  smoked on a macOS 15 runner, whose Rosetta can (v0.1.0-alpha.33 crashed on macos-14, #371). */
 export function bunAsset(arch: Arch): { asset: string; folder: string } {
   const folder = arch === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
   return { asset: `${folder}.zip`, folder };

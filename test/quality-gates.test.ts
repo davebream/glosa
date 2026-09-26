@@ -126,7 +126,7 @@ describe("repository quality gates", () => {
     expect(job(ci, "prepare")).toContain("app: ${{ steps.plan.outputs.app }}");
     const shell = job(ci, "shell");
     expect(shell).toContain(
-      "- name: Build the unsigned app and smoke it\n        if: needs.prepare.outputs.app == 'true'\n        run: bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke",
+      "- name: Build the unsigned app and smoke it\n        if: needs.prepare.outputs.app == 'true'\n        run: bun run --cwd packages/shell package -- --arch all --unsigned --smoke",
     );
     expect(shell).toContain("uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830");
     // The build runs BEFORE the real-Electron suite: that suite's first launch downloads Electron's
@@ -137,6 +137,10 @@ describe("repository quality gates", () => {
     expect(build, "the app build step exists").toBeGreaterThan(-1);
     expect(suite, "the real-Electron suite step exists").toBeGreaterThan(-1);
     expect(build, "the app build runs before the real-Electron suite").toBeLessThan(suite);
+    // The Intel app is smoked under Rosetta, and only macOS 15's Rosetta executes the AVX that Bun's
+    // x64 build needs; on macos-14 it crashed (v0.1.0-alpha.33).
+    expect(shell).toContain("runs-on: macos-15");
+    expect(job(workflows[1]!, "app")).toContain("runs-on: macos-15");
     for (const secret of ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"])
       expect(ci).not.toContain(`secrets.${secret}`);
   });
