@@ -413,14 +413,14 @@ jobs:
             packages/shell/dist/arm64/*.dmg packages/shell/dist/arm64/*.zip \
             packages/shell/dist/x64/*.dmg packages/shell/dist/x64/*.zip \
             packages/shell/dist/SHA256SUMS --clobber
-      - name: Open the Homebrew tap pull request
+      - name: Update the Homebrew tap
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # A deploy key with write access to davebream/homebrew-tap only (docs/release.md).
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           SIGNED: ${{ steps.signing.outputs.enabled }}
         run: |
-          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN is not set; bump the cask by hand (docs/release.md)."
+          if [ -z "${HOMEBREW_TAP_DEPLOY_KEY:-}" ]; then
+            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY is not set; bump the tap by hand (docs/release.md)."
             exit 0
           fi
           # Only a notarized app may drop the cask's quarantine instructions.

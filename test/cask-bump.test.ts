@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The Homebrew cask renderer and the SHA256SUMS reader behind it (#371). The cask is the one
-// artifact a person installs the desktop app through, so the stanzas that decide what it touches
-// on their machine are pinned here: it links the bundled CLI, and it never removes ~/.glosa.
+// The Homebrew cask and formula renderers and the SHA256SUMS reader behind them (#371). The cask is
+// the one artifact a person installs the desktop app through, and the formula the command line
+// alone, so the stanzas that decide what each touches on their machine are pinned here: the cask
+// links the bundled CLI and never removes ~/.glosa; the formula pins Homebrew's Bun.
 import { describe, expect, test } from "bun:test";
 import {
   dmgDigests,
   dmgName,
   parseArgs,
+  npmTarballUrl,
   parseSha256Sums,
   renderCask,
-  tapAuthEnvironment,
+  renderFormula,
+  sha256Hex,
+  GITHUB_SSH_HOST_KEY,
+  tapSshCommand,
 } from "../scripts/cask-bump.ts";
 
 const ARM = "a".repeat(64);
@@ -81,9 +86,11 @@ describe("parseArgs", () => {
     expect(parseArgs(["--version", `v${V}`, "--dry-run"])).toEqual({
       version: V,
       notarized: false,
+      npmTarball: null,
       sums: null,
       tap: "davebream/homebrew-tap",
       dryRun: true,
+      formula: false,
     });
   });
 
@@ -94,12 +101,16 @@ describe("parseArgs", () => {
   });
 });
 
-test("the tap token reaches git only as a basic-auth header, never as a raw value", () => {
-  const env = tapAuthEnvironment("ghp_secretvalue");
-  expect(Object.values(env).some((v) => v.includes("ghp_secretvalue"))).toBe(false);
-  expect(env.GIT_CONFIG_KEY_0).toBe("http.https://github.com/.extraheader");
-  const encoded = env.GIT_CONFIG_VALUE_0?.replace("AUTHORIZATION: basic ", "") ?? "";
-  expect(Buffer.from(encoded, "base64").toString()).toBe("x-access-token:ghp_secretvalue");
+test("the tap push uses only the deploy key and only GitHub's pinned host key", () => {
+  const command = tapSshCommand("/tmp/x/deploy-key", "/tmp/x/known_hosts");
+  expect(command).toContain("-i '/tmp/x/deploy-key'");
+  expect(command).toContain("-o IdentitiesOnly=yes");
+  expect(command).toContain("-o UserKnownHostsFile='/tmp/x/known_hosts'");
+  // A changed or missing host key is refused, never accepted on first sight.
+  expect(command).toContain("-o StrictHostKeyChecking=yes");
+  expect(GITHUB_SSH_HOST_KEY).toBe(
+    "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+  );
 });
 
 describe("quarantine caveat (#371)", () => {
@@ -116,5 +127,64 @@ describe("quarantine caveat (#371)", () => {
   test("--notarized is opt-in; the default is the ad-hoc cask", () => {
     expect(parseArgs(["--version", V]).notarized).toBe(false);
     expect(parseArgs(["--version", V, "--notarized"]).notarized).toBe(true);
+  });
+});
+
+describe("renderFormula (#371)", () => {
+  const TARBALL = "c".repeat(64);
+  const formula = renderFormula(V, TARBALL);
+
+  test("installs the npm tarball of this version on Homebrew's Bun", () => {
+    expect(formula).toContain('depends_on "bun"');
+    expect(formula).toContain(`url "${npmTarballUrl(V)}"`);
+    expect(npmTarballUrl(V)).toBe(`https://registry.npmjs.org/@davebream/glosa/-/glosa-${V}.tgz`);
+    expect(formula).toContain(`sha256 "${TARBALL}"`);
+    expect(formula).toContain('system formula_opt_bin("bun")/"bun", "add", "--global", cached_download');
+  });
+
+  test("pins Homebrew's Bun in a wrapper, so the CLI runs on a bare PATH", () => {
+    // Measured 2026-09-26: without the wrapper the keg's glosa died with "env: bun: No such file or
+    // directory" under PATH=/usr/bin:/bin; with it, --version answered.
+    expect(formula).toContain(
+      '(bin/"glosa").write_env_script libexec/"bin/glosa", PATH: "#{formula_opt_bin("bun")}:$PATH"',
+    );
+  });
+
+  test("carries a test block and a livecheck on the npm registry", () => {
+    expect(formula).toContain("test do");
+    expect(formula).toContain('assert_match version.to_s, shell_output("#{bin}/glosa --version")');
+    expect(formula).toContain('url "https://registry.npmjs.org/@davebream/glosa"');
+  });
+
+  test("says to install the formula or the cask, never both", () => {
+    expect(formula).toContain("Install one or the other");
+    expect(renderCask(V, ARM, INTEL)).toContain("Install one or the other");
+  });
+
+  test("refuses a digest or version it could not have been given by a release", () => {
+    expect(() => renderFormula(V, "short")).toThrow(/npm tarball digest/);
+    expect(() => renderFormula("latest", TARBALL)).toThrow(/not a release version/);
+  });
+
+  test("carries no em dash", () => {
+    expect(formula).not.toContain("\u2014");
+  });
+
+  test("hashes tarball bytes as lowercase sha256 hex", () => {
+    expect(sha256Hex(new TextEncoder().encode("abc"))).toBe(
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
+  });
+});
+
+describe("parseArgs: formula flags", () => {
+  test("--npm-tarball takes a path and --formula selects what --dry-run prints", () => {
+    const options = parseArgs(["--version", V, "--dry-run", "--formula", "--npm-tarball", "/tmp/glosa.tgz"]);
+    expect(options.formula).toBe(true);
+    expect(options.npmTarball).toBe("/tmp/glosa.tgz");
+  });
+
+  test("--formula without --dry-run is refused", () => {
+    expect(() => parseArgs(["--version", V, "--formula"])).toThrow(/--dry-run/);
   });
 });

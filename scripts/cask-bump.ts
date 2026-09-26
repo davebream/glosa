@@ -1,10 +1,18 @@
 #!/usr/bin/env bun
 // SPDX-License-Identifier: Apache-2.0
-// Renders the Homebrew cask for a desktop-app release and opens a pull request against the tap
-// (#371). The release job runs it after uploading the DMGs and SHA256SUMS; `--dry-run` prints
-// the cask so a maintainer can bump the tap by hand (docs/release.md, "Homebrew cask").
+// Renders the Homebrew cask (the desktop app) and formula (the command line alone) for a release
+// and commits both to the tap's default branch with the tap's deploy key (#371), taken from
+// HOMEBREW_TAP_DEPLOY_KEY. The release job runs it after
+// uploading the DMGs and SHA256SUMS; `--dry-run` prints the cask, and `--dry-run --formula` the
+// formula, so a maintainer can bump the tap by hand (docs/release.md, "Homebrew tap").
 //
-//   bun run scripts/cask-bump.ts --version 0.1.0-alpha.32 [--notarized] [--sums <path>] [--tap davebream/homebrew-tap] [--dry-run]
+//   bun run scripts/cask-bump.ts --version 0.1.0-alpha.32 [--notarized] [--sums <path>] [--npm-tarball <path>]
+//                                [--tap davebream/homebrew-tap] [--dry-run [--formula]]
+//
+// The formula installs the npm package with `bun add --global` into its keg and pins Homebrew's
+// Bun with a wrapper, because the CLI starts with `#!/usr/bin/env bun` and a Dock-launched or
+// otherwise bare PATH has no Bun on it. Its digest is the npm tarball's sha256: `--npm-tarball`
+// hashes a local file, otherwise the tarball is downloaded from the registry.
 //
 // Without `--notarized` the cask describes an ad-hoc signed app, which macOS quarantines on install
 // and after every upgrade, so its caveats say how to unblock it. The release job passes
@@ -13,6 +21,7 @@
 // The cask installs the app and links its bundled CLI. It never writes into an agent's
 // configuration and its zap stanza never lists ~/.glosa, which holds journals, history and the
 // pairing token.
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,14 +76,18 @@ const QUARANTINE_CAVEAT = `glosa.app is signed ad hoc, not notarized by Apple, s
 
     `;
 
-export function renderCask(version: string, armSha: string, intelSha: string, options: CaskOptions = {}): string {
-  for (const [label, digest] of [
-    ["arm64", armSha],
-    ["x64", intelSha],
-  ] as const) {
-    if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error(`${label} digest is not a sha256: ${digest}`);
-  }
+function assertDigest(label: string, digest: string): void {
+  if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error(`${label} digest is not a sha256: ${digest}`);
+}
+
+function assertVersion(version: string): void {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/.test(version)) throw new Error(`not a release version: ${version}`);
+}
+
+export function renderCask(version: string, armSha: string, intelSha: string, options: CaskOptions = {}): string {
+  assertDigest("arm64", armSha);
+  assertDigest("x64", intelSha);
+  assertVersion(version);
   return `cask "glosa" do
   arch arm: "arm64", intel: "x64"
 
@@ -121,6 +134,9 @@ export function renderCask(version: string, armSha: string, intelSha: string, op
       /plugin marketplace add davebream/glosa
       /plugin install glosa
 
+    The glosa formula installs the same command line without the app. Install one or the other:
+    both link glosa into #{HOMEBREW_PREFIX}/bin, so the second one fails to link.
+
     A daemon started by glosa keeps running after the app quits; \`glosa status\` shows it.
     Update with: brew upgrade --cask glosa
   EOS
@@ -128,16 +144,93 @@ end
 `;
 }
 
+/** The npm tarball the formula installs. */
+export function npmTarballUrl(version: string): string {
+  return `https://registry.npmjs.org/@davebream/glosa/-/glosa-${version}.tgz`;
+}
+
+/**
+ * The formula for one release: the command line alone, on Homebrew's Bun. Pure over its
+ * arguments. The shape was verified end to end on 2026-09-26: `brew install` from a tap,
+ * `brew test`, `glosa --version` with PATH=/usr/bin:/bin, and `glosa open` starting a daemon on
+ * the keg's Bun.
+ */
+export function renderFormula(version: string, tarballSha: string): string {
+  assertDigest("npm tarball", tarballSha);
+  assertVersion(version);
+  return `class Glosa < Formula
+  desc "Local-first review workspace for documents drafted by AI coding agents"
+  homepage "https://github.com/davebream/glosa"
+  url "${npmTarballUrl(version)}"
+  sha256 "${tarballSha}"
+  license "Apache-2.0"
+
+  livecheck do
+    url "https://registry.npmjs.org/@davebream/glosa"
+    strategy :json do |json|
+      json["dist-tags"]&.values
+    end
+  end
+
+  depends_on "bun"
+  depends_on :macos
+
+  def install
+    ENV["BUN_INSTALL"] = libexec
+    ENV["BUN_INSTALL_CACHE_DIR"] = buildpath/"bun-cache"
+    system formula_opt_bin("bun")/"bun", "add", "--global", cached_download
+    # The CLI starts with \`#!/usr/bin/env bun\`; pin Homebrew's Bun so a bare PATH still works.
+    (bin/"glosa").write_env_script libexec/"bin/glosa", PATH: "#{formula_opt_bin("bun")}:$PATH"
+  end
+
+  def caveats
+    <<~EOS
+      This formula installs the glosa command line only, on Homebrew's Bun. The desktop app is
+      the glosa cask, which carries the same command line. Install one or the other: both link
+      glosa into #{HOMEBREW_PREFIX}/bin, so the second one fails to link.
+
+      glosa never writes into your agent's configuration. Add the Claude Code plugin the same way
+      as before:
+        /plugin marketplace add davebream/glosa
+        /plugin install glosa
+
+      Update with: brew upgrade glosa
+    EOS
+  end
+
+  test do
+    ENV["GLOSA_HOME"] = testpath/"glosa-home"
+    assert_match version.to_s, shell_output("#{bin}/glosa --version")
+  end
+end
+`;
+}
+
+/** sha256 of a tarball's bytes, lowercase hex. */
+export function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 interface Options {
   version: string;
   notarized: boolean;
   sums: string | null;
+  npmTarball: string | null;
   tap: string;
   dryRun: boolean;
+  formula: boolean;
 }
 
 export function parseArgs(argv: string[]): Options {
-  const options: Options = { version: "", notarized: false, sums: null, tap: DEFAULT_TAP, dryRun: false };
+  const options: Options = {
+    version: "",
+    notarized: false,
+    sums: null,
+    npmTarball: null,
+    tap: DEFAULT_TAP,
+    dryRun: false,
+    formula: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => {
@@ -150,9 +243,12 @@ export function parseArgs(argv: string[]): Options {
     else if (arg === "--tap") options.tap = value();
     else if (arg === "--dry-run") options.dryRun = true;
     else if (arg === "--notarized") options.notarized = true;
+    else if (arg === "--npm-tarball") options.npmTarball = value();
+    else if (arg === "--formula") options.formula = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.version) throw new Error("--version <version> is required");
+  if (options.formula && !options.dryRun) throw new Error("--formula only selects what --dry-run prints");
   return options;
 }
 
@@ -185,80 +281,93 @@ function readSums(options: Options, scratch: string): string {
   return readFileSync(join(scratch, "SHA256SUMS"), "utf8");
 }
 
-/** Git configuration, passed through the environment, that authenticates to github.com with the
- *  tap token as a basic-auth header. Keeps the token out of every URL and argv. */
-export function tapAuthEnvironment(token: string): Record<string, string> {
-  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-  return {
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
-  };
+/** The npm tarball's sha256. A local file when given; otherwise the registry, retried with
+ *  backoff because the CDN can lag a few minutes behind a fresh publish. */
+async function tarballDigest(options: Options): Promise<string> {
+  if (options.npmTarball) return sha256Hex(readFileSync(options.npmTarball));
+  const url = npmTarballUrl(options.version);
+  let last = "";
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try {
+      const response = await fetch(url, { headers: { "User-Agent": "glosa-release" } });
+      if (response.ok) return sha256Hex(new Uint8Array(await response.arrayBuffer()));
+      last = `HTTP ${response.status}`;
+    } catch (error) {
+      last = (error as Error).message;
+    }
+    if (attempt < 6) await Bun.sleep(attempt * 10_000);
+  }
+  throw new Error(`could not download ${url}: ${last}`);
 }
 
-function openTapPullRequest(options: Options, cask: string, scratch: string): string {
-  const token = process.env.HOMEBREW_TAP_TOKEN;
-  if (!token) {
-    throw new Error("HOMEBREW_TAP_TOKEN is not set; bump the cask by hand with --dry-run (docs/release.md)");
+/** GitHub's ed25519 SSH host key, pinned so the push refuses any other server. Taken on 2026-09-26
+ *  from both `ssh-keyscan -t ed25519 github.com` and `gh api meta` (`ssh_keys`), which agreed. */
+export const GITHUB_SSH_HOST_KEY =
+  "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
+
+/** The ssh command git uses to reach the tap: only the deploy key, only the pinned host key. */
+export function tapSshCommand(keyPath: string, knownHostsPath: string): string {
+  return [
+    "ssh",
+    `-i '${keyPath}'`,
+    "-o IdentitiesOnly=yes",
+    `-o UserKnownHostsFile='${knownHostsPath}'`,
+    "-o StrictHostKeyChecking=yes",
+  ].join(" ");
+}
+
+/**
+ * Writes both files to the tap's default branch with the tap's deploy key (#371). A deploy key can
+ * push but cannot open a pull request, so the bump is a direct commit, which is how personal taps
+ * are usually kept. Re-running for a version the tap already carries changes nothing and succeeds.
+ */
+function pushToTap(options: Options, cask: string, formula: string, scratch: string): string {
+  const key = process.env.HOMEBREW_TAP_DEPLOY_KEY;
+  if (!key) {
+    throw new Error("HOMEBREW_TAP_DEPLOY_KEY is not set; bump the tap by hand with --dry-run (docs/release.md)");
   }
+  const keyPath = join(scratch, "deploy-key");
+  const knownHosts = join(scratch, "known_hosts");
+  writeFileSync(keyPath, key.endsWith("\n") ? key : `${key}\n`, { mode: 0o600 });
+  writeFileSync(knownHosts, `${GITHUB_SSH_HOST_KEY}\n`, { mode: 0o600 });
   const checkout = join(scratch, "tap");
-  const branch = `glosa-${options.version}`;
   const env = {
     ...gitEnvironment(),
-    GH_TOKEN: token,
+    GIT_SSH_COMMAND: tapSshCommand(keyPath, knownHosts),
     GIT_AUTHOR_NAME: "github-actions[bot]",
     GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
     GIT_COMMITTER_NAME: "github-actions[bot]",
     GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
   };
-  const base = run(
-    ["gh", "repo", "view", options.tap, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
-    scratch,
-    env,
-  ).trim();
-  // The token travels as an HTTP header set through git's environment, never in the remote URL or
-  // the argv: git echoes a failing URL in its own error text, and run() puts stderr in the error.
-  const gitEnv = { ...env, ...tapAuthEnvironment(token) };
-  const remote = `https://github.com/${options.tap}.git`;
-  run(["git", "clone", "--depth", "1", "--branch", base, remote, checkout], scratch, gitEnv);
-  run(["git", "checkout", "-b", branch], checkout, env);
+  run(["git", "clone", "--depth", "1", `git@github.com:${options.tap}.git`, checkout], scratch, env);
   mkdirSync(join(checkout, "Casks"), { recursive: true });
+  mkdirSync(join(checkout, "Formula"), { recursive: true });
   writeFileSync(join(checkout, "Casks", "glosa.rb"), cask);
-  run(["git", "add", "Casks/glosa.rb"], checkout, env);
+  writeFileSync(join(checkout, "Formula", "glosa.rb"), formula);
+  run(["git", "add", "Casks/glosa.rb", "Formula/glosa.rb"], checkout, env);
+  const unchanged = Bun.spawnSync({ cmd: ["git", "diff", "--cached", "--quiet"], cwd: checkout, env });
+  if (unchanged.exitCode === 0) return `${options.tap} already carries glosa ${options.version}`;
   run(["git", "commit", "-m", `glosa ${options.version}`], checkout, env);
-  run(["git", "push", "origin", branch], checkout, gitEnv);
-  return run(
-    [
-      "gh",
-      "pr",
-      "create",
-      "--repo",
-      options.tap,
-      "--base",
-      base,
-      "--head",
-      branch,
-      "--title",
-      `glosa ${options.version}`,
-      "--body",
-      `Bumps the cask to glosa ${options.version}.\n\nRelease: https://github.com/davebream/glosa/releases/tag/v${options.version}\n\narm64: ${dmgName(options.version, "arm64")}\nx64: ${dmgName(options.version, "x64")}\n\nDigests come from the release's SHA256SUMS.`,
-    ],
-    checkout,
-    env,
-  ).trim();
+  run(["git", "push", "origin", "HEAD"], checkout, env);
+  return `pushed glosa ${options.version} to ${options.tap}`;
 }
 
-export function main(argv: string[]): number {
+export async function main(argv: string[]): Promise<number> {
   const options = parseArgs(argv);
   const scratch = mkdtempSync(join(tmpdir(), "glosa-cask-"));
   try {
+    if (options.dryRun && options.formula) {
+      process.stdout.write(renderFormula(options.version, await tarballDigest(options)));
+      return 0;
+    }
     const { arm, intel } = dmgDigests(parseSha256Sums(readSums(options, scratch)), options.version);
     const cask = renderCask(options.version, arm, intel, { notarized: options.notarized });
     if (options.dryRun) {
       process.stdout.write(cask);
       return 0;
     }
-    process.stdout.write(`${openTapPullRequest(options, cask, scratch)}\n`);
+    const formula = renderFormula(options.version, await tarballDigest(options));
+    process.stdout.write(`${pushToTap(options, cask, formula, scratch)}\n`);
     return 0;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -267,7 +376,7 @@ export function main(argv: string[]): number {
 
 if (import.meta.main) {
   try {
-    process.exit(main(Bun.argv.slice(2)));
+    process.exit(await main(Bun.argv.slice(2)));
   } catch (error) {
     process.stderr.write(`cask-bump: ${(error as Error).message}\n`);
     process.exit(1);

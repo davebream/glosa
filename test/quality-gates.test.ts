@@ -154,13 +154,16 @@ describe("repository quality gates", () => {
       "- name: Build and smoke an ad-hoc signed app\n        if: steps.signing.outputs.enabled != 'true'",
     );
     // Publishing does not: without a Developer ID the ad-hoc build is what people install (#371).
-    for (const step of ["Write SHA256SUMS", "Upload the app to the release", "Open the Homebrew tap pull request"]) {
+    for (const step of ["Write SHA256SUMS", "Upload the app to the release", "Update the Homebrew tap"]) {
       expect(app, step).toContain(`- name: ${step}\n`);
       expect(app, step).not.toContain(`- name: ${step}\n        if:`);
     }
     expect(app).toContain('gh release upload "$GITHUB_REF_NAME"');
     expect(app).toContain("packages/shell/dist/SHA256SUMS --clobber");
     expect(app).toContain("bun run scripts/cask-bump.ts");
+    // The tap is written with a deploy key scoped to it, never a broad token.
+    expect(app).toContain("HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}");
+    expect(app).not.toContain("HOMEBREW_TAP_TOKEN");
     // The cask drops its quarantine instructions only for a build the signing step actually signed.
     expect(app).toContain("SIGNED: ${{ steps.signing.outputs.enabled }}");
     expect(app).toContain('if [ "${SIGNED}" = "true" ]; then notarized="--notarized"; fi');
