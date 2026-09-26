@@ -117,6 +117,9 @@ describe("quarantine caveat (#371)", () => {
   test("an ad-hoc cask tells people how to unblock the app and its command line", () => {
     const cask = renderCask(V, ARM, INTEL);
     expect(cask).toContain("xattr -dr com.apple.quarantine #{appdir}/glosa.app");
+    // macOS's App Management protection refuses that command from a terminal not allowed to change
+    // apps, which is how it failed when the v0.1.0-alpha.34 cask was verified.
+    expect(cask).toContain("App Management");
     expect(cask).toContain("Open Anyway");
   });
   test("a notarized cask carries no quarantine step", () => {

@@ -72,7 +72,9 @@ export interface CaskOptions {
 const QUARANTINE_CAVEAT = `glosa.app is signed ad hoc, not notarized by Apple, so macOS blocks it, and the glosa
     command line inside it, until you allow it. After installing, and again after each upgrade, run:
       xattr -dr com.apple.quarantine #{appdir}/glosa.app
-    Or open the app once, then choose Open Anyway in System Settings, Privacy & Security.
+    If that answers "Operation not permitted", macOS needs your terminal allowed to change apps:
+    System Settings, Privacy & Security, App Management. Or open the app once, then choose
+    Open Anyway in System Settings, Privacy & Security.
 
     `;
 
