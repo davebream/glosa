@@ -24,6 +24,7 @@ export type InstallKind =
   | "bun-global"
   | "npm-global"
   | "app-bundle"
+  | "homebrew"
   | "ephemeral"
   | "source-checkout"
   | "project-local"
@@ -52,6 +53,14 @@ function norm(p: string): string {
 /** `<anything>.app/Contents/Resources/` as a run of path segments: the desktop app's bundle
  *  (#371). `/glosa.app/` matches; a plain `/app/` directory does not. */
 const APP_BUNDLE_RESOURCES = /\/[^/]+\.app\/Contents\/Resources\//;
+
+/** `<prefix>/Cellar/glosa/<version>/...`: the keg of the `glosa` Homebrew formula (#371). */
+const HOMEBREW_KEG = /\/Cellar\/glosa\/[^/]+\//;
+
+/** True when `path` sits inside the `glosa` formula's keg, on either Homebrew prefix. */
+export function isHomebrewKegPath(path: string): boolean {
+  return HOMEBREW_KEG.test(norm(path));
+}
 
 /** True when `path` sits inside a macOS application bundle's resources. */
 export function isAppBundlePath(path: string): boolean {
@@ -110,6 +119,10 @@ export function classifyInstall(packagePath: string, hasGitMarker = false): Inst
   //    brew; whatever it contains (a bundled node_modules can carry any suffix) is not ours to
   //    rewrite.
   if (isAppBundlePath(p)) return refuse("app-bundle", "brew upgrade --cask glosa");
+  // 2b. Homebrew formula, also BEFORE the package-manager markers (#371). The formula installs the
+  //     npm package with `bun add --global` into its keg, so the path ends in the bun-global suffix;
+  //     writing there would put the keg out of step with what brew recorded.
+  if (isHomebrewKegPath(p)) return refuse("homebrew", "brew upgrade glosa");
   // 3. Ephemeral — a package-runner cache is never upgradeable, whatever else the path resembles.
   if (isEphemeralPackageRunnerPath(p)) return refuse("ephemeral", `bun add --global ${PKG}@alpha`);
   // 4. Volta BEFORE the /lib/node_modules/ marker. Volta's layout matches it, but writing there

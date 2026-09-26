@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `glosa update` recognises an install made by a Homebrew formula (`homebrew`, anything under
+  `Cellar/glosa/`) and answers with `brew upgrade glosa` instead of rewriting files inside brew's keg
+  (#371).
 - `scripts/cask-bump.ts` renders the Homebrew cask for a signed desktop-app release from the
   release's `SHA256SUMS` and opens a pull request against the `davebream/homebrew-glosa` tap. The
   cask links the CLI the app carries, never writes into agent configuration and never removes

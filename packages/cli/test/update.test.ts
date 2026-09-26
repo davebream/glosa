@@ -51,6 +51,7 @@ const BUN = "/Users/x/.bun/install/global/node_modules/@davebream/glosa";
 const NPM = "/usr/local/lib/node_modules/@davebream/glosa";
 const VOLTA_PATH = "/Users/x/.volta/tools/image/packages/@davebream/glosa/lib/node_modules/@davebream/glosa";
 const APP = "/Applications/glosa.app/Contents/Resources/glosa";
+const KEG = "/opt/homebrew/Cellar/glosa/0.1.0-alpha.32/libexec/install/global/node_modules/@davebream/glosa";
 
 describe("classifyInstall", () => {
   test.each([
@@ -80,6 +81,12 @@ describe("classifyInstall", () => {
     ["/opt/homebrew/Caskroom/glosa/0.1.0-alpha.32/glosa.app/Contents/Resources/glosa", "app-bundle"],
     // A directory merely named `app` is not a bundle.
     ["/Users/x/app/Contents/Resources/glosa", "unknown"],
+    // The Homebrew formula's keg (#371), on Apple Silicon and Intel prefixes. It installs with
+    // `bun add --global`, so the path also carries the bun-global suffix.
+    [KEG, "homebrew"],
+    ["/usr/local/Cellar/glosa/0.1.0-alpha.32/libexec/install/global/node_modules/@davebream/glosa", "homebrew"],
+    // Another formula's keg is not glosa's.
+    ["/opt/homebrew/Cellar/other/1.0/libexec/install/global/node_modules/@davebream/glosa", "bun-global"],
   ] as const)("%s -> %s", (path, kind) => {
     expect(classifyInstall(path).kind).toBe(kind);
   });
@@ -101,6 +108,22 @@ describe("classifyInstall", () => {
 
   test("a .git marker still beats the app-bundle marker", () => {
     expect(classifyInstall(APP, true).kind).toBe("source-checkout");
+  });
+
+  test("homebrew wins over the bun-global suffix its keg carries", () => {
+    // Without this check `glosa update` would rewrite files inside brew's keg.
+    expect(classifyInstall(KEG).kind).toBe("homebrew");
+    expect(classifyInstall(KEG, true).kind).toBe("source-checkout");
+  });
+
+  test("homebrew is refused with the formula's brew command and no install dir", () => {
+    expect(classifyInstall(KEG)).toEqual({
+      kind: "homebrew",
+      managed: false,
+      installDir: null,
+      manualCommand: "brew upgrade glosa",
+      reshimHint: null,
+    });
   });
 
   test("app-bundle is refused with the brew command and no install dir", () => {
@@ -865,6 +888,16 @@ describe("runUpdate — evaluation order", () => {
     expect(r.error?.code).toBe("update-unmanaged-install");
     expect(r.data.install_kind).toBe("volta");
     expect(r.data.manual_command).toBe("volta install @davebream/glosa");
+    expect(h.calls.fetchPackument).toBe(0);
+  });
+
+  test("a homebrew formula install exits 2 with brew upgrade glosa and never touches the network", async () => {
+    const h = makeDeps({ packageRoot: () => KEG });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.code).toBe("update-unmanaged-install");
+    expect(r.data.install_kind).toBe("homebrew");
+    expect(r.data.manual_command).toBe("brew upgrade glosa");
     expect(h.calls.fetchPackument).toBe(0);
   });
 
