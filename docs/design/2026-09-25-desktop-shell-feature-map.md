@@ -123,7 +123,8 @@ File menu's "Reveal in Finder" (⌥⌘R) does the same for the focused window wi
 5. **Kind at open, not at registration** (decided 2026-09-25): the link carries `kind=`, the SPA
    gates chats, stars and the connection chip on it, and no workspace row or index field exists for
    it. The shell keeps one kind per window; a presentation arriving for a folder a desk window shows
-   opens a second, companion window (the `glosa://` handler, not yet built).
+   opens a second, companion window. Built in #392: the `glosa://` handler reuses a window only when
+   origin, folder and kind all match, and "Open Folder…" never reuses a companion window.
 6. **Origin:** the shell loads `http://glosa.localhost:4646`, same as `glosa open` (#255).
 7. **No build step exception** is scoped to the shell package only; SPA and daemon stay served
    unbundled by the daemon so the two modes cannot drift.

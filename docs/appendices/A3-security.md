@@ -231,6 +231,17 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
 - **Only the SPA origin is trusted, never a path.** "Open folder" runs `glosa open` on the folder the
   native picker returned; the page can ask for the picker, not name a directory. Starred-workspace
   routes keep their no-path shape.
+- **A `glosa://` link is route state, never a credential, and any page can fire one (#392).** The
+  packaged app declares the scheme (`CFBundleURLTypes`) and answers
+  `glosa://open?path=<absolute>[&focus=<relative>][&kind=][&surface=][&mode=][&lock=read]`. The parser
+  refuses anything else: another action, a path that is not absolute and plain (no `.`, `..`, empty
+  segment or backslash), a focus that is not relative and plain, an unknown value, and any extra or
+  repeated parameter, so a link cannot carry `p=` or `t=`. The shell mints its own token by running
+  `glosa open` with the link's path, exactly as for a picked folder (R-P1). When no window already
+  shows the link's folder, the shell asks first ("Open <folder> in glosa?"); only an unpackaged app
+  honours `GLOSA_SHELL_CONFIRM=yes`, which the real-Electron test uses to answer for it. A link reuses
+  a window only when origin, folder and kind all match, so a companion link never turns a desk window
+  into a companion. An unpackaged run never registers itself as the scheme's handler.
 - **The main process reaches the daemon by IP.** Its own requests (the compatibility handshake) go to
   `http://127.0.0.1:<port>`, on the Host allowlist. Chromium resolves `glosa.localhost` internally, so
   the window loads that origin; Node's resolver in the main process may not (it did not on a macOS 14
@@ -245,7 +256,8 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   update check of its own; "Check for Updates…" opens the releases page on click (A6 §F33).
 - **Test:** `packages/shell/test/shell-real-engine.electron.ts` runs the §5 posture inside the shell's own
   renderer against a real daemon (pairing over the bridge, no secret in any URL or history, class-F
-  probe verdicts, denied navigation, daemon alive after quit); `packages/shell/test/policy.test.ts`
+  probe verdicts, denied navigation, daemon alive after quit, and a `glosa://` launch that opens a
+  paired companion window with the link's route); `packages/shell/test/policy.test.ts`
   pins each rule as a pure function. CI runs the former in a dedicated `shell` job with Electron
   installed; a skip there is a failed gate.
 

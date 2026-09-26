@@ -481,6 +481,13 @@ export const presentOutputSchema = z
       .string()
       .min(1)
       .describe("Ready SPA URL with a short-TTL presentation token (p=), never the durable pairing token."),
+    app_url: z
+      .string()
+      .startsWith("glosa://open?")
+      .optional()
+      .describe(
+        "The same presentation as a glosa:// link the desktop app opens. It carries no token; the app mints its own.",
+      ),
     slug: z.string().min(1),
     path: z.string().min(1).describe("Workspace work-tree path."),
     focus: z.string().min(1).optional().describe("Workspace-relative artifact path when known."),

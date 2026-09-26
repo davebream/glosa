@@ -2,21 +2,30 @@
 // The shell's pure rules. Each test names the contract clause it pins; deleting the rule in
 // policy.ts must turn the matching test red (AGENTS.md "ablate it").
 import { describe, expect, test } from "bun:test";
+import { buildAppUrl } from "../../cli/src/open-presentation.ts";
 import {
   cliCandidates,
   compareVersions,
   compatibility,
   egressDecision,
+  linkFromArgv,
   loopbackApiOrigin,
   navigationDecision,
+  needsConfirmation,
+  openArgsFor,
+  parseGlosaUrl,
   parseOpenEnvelope,
+  plainPath,
   preloadShouldExpose,
   quitDecision,
+  type RoutedWindow,
   representedFile,
   revealTarget,
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  windowFor,
+  withRoute,
 } from "../src/policy.ts";
 
 const SPA = "http://glosa.localhost:4646";
@@ -261,5 +270,132 @@ describe("CLI lookup (R-O1, #371: the recorded executable first, the app's own C
     const candidates = cliCandidates({ homeDir: HOME, resourcesPath: moved });
     expect(candidates[1]).toBe(`${moved}/bin/glosa`);
     expect(candidates.some((c) => c.startsWith("/Applications/"))).toBe(false);
+  });
+});
+
+describe("glosa:// links (#392)", () => {
+  const link = (query: string) => parseGlosaUrl(`glosa://open?${query}`);
+  const DIR = "/Users/u/writing";
+
+  test("a well-formed link parses, with companion as the default kind", () => {
+    expect(link(`path=${encodeURIComponent(DIR)}`)).toEqual({
+      path: DIR,
+      focus: null,
+      kind: "companion",
+      surface: null,
+      mode: null,
+      readLock: false,
+    });
+    expect(
+      link(`path=${encodeURIComponent(DIR)}&focus=notes%2Fplan.md&kind=desk&surface=document&mode=edit&lock=read`),
+    ).toEqual({ path: DIR, focus: "notes/plan.md", kind: "desk", surface: "document", mode: "edit", readLock: true });
+  });
+
+  test("a path must be absolute and plain; a focus relative and plain", () => {
+    for (const bad of ["relative/dir", "/Users/u/../etc", "/Users/./u", "/Users//u", "/", "C:\\x", "/a/\0b"]) {
+      expect(link(`path=${encodeURIComponent(bad)}`), bad).toBeNull();
+    }
+    for (const bad of ["/abs.md", "../up.md", "a/../b.md", "./a.md", "a//b.md", "a\\b.md"]) {
+      expect(link(`path=${encodeURIComponent(DIR)}&focus=${encodeURIComponent(bad)}`), bad).toBeNull();
+    }
+    expect(plainPath("a/b.md", false)).toBe(true);
+    expect(plainPath("/a/b", true)).toBe(true);
+  });
+
+  test("anything but glosa://open, a known value, or a single known parameter is refused", () => {
+    expect(parseGlosaUrl(`https://open?path=${encodeURIComponent(DIR)}`)).toBeNull();
+    expect(parseGlosaUrl(`glosa://present?path=${encodeURIComponent(DIR)}`)).toBeNull();
+    expect(parseGlosaUrl(`glosa://open/extra?path=${encodeURIComponent(DIR)}`)).toBeNull();
+    expect(parseGlosaUrl(`glosa://open?path=${encodeURIComponent(DIR)}#p=abc`)).toBeNull();
+    expect(link("kind=desk")).toBeNull();
+    expect(link(`path=${encodeURIComponent(DIR)}&kind=admin`)).toBeNull();
+    expect(link(`path=${encodeURIComponent(DIR)}&mode=write`)).toBeNull();
+    expect(link(`path=${encodeURIComponent(DIR)}&lock=edit`)).toBeNull();
+    expect(link(`path=${encodeURIComponent(DIR)}&path=%2Fetc`)).toBeNull();
+    // A link never carries a pairing token: an extra parameter is refused rather than ignored.
+    expect(link(`path=${encodeURIComponent(DIR)}&p=abcd`)).toBeNull();
+    expect(link(`path=${encodeURIComponent(DIR)}&t=abcd`)).toBeNull();
+    expect(parseGlosaUrl("not a url")).toBeNull();
+  });
+
+  test("the CLI's app_url round-trips through the shell's parser", () => {
+    const url = buildAppUrl({
+      path: DIR,
+      focus: "drafts/chapter one.md",
+      kind: "companion",
+      surface: "document",
+      mode: "review",
+      readLock: false,
+    });
+    expect(parseGlosaUrl(url)).toEqual({
+      path: DIR,
+      focus: "drafts/chapter one.md",
+      kind: "companion",
+      surface: "document",
+      mode: "review",
+      readLock: false,
+    });
+    const locked = buildAppUrl({ path: DIR, kind: "desk", surface: "workspace", mode: "read", readLock: true });
+    expect(parseGlosaUrl(locked)).toMatchObject({ kind: "desk", surface: "workspace", mode: "read", readLock: true });
+  });
+
+  test("a link maps to the glosa open arguments that reproduce it", () => {
+    const base = { path: DIR, focus: null, kind: "companion" as const, surface: null, mode: null, readLock: false };
+    expect(openArgsFor(base)).toEqual([DIR]);
+    expect(openArgsFor({ ...base, focus: "a.md" })).toEqual([DIR, "a.md"]);
+    expect(openArgsFor({ ...base, focus: "a.md", surface: "workspace", readLock: true })).toEqual([
+      DIR,
+      "a.md",
+      "--workspace",
+      "--read",
+    ]);
+    // The CLI refuses --document beside a second positional, so a document link opens the file.
+    expect(openArgsFor({ ...base, focus: "notes/a.md", surface: "document" })).toEqual([
+      `${DIR}/notes/a.md`,
+      "--document",
+    ]);
+    expect(openArgsFor({ ...base, surface: "document" })).toEqual([DIR, "--document"]);
+  });
+
+  test("kind and mode are set on the answered URL, every other entry kept", () => {
+    const answered = `${SPA}/#p=tok&w=ws&a=a.md&surface=workspace&mode=review&kind=desk`;
+    const routed = new URL(withRoute(answered, { kind: "companion", mode: "edit" }));
+    const params = new URLSearchParams(routed.hash.slice(1));
+    expect(params.get("kind")).toBe("companion");
+    expect(params.get("mode")).toBe("edit");
+    expect(params.get("p")).toBe("tok");
+    expect(params.get("a")).toBe("a.md");
+    expect(new URLSearchParams(new URL(withRoute(answered, { kind: "desk" })).hash.slice(1)).get("mode")).toBe(
+      "review",
+    );
+    expect(surfaceKind(withRoute(answered, { kind: "companion" }))).toBe("companion");
+  });
+
+  const windows: RoutedWindow[] = [
+    { id: 1, origin: SPA, folder: DIR, kind: "desk" },
+    { id: 2, origin: SPA, folder: "/Users/u/other", kind: "companion" },
+  ];
+
+  test("a link reuses a window only when origin, folder and kind all match (decision 5)", () => {
+    // A companion link beside a desk window on the same folder gets its own window.
+    expect(windowFor({ origin: SPA, folder: DIR, kind: "companion" }, windows)).toBeNull();
+    expect(windowFor({ origin: SPA, folder: DIR, kind: "desk" }, windows)).toBe(1);
+    expect(windowFor({ origin: SPA, folder: "/Users/u/other", kind: "companion" }, windows)).toBe(2);
+    expect(windowFor({ origin: "http://127.0.0.1:4646", folder: DIR, kind: "desk" }, windows)).toBeNull();
+  });
+
+  test("a link asks first unless a window already shows its folder", () => {
+    expect(needsConfirmation(DIR, windows)).toBe(false);
+    expect(needsConfirmation(`${DIR}/notes/a.md`, windows)).toBe(false);
+    expect(needsConfirmation(`${DIR}-archive`, windows)).toBe(true);
+    expect(needsConfirmation("/Users/u/elsewhere", windows)).toBe(true);
+    expect(needsConfirmation(DIR, [{ id: 3, origin: SPA, folder: null, kind: null }])).toBe(true);
+  });
+
+  test("a link arrives on the command line as any argument starting glosa://", () => {
+    expect(linkFromArgv(["/Applications/glosa.app/Contents/MacOS/glosa", "glosa://open?path=%2Fx"])).toBe(
+      "glosa://open?path=%2Fx",
+    );
+    expect(linkFromArgv(["/tmp/folder"])).toBeNull();
   });
 });

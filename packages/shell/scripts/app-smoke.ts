@@ -14,7 +14,7 @@
 //   S1 the bundled Bun is the packageManager pin
 //   S2 the launcher prints the release version
 //   S3 the bundled sources hash to the same build id as the checkout's
-//   S4 Info.plist carries the version, the microphone string and the macOS floor
+//   S4 Info.plist carries the version, the microphone string, the macOS floor and the glosa:// scheme
 //   S5 the code signature verifies (ad hoc or Developer ID; notarization when stapled)
 //   S6 the CLI recorded the launcher, and the recorded path runs with no Bun on PATH
 //   S7 `glosa doctor` reports this install as an app-bundle and names the launcher
@@ -219,6 +219,9 @@ async function main(): Promise<void> {
     if (!plistValue("NSMicrophoneUsageDescription").includes("Dictate"))
       fail("S4", "NSMicrophoneUsageDescription is missing");
     if (plistValue("LSMinimumSystemVersion") !== "13.0") fail("S4", "LSMinimumSystemVersion is not 13.0");
+    // The bundle declares glosa:// so macOS routes links to the app (#392).
+    if (plistValue("CFBundleURLTypes.0.CFBundleURLSchemes.0") !== "glosa")
+      fail("S4", "CFBundleURLTypes does not declare the glosa scheme");
     passed.push("S4 Info.plist");
 
     // S5
