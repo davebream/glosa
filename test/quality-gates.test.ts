@@ -137,7 +137,7 @@ describe("repository quality gates", () => {
   // release (Homebrew 5.0 deprecated unsigned casks; macOS 15.1+ refuses unsigned downloads). A
   // job-level `if:` cannot read secrets, so one step decides and every publishing step is gated on
   // its output. The signing secrets reach exactly one step.
-  test("the desktop app is uploaded only when it was signed, and a release without it is red", () => {
+  test("every tag publishes the desktop app, signed when the secrets exist and ad hoc otherwise, and a release without it is red", () => {
     const yaml = workflows[1]!;
     const app = job(yaml, "app");
     expect(app).toContain("needs: [release]");
@@ -146,17 +146,24 @@ describe("repository quality gates", () => {
     expect(app).toContain('APP_SIGNING_REQUIRED: "false"');
     expect(app).toContain("bun run --cwd packages/shell package -- --arch all --smoke");
     expect(app).toContain("bun run --cwd packages/shell package -- --arch all --unsigned --smoke");
-    for (const step of [
-      "Build, sign, notarize and smoke both architectures",
-      "Write SHA256SUMS",
-      "Upload signed app artifacts",
-      "Open the Homebrew tap pull request",
-    ]) {
-      expect(app, step).toContain(`- name: ${step}\n        if: steps.signing.outputs.enabled == 'true'`);
+    // The two builds branch on the signing decision; exactly one of them runs.
+    expect(app).toContain(
+      "- name: Build, sign, notarize and smoke both architectures\n        if: steps.signing.outputs.enabled == 'true'",
+    );
+    expect(app).toContain(
+      "- name: Build and smoke an ad-hoc signed app\n        if: steps.signing.outputs.enabled != 'true'",
+    );
+    // Publishing does not: without a Developer ID the ad-hoc build is what people install (#371).
+    for (const step of ["Write SHA256SUMS", "Upload the app to the release", "Open the Homebrew tap pull request"]) {
+      expect(app, step).toContain(`- name: ${step}\n`);
+      expect(app, step).not.toContain(`- name: ${step}\n        if:`);
     }
     expect(app).toContain('gh release upload "$GITHUB_REF_NAME"');
     expect(app).toContain("packages/shell/dist/SHA256SUMS --clobber");
     expect(app).toContain("bun run scripts/cask-bump.ts");
+    // The cask drops its quarantine instructions only for a build the signing step actually signed.
+    expect(app).toContain("SIGNED: ${{ steps.signing.outputs.enabled }}");
+    expect(app).toContain('if [ "${SIGNED}" = "true" ]; then notarized="--notarized"; fi');
     for (const secret of ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]) {
       expect(app.split(`\${{ secrets.${secret} }}`).length - 1, secret).toBe(1);
     }

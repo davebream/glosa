@@ -9,10 +9,11 @@ Pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/r
 
 1. The same test jobs as CI, with the full profile forced, plus the secret and dependency scans.
 2. `release`: publishes `@davebream/glosa` to npm with provenance and creates the GitHub release.
-3. `app`: builds the desktop app for Apple Silicon (`arm64`) and Intel (`x64`) and smoke-tests it.
-   When every signing secret is present, it signs, notarizes and uploads to the GitHub release:
-   `glosa-<version>-arm64.dmg`, `glosa-<version>-arm64.zip`, `glosa-<version>-x64.dmg`,
-   `glosa-<version>-x64.zip` and `SHA256SUMS`. It then opens the Homebrew tap pull request.
+3. `app`: builds the desktop app for Apple Silicon (`arm64`) and Intel (`x64`), smoke-tests it,
+   and uploads to the GitHub release: `glosa-<version>-arm64.dmg`, `glosa-<version>-arm64.zip`,
+   `glosa-<version>-x64.dmg`, `glosa-<version>-x64.zip` and `SHA256SUMS`. It then opens the
+   Homebrew tap pull request. With the Developer ID secrets the app is signed and notarized;
+   without them it is signed ad hoc (see "Ad hoc or notarized" below).
 4. `released`: fails the run unless both `release` and `app` succeeded, so a tag that published npm
    but produced no app is red.
 
@@ -57,16 +58,32 @@ Only the step that signs and notarizes receives the five Apple secrets. A test i
 
 Delete the local `.p12` once the secret is saved.
 
-### The signing switch
+### Ad hoc or notarized
 
-`release.yml` sets `APP_SIGNING_REQUIRED: "false"` on the `app` job. While it is false and the
-secrets are missing, the job still builds and smokes an unsigned app, leaves a warning
-("No signing secrets; building an unsigned app for verification only"), keeps the DMGs as run
-artifacts for 14 days, and uploads nothing to the release. An unsigned app never reaches a release:
-macOS 15.1 and later refuse to open an unsigned download, and Homebrew 5.0 deprecated unsigned casks.
+glosa does not require the Apple Developer Program. Without its secrets the `app` job signs the app
+ad hoc, which uses no certificate, publishes it all the same, and leaves a notice saying so.
 
-Once the secrets exist, set `APP_SIGNING_REQUIRED` to `"true"`. From then on a tag with missing
-secrets fails instead of quietly building an unsigned app.
+An ad-hoc signed app runs, but macOS quarantines anything downloaded, and a cask install counts.
+Gatekeeper then blocks the app, and the `glosa` command line inside it, until the person allows it.
+That happens after the first install and again after every upgrade. There are two ways to allow it:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/glosa.app
+```
+
+Or open the app once, then choose Open Anyway in System Settings, Privacy & Security. The command
+above also clears the Bun runtime inside the app, which the command line runs on; Open Anyway is
+confirmed to unblock the app window, and whether it also clears the nested Bun is not verified.
+The cask's caveats and the README say the same.
+
+Homebrew 5.0 disables casks that fail Gatekeeper only in the official `Homebrew/homebrew-cask`
+repository, and deprecated the `--no-quarantine` flag everywhere. A personal tap may carry an
+ad-hoc signed cask; Homebrew still quarantines what it installs.
+
+A Developer ID removes the prompt: the app is signed and notarized, and the cask drops its
+quarantine instructions (the release job passes `--notarized` to `scripts/cask-bump.ts` only
+then). Once the secrets exist, set `APP_SIGNING_REQUIRED` in `release.yml` to `"true"`, so that a
+tag with a missing secret fails instead of falling back to an ad-hoc build.
 
 ## Rehearsing locally
 
@@ -91,8 +108,9 @@ spctl --assess --type execute -vv /Applications/glosa.app
 xcrun stapler validate /Applications/glosa.app
 ```
 
-`spctl` should report `source=Notarized Developer ID`, and `stapler` should report that the
-validate action worked.
+For a notarized build, `spctl` should report `source=Notarized Developer ID`, and `stapler` should
+report that the validate action worked. An ad-hoc build is expected to fail both: `spctl` reports
+`rejected` and there is no ticket to staple. Its checksum is what you verify.
 
 ## When notarization fails
 
@@ -121,8 +139,8 @@ brew install --cask davebream/glosa/glosa
 brew upgrade --cask glosa
 ```
 
-The cask is a signed and notarized app only. Homebrew 5.0 deprecated casks that fail Gatekeeper
-and the `--no-quarantine` flag, so no cask is published for an unsigned build.
+The tap carries the ad-hoc signed app until a Developer ID exists (see "Ad hoc or notarized"),
+with caveats that tell people how to allow it. A notarized release renders the cask without them.
 
 What the cask does on a person's machine:
 

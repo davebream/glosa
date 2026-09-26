@@ -1496,3 +1496,34 @@ last, including a daemon or MCP server the app started in the background.
 **What this leaves open.** Whether the bundled Bun needs entitlements beyond Electron's JIT pair is
 confirmed on the first signed build. A person with a stale terminal install sees the app's "too
 old" screen until they update or remove it; `glosa doctor` says why.
+
+
+## The desktop app ships ad hoc signed until a Developer ID exists (2026-09-26)
+
+The #371 entry above said a Developer ID signature and notarization precede the first public app
+artifact. The maintainer chose to share the app without joining the Apple Developer Program, and
+that premise was also narrower than it read: Homebrew 5.0 disables casks that fail Gatekeeper only
+in the official `Homebrew/homebrew-cask` repository, not in a personal tap.
+
+**Decision.** Every tag publishes the app. With the Developer ID and notarization secrets it is
+signed and notarized; without them it is signed ad hoc, uploaded to the GitHub release and offered
+through the `davebream/homebrew-glosa` cask all the same. Supersedes "Signing comes first" above.
+
+**What a person pays.** macOS quarantines the download or cask install, and Gatekeeper blocks the
+app and the command line inside it until the person allows it, after the first install and after
+every upgrade. The cask caveats and the README give the one command that clears it
+(`xattr -dr com.apple.quarantine /Applications/glosa.app`) and the System Settings path. Measured
+on 2026-09-26: a quarantined copy's `bin/glosa --version` blocked until killed; the same build
+without quarantine answered at once.
+
+**Why not hide the prompt.** Homebrew deprecated `--no-quarantine` so that taps do not circumvent
+Gatekeeper, and a cask `postflight` that strips the quarantine would do exactly that. The prompt is
+the honest cost of not notarizing, so it is documented, not removed.
+
+**Why not keep the app private until then.** The desk face is for people who may never open a
+terminal, and the app is how they get glosa at all. One confirmation per upgrade is a smaller cost
+than no app.
+
+**Later.** A Developer ID turns the prompt off: the release job passes `--notarized` to
+`scripts/cask-bump.ts`, which drops the caveat, and `APP_SIGNING_REQUIRED: "true"` stops a tag from
+falling back to an ad-hoc build.

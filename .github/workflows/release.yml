@@ -339,12 +339,12 @@ jobs:
   app:
     name: app
     # The desktop app (#371): runs after the GitHub release exists so its assets have somewhere to
-    # go. Builds both architectures on the arm64 runner. Signs and notarizes only when every secret
-    # is present. Otherwise it still builds and smokes an ad-hoc-signed app so the packaging path
-    # stays exercised, and uploads nothing to the release: an unsigned app must never reach one
-    # (Homebrew 5.0 deprecated unsigned casks; macOS 15.1+ refuses unsigned downloads).
-    # A job-level `if:` cannot read `secrets`, so the `signing` step decides and every later step
-    # branches on its output. APP_SIGNING_REQUIRED flips to "true" once the Developer ID exists.
+    # go. Builds both architectures on the arm64 runner, smokes them, and publishes them with a
+    # SHA256SUMS file and a Homebrew tap pull request. With a Developer ID and notarization secrets
+    # the app is signed and notarized; without them it is signed ad hoc, which runs everywhere but
+    # asks each person to confirm it once in System Settings (docs/release.md). A job-level `if:`
+    # cannot read `secrets`, so the `signing` step decides and the two build steps branch on it.
+    # APP_SIGNING_REQUIRED set to "true" makes missing secrets fail the job instead.
     if: always() && needs.release.result == 'success'
     needs: [release]
     runs-on: macos-14
@@ -385,7 +385,7 @@ jobs:
             echo "Developer ID or notarization secrets are missing and signing is required." >&2
             exit 1
           else
-            echo "::warning::No signing secrets; building an unsigned app for verification only. Nothing is uploaded to the release."
+            echo "::notice::No Developer ID secrets; publishing an ad-hoc signed app. People confirm it once in System Settings (docs/release.md)."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Build, sign, notarize and smoke both architectures
@@ -397,17 +397,15 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bun run --cwd packages/shell package -- --arch all --smoke
-      - name: Build and smoke an unsigned app for verification only
+      - name: Build and smoke an ad-hoc signed app
         if: steps.signing.outputs.enabled != 'true'
         run: bun run --cwd packages/shell package -- --arch all --unsigned --smoke
       - name: Write SHA256SUMS
-        if: steps.signing.outputs.enabled == 'true'
         run: |
           cd packages/shell/dist
           shasum -a 256 arm64/*.dmg arm64/*.zip x64/*.dmg x64/*.zip | sed -E 's#  [a-z0-9]+/#  #' > SHA256SUMS
           cat SHA256SUMS
-      - name: Upload signed app artifacts
-        if: steps.signing.outputs.enabled == 'true'
+      - name: Upload the app to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -416,21 +414,16 @@ jobs:
             packages/shell/dist/x64/*.dmg packages/shell/dist/x64/*.zip \
             packages/shell/dist/SHA256SUMS --clobber
       - name: Open the Homebrew tap pull request
-        if: steps.signing.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          SIGNED: ${{ steps.signing.outputs.enabled }}
         run: |
           if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
             echo "::warning::HOMEBREW_TAP_TOKEN is not set; bump the cask by hand (docs/release.md)."
             exit 0
           fi
-          bun run scripts/cask-bump.ts --version "${GITHUB_REF_NAME#v}" --sums packages/shell/dist/SHA256SUMS
-      - name: Keep the unsigned build for inspection
-        if: always() && steps.signing.outputs.enabled != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: app-unsigned
-          path: packages/shell/dist/*/*.dmg
-          if-no-files-found: warn
-          retention-days: 14
+          # Only a notarized app may drop the cask's quarantine instructions.
+          notarized=""
+          if [ "${SIGNED}" = "true" ]; then notarized="--notarized"; fi
+          bun run scripts/cask-bump.ts --version "${GITHUB_REF_NAME#v}" --sums packages/shell/dist/SHA256SUMS ${notarized}
