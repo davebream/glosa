@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- The release build of the desktop app no longer depends on Electron having been launched first.
+  Bun can restore Electron from its install cache without running Electron's postinstall, which
+  downloads the Electron binary, so `packages/shell/scripts/package-app.ts` now runs Electron's
+  installer itself when the binary is missing. v0.1.0-alpha.32 reached npm, but its app build
+  stopped on the missing binary, so that release carries no desktop app (#371).
+
 ## [0.1.0-alpha.32] — 2026-09-26
 
 ### Added
