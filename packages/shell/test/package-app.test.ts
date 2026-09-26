@@ -57,12 +57,6 @@ describe("package-app: Bun checksums", () => {
   test("finds the digest for exactly the named asset", () => {
     expect(parseShasums(SUMS, "bun-darwin-aarch64.zip")).toBe("a".repeat(64));
     expect(parseShasums(SUMS, "bun-darwin-x64.zip")).toBe("c".repeat(64));
-    expect(parseShasums(SUMS, "bun-darwin-x64-baseline.zip")).toBe("b".repeat(64));
-  });
-  test("the standard x64 asset does not answer for the baseline one the Intel app carries", () => {
-    expect(() => parseShasums(`${"c".repeat(64)}  bun-darwin-x64.zip`, "bun-darwin-x64-baseline.zip")).toThrow(
-      "bun-darwin-x64-baseline.zip is not listed in SHASUMS256.txt",
-    );
   });
   test("a similarly named asset does not answer for another", () => {
     expect(() => parseShasums(`${"b".repeat(64)}  bun-darwin-x64-baseline.zip`, "bun-darwin-x64.zip")).toThrow(
@@ -74,8 +68,7 @@ describe("package-app: Bun checksums", () => {
   });
   test("maps architectures to Bun's asset names", () => {
     expect(bunAsset("arm64")).toEqual({ asset: "bun-darwin-aarch64.zip", folder: "bun-darwin-aarch64" });
-    // The baseline build: no AVX needed, so the Intel app also runs under a Rosetta without AVX.
-    expect(bunAsset("x64")).toEqual({ asset: "bun-darwin-x64-baseline.zip", folder: "bun-darwin-x64-baseline" });
+    expect(bunAsset("x64")).toEqual({ asset: "bun-darwin-x64.zip", folder: "bun-darwin-x64" });
   });
 });
 

@@ -199,7 +199,7 @@ jobs:
   shell:
     needs: prepare
     if: needs.prepare.outputs.profile == 'full'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -222,8 +222,9 @@ jobs:
       # BEFORE the real-Electron suite on purpose: that suite's first launch downloads Electron's
       # binary, which hid a build that only worked after it (v0.1.0-alpha.32's release job builds
       # first and failed on node_modules/electron/dist). Both architectures: the Intel app is smoked
-      # under this runner's Rosetta, which has no AVX, which is how v0.1.0-alpha.33's crash is caught
-      # in a pull request instead of a release.
+      # under this runner's Rosetta, which is how v0.1.0-alpha.33's AVX crash is caught
+      # in a pull request instead of a release. That needs macOS 15's Rosetta, which executes AVX;
+      # macOS 14's cannot, and Bun ships no AVX-free macOS build, so this job runs on macos-15.
       - name: Cache the Electron and Bun downloads for the app build
         if: needs.prepare.outputs.app == 'true'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830

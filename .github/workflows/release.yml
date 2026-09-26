@@ -347,7 +347,7 @@ jobs:
     # APP_SIGNING_REQUIRED set to "true" makes missing secrets fail the job instead.
     if: always() && needs.release.result == 'success'
     needs: [release]
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     permissions:
       contents: write

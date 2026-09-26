@@ -62,17 +62,17 @@ resources=$(cd -P -- "$(dirname -- "$self")/.." && pwd -P)
 exec "$resources/bin/bun" --no-install "$resources/glosa/packages/cli/src/main.ts" "$@"
 `;
 
-/** Bun's release asset for an architecture. x64 is the `-baseline` build, which needs no AVX: the
- *  standard x64 build crashed with "CPU lacks AVX support" under Rosetta on the macOS 14 runner that
- *  smokes the Intel app (v0.1.0-alpha.33), and the same would happen to anyone running the Intel app
- *  under an older Rosetta. Real Intel Macs on macOS 13+ run either build. */
+/** Bun's release asset for an architecture. The x64 build needs AVX, and Bun publishes no macOS build
+ *  without it: for 1.4.2, `bun-darwin-x64-baseline.zip` carries a byte-identical binary. Every Intel
+ *  Mac that runs macOS 13 has AVX2. Rosetta on macOS 14 cannot execute AVX, so the Intel app is
+ *  smoked on a macOS 15 runner, whose Rosetta can (v0.1.0-alpha.33 crashed on macos-14, #371). */
 export function bunAsset(arch: Arch): { asset: string; folder: string } {
-  const folder = arch === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64-baseline";
+  const folder = arch === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
   return { asset: `${folder}.zip`, folder };
 }
 
 /** The sha256 SHASUMS256.txt lists for exactly `asset`. A missing line is a failure, never a pass:
- *  a similarly named asset (`bun-darwin-x64.zip`) does not answer for `bun-darwin-x64-baseline.zip`. */
+ *  a similarly named asset (`bun-darwin-x64-baseline.zip`) does not answer for `bun-darwin-x64.zip`. */
 export function parseShasums(text: string, asset: string): string {
   for (const line of text.split(/\r?\n/)) {
     const match = /^([0-9a-f]{64})\s+\*?(\S+)$/.exec(line.trim());
