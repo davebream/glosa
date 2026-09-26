@@ -1,6 +1,6 @@
 {
   "name": "@glosa/shell",
-  "version": "0.1.0-alpha.31",
+  "version": "0.1.0-alpha.32",
   "private": true,
   "description": "glosa desktop shell: an Electron window on the daemon-served SPA",
   "type": "module",
@@ -21,7 +21,7 @@
     "electron"
   ],
   "glosa": {
-    "minimumDaemon": "0.1.0-alpha.31",
+    "minimumDaemon": "0.1.0-alpha.32",
     "releases": "https://github.com/davebream/glosa/releases"
   },
   "productName": "glosa",

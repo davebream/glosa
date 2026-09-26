@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.32] — 2026-09-26
+
 ### Added
 
 - `glosa update` recognises an install made by a Homebrew formula (`homebrew`, anything under
@@ -1351,7 +1353,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.31...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.32...HEAD
+[0.1.0-alpha.32]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.31...v0.1.0-alpha.32
 [0.1.0-alpha.31]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.30...v0.1.0-alpha.31
 [0.1.0-alpha.30]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.29...v0.1.0-alpha.30
 [0.1.0-alpha.29]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.28...v0.1.0-alpha.29

@@ -37,7 +37,7 @@ describe("OSS release metadata", () => {
     expect(rootPackage.name).toBe("@davebream/glosa");
     // Machine-maintained by `bun run version:sync`; it records the release, it does not gate it.
     // The gate that a bump cannot bypass is the CHANGELOG heading asserted further down.
-    expect(rootPackage.version).toBe("0.1.0-alpha.31");
+    expect(rootPackage.version).toBe("0.1.0-alpha.32");
     expect(rootPackage.private).toBe(false);
     expect(rootPackage.license).toBe("Apache-2.0");
     expect(rootPackage.bin).toEqual({ glosa: "packages/cli/src/main.ts" });
