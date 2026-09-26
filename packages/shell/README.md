@@ -1,8 +1,8 @@
 # @glosa/shell
 
 The desktop shell: one Electron window on the SPA that the glosa daemon already serves. It adds
-what a browser tab cannot have (a native folder picker, pairing without a URL, OS notifications)
-and nothing else. The daemon and SPA are whatever the recorded executable (`~/.glosa/bin/glosa`,
+what a browser tab cannot have (a native folder picker, pairing without a URL, OS notifications,
+Reveal in Finder) and nothing else. The daemon and SPA are whatever the recorded executable (`~/.glosa/bin/glosa`,
 or `$GLOSA_HOME/bin/glosa`) is; the shell never updates or stops them. A packaged app also carries
 a CLI, the daemon, the SPA and a Bun runtime under `Contents/Resources`, and uses them only when
 nothing is recorded, so a downloaded app is complete on its own (#371).

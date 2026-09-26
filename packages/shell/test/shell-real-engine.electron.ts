@@ -212,6 +212,10 @@ describe.skipIf(!electronInstalled)(
         expect(durable, `paired via bridge; shell stderr:\n${stderrText}`).toBeString();
         expect(await cdp.evaluate<string>("location.href")).not.toMatch(/[#&](p|t)=/);
         expect(await cdp.evaluate<string>("typeof window.glosaShell")).toBe("object");
+        // Reveal in Finder is on the bridge, and takes no argument (#160). Not called: it would
+        // open Finder on the machine running the test.
+        expect(await cdp.evaluate<string>("typeof window.glosaShell.revealInFinder")).toBe("function");
+        expect(await cdp.evaluate<number>("window.glosaShell.revealInFinder.length")).toBe(0);
         // One-shot (R-P2): a second ask gets nothing.
         expect(await cdp.evaluate<string | null>("window.glosaShell.presentationToken()")).toBeNull();
 

@@ -651,6 +651,42 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(status.textContent).toContain("Couldn't copy source");
   });
 
+  test("Reveal in Finder is offered only in the desktop shell, and sends the shell no path (#160)", async () => {
+    // In a browser there is no bridge, so there is no row at all.
+    const browserRoot = dom.document.createElement("div");
+    dom.document.body.append(browserRoot);
+    mountApp(browserRoot, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (browserRoot.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(browserRoot.querySelector(".glosa-tools-reveal")).toBeNull();
+    browserRoot.remove();
+
+    // In the shell the row appears once a document is open, and calls the bridge with nothing.
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const calls: unknown[][] = [];
+    mountApp(root, {
+      dataAccess: fakeDataAccess(),
+      shell: {
+        revealInFinder: async (...args: unknown[]) => {
+          calls.push(args);
+          return true;
+        },
+      },
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const reveal = inPane(root, ".glosa-tools-reveal");
+    expect(reveal.hidden).toBe(false);
+    expect(reveal.textContent).toBe("Reveal in Finder");
+    reveal.click();
+    // The pane yields a turn before asking, so the address bar names this document first.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(calls).toEqual([[]]);
+  });
+
   test("Class-F artifacts do not offer copy or print tools", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);

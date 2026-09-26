@@ -70,15 +70,29 @@ export function splitPresentationToken(url: string): { tokenlessUrl: string; tok
   return { tokenlessUrl: parsed.toString(), token };
 }
 
+/** What the shell keeps from `glosa open --url --json`: the link, the workspace's slug, and its
+ * folder. `path` is the daemon's absolute `worktree_path`, a directory even when the target was a
+ * single file, never the argument the shell was given (#160). */
+export interface OpenedWorkspace {
+  url: string;
+  slug: string;
+  path: string;
+}
+
 /** The A6 JSON envelope `glosa open --url --json` prints. Anything else is a refusal, not a guess. */
-export function parseOpenEnvelope(text: string): { url: string; slug: string } {
+export function parseOpenEnvelope(text: string): OpenedWorkspace {
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
     throw new Error("glosa open did not print a JSON envelope");
   }
-  const env = body as { glosa_json?: unknown; ok?: unknown; data?: { url?: unknown; slug?: unknown }; error?: unknown };
+  const env = body as {
+    glosa_json?: unknown;
+    ok?: unknown;
+    data?: { url?: unknown; slug?: unknown; path?: unknown };
+    error?: unknown;
+  };
   if (env.glosa_json !== 1) throw new Error("glosa open printed something that is not the A6 envelope");
   if (env.ok !== true) {
     const err = env.error as { code?: unknown; message?: unknown } | null | undefined;
@@ -87,7 +101,23 @@ export function parseOpenEnvelope(text: string): { url: string; slug: string } {
   if (typeof env.data?.url !== "string" || typeof env.data?.slug !== "string") {
     throw new Error("glosa open envelope has no url");
   }
-  return { url: env.data.url, slug: env.data.slug };
+  if (typeof env.data.path !== "string" || !env.data.path.startsWith("/")) {
+    throw new Error("glosa open envelope has no absolute path");
+  }
+  return { url: env.data.url, slug: env.data.slug, path: env.data.path };
+}
+
+/** The surface kind a link opens (`kind=` in its fragment). A link without one opens a companion
+ * surface, the SPA's own default (bootstrap.js), so the shell reads it the same way. */
+export function surfaceKind(url: string): "desk" | "companion" {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "companion";
+  }
+  const hash = parsed.hash.startsWith("#") ? parsed.hash.slice(1) : parsed.hash;
+  return new URLSearchParams(hash).get("kind") === "desk" ? "desk" : "companion";
 }
 
 /** `0.1.0-alpha.31` style ordering: numeric parts, then a release outranks any prerelease, then
@@ -172,12 +202,14 @@ export function loopbackApiOrigin(spaOrigin: string): string {
 }
 
 /**
- * The file the window represents, for macOS's proxy icon and title-bar path popover, the way an
- * editor's window does. Derived from the route the SPA is showing (`a=` in the fragment) under the
- * folder the shell opened; a route with no document represents the folder itself. A relative path
- * that escapes the folder represents nothing.
+ * The file the window represents, for macOS's proxy icon, the title-bar path popover and Reveal in
+ * Finder, the way an editor's window does. Derived from the route the SPA is showing (`a=` in the
+ * fragment) under the folder the shell opened; a route with no document represents the folder
+ * itself. It represents nothing when the route names another workspace than the one this window
+ * opened (`w=`: the SPA can switch workspace inside a window), or when the relative path is not a
+ * plain one: absolute, `..` or `.` segments, empty segments, or backslashes.
  */
-export function representedFile(url: string, folder: string): string | null {
+export function representedFile(url: string, folder: string, slug?: string): string | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -185,10 +217,39 @@ export function representedFile(url: string, folder: string): string | null {
     return null;
   }
   const hash = parsed.hash.startsWith("#") ? parsed.hash.slice(1) : parsed.hash;
-  const artifact = new URLSearchParams(hash).get("a");
+  const params = new URLSearchParams(hash);
+  const workspace = params.get("w");
+  if (slug !== undefined && workspace !== null && workspace !== slug) return null;
+  const artifact = params.get("a");
   if (!artifact) return folder;
-  if (artifact.startsWith("/") || artifact.split("/").includes("..")) return null;
+  if (artifact.startsWith("/") || artifact.includes("\\")) return null;
+  const segments = artifact.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) return null;
   return `${folder.replace(/\/+$/, "")}/${artifact}`;
+}
+
+/** What Reveal in Finder needs from the filesystem, injected so the rule is testable. */
+export interface RevealIo {
+  /** The real path, symlinks resolved, or null when it cannot be resolved. */
+  realpath: (path: string) => string | null;
+  exists: (path: string) => boolean;
+}
+
+/**
+ * The path Reveal in Finder shows (#160). The page never sends one (A3 "Desktop shell"): the main
+ * process derives it from the window's own URL and the folder it opened. The file must resolve
+ * inside the folder after symlinks, so a link inside the workspace cannot reveal a file outside
+ * it; a file that no longer exists falls back to the folder. Null means reveal nothing.
+ */
+export function revealTarget(url: string, window: { folder: string; slug: string }, io: RevealIo): string | null {
+  const file = representedFile(url, window.folder, window.slug);
+  if (file === null) return null;
+  const root = io.realpath(window.folder);
+  if (root === null) return null;
+  if (!io.exists(file)) return root;
+  const real = io.realpath(file);
+  if (real === null) return root;
+  return real === root || real.startsWith(`${root.replace(/\/+$/, "")}/`) ? real : null;
 }
 
 /** What the shell needs to know to find a glosa CLI. The main process fills it; nothing here reads. */

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The desktop app can reveal a document in Finder: File, Reveal in Finder (⌥⌘R), or a document
+  pane's More menu. The page sends no path; the app works out the file from its own window and
+  refuses anything that resolves outside the workspace folder. The window's folder is now the
+  workspace's own folder from `glosa open`, so the title bar's proxy icon is right for a relative or
+  single-file target and after the window switches workspace (#160).
+
 ### Fixed
 
 - The desktop app's install instructions (the cask caveats, the README and `docs/release.md`) now

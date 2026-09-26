@@ -13,8 +13,10 @@ import {
   preloadShouldExpose,
   quitDecision,
   representedFile,
+  revealTarget,
   scrubChildEnv,
   splitPresentationToken,
+  surfaceKind,
 } from "../src/policy.ts";
 
 const SPA = "http://glosa.localhost:4646";
@@ -77,14 +79,20 @@ describe("token handover (R-P1)", () => {
 });
 
 describe("glosa open envelope (A6)", () => {
-  test("accepts the ok envelope and returns its url and slug", () => {
+  test("accepts the ok envelope and returns its url, slug and folder", () => {
     const text = JSON.stringify({
       glosa_json: 1,
       ok: true,
       command: "open",
-      data: { url: `${SPA}/#p=x&w=s`, slug: "s" },
+      data: { url: `${SPA}/#p=x&w=s`, slug: "s", path: "/Users/x/proj", kind: "directory" },
     });
-    expect(parseOpenEnvelope(text)).toEqual({ url: `${SPA}/#p=x&w=s`, slug: "s" });
+    expect(parseOpenEnvelope(text)).toEqual({ url: `${SPA}/#p=x&w=s`, slug: "s", path: "/Users/x/proj" });
+  });
+  test("the folder is the daemon's absolute path; an envelope without one is refused (#160)", () => {
+    const envelope = (path: unknown) =>
+      JSON.stringify({ glosa_json: 1, ok: true, data: { url: `${SPA}/#w=s`, slug: "s", path } });
+    expect(() => parseOpenEnvelope(envelope(undefined))).toThrow(/absolute path/);
+    expect(() => parseOpenEnvelope(envelope("proj"))).toThrow(/absolute path/);
   });
   test("a refusal surfaces the CLI's own error code, never a guessed url", () => {
     const text = JSON.stringify({
@@ -161,6 +169,66 @@ describe("the represented file (an editor's proxy icon)", () => {
     expect(representedFile(`${SPA}/#a=..%2Fsecret`, "/Users/x/proj")).toBeNull();
     expect(representedFile(`${SPA}/#a=%2Fetc%2Fpasswd`, "/Users/x/proj")).toBeNull();
     expect(representedFile("garbage", "/Users/x/proj")).toBeNull();
+  });
+  test("only plain relative paths: no `.` or empty segments, no backslashes", () => {
+    for (const a of ["docs%2F.%2Fplan.md", ".%2Fplan.md", "docs%2F%2Fplan.md", "docs%5C..%5Csecret", "docs%2F"]) {
+      expect(representedFile(`${SPA}/#w=s&a=${a}`, "/Users/x/proj", "s")).toBeNull();
+    }
+  });
+  test("a route on another workspace than the window opened represents nothing (#160)", () => {
+    // The SPA can switch workspace inside a window; the folder then no longer matches the route.
+    const other = `${SPA}/#w=other&a=docs%2Fplan.md`;
+    expect(representedFile(other, "/Users/x/proj", "s")).toBeNull();
+    expect(representedFile(`${SPA}/#w=other`, "/Users/x/proj", "s")).toBeNull();
+    expect(representedFile(`${SPA}/#w=s&a=docs%2Fplan.md`, "/Users/x/proj", "s")).toBe("/Users/x/proj/docs/plan.md");
+  });
+});
+
+describe("the surface kind a link opens", () => {
+  test("desk only when the fragment says so; a link without it is a companion, as in the SPA", () => {
+    expect(surfaceKind(`${SPA}/#w=s&kind=desk`)).toBe("desk");
+    expect(surfaceKind(`${SPA}/#w=s&kind=companion`)).toBe("companion");
+    expect(surfaceKind(`${SPA}/#w=s`)).toBe("companion");
+    expect(surfaceKind("garbage")).toBe("companion");
+  });
+});
+
+describe("Reveal in Finder (#160): the path comes from the window, never the page", () => {
+  const WINDOW = { folder: "/Users/x/proj", slug: "s" };
+  /** A filesystem where `links` maps a path to what it resolves to, and `present` lists what exists. */
+  const fs = (present: string[], links: Record<string, string> = {}) => ({
+    realpath: (path: string) => links[path] ?? (present.includes(path) ? path : null),
+    exists: (path: string) => present.includes(path),
+  });
+  test("reveals the route's document when it exists inside the folder", () => {
+    const io = fs(["/Users/x/proj", "/Users/x/proj/docs/plan.md"]);
+    expect(revealTarget(`${SPA}/#w=s&a=docs%2Fplan.md`, WINDOW, io)).toBe("/Users/x/proj/docs/plan.md");
+  });
+  test("reveals the folder when the route names no document", () => {
+    expect(revealTarget(`${SPA}/#w=s`, WINDOW, fs(["/Users/x/proj"]))).toBe("/Users/x/proj");
+  });
+  test("falls back to the folder when the document is gone", () => {
+    expect(revealTarget(`${SPA}/#w=s&a=gone.md`, WINDOW, fs(["/Users/x/proj"]))).toBe("/Users/x/proj");
+  });
+  test("a symlink inside the folder that resolves outside it reveals nothing", () => {
+    const io = fs(["/Users/x/proj", "/Users/x/proj/notes.md"], { "/Users/x/proj/notes.md": "/Users/x/secret.md" });
+    expect(revealTarget(`${SPA}/#w=s&a=notes.md`, WINDOW, io)).toBeNull();
+  });
+  test("a sibling folder sharing the prefix is not inside it", () => {
+    const io = fs(["/Users/x/proj", "/Users/x/proj/a.md"], { "/Users/x/proj/a.md": "/Users/x/proj-old/a.md" });
+    expect(revealTarget(`${SPA}/#w=s&a=a.md`, WINDOW, io)).toBeNull();
+  });
+  test("a folder that resolves through a symlink still contains its own documents", () => {
+    const io = fs(["/Users/x/proj", "/Users/x/proj/a.md"], {
+      "/Users/x/proj": "/Volumes/data/proj",
+      "/Users/x/proj/a.md": "/Volumes/data/proj/a.md",
+    });
+    expect(revealTarget(`${SPA}/#w=s&a=a.md`, WINDOW, io)).toBe("/Volumes/data/proj/a.md");
+  });
+  test("another workspace's route and an escaping path reveal nothing", () => {
+    const io = fs(["/Users/x/proj", "/Users/x/proj/a.md"]);
+    expect(revealTarget(`${SPA}/#w=other&a=a.md`, WINDOW, io)).toBeNull();
+    expect(revealTarget(`${SPA}/#w=s&a=..%2Fsecret`, WINDOW, io)).toBeNull();
   });
 });
 

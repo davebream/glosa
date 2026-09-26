@@ -16,5 +16,8 @@ if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin
     openFolder: () => ipcRenderer.invoke("glosa:open-folder"),
     /** An OS notification. Title and body only; the main process truncates both. */
     notify: (title, body) => ipcRenderer.invoke("glosa:notify", { title, body }),
+    /** Shows the document this window's route names, or its folder, in Finder. Takes no argument:
+     * the main process works out the path from the window's own URL and folder (A3, #160). */
+    revealInFinder: () => ipcRenderer.invoke("glosa:reveal"),
   });
 }

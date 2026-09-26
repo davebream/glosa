@@ -118,6 +118,7 @@ export { INTENTS, initialModeState, isParked, MODES, modeReducer, morphArtifactC
  *   layoutStorage?: any,
  *   faceStore?: any,
  *   dictationController?: any,
+ *   shell?: { revealInFinder?: () => Promise<unknown> } | null,
  * }} [options]
  */
 export function mountApp(
@@ -138,6 +139,9 @@ export function mountApp(
     // The writer's per-artifact face (face.js). One store for every pane; a test passes its own.
     faceStore = createFaceStore({ storage: layoutStorage ?? undefined }),
     dictationController: injectedDictationController,
+    // The desktop shell's bridge (`window.glosaShell`), or null in a browser. The SPA reaches the
+    // daemon only through dataAccess (R6); this is the one other way out, and only in the shell.
+    shell: desktopShell = null,
   } = {},
 ) {
   root.textContent = "";
@@ -1100,6 +1104,16 @@ export function mountApp(
         singlePane ? null : (tabLabels().get(decodePanelId(id)[1]) ?? decodePanelId(id)[1].split("/").pop()),
       faceStore,
       dictationController,
+      // The shell reveals the document the window's route names, and the route follows the active
+      // pane (reflectFocus). So a pane's own "Reveal in Finder" makes that pane active first, then
+      // yields a turn so the address bar has caught up before the shell reads it (#160).
+      revealInFinder: desktopShell?.revealInFinder
+        ? async () => {
+            if (activePanelId !== id) panelApi?.setActive?.();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            return desktopShell.revealInFinder?.();
+          }
+        : null,
       openDiffTab: openDiff,
       claimWidth: (target) => dock?.claimWidth(id, target),
       releaseWidth: () => dock?.releaseWidth(id),
