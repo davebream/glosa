@@ -9,7 +9,7 @@
 // docs/research/2026-09-25-desktop-shell-readiness.md §3 (what Electron's defaults leave open),
 // docs/appendices/A3-security.md "Desktop shell".
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,10 +20,13 @@ import {
   egressDecision,
   loopbackApiOrigin,
   navigationDecision,
+  type OpenedWorkspace,
   parseOpenEnvelope,
   representedFile,
+  revealTarget,
   scrubChildEnv,
   splitPresentationToken,
+  surfaceKind,
 } from "./policy.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -59,7 +62,7 @@ function resolveCli(): string {
 
 /** `glosa open <target> --url --json`: registers the folder, ensures a daemon (the CLI's own
  * spawn-only-when-absent, R-O3), mints a one-shot presentation token into the URL fragment. */
-function runOpen(target: string, focus: string | null = null): Promise<{ url: string; slug: string }> {
+function runOpen(target: string, focus: string | null = null): Promise<OpenedWorkspace> {
   return new Promise((resolve, reject) => {
     execFile(
       resolveCli(),
@@ -90,9 +93,21 @@ async function handshake(origin: string): Promise<Record<string, unknown> | null
 // ---------- token handover (R-P1, R-P2): one token per window load, never in the URL ----------
 
 const pendingTokens = new Map<number, string>();
-const spaOrigins = new Map<number, string>();
-/** The folder each window opened, for the represented file. */
-const openedFolders = new Map<number, string>();
+
+/**
+ * What the shell knows about each window, keyed by its webContents id (#160). `origin` is set at
+ * creation (the preload needs it, R-P3); the rest once `glosa open` has answered. `folder` is the
+ * daemon's absolute `worktree_path` and `slug` the workspace's, never the argument the shell was
+ * given; `kind` is the surface the link opened, read from its fragment, which is what the
+ * `glosa://` handler (#392) routes windows by.
+ */
+interface WindowState {
+  origin: string;
+  folder: string | null;
+  slug: string | null;
+  kind: "desk" | "companion" | null;
+}
+const windows = new Map<number, WindowState>();
 
 function blockingScreen(title: string, command: string): string {
   const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string);
@@ -111,7 +126,7 @@ async function openInWindow(
   existing: BrowserWindow | null,
   focus: string | null = null,
 ): Promise<BrowserWindow> {
-  let opened: { url: string; slug: string };
+  let opened: OpenedWorkspace;
   const started = Date.now();
   try {
     opened = await runOpen(target, focus);
@@ -123,7 +138,7 @@ async function openInWindow(
   }
   log(`glosa open answered in ${Date.now() - started} ms for ${opened.slug}`);
   const origin = new URL(opened.url).origin;
-  const win = existing && spaOrigins.get(existing.webContents.id) === origin ? existing : createWindow(origin);
+  const win = existing && windows.get(existing.webContents.id)?.origin === origin ? existing : createWindow(origin);
   const compat = compatibility(await handshake(loopbackApiOrigin(origin)), pkg.glosa.minimumDaemon);
   if (compat.state !== "ok") {
     log(`compatibility: ${compat.state}`);
@@ -137,7 +152,12 @@ async function openInWindow(
   }
   const { tokenlessUrl, token } = splitPresentationToken(opened.url);
   if (token) pendingTokens.set(win.webContents.id, token);
-  openedFolders.set(win.webContents.id, target);
+  windows.set(win.webContents.id, {
+    origin,
+    folder: opened.path,
+    slug: opened.slug,
+    kind: surfaceKind(opened.url),
+  });
   await win.loadURL(tokenlessUrl);
   return win;
 }
@@ -158,11 +178,11 @@ function createWindow(origin: string | null): BrowserWindow {
     },
   });
   const wc = win.webContents;
-  if (origin) spaOrigins.set(wc.id, origin);
+  if (origin) windows.set(wc.id, { origin, folder: null, slug: null, kind: null });
   // What Electron's defaults leave open for the TOP frame (readiness note §3).
   wc.setWindowOpenHandler(() => ({ action: "deny" }));
   wc.on("will-navigate", (event, url) => {
-    const origin = spaOrigins.get(wc.id);
+    const origin = windows.get(wc.id)?.origin;
     if (!origin || navigationDecision(url, origin) === "deny") {
       log(`denied navigation to ${new URL(url).origin}`);
       event.preventDefault();
@@ -184,16 +204,15 @@ function createWindow(origin: string | null): BrowserWindow {
   wc.on("render-process-gone", (_e, details) => log(`renderer gone: ${details.reason}`));
   // The page owns the title (`<file> — <folder>`); the window adds the proxy icon an editor has.
   const represent = () => {
-    const folder = openedFolders.get(wc.id);
-    if (!folder) return;
-    win.setRepresentedFilename(representedFile(wc.getURL(), folder) ?? "");
+    const state = windows.get(wc.id);
+    if (!state?.folder || !state.slug) return;
+    win.setRepresentedFilename(representedFile(wc.getURL(), state.folder, state.slug) ?? "");
   };
   wc.on("page-title-updated", represent);
   wc.on("did-navigate-in-page", represent);
   win.on("closed", () => {
     pendingTokens.delete(wc.id);
-    spaOrigins.delete(wc.id);
-    openedFolders.delete(wc.id);
+    windows.delete(wc.id);
   });
   return win;
 }
@@ -211,6 +230,37 @@ async function openFolderFlow(existing: BrowserWindow | null): Promise<void> {
   await openInWindow(folder, existing);
 }
 
+/**
+ * Reveal in Finder for `win` (#160): the document its route shows, or its folder. No path comes
+ * from the page (A3 "Desktop shell"); `revealTarget` derives it from the window's own URL and the
+ * folder `glosa open` answered with, and refuses anything that resolves outside that folder.
+ */
+function revealIn(win: BrowserWindow | null): boolean {
+  if (!win) return false;
+  const state = windows.get(win.webContents.id);
+  if (!state?.folder || !state.slug) return false;
+  const target = revealTarget(
+    win.webContents.getURL(),
+    { folder: state.folder, slug: state.slug },
+    {
+      realpath: (path) => {
+        try {
+          return realpathSync(path);
+        } catch {
+          return null;
+        }
+      },
+      exists: (path) => existsSync(path),
+    },
+  );
+  if (target === null) {
+    log("reveal: nothing to reveal for this window's route");
+    return false;
+  }
+  shell.showItemInFolder(target);
+  return true;
+}
+
 function buildMenu(): void {
   const focused = () => BrowserWindow.getFocusedWindow();
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -220,6 +270,9 @@ function buildMenu(): void {
       submenu: [
         { label: "Open Folder…", accelerator: "CmdOrCtrl+O", click: () => void openFolderFlow(focused()) },
         { label: "New Window", accelerator: "CmdOrCtrl+Shift+N", click: () => void openFolderFlow(null) },
+        { type: "separator" },
+        // Worked out here from the focused window, so the menu needs no call from the page.
+        { label: "Reveal in Finder", accelerator: "Alt+CmdOrCtrl+R", click: () => void revealIn(focused()) },
         { type: "separator" },
         { role: "close" },
       ],
@@ -257,7 +310,7 @@ function buildMenu(): void {
 
 function installIpc(): void {
   const fromSpa = (event: Electron.IpcMainInvokeEvent): boolean => {
-    const origin = spaOrigins.get(event.sender.id);
+    const origin = windows.get(event.sender.id)?.origin;
     // The class-F document reports `null` here (opaque origin under its CSP sandbox); this check,
     // not the preload's, is the boundary (readiness note §1b).
     return Boolean(origin) && event.senderFrame?.origin === origin;
@@ -271,6 +324,11 @@ function installIpc(): void {
   ipcMain.handle("glosa:open-folder", async (event) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     await openFolderFlow(BrowserWindow.fromWebContents(event.sender));
+  });
+  // Takes nothing from the page: which file is revealed is decided here (revealIn).
+  ipcMain.handle("glosa:reveal", (event) => {
+    if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
+    return revealIn(BrowserWindow.fromWebContents(event.sender));
   });
   ipcMain.handle("glosa:notify", (event, payload: unknown) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");

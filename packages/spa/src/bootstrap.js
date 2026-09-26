@@ -108,6 +108,7 @@ export function canonicalMode(raw) {
  *   surfaceKind: SurfaceKind,
  *   appearance: ReturnType<typeof createAppearanceController> | null,
  *   onFocusChange: (next: FocusChange) => void,
+ *   shell: { revealInFinder?: () => Promise<unknown> } | null,
  * }} BootstrapMountOptions */
 
 /**
@@ -471,6 +472,8 @@ async function main() {
       readLock,
       surfaceKind: route.kind ?? "companion",
       appearance,
+      // The desktop shell's bridge, present only in its own window on the SPA's origin (R-P3).
+      shell: /** @type {any} */ (window).glosaShell ?? null,
       onFocusChange: (next) =>
         navigation.reflectFocus({
           ...next,

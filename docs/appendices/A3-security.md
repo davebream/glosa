@@ -216,8 +216,13 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   equals the SPA origin exactly, and every `ipcMain` handler re-checks `event.senderFrame.origin`
   before acting; that handler check is the boundary (a class-F document reports a `null` origin under
   its CSP sandbox and is refused even by a deliberately unscoped preload). The class-F frame receives
-  no preload. The bridge carries three calls: a one-shot presentation token, "open folder", and an OS
-  notification. No call takes a path from the page.
+  no preload. The bridge carries four calls: a one-shot presentation token, "open folder", an OS
+  notification, and "reveal in Finder". No call takes a path from the page. Reveal in Finder takes no
+  argument at all: the main process derives the file from the window's own URL (`a=`) under the
+  folder `glosa open` answered with (`data.path`, the workspace's absolute `worktree_path`), reveals
+  nothing when the URL's workspace (`w=`) is not the one that window opened, and requires the file's
+  real path to stay inside the folder's real path, so a symlink in a workspace cannot point Finder
+  outside it (#160).
 - **The pairing token never travels in a URL the shell loads.** The main process runs the same
   `glosa open <folder> --url --json` the CLI runs, strips `p=` from the fragment, loads the tokenless
   URL and hands the token to the page over the bridge once per window load; the page redeems it as it

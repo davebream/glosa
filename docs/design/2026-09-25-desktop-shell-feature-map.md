@@ -107,7 +107,10 @@ presented. **Desk** = only on a surface the human opened. **Shell** = needs the 
 | OS notifications, dock badge, menu bar, `glosa://` | Electron APIs | |
 | Native print to PDF | `webContents.printToPDF` | |
 
-Preload exposes at most `openFolder()`, `notify()`, `revealInFinder()`. No daemon route gains a path.
+Preload exposes at most `openFolder()`, `notify()`, `revealInFinder()`, beside the one-shot pairing
+token. No daemon route gains a path. `revealInFinder()` exists (#160): it takes no argument, and the
+main process derives the file from the window's URL and the folder `glosa open` answered with. The
+File menu's "Reveal in Finder" (⌥⌘R) does the same for the focused window without a preload call.
 
 ## 4. Decisions before the shell exists
 

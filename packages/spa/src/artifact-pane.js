@@ -284,6 +284,8 @@ const ICONS = {
   compare:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3.5H4.4A1.4 1.4 0 0 0 3 4.9v10.2a1.4 1.4 0 0 0 1.4 1.4H7M13 3.5h2.6A1.4 1.4 0 0 1 17 4.9v10.2a1.4 1.4 0 0 1-1.4 1.4H13M10 2v16"/></svg>',
   move: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="1.5"/><path d="M11.5 4v12"/></svg>',
+  reveal:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 6V14.5A1.5 1.5 0 0 0 4 16h12a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 16 6H9.5L8 4H4A1.5 1.5 0 0 0 2.5 5.5V6Z"/><path d="M10 9v4M8.2 10.8 10 9l1.8 1.8"/></svg>',
 };
 
 /**
@@ -344,6 +346,10 @@ export function createArtifactPane(host, deps) {
     // default serif and offers no control.
     faceStore = null,
     dictationController = null,
+    // Reveal this document in Finder. Only the desktop shell can (#160); in a browser there is no
+    // such capability and the pane offers no row for it. It takes no path: the shell works out the
+    // file from its own window.
+    revealInFinder = null,
   } = deps;
 
   let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?, valid_utf8?}
@@ -556,6 +562,14 @@ export function createArtifactPane(host, deps) {
     setToolsOpen(false, { restoreFocus: true });
     void copyArtifactSource();
   });
+  const revealButton = revealInFinder
+    ? menuItem("glosa-tools-reveal", ICONS.reveal, "Reveal in Finder", () => {
+        setToolsOpen(false, { restoreFocus: true });
+        void Promise.resolve(revealInFinder()).catch(() => {});
+      })
+    : null;
+  // Until a document has loaded there is nothing in Finder to point at (renderArtifactTools).
+  if (revealButton) revealButton.hidden = true;
   const printArtifactButton = menuItem("glosa-tools-print", ICONS.print, "Print / Save as PDF", () => {
     setToolsOpen(false, { restoreFocus: true });
     printArtifact();
@@ -628,6 +642,7 @@ export function createArtifactPane(host, deps) {
     historyMenuItem,
     editSourceButton,
     copySourceButton,
+    ...(revealButton ? [revealButton] : []),
     printArtifactButton,
     compareButton,
     faceGroup,
@@ -1042,6 +1057,7 @@ export function createArtifactPane(host, deps) {
     return [
       historyMenuItem,
       copySourceButton,
+      revealButton,
       printArtifactButton,
       compareButton,
       ...moveGroup.querySelectorAll("button"),
@@ -1097,6 +1113,9 @@ export function createArtifactPane(host, deps) {
     const artifactPath = currentArtifact?.class === "R" ? currentArtifact.source_path : null;
     const available = artifactPath !== null;
     copySourceButton.hidden = !available;
+    // Any loaded document can be revealed, rendered or not; with nothing loaded there is nothing
+    // in Finder to point at.
+    if (revealButton) revealButton.hidden = !currentArtifact?.source_path;
     printArtifactButton.hidden = !available;
     compareButton.hidden = !available || !openDiffTab;
     // The source editor, and the reason it is unavailable when it is. The apply-lease pause used to
