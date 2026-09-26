@@ -126,7 +126,7 @@ describe("repository quality gates", () => {
     expect(job(ci, "prepare")).toContain("app: ${{ steps.plan.outputs.app }}");
     const shell = job(ci, "shell");
     expect(shell).toContain(
-      "- name: Build the unsigned app and smoke it\n        if: needs.prepare.outputs.app == 'true'\n        run: bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke",
+      "- name: Build the unsigned app and smoke it\n        if: needs.prepare.outputs.app == 'true'\n        run: bun run --cwd packages/shell package -- --arch all --unsigned --smoke",
     );
     expect(shell).toContain("uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830");
     // The build runs BEFORE the real-Electron suite: that suite's first launch downloads Electron's
