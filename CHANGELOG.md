@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- The desktop app's install instructions (the cask caveats, the README and `docs/release.md`) now
+  say what to do when `xattr -dr com.apple.quarantine /Applications/glosa.app` answers "Operation
+  not permitted": macOS's App Management protection needs the terminal allowed to change apps, under
+  System Settings, Privacy & Security, App Management (#371).
+
 ## [0.1.0-alpha.34] — 2026-09-26
 
 ### Fixed

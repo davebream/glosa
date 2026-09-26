@@ -233,7 +233,9 @@ you allow it. Do this after installing and again after each upgrade:
 xattr -dr com.apple.quarantine /Applications/glosa.app
 ```
 
-Or open the app once, then choose Open Anyway in System Settings, Privacy & Security.
+If that answers "Operation not permitted", macOS needs your terminal allowed to change apps: turn it
+on under System Settings, Privacy & Security, App Management, then run it again. Or open the app
+once, then choose Open Anyway in System Settings, Privacy & Security.
 
 The app carries its own Bun, so it needs no install above. The cask links `glosa` into Homebrew's
 bin, so the terminal, the plugin and the app see one install; if you already installed glosa with

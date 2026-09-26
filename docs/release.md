@@ -71,9 +71,15 @@ That happens after the first install and again after every upgrade. There are tw
 xattr -dr com.apple.quarantine /Applications/glosa.app
 ```
 
+macOS's App Management protection refuses that command, with "Operation not permitted", when the
+terminal running it is not allowed to change apps in `/Applications`; the person turns it on under
+System Settings, Privacy & Security, App Management. Verified on 2026-09-26 against the installed
+v0.1.0-alpha.34 cask: the same command cleared a copy outside `/Applications` at once and was
+refused inside it.
+
 Or open the app once, then choose Open Anyway in System Settings, Privacy & Security. The command
-above also clears the Bun runtime inside the app, which the command line runs on; Open Anyway is
-confirmed to unblock the app window, and whether it also clears the nested Bun is not verified.
+above also clears the Bun runtime inside the app, which the command line runs on. Open Anyway is
+Apple's standard path for the app window; whether it also clears the nested Bun is not verified.
 The cask's caveats and the README say the same.
 
 Homebrew 5.0 disables casks that fail Gatekeeper only in the official `Homebrew/homebrew-cask`
