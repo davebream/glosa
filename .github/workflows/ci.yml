@@ -216,11 +216,12 @@ jobs:
         # src under erasableSyntaxOnly (Electron's Node strips types, nothing more); the tests import
         # daemon helpers that use non-erasable syntax, so they are checked without that flag.
         run: bunx tsc --noEmit -p packages/shell/tsconfig.json && bunx tsc --noEmit -p packages/shell/tsconfig.test.json
-      - name: Run the shell's renderer security suite in real Electron
-        run: bun run scripts/test-runner.ts shell
       # The desktop app (#371): Electron, Bun and the staged sources in one bundle. Built unsigned
       # (ad hoc) and smoke-tested from an isolated copy whenever a change shapes the bundle
-      # (scripts/test-plan.ts classifyApp). Nothing here signs, notarizes or publishes.
+      # (scripts/test-plan.ts classifyApp). Nothing here signs, notarizes or publishes. It runs
+      # BEFORE the real-Electron suite on purpose: that suite's first launch downloads Electron's
+      # binary, which hid a build that only worked after it (v0.1.0-alpha.32's release job builds
+      # first and failed on node_modules/electron/dist).
       - name: Cache the Electron and Bun downloads for the app build
         if: needs.prepare.outputs.app == 'true'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -241,6 +242,8 @@ jobs:
           path: packages/shell/dist/arm64/*.dmg
           if-no-files-found: warn
           retention-days: 7
+      - name: Run the shell's renderer security suite in real Electron
+        run: bun run scripts/test-runner.ts shell
       - name: Preserve test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

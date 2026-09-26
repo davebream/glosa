@@ -129,6 +129,14 @@ describe("repository quality gates", () => {
       "- name: Build the unsigned app and smoke it\n        if: needs.prepare.outputs.app == 'true'\n        run: bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke",
     );
     expect(shell).toContain("uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830");
+    // The build runs BEFORE the real-Electron suite: that suite's first launch downloads Electron's
+    // binary, and a build placed after it passed in CI while the release job, which builds first,
+    // failed on node_modules/electron/dist (v0.1.0-alpha.32).
+    const build = shell.indexOf("- name: Build the unsigned app and smoke it");
+    const suite = shell.indexOf("- name: Run the shell's renderer security suite in real Electron");
+    expect(build, "the app build step exists").toBeGreaterThan(-1);
+    expect(suite, "the real-Electron suite step exists").toBeGreaterThan(-1);
+    expect(build, "the app build runs before the real-Electron suite").toBeLessThan(suite);
     for (const secret of ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"])
       expect(ci).not.toContain(`secrets.${secret}`);
   });

@@ -425,6 +425,23 @@ function canRunX64(): boolean {
   return spawnSync("arch", ["-x86_64", "/usr/bin/true"]).status === 0;
 }
 
+/**
+ * Runs Electron's own installer when its binary is missing. Bun does not run Electron's postinstall
+ * when the package comes out of a warm install cache, and Electron otherwise downloads the binary
+ * only on first use. The release job builds before anything has run Electron, so dist/ was empty
+ * and the licenses step failed on dist/LICENSE (v0.1.0-alpha.32, #371).
+ */
+function ensureElectronBinary(): void {
+  const electron = join(shellRoot, "node_modules", "electron");
+  const license = join(electron, "dist", "LICENSE");
+  if (existsSync(license)) return;
+  if (!existsSync(join(electron, "install.js")))
+    fail("electron is not installed: run `bun install --cwd packages/shell --frozen-lockfile`");
+  process.stdout.write("package-app: Electron's binary is missing; running its installer\n");
+  run("node", [join(electron, "install.js")], { cwd: electron, stdio: "inherit" });
+  if (!existsSync(license)) fail(`Electron's installer finished but ${license} is still missing`);
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (process.platform !== "darwin") fail("glosa.app is built on macOS only");
@@ -436,6 +453,7 @@ async function main(): Promise<void> {
   if (runningBun !== pin) fail(`run this with Bun ${pin} (the packageManager pin), not ${runningBun ?? "Node"}`);
   if (!existsSync(join(shellRoot, "node_modules", "electron-builder", "cli.js")))
     fail("electron-builder is not installed: run `bun install --cwd packages/shell --frozen-lockfile`");
+  ensureElectronBinary();
 
   const version = String(rootManifest.version);
   const shellManifest = readJson(join(shellRoot, "package.json"));
