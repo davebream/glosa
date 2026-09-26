@@ -130,12 +130,12 @@ needed here.
 
 ## Homebrew cask
 
-The desktop app ships through a Homebrew cask in a separate tap repository,
-[`davebream/homebrew-glosa`](https://github.com/davebream/homebrew-glosa), at `Casks/glosa.rb`.
-The maintainer creates that repository once, by hand. People install with:
+The desktop app ships through a Homebrew cask in the maintainer's tap repository,
+[`davebream/homebrew-tap`](https://github.com/davebream/homebrew-tap), at `Casks/glosa.rb`. The
+tap also holds other formulae; the bump script touches only glosa's files. People install with:
 
 ```sh
-brew install --cask davebream/glosa/glosa
+brew install --cask davebream/tap/glosa
 brew upgrade --cask glosa
 ```
 
@@ -160,7 +160,7 @@ Once the release workflow builds the desktop app (the next step of #371), it run
 `glosa-<version>` branch to the tap and opens a pull request there.
 
 It needs one repository secret, `HOMEBREW_TAP_TOKEN`: a fine-grained personal access token scoped to
-`davebream/homebrew-glosa` only, with **Contents** and **Pull requests** set to read and write.
+`davebream/homebrew-tap` only, with **Contents** and **Pull requests** set to read and write.
 Without it the script refuses, and the release job leaves a warning asking for a manual bump.
 
 ### Bumping the cask by hand

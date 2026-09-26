@@ -215,7 +215,7 @@ From the next release, the desktop app installs through a Homebrew cask, or as a
 Releases page:
 
 ```sh
-brew install --cask davebream/glosa/glosa
+brew install --cask davebream/tap/glosa
 brew upgrade --cask glosa
 ```
 

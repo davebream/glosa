@@ -82,7 +82,7 @@ describe("parseArgs", () => {
       version: V,
       notarized: false,
       sums: null,
-      tap: "davebream/homebrew-glosa",
+      tap: "davebream/homebrew-tap",
       dryRun: true,
     });
   });

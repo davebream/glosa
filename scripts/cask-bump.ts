@@ -4,7 +4,7 @@
 // (#371). The release job runs it after uploading the DMGs and SHA256SUMS; `--dry-run` prints
 // the cask so a maintainer can bump the tap by hand (docs/release.md, "Homebrew cask").
 //
-//   bun run scripts/cask-bump.ts --version 0.1.0-alpha.32 [--notarized] [--sums <path>] [--tap davebream/homebrew-glosa] [--dry-run]
+//   bun run scripts/cask-bump.ts --version 0.1.0-alpha.32 [--notarized] [--sums <path>] [--tap davebream/homebrew-tap] [--dry-run]
 //
 // Without `--notarized` the cask describes an ad-hoc signed app, which macOS quarantines on install
 // and after every upgrade, so its caveats say how to unblock it. The release job passes
@@ -13,12 +13,12 @@
 // The cask installs the app and links its bundled CLI. It never writes into an agent's
 // configuration and its zap stanza never lists ~/.glosa, which holds journals, history and the
 // pairing token.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitEnvironment } from "./git-env.ts";
 
-export const DEFAULT_TAP = "davebream/homebrew-glosa";
+export const DEFAULT_TAP = "davebream/homebrew-tap";
 
 /** The DMG asset name the release job uploads for one architecture. */
 export function dmgName(version: string, arch: "arm64" | "x64"): string {
@@ -222,6 +222,7 @@ function openTapPullRequest(options: Options, cask: string, scratch: string): st
   const remote = `https://github.com/${options.tap}.git`;
   run(["git", "clone", "--depth", "1", "--branch", base, remote, checkout], scratch, gitEnv);
   run(["git", "checkout", "-b", branch], checkout, env);
+  mkdirSync(join(checkout, "Casks"), { recursive: true });
   writeFileSync(join(checkout, "Casks", "glosa.rb"), cask);
   run(["git", "add", "Casks/glosa.rb"], checkout, env);
   run(["git", "commit", "-m", `glosa ${options.version}`], checkout, env);

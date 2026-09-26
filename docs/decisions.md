@@ -1507,7 +1507,7 @@ in the official `Homebrew/homebrew-cask` repository, not in a personal tap.
 
 **Decision.** Every tag publishes the app. With the Developer ID and notarization secrets it is
 signed and notarized; without them it is signed ad hoc, uploaded to the GitHub release and offered
-through the `davebream/homebrew-glosa` cask all the same. Supersedes "Signing comes first" above.
+through the `davebream/homebrew-tap` cask all the same. Supersedes "Signing comes first" above.
 
 **What a person pays.** macOS quarantines the download or cask install, and Gatekeeper blocks the
 app and the command line inside it until the person allows it, after the first install and after
