@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 // SPDX-License-Identifier: Apache-2.0
 // Renders the Homebrew cask (the desktop app) and formula (the command line alone) for a release
-// and opens one pull request against the tap with both (#371). The release job runs it after
+// and commits both to the tap's default branch with the tap's deploy key (#371), taken from
+// HOMEBREW_TAP_DEPLOY_KEY. The release job runs it after
 // uploading the DMGs and SHA256SUMS; `--dry-run` prints the cask, and `--dry-run --formula` the
 // formula, so a maintainer can bump the tap by hand (docs/release.md, "Homebrew tap").
 //
@@ -299,69 +300,56 @@ async function tarballDigest(options: Options): Promise<string> {
   throw new Error(`could not download ${url}: ${last}`);
 }
 
-/** Git configuration, passed through the environment, that authenticates to github.com with the
- *  tap token as a basic-auth header. Keeps the token out of every URL and argv. */
-export function tapAuthEnvironment(token: string): Record<string, string> {
-  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-  return {
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
-  };
+/** GitHub's ed25519 SSH host key, pinned so the push refuses any other server. Taken on 2026-09-26
+ *  from both `ssh-keyscan -t ed25519 github.com` and `gh api meta` (`ssh_keys`), which agreed. */
+export const GITHUB_SSH_HOST_KEY =
+  "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
+
+/** The ssh command git uses to reach the tap: only the deploy key, only the pinned host key. */
+export function tapSshCommand(keyPath: string, knownHostsPath: string): string {
+  return [
+    "ssh",
+    `-i '${keyPath}'`,
+    "-o IdentitiesOnly=yes",
+    `-o UserKnownHostsFile='${knownHostsPath}'`,
+    "-o StrictHostKeyChecking=yes",
+  ].join(" ");
 }
 
-function openTapPullRequest(options: Options, cask: string, formula: string, scratch: string): string {
-  const token = process.env.HOMEBREW_TAP_TOKEN;
-  if (!token) {
-    throw new Error("HOMEBREW_TAP_TOKEN is not set; bump the tap by hand with --dry-run (docs/release.md)");
+/**
+ * Writes both files to the tap's default branch with the tap's deploy key (#371). A deploy key can
+ * push but cannot open a pull request, so the bump is a direct commit, which is how personal taps
+ * are usually kept. Re-running for a version the tap already carries changes nothing and succeeds.
+ */
+function pushToTap(options: Options, cask: string, formula: string, scratch: string): string {
+  const key = process.env.HOMEBREW_TAP_DEPLOY_KEY;
+  if (!key) {
+    throw new Error("HOMEBREW_TAP_DEPLOY_KEY is not set; bump the tap by hand with --dry-run (docs/release.md)");
   }
+  const keyPath = join(scratch, "deploy-key");
+  const knownHosts = join(scratch, "known_hosts");
+  writeFileSync(keyPath, key.endsWith("\n") ? key : `${key}\n`, { mode: 0o600 });
+  writeFileSync(knownHosts, `${GITHUB_SSH_HOST_KEY}\n`, { mode: 0o600 });
   const checkout = join(scratch, "tap");
-  const branch = `glosa-${options.version}`;
   const env = {
     ...gitEnvironment(),
-    GH_TOKEN: token,
+    GIT_SSH_COMMAND: tapSshCommand(keyPath, knownHosts),
     GIT_AUTHOR_NAME: "github-actions[bot]",
     GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
     GIT_COMMITTER_NAME: "github-actions[bot]",
     GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
   };
-  const base = run(
-    ["gh", "repo", "view", options.tap, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
-    scratch,
-    env,
-  ).trim();
-  // The token travels as an HTTP header set through git's environment, never in the remote URL or
-  // the argv: git echoes a failing URL in its own error text, and run() puts stderr in the error.
-  const gitEnv = { ...env, ...tapAuthEnvironment(token) };
-  const remote = `https://github.com/${options.tap}.git`;
-  run(["git", "clone", "--depth", "1", "--branch", base, remote, checkout], scratch, gitEnv);
-  run(["git", "checkout", "-b", branch], checkout, env);
+  run(["git", "clone", "--depth", "1", `git@github.com:${options.tap}.git`, checkout], scratch, env);
   mkdirSync(join(checkout, "Casks"), { recursive: true });
   mkdirSync(join(checkout, "Formula"), { recursive: true });
   writeFileSync(join(checkout, "Casks", "glosa.rb"), cask);
   writeFileSync(join(checkout, "Formula", "glosa.rb"), formula);
   run(["git", "add", "Casks/glosa.rb", "Formula/glosa.rb"], checkout, env);
+  const unchanged = Bun.spawnSync({ cmd: ["git", "diff", "--cached", "--quiet"], cwd: checkout, env });
+  if (unchanged.exitCode === 0) return `${options.tap} already carries glosa ${options.version}`;
   run(["git", "commit", "-m", `glosa ${options.version}`], checkout, env);
-  run(["git", "push", "origin", branch], checkout, gitEnv);
-  return run(
-    [
-      "gh",
-      "pr",
-      "create",
-      "--repo",
-      options.tap,
-      "--base",
-      base,
-      "--head",
-      branch,
-      "--title",
-      `glosa ${options.version}`,
-      "--body",
-      `Bumps the cask and the formula to glosa ${options.version}.\n\nRelease: https://github.com/davebream/glosa/releases/tag/v${options.version}\n\nCask, arm64: ${dmgName(options.version, "arm64")}\nCask, x64: ${dmgName(options.version, "x64")}\nFormula: ${npmTarballUrl(options.version)}\n\nDMG digests come from the release's SHA256SUMS; the formula digest is the npm tarball's sha256.`,
-    ],
-    checkout,
-    env,
-  ).trim();
+  run(["git", "push", "origin", "HEAD"], checkout, env);
+  return `pushed glosa ${options.version} to ${options.tap}`;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -379,7 +367,7 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
     const formula = renderFormula(options.version, await tarballDigest(options));
-    process.stdout.write(`${openTapPullRequest(options, cask, formula, scratch)}\n`);
+    process.stdout.write(`${pushToTap(options, cask, formula, scratch)}\n`);
     return 0;
   } finally {
     rmSync(scratch, { recursive: true, force: true });

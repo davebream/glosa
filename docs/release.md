@@ -11,8 +11,8 @@ Pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/r
 2. `release`: publishes `@davebream/glosa` to npm with provenance and creates the GitHub release.
 3. `app`: builds the desktop app for Apple Silicon (`arm64`) and Intel (`x64`), smoke-tests it,
    and uploads to the GitHub release: `glosa-<version>-arm64.dmg`, `glosa-<version>-arm64.zip`,
-   `glosa-<version>-x64.dmg`, `glosa-<version>-x64.zip` and `SHA256SUMS`. It then opens the
-   Homebrew tap pull request. With the Developer ID secrets the app is signed and notarized;
+   `glosa-<version>-x64.dmg`, `glosa-<version>-x64.zip` and `SHA256SUMS`. It then commits the
+   new cask and formula to the Homebrew tap. With the Developer ID secrets the app is signed and notarized;
    without them it is signed ad hoc (see "Ad hoc or notarized" below).
 4. `released`: fails the run unless both `release` and `app` succeeded, so a tag that published npm
    but produced no app is red.
@@ -33,7 +33,7 @@ Set these under the repository's Settings, Secrets and variables, Actions.
 | `APPLE_ID` | The Apple ID email of the developer account, used for notarization. |
 | `APPLE_APP_SPECIFIC_PASSWORD` | An app-specific password for that Apple ID. |
 | `APPLE_TEAM_ID` | The 10-character Team ID of the developer account. |
-| `HOMEBREW_TAP_TOKEN` | Fine-grained token for the tap; see "Homebrew cask" below. |
+| `HOMEBREW_TAP_DEPLOY_KEY` | Private half of an SSH deploy key with write access to `davebream/homebrew-tap` only; see "Bumping the tap automatically" below. |
 
 Only the step that signs and notarizes receives the five Apple secrets. A test in
 `test/quality-gates.test.ts` pins that.
@@ -177,12 +177,25 @@ What the cask does on a person's machine:
 The release workflow's `app` job runs `scripts/cask-bump.ts` after uploading the DMGs and
 `SHA256SUMS` to the GitHub release. The script reads both DMG digests from `SHA256SUMS`, downloads
 the npm tarball and hashes it (retrying while the registry catches up with a fresh publish),
-renders `Casks/glosa.rb` and `Formula/glosa.rb`, pushes a `glosa-<version>` branch to the tap and
-opens one pull request with both.
+renders `Casks/glosa.rb` and `Formula/glosa.rb`, and commits both to the tap's default branch.
+Re-running for a version the tap already carries changes nothing.
 
-It needs one repository secret, `HOMEBREW_TAP_TOKEN`: a fine-grained personal access token scoped to
-`davebream/homebrew-tap` only, with **Contents** and **Pull requests** set to read and write.
-Without it the script refuses, and the release job leaves a warning asking for a manual bump.
+It needs one repository secret, `HOMEBREW_TAP_DEPLOY_KEY`: the private half of an SSH deploy key
+whose public half is registered on `davebream/homebrew-tap` with write access. A deploy key reaches
+that one repository and nothing else, and does not expire. It can push but cannot open pull requests,
+which is why the bump is a direct commit. The script pins GitHub's SSH host key and refuses any other.
+Without the secret the release job leaves a warning asking for a manual bump.
+
+To replace the key:
+
+```sh
+ssh-keygen -q -t ed25519 -N "" -C "glosa release job to homebrew-tap" -f tapkey
+gh repo deploy-key add tapkey.pub --repo davebream/homebrew-tap --allow-write --title "glosa release job"
+gh secret set HOMEBREW_TAP_DEPLOY_KEY --repo davebream/glosa < tapkey
+rm tapkey tapkey.pub
+```
+
+Then delete the old key under the tap's Settings, Deploy keys.
 
 ### Bumping the tap by hand
 

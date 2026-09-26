@@ -13,20 +13,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (#371).
 - The Homebrew tap gains a `glosa` formula next to the cask: `brew install davebream/tap/glosa`
   installs the command line alone, on Homebrew's Bun, with a wrapper that keeps it working on a bare
-  `PATH`. `scripts/cask-bump.ts` renders both files from one release and opens one tap pull request;
+  `PATH`. `scripts/cask-bump.ts` renders both files from one release and commits them to the tap with a deploy key;
   `--dry-run --formula` prints the formula. Install the cask or the formula, not both: each links
   `glosa` (#371).
 - A tagged release builds the desktop app for Apple Silicon and Intel, smoke-tests it, and uploads a
-  DMG and a zip per architecture plus `SHA256SUMS` to the GitHub release, then opens the Homebrew
-  tap pull request. Without Developer ID secrets the app is signed ad hoc: it works, and macOS asks
+  DMG and a zip per architecture plus `SHA256SUMS` to the GitHub release, then updates the Homebrew
+  tap. Without Developer ID secrets the app is signed ad hoc: it works, and macOS asks
   each person to allow it once after install and each upgrade, which the cask caveats and the README
   explain. With the secrets it is signed and notarized. The `released` gate now fails a tag whose app
   did not build. `docs/release.md` lists the secrets, the one-time Developer ID setup, the signing switch
   and how to check a shipped build (#371).
 - `scripts/cask-bump.ts` renders the Homebrew cask for a desktop-app release from the
-  release's `SHA256SUMS` and opens a pull request against the `davebream/homebrew-tap` tap. The
+  release's `SHA256SUMS` and commits it to the `davebream/homebrew-tap` tap. The
   cask links the CLI the app carries, never writes into agent configuration and never removes
-  `~/.glosa`. `docs/release.md` describes the tap, the `HOMEBREW_TAP_TOKEN` secret and the manual
+  `~/.glosa`. `docs/release.md` describes the tap, the `HOMEBREW_TAP_DEPLOY_KEY` secret and the manual
   fallback (#371).
 - The desktop app can be packaged: `bun run --cwd packages/shell package` builds `glosa.app`, a
   DMG and a zip per architecture. The app carries Bun at the repository's pin, the CLI, the daemon

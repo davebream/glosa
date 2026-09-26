@@ -14,7 +14,8 @@ import {
   renderCask,
   renderFormula,
   sha256Hex,
-  tapAuthEnvironment,
+  GITHUB_SSH_HOST_KEY,
+  tapSshCommand,
 } from "../scripts/cask-bump.ts";
 
 const ARM = "a".repeat(64);
@@ -100,12 +101,16 @@ describe("parseArgs", () => {
   });
 });
 
-test("the tap token reaches git only as a basic-auth header, never as a raw value", () => {
-  const env = tapAuthEnvironment("ghp_secretvalue");
-  expect(Object.values(env).some((v) => v.includes("ghp_secretvalue"))).toBe(false);
-  expect(env.GIT_CONFIG_KEY_0).toBe("http.https://github.com/.extraheader");
-  const encoded = env.GIT_CONFIG_VALUE_0?.replace("AUTHORIZATION: basic ", "") ?? "";
-  expect(Buffer.from(encoded, "base64").toString()).toBe("x-access-token:ghp_secretvalue");
+test("the tap push uses only the deploy key and only GitHub's pinned host key", () => {
+  const command = tapSshCommand("/tmp/x/deploy-key", "/tmp/x/known_hosts");
+  expect(command).toContain("-i '/tmp/x/deploy-key'");
+  expect(command).toContain("-o IdentitiesOnly=yes");
+  expect(command).toContain("-o UserKnownHostsFile='/tmp/x/known_hosts'");
+  // A changed or missing host key is refused, never accepted on first sight.
+  expect(command).toContain("-o StrictHostKeyChecking=yes");
+  expect(GITHUB_SSH_HOST_KEY).toBe(
+    "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+  );
 });
 
 describe("quarantine caveat (#371)", () => {
