@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `glosa update` recognises an install made by a Homebrew formula (`homebrew`, anything under
   `Cellar/glosa/`) and answers with `brew upgrade glosa` instead of rewriting files inside brew's keg
   (#371).
+- The Homebrew tap gains a `glosa` formula next to the cask: `brew install davebream/tap/glosa`
+  installs the command line alone, on Homebrew's Bun, with a wrapper that keeps it working on a bare
+  `PATH`. `scripts/cask-bump.ts` renders both files from one release and opens one tap pull request;
+  `--dry-run --formula` prints the formula. Install the cask or the formula, not both: each links
+  `glosa` (#371).
 - A tagged release builds the desktop app for Apple Silicon and Intel, smoke-tests it, and uploads a
   DMG and a zip per architecture plus `SHA256SUMS` to the GitHub release, then opens the Homebrew
   tap pull request. Without Developer ID secrets the app is signed ad hoc: it works, and macOS asks

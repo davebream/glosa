@@ -128,16 +128,35 @@ bundled Bun is killed at launch under the hardened runtime, the next candidate i
 `com.apple.security.cs.disable-executable-page-protection`. Record what the first signed build
 needed here.
 
-## Homebrew cask
+## Homebrew tap
 
-The desktop app ships through a Homebrew cask in the maintainer's tap repository,
-[`davebream/homebrew-tap`](https://github.com/davebream/homebrew-tap), at `Casks/glosa.rb`. The
-tap also holds other formulae; the bump script touches only glosa's files. People install with:
+glosa ships through the maintainer's tap repository,
+[`davebream/homebrew-tap`](https://github.com/davebream/homebrew-tap), which also holds other
+formulae; the bump script touches only glosa's two files:
 
-```sh
-brew install --cask davebream/tap/glosa
-brew upgrade --cask glosa
-```
+| File | What it installs | Command |
+|---|---|---|
+| `Casks/glosa.rb` | The desktop app, with the command line inside it | `brew install --cask davebream/tap/glosa` |
+| `Formula/glosa.rb` | The command line only, on Homebrew's Bun | `brew install davebream/tap/glosa` |
+
+Install one or the other. Both link `glosa` into Homebrew's bin, so the second fails to link, and
+Homebrew has no way for a cask to declare a conflict with a formula (its cask `conflicts_with`
+accepts only other casks). Both files' caveats say so.
+
+### The formula
+
+The formula installs the published npm tarball: `bun add --global` into the keg, with Homebrew's
+Bun. The CLI starts with `#!/usr/bin/env bun`, so `bin/glosa` is a small wrapper that puts
+Homebrew's Bun first on `PATH`; without it, a bare `PATH` such as a Dock launch fails with
+`env: bun: No such file or directory`. Its digest is the npm tarball's sha256. `glosa update`
+refuses a formula install and answers with `brew upgrade glosa` (#379), because writing into the
+keg would put it out of step with what brew recorded.
+
+This shape was verified on 2026-09-26 by installing it from a throwaway tap: `brew test` passed,
+`glosa --version` answered with `PATH=/usr/bin:/bin`, and `glosa open` started a daemon on the
+keg's Bun.
+
+### The cask
 
 The tap carries the ad-hoc signed app until a Developer ID exists (see "Ad hoc or notarized"),
 with caveats that tell people how to allow it. A notarized release renders the cask without them.
@@ -153,29 +172,36 @@ What the cask does on a person's machine:
   `dev.glosa.app`. It never removes `~/.glosa`, which holds journals, version history and the
   pairing token.
 
-### Bumping the cask automatically
+### Bumping the tap automatically
 
-Once the release workflow builds the desktop app (the next step of #371), it runs
-`scripts/cask-bump.ts` after uploading the DMGs and `SHA256SUMS` to the GitHub release. The script reads both DMG digests from `SHA256SUMS`, renders `Casks/glosa.rb`, pushes a
-`glosa-<version>` branch to the tap and opens a pull request there.
+The release workflow's `app` job runs `scripts/cask-bump.ts` after uploading the DMGs and
+`SHA256SUMS` to the GitHub release. The script reads both DMG digests from `SHA256SUMS`, downloads
+the npm tarball and hashes it (retrying while the registry catches up with a fresh publish),
+renders `Casks/glosa.rb` and `Formula/glosa.rb`, pushes a `glosa-<version>` branch to the tap and
+opens one pull request with both.
 
 It needs one repository secret, `HOMEBREW_TAP_TOKEN`: a fine-grained personal access token scoped to
 `davebream/homebrew-tap` only, with **Contents** and **Pull requests** set to read and write.
 Without it the script refuses, and the release job leaves a warning asking for a manual bump.
 
-### Bumping the cask by hand
+### Bumping the tap by hand
 
 From a checkout of the tap:
 
 ```sh
 bun run /path/to/glosa/scripts/cask-bump.ts --version 0.1.0-alpha.32 --dry-run > Casks/glosa.rb
+bun run /path/to/glosa/scripts/cask-bump.ts --version 0.1.0-alpha.32 --dry-run --formula > Formula/glosa.rb
 brew audit --cask --online Casks/glosa.rb
+brew audit --online Formula/glosa.rb
 git switch -c glosa-0.1.0-alpha.32
-git commit -am "glosa 0.1.0-alpha.32"
+git add Casks/glosa.rb Formula/glosa.rb
+git commit -m "glosa 0.1.0-alpha.32"
 git push -u origin glosa-0.1.0-alpha.32
 gh pr create --fill
 ```
 
-`--dry-run` downloads `SHA256SUMS` from the GitHub release unless you pass `--sums <path>`, and
-fails by name if either DMG digest is missing. `brew audit` needs the cask inside a tap, which a
-checkout of the tap already is.
+For the cask, `--dry-run` downloads `SHA256SUMS` from the GitHub release unless you pass
+`--sums <path>`, and fails by name if either DMG digest is missing. For the formula, it downloads
+the npm tarball unless you pass `--npm-tarball <path>`. `brew audit` needs both files inside a tap,
+which a checkout of the tap already is. Add `--notarized` to the cask command only for a build
+signed with a Developer ID.

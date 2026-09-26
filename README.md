@@ -140,6 +140,13 @@ Install the alpha CLI globally:
 bun add --global @davebream/glosa@alpha
 ```
 
+From the next release, Homebrew can install it instead, together with the Bun it runs on:
+
+```sh
+brew install davebream/tap/glosa
+brew upgrade glosa
+```
+
 Do not use the `davebream/glosa` GitHub shorthand. It installs the repository's moving default branch
 instead of the published alpha.
 
@@ -232,6 +239,9 @@ The app carries its own Bun, so it needs no install above. The cask links `glosa
 bin, so the terminal, the plugin and the app see one install; if you already installed glosa with
 bun or npm, that install stays the one the plugin uses, and `glosa doctor` says which one is recorded.
 The plugin step is the same, and the cask writes nothing into your agent's configuration.
+
+Install either the cask or the `glosa` formula, not both. Each links `glosa` into Homebrew's bin,
+so the second one fails to link. The cask already carries the command line.
 
 ### Updating
 
