@@ -156,7 +156,9 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.whole == 'true'
     runs-on: macos-14
-    timeout-minutes: 10
+    # The full profile has taken 7 to 9 minutes on main and hit a 10-minute cap on f2ca4bd; a cap is
+    # a hang guard, not a latency budget (docs/testing.md), so it keeps real headroom.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
