@@ -16,6 +16,7 @@ import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
 import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
 import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import type { SignalFrame, SignalRegistry } from "../agent-provider/signal-registry.ts";
+import type { AttentionFeed } from "../bus/attention-feed.ts";
 import type { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import type { DictationProviderRegistry } from "../dictation/interface.ts";
 import { createHash } from "node:crypto";
@@ -23,7 +24,13 @@ import { sourceSha256 } from "../artifact-render.ts";
 import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
 import { WorkspaceAdoptedError, type WorkspaceBus } from "../bus/bus.ts";
 import { type DeliveryVia, isTerminal } from "../bus/lifecycle.ts";
-import { badgePendingCount, hasOpenAttention, orphanedEntryCount, peekJournal } from "../bus/peek.ts";
+import {
+  badgePendingCount,
+  hasOpenAttention,
+  openAttentionCount,
+  orphanedEntryCount,
+  peekJournal,
+} from "../bus/peek.ts";
 import { CompositeDeliveryRegistry } from "../delivery/composite-reservations.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
 import { BUILD_ID } from "../lifecycle/build-id.ts";
@@ -233,6 +240,10 @@ export interface ApiContext {
   /** Session signals derived from claim events (issue #155). Optional so a hand-built test context
    * keeps compiling; absent, drains carry no `signals` and the ack route answers 404. */
   signalRegistry?: SignalRegistry;
+  /** Daemon-wide attention changes (#389): every workspace stream forwards `attention_changed
+   * {slug}` for every workspace. Optional so a hand-built test context keeps compiling; absent,
+   * streams carry only their own workspace's journal, as before. */
+  attentionFeed?: AttentionFeed;
   /** Proves a `watch/transport-ack` names entries this session's own watch response emitted (#153
    * Part 2). Optional so every hand-built test context keeps compiling; when absent the ack route
    * refuses rather than falling back to the old "any in-scope external_edit" rule, because that
@@ -545,16 +556,30 @@ function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
 /** `GET /api/workspaces` (A1 §5.2) — the live, present-only registry. */
 function handleListWorkspaces(ctx: ApiContext): Response {
   const entries = ctx.workspaceIndex.list({ presentOnly: true });
-  const body = entries.map((e) => ({
-    slug: e.slug,
-    path: e.worktree_path,
-    registration_id: e.registration_id,
-    registration_epoch: e.first_seen,
-    // Contract 1.11: lets the SPA offer a star only where one can be taken.
-    kind: e.kind,
-    last_seen: e.last_seen,
-    has_attention: hasOpenAttention(peekJournal(e).state),
-  }));
+  // Contract 1.19 (#389): the desktop shell's Dock badge sums these across every workspace.
+  let decisions = new Map<string, number>();
+  try {
+    decisions = ctx.managedChats?.pendingDecisionCounts() ?? decisions;
+  } catch {
+    // Managed chats are optional; an unreadable chat store never fails the workspace list.
+  }
+  const body = entries.map((e) => {
+    const state = peekJournal(e).state;
+    return {
+      slug: e.slug,
+      path: e.worktree_path,
+      registration_id: e.registration_id,
+      registration_epoch: e.first_seen,
+      // Contract 1.11: lets the SPA offer a star only where one can be taken.
+      kind: e.kind,
+      last_seen: e.last_seen,
+      has_attention: hasOpenAttention(state),
+      // The same number that workspace's attention tray shows (`pending_count`).
+      attention_count: openAttentionCount(state),
+      // Chats in that workspace with a decision waiting on the person.
+      decision_count: decisions.get(`${e.registration_id}:${e.first_seen}`) ?? 0,
+    };
+  });
   return Response.json(body);
 }
 
@@ -2745,12 +2770,21 @@ async function handleStream(
     shutdownSignal: lifecycleSignal(ctx, authSignal),
     subscribeChats: ctx.managedChats
       ? (listener) => {
-          ctx.managedChats!.store.listeners.add(listener);
+          const store = ctx.managedChats!.store;
+          // #389: name the workspace whose chat changed, when the chat can be tied to a live
+          // registration of the same epoch; otherwise the frame says "something changed".
+          const relay = ({ chatId }: { chatId?: string }) => {
+            const owner = chatId === undefined ? undefined : store.workspaceOf(chatId);
+            const entry = owner ? ctx.workspaceIndex.getWorkspaceByRegistration(owner.workspaceId) : null;
+            listener(entry && owner && entry.first_seen === owner.workspaceEpoch ? { slug: entry.slug } : {});
+          };
+          store.listeners.add(relay);
           return () => {
-            ctx.managedChats!.store.listeners.delete(listener);
+            store.listeners.delete(relay);
           };
         }
       : undefined,
+    subscribeAttention: ctx.attentionFeed ? (listener) => ctx.attentionFeed!.subscribe(listener) : undefined,
     subscribeMetadata: ctx.metadataRegistry
       ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry, listener)
       : undefined,

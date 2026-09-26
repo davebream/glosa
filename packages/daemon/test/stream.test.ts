@@ -488,7 +488,8 @@ test("managed-chat invalidations share the workspace stream without changing its
     const change = await readEvent(reader);
     expect(change.event).toBe("chats_changed");
     expect(change.id).toBeUndefined();
-    expect(JSON.parse(change.data)).toEqual({});
+    // #389: a change that names no workspace coalesces to an empty `slugs`, meaning "any".
+    expect(JSON.parse(change.data)).toEqual({ slugs: [] });
     expect(bus.currentCursor()).toBe(Number(snapshot.id));
   } finally {
     await reader.cancel();

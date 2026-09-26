@@ -118,7 +118,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.18", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.19", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
@@ -139,9 +139,15 @@ dirs, manually opened dirs).
 - **200**
 ```json
 [{ "slug": "workspace-a1b2c3", "path": "/Users/example/Documents/workspace", "kind": "directory",
-   "last_seen": "2026-07-20T10:00:00Z", "has_attention": false }]
+   "last_seen": "2026-07-20T10:00:00Z", "has_attention": false, "attention_count": 0,
+   "decision_count": 0 }]
 ```
-`kind` (`"directory"` or `"loose-file"`) was added in contract 1.11. There is no route that creates a
+`kind` (`"directory"` or `"loose-file"`) was added in contract 1.11. `attention_count` and
+`decision_count` were added in contract 1.19 (#389) for the desktop shell's Dock badge, which sums
+them across every workspace. `attention_count` is exactly that workspace's attention tray count
+(`pending_count` of `GET /w/:slug/inbox`: attention requests not yet terminal). `decision_count` is
+the number of its chats with a decision waiting on the person; a chat counts once however many
+decisions it holds. There is no route that creates a
 workspace from a path the SPA supplies: a new directory is opened from the terminal (`glosa open
 <dir>`, R8). The SPA can reopen a directory only through a star (§5.21), whose path the daemon
 recorded from a registration it already held.
@@ -1156,7 +1162,7 @@ wire mechanics.
 Standard SSE framing, hand-parsed client-side (fetch-streaming, not `EventSource` — §2):
 ```
 id: <cursor>
-event: <artifact | journal | heartbeat | snapshot | resync_required>
+event: <artifact | journal | heartbeat | snapshot | resync_required | chats_changed | attention_changed>
 data: <json>
 
 ```
@@ -1325,7 +1331,17 @@ startup disconnects are not classified as uncertain submissions; uncertainty beg
 
 Managed chat panes and the Chats list share the existing workspace SSE connection in the SPA.
 The advisory `chats_changed` frame has no journal cursor or transcript payload; notifications
-coalesce over 250 ms and each pane reloads its bounded durable snapshot. Reconnect also reloads
+coalesce over 250 ms and each pane reloads its bounded durable snapshot. Since contract 1.19 (#389)
+its data is `{slugs}`: every workspace whose chats changed in that window, sorted, and empty when a
+change could not be tied to one workspace. When exactly one did, `slug` repeats it. The chat store is
+daemon-wide, so every workspace stream receives every workspace's chat changes.
+
+Also since contract 1.19, every `GET /w/:slug/stream` emits the advisory `attention_changed {slug}`
+whenever any workspace's attention changes: an attention request created, moved through its
+lifecycle, adopted or dismissed. It has no cursor and is not replayed on reconnect; a client that
+reconnects refetches `GET /api/workspaces` for the counts. The page's own workspace sees the same
+change as a `journal` frame too. This is how one open page follows attention daemon-wide (desktop
+shell feature map §4, decision 4) without a second long-lived connection. Reconnect also reloads
 snapshots. The direct per-chat event endpoint remains available, but opening more UI tabs does
 not allocate more long-lived browser connections. Document-only surfaces do not subscribe to the
 chat list. This prevents chat streams from starving document requests at the browser connection limit.

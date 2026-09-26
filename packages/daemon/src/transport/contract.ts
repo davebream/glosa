@@ -58,8 +58,15 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * claim problem slugs (`claim-held`, `claim-revoked`, `claim-expired`, `claim-superseded`,
  * `entry-resolved`, `no-claim`, `claim-limit`) carrying their facts as RFC 9457 extension members.
  * apply-begin's conflict moves from `lease-conflict` to `claim-held`; an N-1 CLI that matched only
- * `lease-conflict` falls back to its generic exit 8, and this CLI accepts both. */
-export const CONTRACT_VERSION = "1.18";
+ * `lease-conflict` falls back to its generic exit 8, and this CLI accepts both.
+ *
+ * v1.19 (issue #389) makes attention daemon-wide for the desktop shell's Dock badge and
+ * notifications: `GET /api/workspaces` rows gain `attention_count` (the attention tray's own
+ * `pending_count` for that workspace) and `decision_count` (its chats with a decision waiting on the
+ * person); every `GET /w/:slug/stream` also emits `attention_changed {slug}` for any workspace's
+ * attention change; `chats_changed` gains `slugs` (and `slug` when exactly one). Additive, N/N-1
+ * safe: an N-1 client ignores the fields and the new frame, and an N-1 daemon omits them. */
+export const CONTRACT_VERSION = "1.19";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

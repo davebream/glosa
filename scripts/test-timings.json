@@ -279,6 +279,10 @@
     "packages/shell/test/package-app.test.ts": {
       "seconds": 0.4,
       "reason": "Initial local Bun 1.4.2 estimate for the app packaging unit tests (21 tests: checksum lookup, staged-tree fixtures, builder config, tree comparison, and two launcher spawns through symlinks), 0.27 s locally; replace with measured CI medians."
+    },
+    "packages/daemon/test/attention-daemon-wide.test.ts": {
+      "seconds": 1.0,
+      "reason": "Initial local Bun 1.4.2 estimate for the daemon-wide attention tests (9 tests over a real loopback server with two workspace buses and SSE streams, including one 400 ms quiet window), 1.0 s locally; replace with measured CI medians."
     }
   }
 }

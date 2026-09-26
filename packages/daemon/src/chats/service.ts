@@ -451,6 +451,19 @@ export class ManagedChatService {
     if (signal.aborted) revoke();
     else signal.addEventListener("abort", revoke, { once: true });
   }
+  /** How many chats in each workspace have a decision waiting on the person, keyed
+   * `${registration id}:${epoch}` like every other chat scope here (#389). A chat counts once
+   * however many decisions it holds: the badge counts things to go and look at. One pass over the
+   * store for all workspaces, so `GET /api/workspaces` does not re-read every chat per row. */
+  pendingDecisionCounts(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const chat of this.store.all()) {
+      if (!chat.decisions.some((decision) => decision.status === "pending")) continue;
+      const key = `${chat.workspaceId}:${chat.workspaceEpoch}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }
   private validateWorkspace(workspace: ChatWorkspace): void {
     if (this.fencedWorkspaces.has(`${workspace.id}:${workspace.epoch}`))
       throw new ManagedAgentError("workspace-stopping", "This workspace is stopping managed agents.");

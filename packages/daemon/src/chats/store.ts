@@ -552,10 +552,24 @@ export class ChatLog {
 }
 
 export class AgentStore {
-  readonly listeners = new Set<() => void>();
-  private notify = () => {
-    for (const listener of this.listeners) listener();
+  /** Told about every change; `chatId` names the chat when one chat's journal changed (#389), and
+   * is absent for a store-wide control change. */
+  readonly listeners = new Set<(change: { chatId?: string }) => void>();
+  private notify = (chatId?: string) => {
+    for (const listener of this.listeners) listener(chatId === undefined ? {} : { chatId });
   };
+  /** The workspace registration a chat belongs to, from its registration record or, for a chat
+   * written before registrations existed, its own state. Undefined when neither can be read. */
+  workspaceOf(chatId: string): { workspaceId: string; workspaceEpoch: string } | undefined {
+    const association = this.associations.get(chatId);
+    if (association) return { workspaceId: association.workspaceId, workspaceEpoch: association.workspaceEpoch };
+    try {
+      const state = this.chat(chatId).state;
+      return { workspaceId: state.workspaceId, workspaceEpoch: state.workspaceEpoch };
+    } catch {
+      return undefined;
+    }
+  }
   readonly control: IntentJournal<z.infer<typeof controlSchema>>;
   private readonly profiles = new Map<string, AgentProfile>();
   private readonly capabilities = new Map<
@@ -576,7 +590,7 @@ export class AgentStore {
   private readonly externals = new Map<string, Extract<z.infer<typeof controlSchema>, { type: "external" }>>();
   constructor(readonly root: string) {
     this.control = new IntentJournal(join(root, "control.jsonl"), controlSchema);
-    this.control.listeners.add(this.notify);
+    this.control.listeners.add(() => this.notify());
     for (const record of this.control.records) this.applyControl(record.data);
   }
   private applyControl(event: z.infer<typeof controlSchema>): void {
@@ -716,7 +730,7 @@ export class AgentStore {
     let log = this.chats.get(chatId);
     if (!log) {
       log = new ChatLog(join(this.root, "chats", chatId));
-      log.journal.listeners.add(this.notify);
+      log.journal.listeners.add(() => this.notify(chatId));
       this.chats.set(chatId, log);
     }
     return log;

@@ -33,6 +33,7 @@ import { type DictationProvider, DictationProviderRegistry } from "../dictation/
 import { ArtifactWatcherAllocation } from "../artifact-watcher-allocation.ts";
 import { ClaimSweeper } from "../claim-sweeper.ts";
 import { SignalRegistry } from "../agent-provider/signal-registry.ts";
+import { AttentionFeed } from "../bus/attention-feed.ts";
 import { ArtifactWatcherRegistry, type ArtifactWatcherRegistryOptions } from "../artifact-watcher.ts";
 import { WorkspaceBus } from "../bus/bus.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
@@ -140,6 +141,7 @@ export interface DaemonBackend {
   managedChats?: ManagedChatService;
   pushRegistry: SessionPushRegistry;
   signalRegistry: SignalRegistry;
+  attentionFeed: AttentionFeed;
   watchEmissions: WatchEmissionRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
   /** Starts daemon-lifetime watching for workspaces already in the index. Call AFTER serving:
@@ -316,11 +318,20 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     sessionsFor: (workspace) => sessionRegistry.forWorkspace(workspace).map((session) => session.session_id),
     push: (sessionId, frame) => pushRegistry.sendSignal(sessionId, frame),
   });
-  busRegistry.setOnOpen((bus, workspace) => {
+  busRegistry.addOnOpen((bus, workspace) => {
     const unsubscribe = signalRegistry.attach(
       bus,
       typeof workspace === "string" ? workspace : workspace.canonical_path,
     );
+    bus.closeSignal().addEventListener("abort", unsubscribe, { once: true });
+  });
+  // #389: attention is daemon-wide (feature map §4, decision 4), so every workspace stream hears
+  // about every workspace's attention through this one feed, observed on each bus as it opens.
+  const attentionFeed = new AttentionFeed(
+    (workspace) => workspaceIndex.getWorkspaceByRegistration(workspaceRegistrationId(workspace))?.slug,
+  );
+  busRegistry.addOnOpen((bus, workspace) => {
+    const unsubscribe = attentionFeed.attach(bus, workspace);
     bus.closeSignal().addEventListener("abort", unsubscribe, { once: true });
   });
   const watchEmissions = new WatchEmissionRegistry();
@@ -457,6 +468,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     managedChats,
     pushRegistry,
     signalRegistry,
+    attentionFeed,
     watchEmissions,
     artifactWatcherRegistry,
     adoptionCoordinator,
@@ -573,6 +585,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     managedChats: backend.managedChats,
     pushRegistry: backend.pushRegistry,
     signalRegistry: backend.signalRegistry,
+    attentionFeed: backend.attentionFeed,
     watchEmissions: backend.watchEmissions,
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,
