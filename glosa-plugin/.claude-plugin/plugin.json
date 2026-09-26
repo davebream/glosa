@@ -1,6 +1,6 @@
 {
   "name": "glosa",
-  "version": "0.1.0-alpha.33",
+  "version": "0.1.0-alpha.34",
   "description": "Local-first writing and review workspace for Claude Code.",
   "author": {
     "name": "Dawid Leszczyński"
