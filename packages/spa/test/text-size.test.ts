@@ -201,7 +201,10 @@ describe("the text size stepper", () => {
   function mount(store: ReturnType<typeof createTextSizeStore>, variant: "menu" | "settings" = "menu") {
     const host = dom.document.createElement("div") as any;
     dom.document.body.append(host);
-    const control = mountTextSizeControl(host, store, { variant });
+    const control = mountTextSizeControl(host, store, {
+      variant,
+      ...(variant === "settings" ? { describedBy: "settings-hint" } : {}),
+    });
     const q = (selector: string) => host.querySelector(selector);
     return {
       host,
@@ -213,13 +216,13 @@ describe("the text size stepper", () => {
     };
   }
 
-  test("is a group named Text size around a spinbutton that carries the step, with − and + outside the tab order", () => {
+  test("is a spinbutton named Text size that carries the step, with − and + outside the tab order", () => {
     const store = createTextSizeStore({ root: dom.document.createElement("html") as any, storage: fakeStorage() });
     const { host, value, smaller, larger, reset } = mount(store);
-    const label = dom.document.getElementById(host.getAttribute("aria-labelledby"));
-    expect(host.getAttribute("role")).toBe("group");
+    const label = dom.document.getElementById(value.getAttribute("aria-labelledby"));
     expect(label?.textContent).toBe("Text size");
-    expect(value.getAttribute("aria-labelledby")).toBe(label?.id);
+    // Named once: the container is no labelled group, or a screen reader says "Text size" twice.
+    expect([host.getAttribute("role"), host.getAttribute("aria-labelledby")]).toEqual([null, null]);
     expect({
       now: value.getAttribute("aria-valuenow"),
       text: value.getAttribute("aria-valuetext"),
@@ -294,7 +297,12 @@ describe("the text size stepper", () => {
     settings.smaller.click();
     expect(menu.value.getAttribute("aria-valuenow")).toBe("16");
     // Each carries its own label id, so two on one page never name each other's value.
-    expect(menu.host.getAttribute("aria-labelledby")).not.toBe(settings.host.getAttribute("aria-labelledby"));
+    expect(menu.value.getAttribute("aria-labelledby")).not.toBe(settings.value.getAttribute("aria-labelledby"));
+    // Settings says what the step sets, after the value; the menu has no such line.
+    expect([menu.value.getAttribute("aria-describedby"), settings.value.getAttribute("aria-describedby")]).toEqual([
+      null,
+      "settings-hint",
+    ]);
     menu.control.destroy();
     settings.larger.click();
     expect(menu.host.childElementCount, "a destroyed control is gone and no longer listening").toBe(0);

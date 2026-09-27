@@ -132,8 +132,10 @@
   --manuscript-size: var(--reading-size);
   --manuscript-leading: 1.62;
   /* h4 to h6: the serif sets them at the body's size, so weight carries the step down from h3, and
-     600 is what bold body text already is; 650 keeps a heading a heading. */
+     600 is what bold body text already is; 650 keeps a heading a heading. `--heading-minor-floor`
+     is the least they may be, in em of the body. */
   --heading-minor-weight: 650;
+  --heading-minor-floor: 1em;
 
   /* Fixed rem scale, ratio ~1.125 (product register). */
   --text-2xs: 0.6875rem; /* 11 — counts, navigator section labels */
@@ -225,7 +227,9 @@
   --font-manuscript: var(--font-sans);
   --manuscript-size: max(0.9375rem, calc(1rem * var(--reading-scale)));
   --manuscript-leading: 1.6;
+  /* At 600, the weight of bold text, h4 to h6 need size to stand above the body: a sixteenth more. */
   --heading-minor-weight: 600;
+  --heading-minor-floor: 1.0625em;
   /* The sans sets more letters in a `ch` than the serif: at 68ch its lines averaged about 79
      characters. 64ch brings it back near the serif's line. */
   --measure: 64ch;
@@ -236,6 +240,7 @@
   --manuscript-size: max(0.9375rem, calc(0.9375rem * var(--reading-scale)));
   --manuscript-leading: 1.65;
   --heading-minor-weight: 600;
+  --heading-minor-floor: 1.0625em;
 }
 
 /* Registered so `100ch` is computed where it is DECLARED — inside the source face's mono context
@@ -2438,8 +2443,8 @@ input,
   flex: 1 1 auto;
 }
 
-/* With no face group above it, the row opens its own section of the menu. */
-.glosa-face-group[hidden] + .glosa-text-size[data-variant="menu"] {
+/* The row opens its own section of the menu, so it is never read as a fourth face. */
+.glosa-text-size[data-variant="menu"] {
   margin-top: var(--space-1);
   padding-top: var(--space-2);
   border-top: 1px solid var(--border);
@@ -2480,6 +2485,10 @@ input,
   .glosa-text-size,
   .glosa-text-size[data-variant="settings"] {
     --stepper-height: 44px;
+  }
+
+  .glosa-text-size .glosa-text-size-reset {
+    min-height: 44px;
   }
 }
 
@@ -2916,12 +2925,13 @@ input,
   margin: var(--space-8) 0 var(--space-2);
 }
 
-/* Never smaller than the text under them: at the body's own size in the serif, and at 17px of the
-   default step in the smaller sans and mono faces, as before. */
+/* Never smaller than the text under them: at the body's own size in the serif, and in the smaller
+   sans and mono faces at 17px of the default step, as before, and always a sixteenth above their
+   body where that floor meets it. */
 .glosa-content h4,
 .glosa-content h5,
 .glosa-content h6 {
-  font-size: max(1em, calc(var(--text-md) * var(--reading-scale)));
+  font-size: max(var(--heading-minor-floor), calc(var(--text-md) * var(--reading-scale)));
   line-height: 1.4;
   font-weight: var(--heading-minor-weight);
   margin: var(--space-6) 0 var(--space-2);

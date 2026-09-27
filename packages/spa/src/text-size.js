@@ -112,17 +112,17 @@ let mounted = 0;
  * end of the ladder is disabled and says so. Changes apply at once; nothing closes around them.
  *
  * `variant` is "menu" (one row of the document's More menu) or "settings" (Settings > Appearance).
+ * `describedBy` names an element that says what the step sets, read after the value. The container
+ * is no group of its own: the spinbutton carries the name, and naming both says it twice.
  * @param {HTMLElement} container
  * @param {ReturnType<typeof createTextSizeStore>} store
- * @param {{ variant?: "menu" | "settings" }} [options]
+ * @param {{ variant?: "menu" | "settings", describedBy?: string }} [options]
  */
-export function mountTextSizeControl(container, store, { variant = "menu" } = {}) {
+export function mountTextSizeControl(container, store, { variant = "menu", describedBy } = {}) {
   mounted += 1;
   const labelId = `glosa-text-size-label-${mounted}`;
   container.classList.add("glosa-text-size");
   container.dataset.variant = variant;
-  container.setAttribute("role", "group");
-  container.setAttribute("aria-labelledby", labelId);
 
   const label = document.createElement("span");
   label.className = "glosa-text-size-label";
@@ -134,7 +134,6 @@ export function mountTextSizeControl(container, store, { variant = "menu" } = {}
   reset.className = "glosa-text-size-reset";
   reset.textContent = "Reset";
   reset.setAttribute("aria-label", `Reset text size to ${DEFAULT_TEXT_SIZE}`);
-  reset.title = `Back to ${DEFAULT_TEXT_SIZE}`;
 
   const stepButton = (direction, name, icon) => {
     const button = document.createElement("button");
@@ -157,6 +156,7 @@ export function mountTextSizeControl(container, store, { variant = "menu" } = {}
   value.setAttribute("role", "spinbutton");
   value.tabIndex = 0;
   value.setAttribute("aria-labelledby", labelId);
+  if (describedBy) value.setAttribute("aria-describedby", describedBy);
   value.setAttribute("aria-valuemin", String(TEXT_SIZES[0]));
   value.setAttribute("aria-valuemax", String(TEXT_SIZES.at(-1)));
   value.addEventListener("keydown", (event) => {

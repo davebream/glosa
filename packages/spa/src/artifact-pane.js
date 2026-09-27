@@ -158,8 +158,8 @@ function contributeHighlight(name, token, ranges) {
 // The painted document column the rail is laid out around (§7): the measure plus its two 2rem
 // gutters, as `.glosa-content` resolves it in the manuscript's own face. It is MEASURED, from the
 // column's computed `max-width`, because it moves with the text size step, the face and the
-// browser's default font size: at a 20px browser default the serif paints about 860px, and a rail
-// sized around a fixed block crossed the column by ~58px at every pane width (#406). This value is
+// browser's default font size: at a 20px browser default the serif paints 843px, and a rail sized
+// around a fixed block crossed the column by ~58px in every pane from 1205px to 1363px (#406). This is
 // only the fallback for an engine that cannot resolve the column (a DOM shim): what it measured
 // when the serif was Iowan Old Style at 17px, wider than anything the default step paints.
 export const MANUSCRIPT_BLOCK_FALLBACK = 707;
@@ -4817,8 +4817,9 @@ export function createArtifactPane(host, deps) {
   //
   // A new step re-sets every block of the page, and the reader's place would slide with it, so
   // the page is held on the block at the top of the pane instead: recorded while the page is still
-  // at the old size, and put back once it is at the new one. Chromium and Firefox anchor scrolling
-  // on their own; Safari does not, and no heuristic knows the reader's block better than this.
+  // at the old size, and put back once it is at the new one. An engine's own scroll anchoring does
+  // not hold it through a change this large (Chromium's lost the reader's paragraph in the real-engine
+  // test), and Safari has none at all.
   let readingAnchor = null;
   let sizeApplied = false;
   const stopTextSizeBefore = textSizeStore?.beforeChange(() => {

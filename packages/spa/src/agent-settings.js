@@ -108,16 +108,15 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
   // The text size step (#406): the same control and the same store as the document's More menu,
   // so a change in either is the other's too.
   const textSizeField = el("div");
-  const textSizeControl = textSize ? mountTextSizeControl(textSizeField, textSize, { variant: "settings" }) : null;
-  if (textSizeControl) {
-    appearancePage.append(
-      textSizeField,
-      el("p", {
-        className: "glosa-settings-hint",
-        textContent: "The document, its notes and the chat, on this device. Menus and buttons follow zoom.",
-      }),
-    );
-  }
+  const textSizeHint = el("p", {
+    id: "glosa-settings-text-size-hint",
+    className: "glosa-settings-hint",
+    textContent: "Sets the document, its notes and the chat. Menus and buttons follow zoom (⌘+ and ⌘−).",
+  });
+  const textSizeControl = textSize
+    ? mountTextSizeControl(textSizeField, textSize, { variant: "settings", describedBy: textSizeHint.id })
+    : null;
+  if (textSizeControl) appearancePage.append(textSizeField, textSizeHint);
   const stopAppearance = appearance?.subscribe(({ preference }) => {
     for (const button of appearanceOptions.children)
       button.setAttribute("aria-pressed", String(button.dataset.themeChoice === preference));

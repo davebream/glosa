@@ -978,6 +978,17 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         await page.evaluate<boolean>(`document.querySelector('${PANE_STEPPER} [data-step="down"]').disabled`),
         "− is disabled at 15",
       ).toBe(true);
+      // In the smaller faces the body stops at its 15px floor; h4 to h6, at the weight of bold text,
+      // must still stand above it, and h3 above them.
+      for (const face of ["sans", "mono"] as const) {
+        await chooseFace(page, face);
+        const faced = await page.evaluate<Reading>(READING);
+        expect(faced.body, `${face} at 15: the body at its floor`).toBe(15);
+        expect(faced.h4, `${face} at 15: h4 stands above the body`).toBeGreaterThan(faced.body);
+        expect(faced.h3, `${face} at 15: h3 stands above h4`).toBeGreaterThan(faced.h4);
+      }
+      await chooseFace(page, "default");
+      await openMoreMenu(page);
       // Up with the keyboard, on the spinbutton, to the top, where it stops.
       await page.evaluate(`document.querySelector('${PANE_STEPPER} [role="spinbutton"]').focus()`);
       for (const step of [16, 18, 20, 22, 24]) {
