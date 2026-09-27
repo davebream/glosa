@@ -418,24 +418,41 @@ const TEXT_SPACING = `(()=>{const style=document.getElementById('wcag-text-spaci
   style.textContent='*{line-height:1.5!important;letter-spacing:0.12em!important;word-spacing:0.16em!important}p{margin-bottom:2em!important}';
   document.head.append(style);return true;})()`;
 
-/** A chat with a reply, a question from the person and a draft, mounted from the production module
- * with a scripted transport. `alone` replaces the page's body, so an audit measures the chat alone;
- * otherwise it is laid out out of the way, unseen, beside the document, for its sizes to be read. */
-const mountChat = (alone: boolean) => `(async()=>{
+interface ChatFixture {
+  reply: string;
+  person: string;
+  draft: string;
+}
+/** A reply with a heading, a list, a code block and a link, a question from the person and a draft. */
+const CHAT_FIXTURE: ChatFixture = {
+  reply:
+    "The outline holds, with one gap. **The second section** promises a comparison it never makes.\n\n### What to change\n\n- Name the two options before weighing them.\n- Move the example with a long path, `packages/spa/src/chat-pane.js`, into its own paragraph.\n\n```\nconst unchanged = true; // a code line long enough to need its own sideways scroll inside the block\n```\n\nRead [the outline guide](https://example.com/guide) before revising.",
+  person: "Review my outline, and say where the argument is weakest.",
+  draft: "A draft that runs long enough to wrap across two lines of the composer before it is sent.",
+};
+
+/** A chat mounted from the production module with a scripted transport. `alone` replaces the page's
+ * body, so an audit measures the chat alone; `hidden` lays it out of the way, unseen, beside the
+ * document, for its sizes to be read; `beside` narrows the desk by `width` and shows the chat in the
+ * room that leaves, as a chat docked beside the document is seen. */
+const mountChat = (
+  where: "alone" | "hidden" | "beside",
+  fixture: ChatFixture = CHAT_FIXTURE,
+  width = 640,
+) => `(async()=>{
   const { createChatPane } = await import('/app/chat-pane.js');
+  const fixture=${JSON.stringify(fixture)},where=${JSON.stringify(where)};
   const host=document.createElement('main');
-  host.style.cssText=${
-    alone
-      ? `'height:100vh;width:100%;padding:12px;box-sizing:border-box'`
-      : `'position:fixed;left:0;bottom:0;height:420px;width:640px;visibility:hidden;pointer-events:none'`
-  };
-  if (${alone}) document.body.replaceChildren(host); else document.body.append(host);
-  const reply='The outline holds, with one gap. **The second section** promises a comparison it never makes.\\n\\n### What to change\\n\\n- Name the two options before weighing them.\\n- Move the example with a long path, \`packages/spa/src/chat-pane.js\`, into its own paragraph.\\n\\n\`\`\`\\nconst unchanged = true; // a code line long enough to need its own sideways scroll inside the block\\n\`\`\`\\n\\nRead [the outline guide](https://example.com/guide) before revising.';
+  if(where==='alone'){host.style.cssText='height:100vh;width:100%;padding:12px;box-sizing:border-box';document.body.replaceChildren(host);}
+  else if(where==='hidden'){host.style.cssText='position:fixed;left:0;bottom:0;height:420px;width:640px;visibility:hidden;pointer-events:none';document.body.append(host);}
+  else{document.getElementById('app').style.width='calc(100% - ${width}px)';
+    host.style.cssText='position:fixed;right:0;top:0;height:100vh;width:${width}px;border-left:1px solid var(--rule)';
+    document.body.append(host);}
   const state={id:'fixture',profileId:'a',provider:'claude-code',title:'Review the outline',revision:1,configRevision:1,draftRevision:0,
-    draft:'A draft that runs long enough to wrap across two lines of the composer before it is sent.',draftAttachments:[],archived:false,
+    draft:fixture.draft,draftAttachments:[],archived:false,
     settings:{model:'model',effort:'high',permissionMode:'default'},
-    turns:[{id:'first',text:'Review my outline, and say where the argument is weakest.',status:'completed'}],
-    content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:reply}],decisions:[]};
+    turns:[{id:'first',text:fixture.person,status:'completed'}],
+    content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:fixture.reply}],decisions:[]};
   const access={
     getAgentStatus:async()=>({available:true,profiles:[{id:'a',provider:'claude-code',label:'Personal',enabled:true}],capabilities:{a:{models:[{id:'model',name:'Model',efforts:['high']}]}}}),
     getChat:async()=>structuredClone(state),openChatStream:()=>()=>{},
@@ -725,7 +742,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       await openComposer(page);
       expectClean(await page.evaluate<Audit>(AUDIT), "the open composer", 40);
 
-      await page.evaluate(mountChat(true));
+      await page.evaluate(mountChat("alone"));
       await page.evaluate(SETTLE);
       expectClean(await page.evaluate<Audit>(AUDIT), "the chat", 15);
     },
@@ -752,7 +769,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       await openComposer(page);
       expectClean(await page.evaluate<Audit>(AUDIT), "the spaced composer", 40);
 
-      await page.evaluate(mountChat(true));
+      await page.evaluate(mountChat("alone"));
       expect(await page.evaluate<boolean>(TEXT_SPACING)).toBe(true);
       await page.evaluate(SETTLE);
       expectClean(await page.evaluate<Audit>(AUDIT), "the spaced chat", 15);
@@ -1043,7 +1060,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       const page = await launch();
       await pin(page, { width: 1440, height: 900 });
       await openInReview(page);
-      await page.evaluate(mountChat(false));
+      await page.evaluate(mountChat("hidden"));
       await openComposer(page);
       await openMoreMenu(page);
       const first = await page.evaluate<Reading>(READING);
@@ -1072,9 +1089,12 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
           { reply: seen.chat.reply, person: seen.chat.person, draft: seen.chat.draft },
           `${where}: the chat's reply, the person's message and the draft sit one step under, stopping at 15`,
         ).toEqual({ reply: chat, person: chat, draft: chat });
-        expect(seen.chat.code, `${where}: a code block in a reply keeps 12px at the default and never goes under`).toBe(
-          Math.max(12, (12 * chat) / 16),
-        );
+        // #408 restates #406's 12px: a code block in a reply keeps the page's relation to its text,
+        // 13px beside a 16px reply, and still never goes under 12.
+        expect(
+          seen.chat.code,
+          `${where}: a code block in a reply is 13px at the default and never goes under 12`,
+        ).toBeCloseTo(Math.max(12, (13 * chat) / 16), 2);
         expect(seen.tab, `${where}: a tab title follows zoom, not the step`).toEqual(first.tab);
       };
 
@@ -1845,6 +1865,317 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       expect(await styleIn(b, NOTED[1])).toBe("editorial");
       await openDocument(a, STYLES_DOC, STYLES_NOTED, 1);
       expect(await styleIn(a, STYLES_NOTED)).toBe("spec");
+    },
+    TEST_TIMEOUT_MS,
+  );
+  // ---------- #408: the Conversation style ----------
+
+  /** #408: a reply holding every Markdown element a reply can carry, a message from the person long
+   * enough to wrap, and a draft. The opening paragraph runs to several lines at every step, so the
+   * characters on each of its lines can be counted where it paints. One table fits the column; the
+   * other holds a word too long for any column. */
+  const CONVERSATION: ChatFixture = {
+    reply: [
+      "# A title in a reply",
+      "",
+      "The opening paragraph of the reply runs long enough to wrap across several lines of the chat at every text size, so the characters on each of its lines can be counted where it paints; it names `packages/spa/src/chat-pane.js` in passing, stresses **one phrase in bold**, and points to [the outline guide](https://example.com/guide) the way a reply sends a reader somewhere else to read.",
+      "",
+      "## A section heading",
+      "",
+      "A paragraph under the section heading.",
+      "",
+      "### A subhead",
+      "",
+      "- A first item in a list",
+      "- A second item, rather longer, so that it wraps onto a second line at the larger sizes",
+      "",
+      "#### A fourth-level heading",
+      "",
+      "1. A numbered step",
+      "2. Another numbered step",
+      "",
+      "##### A fifth-level heading",
+      "",
+      "> A quotation the reply keeps, set as a blockquote.",
+      "",
+      "###### A sixth-level heading",
+      "",
+      "```",
+      "const unchanged = true; // a code line long enough to need its own sideways scroll inside the block",
+      "```",
+      "",
+      "| Term | Meaning |",
+      "| --- | --- |",
+      "| Style | A document's dress |",
+      "| Step | One rung of the ladder |",
+      "",
+      "| Digest | Note |",
+      "| --- | --- |",
+      `| ${"0123456789abcdef".repeat(6)} | one word too long for any column |`,
+      "",
+      "---",
+      "",
+      "A closing paragraph after the rule.",
+    ].join("\n"),
+    person:
+      "Review my outline, and say where the argument is weakest. The second section feels thin, and I am not sure the example in it earns its place, so tell me whether to cut it or move it.",
+    draft: "A draft that runs long enough to wrap across two lines of the composer before it is sent.",
+  };
+
+  interface Type {
+    family: string;
+    size: number;
+    weight: number;
+    leading: number;
+    italic: boolean;
+    /** `ink` or `muted` when the colour is that token's, as the chat's own cascade resolves it. */
+    colour: string;
+  }
+  type Rect = { left: number; right: number; width: number };
+  interface ChatReading {
+    fonts: boolean;
+    step: number;
+    /** The size of the document's h3 beside the chat: no heading in a reply is larger. */
+    documentH3: number;
+    type: Record<
+      | "p"
+      | "li"
+      | "ol"
+      | "h1"
+      | "h2"
+      | "h3"
+      | "h4"
+      | "h5"
+      | "h6"
+      | "strong"
+      | "quote"
+      | "code"
+      | "pre"
+      | "preCode"
+      | "table"
+      | "th"
+      | "td"
+      | "person"
+      | "draft",
+      Type
+    >;
+    gap: number;
+    link: { reply: string; document: string };
+    /** Characters on each full line of the opening paragraph, the reply's column and that paragraph. */
+    line: { chars: number[]; column: Rect; paragraph: Rect };
+    person: Rect;
+    composer: Rect;
+    fit: Array<string | null>;
+    tables: Rect[];
+    split: string[];
+    sideways: number;
+  }
+  /** Everything the Conversation style sets, read from the chat beside the document in one evaluate.
+   * Colours are named by the token they resolve to in the chat's own cascade, so a reply in the
+   * session's ink or a heading in the chrome's grey reads as that, not as a number. */
+  const CHAT_READING = `(()=>{
+    const r2=(v)=>Math.round(v*100)/100;
+    const history=document.querySelector('.glosa-chat-history'),reply=history.querySelector('.glosa-chat-markdown');
+    const q=(selector)=>reply.querySelector(selector);
+    const paint=(css)=>{const s=document.createElement('span');s.style.color=css;reply.append(s);
+      const c=getComputedStyle(s).color;s.remove();return c;};
+    const ink=paint('var(--ink)'),muted=paint('var(--muted)');
+    const box=(el)=>{const s=getComputedStyle(el),size=parseFloat(s.fontSize);
+      return {family:s.fontFamily.split(',')[0].replace(/["']/g,'').trim(),size:r2(size),weight:Number(s.fontWeight),
+        leading:r2(parseFloat(s.lineHeight)/size),italic:s.fontStyle==='italic',
+        colour:s.color===ink?'ink':s.color===muted?'muted':s.color};};
+    const pane=[...document.querySelectorAll('.glosa-pane')].find(p=>p.getBoundingClientRect().width>0);
+    const content=pane.querySelector('.glosa-content');
+    const probe=document.createElement('a');probe.href='#';probe.textContent='a link';content.append(probe);
+    const documentLink=getComputedStyle(probe).color;probe.remove();
+    const first=q(':scope > p'),top=first.getBoundingClientRect().top,line=parseFloat(getComputedStyle(first).lineHeight);
+    const counts=[],range=document.createRange(),walk=document.createTreeWalker(first,NodeFilter.SHOW_TEXT);
+    for(let n=walk.nextNode();n;n=walk.nextNode()) for(let i=0;i<n.data.length;i++){range.setStart(n,i);range.setEnd(n,i+1);
+      const r=[...range.getClientRects()].find(x=>x.height>0);if(!r) continue;
+      const at=Math.floor((r.top+r.height/2-top)/line);counts[at]=(counts[at]??0)+1;}
+    const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r2(r.left),right:r2(r.right),width:r2(r.width)};};
+    const human=document.querySelector('.glosa-chat-message[data-kind="human"]');
+    const tables=[...reply.querySelectorAll('table')];
+    return {fonts:document.fonts.check('16px "Source Serif 4"')&&document.fonts.check('16px "Source Sans 3"'),
+      step:Number(document.documentElement.dataset.textSize),
+      documentH3:r2(parseFloat(getComputedStyle(content.querySelector('h3')).fontSize)),
+      type:{p:box(first),li:box(q('ul > li')),ol:box(q('ol > li')),h1:box(q('h1')),h2:box(q('h2')),h3:box(q('h3')),
+        h4:box(q('h4')),h5:box(q('h5')),h6:box(q('h6')),strong:box(q('strong')),quote:box(q('blockquote > p')),
+        code:box(q('p code')),pre:box(q('pre')),preCode:box(q('pre code')),table:box(q('table')),th:box(q('th')),
+        td:box(q('td')),person:box(human.querySelector('.glosa-chat-text')),draft:box(document.querySelector('.glosa-chat-draft'))},
+      gap:r2(parseFloat(getComputedStyle(first).marginBottom)),
+      link:{reply:getComputedStyle(q('a')).color,document:documentLink},
+      line:{chars:counts.slice(0,-1),column:rect(reply.closest('.glosa-chat-message')),paragraph:rect(first)},
+      person:rect(human),composer:rect(document.querySelector('.glosa-chat-composer')),
+      fit:tables.map(t=>t.getAttribute('data-fit')),tables:tables.map(rect),
+      split:[...reply.querySelectorAll('table:not([data-fit]) :is(th,td)')].flatMap(cell=>{
+        const out=[],walk=document.createTreeWalker(cell,NodeFilter.SHOW_TEXT);
+        for(let node=walk.nextNode();node;node=walk.nextNode()) for(const m of node.data.matchAll(/[^\\s-]+/g)){
+          const r=document.createRange();r.setStart(node,m.index);r.setEnd(node,m.index+m[0].length);
+          if(new Set([...r.getClientRects()].filter(x=>x.width>0).map(x=>Math.round(x.top))).size>1) out.push(m[0]);}
+        return out;}),
+      sideways:history.scrollWidth-history.clientWidth};
+  })()`;
+
+  /** The Conversation style of #408 at a step: the reply, the person's message and the draft in the
+   * serif one step under the document (CHAT_UNDER), with the document's rules for every element in
+   * the reply's own em. Headings run 1.25em, 1.125em, then the reply's size, and none is ever larger
+   * than the document's h3 (20px at the default step); code, tables and table heads stop at the
+   * reading scale's floors of 12px, 13px and 12px. */
+  function conversation(step: number): ChatReading["type"] {
+    const size = CHAT_UNDER[step] ?? Number.NaN;
+    const h3 = (20 * step) / 18;
+    const serif = (px: number, weight: number, leading: number): Type => ({
+      family: "Source Serif 4",
+      size: round(px),
+      weight,
+      leading,
+      italic: false,
+      colour: "ink",
+    });
+    const pre = Math.max(12, (13 * size) / 16);
+    const table = Math.max(13, (14 * size) / 16);
+    const minor = serif(size, 650, 1.4);
+    return {
+      p: serif(size, 400, 1.62),
+      li: serif(size, 400, 1.62),
+      ol: serif(size, 400, 1.62),
+      h1: serif(Math.min(1.25 * size, h3), 620, 1.25),
+      h2: serif(Math.min(1.25 * size, h3), 620, 1.25),
+      h3: serif(Math.min(1.125 * size, h3), 620, 1.3),
+      h4: minor,
+      h5: minor,
+      h6: minor,
+      strong: serif(size, 600, 1.62),
+      quote: { ...serif(size, 400, 1.62), italic: true, colour: "muted" },
+      code: { ...serif(0.85 * size, 400, 1.62), family: "ui-monospace" },
+      pre: { ...serif(pre, 400, 1.6), family: "ui-monospace" },
+      preCode: { ...serif(pre, 400, 1.6), family: "ui-monospace" },
+      table: { ...serif(table, 400, 1.62), family: "Source Sans 3" },
+      th: { ...serif(Math.max(12, (13 * size) / 16), 600, 1.62), family: "Source Sans 3", colour: "muted" },
+      td: { ...serif(table, 400, 1.62), family: "Source Sans 3" },
+      person: serif(size, 400, 1.62),
+      draft: serif(size, 400, 1.62),
+    };
+  }
+  /** What a person or a session wrote in a reply: set in the serif, in ink (quotes excepted). */
+  const WRITING = ["p", "li", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "person", "draft"] as const;
+  const HEADINGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
+
+  test(
+    "#408: a reply, the person's message and the draft are set in the Conversation style, serif one step under the document with the document's rules for every Markdown element, on a column of 34em that the composer matches, the same beside a document in Editorial, Spec and Mono and at the smallest and largest steps",
+    async () => {
+      const page = await launch();
+      await pin(page, { width: 1920, height: 1600 });
+      const CHAT = "document.querySelector('.glosa-chat-pane')";
+      // Everything is measured first and judged after, so the screenshots for review exist even when a
+      // value is wrong.
+      await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
+      await page.evaluate(mountChat("beside", CONVERSATION, 720));
+      await page.evaluate(SETTLE);
+      await shot(page, "chat-light", CHAT, 0);
+      await scheme(page, "dark");
+      await shot(page, "chat-dark", CHAT, 0);
+      await scheme(page, "light");
+      const styles: Partial<Record<StyleName, ChatReading>> = {};
+      for (const style of ["editorial", "spec", "mono"] as const) {
+        await chooseStyleOf(page, STYLES_NOTED, style);
+        styles[style] = await page.evaluate<ChatReading>(CHAT_READING);
+        if (style === "spec") await shot(page, "chat-beside-spec");
+      }
+      await chooseStyleOf(page, STYLES_NOTED, "editorial");
+      const steps: Record<number, ChatReading> = { 18: styles.editorial as ChatReading };
+      for (const step of [24, 15]) {
+        await page.evaluate(`localStorage.setItem('glosa_text_size','${step}')`);
+        await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
+        await page.evaluate(mountChat("beside", CONVERSATION, 960));
+        await page.evaluate(SETTLE);
+        steps[step] = await page.evaluate<ChatReading>(CHAT_READING);
+        if (step === 24) await shot(page, "chat-largest", CHAT, 0);
+      }
+
+      const editorial = styles.editorial as ChatReading;
+      expect(editorial.fonts, "the vendored faces have loaded").toBe(true);
+      // One Conversation style, whatever the document beside it is set in: a Spec page sits beside a
+      // serif chat.
+      for (const style of ["spec", "mono"] as const) {
+        expect(styles[style]?.type, `beside a ${style} document the chat keeps the Conversation style`).toEqual(
+          editorial.type,
+        );
+      }
+      for (const [at, seen] of Object.entries(steps)) {
+        const step = Number(at);
+        const where = `at step ${step}`;
+        expect(seen.step, where).toBe(step);
+        expect(seen.type, `${where}: the Conversation style`).toEqual(conversation(step));
+        // The invariants, whatever the values: writing in the serif and in ink, no heading over the
+        // document's h3, and links as the document draws them.
+        for (const key of WRITING) {
+          expect(seen.type[key].family, `${where}: ${key} is writing, set in the serif`).toBe("Source Serif 4");
+          expect(seen.type[key].colour, `${where}: ${key} is in ink, never the session's`).toBe("ink");
+        }
+        for (const key of HEADINGS) {
+          expect(
+            seen.type[key].size,
+            `${where}: a reply's ${key} is no larger than the document's h3`,
+          ).toBeLessThanOrEqual(seen.documentH3);
+        }
+        expect(seen.link.reply, `${where}: a reply's link is the colour of the document's`).toBe(seen.link.document);
+        // The composer's frame is the reply's column, and the person's bubble, narrower than the column
+        // even when the message wraps, keeps to its right edge: alignment and shape tell the speakers
+        // apart, not the tint.
+        const { column } = seen.line;
+        expect(Math.abs(seen.composer.left - column.left), `${where}: the composer starts on the column`).toBeLessThan(
+          1,
+        );
+        expect(Math.abs(seen.composer.right - column.right), `${where}: the composer ends on the column`).toBeLessThan(
+          1,
+        );
+        expect(
+          Math.abs(seen.person.right - column.right),
+          `${where}: the person's bubble on the column's right edge`,
+        ).toBeLessThan(1);
+        expect(seen.person.left, `${where}: the person's bubble stops short of the column's left edge`).toBeGreaterThan(
+          column.left + column.width * 0.1,
+        );
+        // A table keeps its words whole unless a word is too long for any column; that one breaks it,
+        // so the table fits the column and the chat never scrolls sideways (the Cell Break Rule).
+        expect(seen.fit, `${where}: only the digest table is marked to break words`).toEqual([null, "break"]);
+        expect(seen.split, `${where}: no word breaks in the other table`).toEqual([]);
+        expect(seen.tables[1]?.right, `${where}: the digest table fits the column`).toBeLessThanOrEqual(
+          column.right + 0.5,
+        );
+        expect(seen.sideways, `${where}: the chat does not scroll sideways`).toBeLessThanOrEqual(0);
+      }
+      expect(editorial.gap, "blocks in a reply are 0.9em of it apart").toBe(round(0.9 * 16));
+      // The column is 34em of the reply, so a text size step keeps its line: the same count of
+      // characters at the default step and at the largest.
+      const mean = (chars: number[]) => chars.reduce((sum, n) => sum + n, 0) / chars.length;
+      const lines: Record<number, number> = {};
+      for (const step of [18, 24]) {
+        const seen = steps[step] as ChatReading;
+        const size = CHAT_UNDER[step] ?? Number.NaN;
+        expect(
+          Math.abs(seen.line.column.width - 34 * size),
+          `at step ${step}: the column is 34em of the reply`,
+        ).toBeLessThan(0.5);
+        expect(
+          seen.line.chars.length,
+          `at step ${step}: the opening paragraph runs to several full lines`,
+        ).toBeGreaterThanOrEqual(3);
+        lines[step] = round(mean(seen.line.chars));
+      }
+      console.log(
+        `#408 painted line length, characters per full line of the opening paragraph: step 18 ${JSON.stringify(steps[18]?.line.chars)} (mean ${lines[18]}), step 24 ${JSON.stringify(steps[24]?.line.chars)} (mean ${lines[24]})`,
+      );
+      // Within a few characters: the serif's optical size draws a little narrower at 22px than at 16px,
+      // and a word moving between lines shifts the mean. A cap in rem would lose over a quarter of the
+      // line at the largest step, where the reply is 22px against 16px.
+      expect(Math.abs((lines[18] ?? 0) - (lines[24] ?? 0)), "the largest step keeps the line length").toBeLessThan(6);
+      for (const step of [18, 24]) {
+        expect(lines[step], `at step ${step}: a reading line of about 70 characters`).toBeGreaterThanOrEqual(62);
+        expect(lines[step], `at step ${step}: a reading line of about 70 characters`).toBeLessThanOrEqual(78);
+      }
     },
     TEST_TIMEOUT_MS,
   );

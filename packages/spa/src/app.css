@@ -121,10 +121,13 @@
   --note-scale: calc(var(--note-step) / 15);
   --note-size: calc(var(--note-step) * 0.0625rem);
   /* The chat sits one step under the document and stops at 15: 16 beside the default 18. Its code
-     keeps 12px at the default step and grows with it, never under 12. */
+     blocks are 13px at the default step and grow with it, never under 12. Its column is 34em of a
+     reply (544px at the default step, about 67ch of the serif and 72 characters of prose), so a step
+     keeps its line; the composer's frame is the same column (#408). */
   --chat-step: 16;
   --chat-size: calc(var(--chat-step) * 0.0625rem);
-  --chat-code-size: max(0.75rem, calc(0.75rem * var(--chat-step) / 16));
+  --chat-code-size: max(0.75rem, calc(0.8125rem * var(--chat-step) / 16));
+  --chat-measure: calc(34 * var(--chat-size));
 
   /* The document's style (#407): face, body size and leading, the gap between blocks, the heading
      ladder, tables, code and line length. These are Editorial's, the default. A pane stamps its
@@ -141,6 +144,7 @@
     calc((1.25rem + 2.5cqi) * var(--reading-scale)),
     calc(2.5rem * var(--reading-scale))
   );
+  --h1-weight: 650;
   --h1-leading: 1.1;
   --h1-tracking: -0.015em;
   --h1-margin: 0 0 var(--space-8);
@@ -151,8 +155,12 @@
   );
   --h2-weight: 620;
   --h2-margin: var(--space-12) 0 var(--space-3);
+  --h3-size: calc(1.25rem * var(--reading-scale));
   --h3-weight: 620;
   --h3-margin: var(--space-8) 0 var(--space-2);
+  /* The document's h3, whatever its style: no heading in a reply is larger (#408). Substituted here,
+     on the root, so the chat's own `--h3-size` below never stands in for it. */
+  --chat-heading-max: var(--h3-size);
   /* h4 to h6: the serif sets them at the body's size, so weight carries the step down from h3, and
      600 is what bold body text already is; 650 keeps a heading a heading. The `em` floor is the
      least they may be against the body, where the body stops at its own floor. */
@@ -199,6 +207,7 @@
   --radius-panel: 8px;
   --radius-composer: 10px;
   --radius-overlay: 12px;
+  --radius-bubble: 14px; /* the person's turn in the chat, and the chat's composer it is sent from */
   --radius-pill: 999px;
 
   /* Elevation — only for what genuinely floats. Two layers each: a tight edge that separates, and
@@ -307,6 +316,47 @@
   --h4-size: max(1.0625em, calc(var(--text-md) * var(--reading-scale)));
   --h5-size: var(--h4-size);
   --heading-minor-weight: 600;
+}
+
+/* The Conversation style (#408). The chat keeps one style of its own beside every document style,
+   so a Spec page sits beside a serif chat. A reply is writing: it is set in the serif, one step under
+   the document, and reads the page's own prose rules (`:is(.glosa-content, .glosa-chat-markdown)` in
+   the manuscript section) through these values of their variables. The chat is never inside a
+   document's pane, so no style reaches it and it sets every value those rules read.
+
+   Sizes are in the reply's own em, so the chat's step carries them; margins stay rem, as the page's
+   do. Headings stay semibold and compact, 1.25em, 1.125em, then the reply's own size, where 650 keeps
+   them above bold text as on the page; none is ever larger than the document's h3, which at the
+   smallest steps is under 1.25em of a reply that has stopped at 15px. Code blocks and tables step
+   under the reply and stop at the reading scale's floors: 12px for code and a table's head, 13px
+   for a table. */
+.glosa-chat-markdown {
+  --block-gap: 0.9em;
+  --h1-size: min(1.25em, var(--chat-heading-max));
+  --h1-weight: 620;
+  --h1-leading: 1.25;
+  --h1-tracking: -0.01em;
+  --h1-margin: var(--space-6) 0 var(--space-2);
+  --h2-size: min(1.25em, var(--chat-heading-max));
+  --h2-weight: 620;
+  --h2-margin: var(--space-6) 0 var(--space-2);
+  --h3-size: min(1.125em, var(--chat-heading-max));
+  --h3-weight: 620;
+  --h3-margin: var(--space-6) 0 var(--space-2);
+  --h4-size: 1em;
+  --h5-size: 1em;
+  --heading-minor-weight: 650;
+  --heading-minor-leading: 1.4;
+  --heading-minor-margin: var(--space-6) 0 var(--space-2);
+  --code-size: 0.85em;
+  --pre-size: var(--chat-code-size);
+  --pre-leading: 1.6;
+  --table-font: var(--font-sans);
+  --table-size: max(0.8125rem, calc(0.875rem * var(--chat-step) / 16));
+  --th-size: max(var(--text-xs), calc(var(--text-sm) * var(--chat-step) / 16));
+  --th-weight: 600;
+  --th-color: var(--muted);
+  --cell-padding: var(--space-2) var(--space-3);
 }
 
 /* Spec's wide lane (#407), registered for the same reason as `--source-measure` below: `ch` and
@@ -475,7 +525,8 @@ input,
 .glosa-conv-feed,
 .glosa-attention-tray,
 .glosa-agent-feedback-popover,
-.glosa-content pre,
+.glosa-chat-history,
+:is(.glosa-content, .glosa-chat-markdown) pre,
 .glosa-rich-surface,
 .glosa-edit-area,
 .glosa-diff-pane {
@@ -2985,10 +3036,15 @@ input,
 }
 
 /* Rendered-markdown element vocabulary. Quiet, book-like; no line numbers in Preview/Annotate
-   (brief §7.6 — the manuscript must never read as an editor buffer). */
-.glosa-content h1,
-.glosa-content h2,
-.glosa-content h3 {
+   (brief §7.6 — the manuscript must never read as an editor buffer).
+
+   One set of prose rules for the page and for a reply in the chat (#408): every size, weight, gap
+   and colour below is a variable, and each surface sets its own values of them. The page's are the
+   document's style (`:root` and `.glosa-pane[data-style]`); a reply's are the Conversation style
+   (`.glosa-chat-markdown`), both at the top of this file. */
+:is(.glosa-content, .glosa-chat-markdown) h1,
+:is(.glosa-content, .glosa-chat-markdown) h2,
+:is(.glosa-content, .glosa-chat-markdown) h3 {
   line-height: 1.25;
   text-wrap: balance;
   font-weight: 600;
@@ -3010,45 +3066,45 @@ input,
    clamp, the pane's share included, scales with the step, so the widths at which a heading steps
    down do not move with it. The values are the style's tokens (`:root` and `.glosa-pane[data-style]`
    at the top of this file); print sets its own scale over them. */
-.glosa-content h1 {
+:is(.glosa-content, .glosa-chat-markdown) h1 {
   font-size: var(--h1-size);
   line-height: var(--h1-leading);
-  font-weight: 650;
+  font-weight: var(--h1-weight);
   letter-spacing: var(--h1-tracking);
   margin: var(--h1-margin);
 }
 
-.glosa-content h2 {
+:is(.glosa-content, .glosa-chat-markdown) h2 {
   font-size: var(--h2-size);
   font-weight: var(--h2-weight);
   letter-spacing: -0.01em;
   margin: var(--h2-margin);
 }
 
-.glosa-content h3 {
-  font-size: calc(1.25rem * var(--reading-scale));
+:is(.glosa-content, .glosa-chat-markdown) h3 {
+  font-size: var(--h3-size);
   line-height: 1.3;
   font-weight: var(--h3-weight);
   margin: var(--h3-margin);
 }
 
 /* Never smaller than the text under them, whatever the style and the step. */
-.glosa-content h4,
-.glosa-content h5,
-.glosa-content h6 {
+:is(.glosa-content, .glosa-chat-markdown) h4,
+:is(.glosa-content, .glosa-chat-markdown) h5,
+:is(.glosa-content, .glosa-chat-markdown) h6 {
   font-size: var(--h5-size);
   line-height: var(--heading-minor-leading);
   font-weight: var(--heading-minor-weight);
   margin: var(--heading-minor-margin);
 }
 
-.glosa-content h4 {
+:is(.glosa-content, .glosa-chat-markdown) h4 {
   font-size: var(--h4-size);
 }
 
 /* A subhead directly under its section heading closes up; the section's air is already above. */
-.glosa-content h2 + h3,
-.glosa-content h3 + h4 {
+:is(.glosa-content, .glosa-chat-markdown) h2 + h3,
+:is(.glosa-content, .glosa-chat-markdown) h3 + h4 {
   margin-top: var(--space-3);
 }
 
@@ -3062,11 +3118,13 @@ input,
    faithfully it reproduces one; without the flag, clicking a heading would spring the paragraph
    below it open by 1.2em — the same defect this whole pairing exists to remove, moved one block
    down. `openRunEditor` sets the flag (artifact-pane.js). */
-.glosa-content :is(h1, h2, h3, h4, h5, h6, .glosa-run-editor[data-heading]) + :is(p, ul, ol, pre) {
+:is(.glosa-content, .glosa-chat-markdown)
+  :is(h1, h2, h3, h4, h5, h6, .glosa-run-editor[data-heading])
+  + :is(p, ul, ol, pre) {
   margin-top: 0;
 }
 
-.glosa-content > :first-child {
+:is(.glosa-content, .glosa-chat-markdown) > :first-child {
   margin-top: 0;
 }
 
@@ -3079,17 +3137,17 @@ input,
    gap with it and closes B against the block above. Two paragraphs then read as one, under the
    caret, in a tool whose whole job at that moment is to show the writer their own structure.
    With the gap on both edges, B holds up its own side and the swap cannot delete anything. */
-.glosa-content p {
+:is(.glosa-content, .glosa-chat-markdown) p {
   margin: var(--prose-gap) 0;
 }
 
 /* The serif's true bold is a shout at 18px; semibold is the copy editor's emphasis. */
-.glosa-content strong,
-.glosa-content b {
+:is(.glosa-content, .glosa-chat-markdown) strong,
+:is(.glosa-content, .glosa-chat-markdown) b {
   font-weight: 600;
 }
 
-.glosa-content blockquote {
+:is(.glosa-content, .glosa-chat-markdown) blockquote {
   margin: var(--space-6) 0;
   padding: 0 0 0 var(--space-4);
   border-left: 1px solid var(--border-strong);
@@ -3101,46 +3159,46 @@ input,
    theirs on top. This existed for the trailing edge already — prose gaining a leading edge is what
    makes the opening half necessary, or a quote and a list item would each open with a blank line
    inside their own frame. */
-.glosa-content blockquote > :first-child,
-.glosa-content li > :first-child {
+:is(.glosa-content, .glosa-chat-markdown) blockquote > :first-child,
+:is(.glosa-content, .glosa-chat-markdown) li > :first-child {
   margin-top: 0;
 }
 
-.glosa-content blockquote > :last-child,
-.glosa-content li > :last-child {
+:is(.glosa-content, .glosa-chat-markdown) blockquote > :last-child,
+:is(.glosa-content, .glosa-chat-markdown) li > :last-child {
   margin-bottom: 0;
 }
 
-.glosa-content ul,
-.glosa-content ol {
+:is(.glosa-content, .glosa-chat-markdown) ul,
+:is(.glosa-content, .glosa-chat-markdown) ol {
   padding-left: var(--space-6);
   margin: var(--prose-gap) 0;
 }
 
-.glosa-content li {
+:is(.glosa-content, .glosa-chat-markdown) li {
   margin-bottom: 0.3em;
 }
 
 /* Markers are wayfinding, not content: they step back to the muted ink, and numerals line up. */
-.glosa-content li::marker {
+:is(.glosa-content, .glosa-chat-markdown) li::marker {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
-.glosa-content li > ul,
-.glosa-content li > ol {
+:is(.glosa-content, .glosa-chat-markdown) li > ul,
+:is(.glosa-content, .glosa-chat-markdown) li > ol {
   margin: var(--space-1) 0 0;
 }
 
 /* A section break is a short deliberate rule, not a faint line that ran out of page. */
-.glosa-content hr {
+:is(.glosa-content, .glosa-chat-markdown) hr {
   border: none;
   border-top: 1px solid var(--border-strong);
   margin: var(--space-8) auto;
   width: 4rem;
 }
 
-.glosa-content code {
+:is(.glosa-content, .glosa-chat-markdown) code {
   font-family: var(--font-mono);
   font-size: var(--code-size);
   background: var(--surface);
@@ -3148,7 +3206,7 @@ input,
   padding: 0.1em 0.35em;
 }
 
-.glosa-content pre {
+:is(.glosa-content, .glosa-chat-markdown) pre {
   font-family: var(--font-mono);
   font-size: var(--pre-size);
   line-height: var(--pre-leading);
@@ -3160,7 +3218,7 @@ input,
   margin: var(--prose-gap) 0;
 }
 
-.glosa-content pre code {
+:is(.glosa-content, .glosa-chat-markdown) pre code {
   background: none;
   border: none;
   padding: 0;
@@ -3172,7 +3230,7 @@ input,
    and no filled header band. Figures align on tabular numerals. Editorial and Mono set them in the
    sans a step under the body with a small muted head; Spec in its own face and size, headed in
    650 ink. */
-.glosa-content table {
+:is(.glosa-content, .glosa-chat-markdown) table {
   border-collapse: collapse;
   font-family: var(--table-font);
   font-size: var(--table-size);
@@ -3180,8 +3238,8 @@ input,
   margin: 0 0 var(--space-6);
 }
 
-.glosa-content th,
-.glosa-content td {
+:is(.glosa-content, .glosa-chat-markdown) th,
+:is(.glosa-content, .glosa-chat-markdown) td {
   border-bottom: 1px solid var(--border);
   padding: var(--cell-padding);
   text-align: left;
@@ -3201,7 +3259,7 @@ input,
   overflow-wrap: anywhere;
 }
 
-.glosa-content th {
+:is(.glosa-content, .glosa-chat-markdown) th {
   border-bottom-color: var(--border-strong);
   color: var(--th-color);
   font-size: var(--th-size);
@@ -3246,24 +3304,23 @@ input,
   }
 }
 
-.glosa-content th:first-child,
-.glosa-content td:first-child {
+:is(.glosa-content, .glosa-chat-markdown) th:first-child,
+:is(.glosa-content, .glosa-chat-markdown) td:first-child {
   padding-left: 0;
 }
 
-.glosa-content th:last-child,
-.glosa-content td:last-child {
+:is(.glosa-content, .glosa-chat-markdown) th:last-child,
+:is(.glosa-content, .glosa-chat-markdown) td:last-child {
   padding-right: 0;
 }
 
-.glosa-content img {
+:is(.glosa-content, .glosa-chat-markdown) img {
   max-width: 100%;
   height: auto;
 }
 
 /* A session's reply links the way the manuscript does, not in the browser's default blue. */
-.glosa-content a,
-.glosa-chat-markdown a {
+:is(.glosa-content, .glosa-chat-markdown) a {
   color: var(--primary);
   text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
   text-underline-offset: 2px;
@@ -7727,6 +7784,8 @@ input,
   min-height: 0;
   container-type: inline-size;
   position: relative;
+  /* Resolved where it is used, against this pane: the history's gutters and the composer's. */
+  --chat-gutter: clamp(16px, 5cqw, 60px);
 }
 .glosa-chat-header {
   display: flex;
@@ -7771,13 +7830,17 @@ input,
 .glosa-chat-transfer[hidden] {
   display: none;
 }
+/* The reply's column sits centred between gutters that widen with the pane. A scrollbar that must
+   show takes the same room on both edges, so the column stays centred on the pane and on the
+   composer's frame below it. */
 .glosa-chat-history {
   flex: 1 1 auto;
   min-height: 96px;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 28px clamp(16px, 5cqw, 60px) 18px;
+  padding: 28px var(--chat-gutter) 18px;
   scroll-padding-block: 16px;
+  scrollbar-gutter: stable both-edges;
 }
 .glosa-chat-actions {
   display: flex;
@@ -7816,8 +7879,9 @@ nav.glosa-chat-actions[hidden] {
   margin: 0;
   max-width: 27rem;
 }
+/* Every turn sits in the reply's column (`--chat-measure`, 34em of a reply), centred. */
 .glosa-chat-message {
-  max-width: 46rem;
+  max-width: var(--chat-measure);
   margin: 0 auto 28px;
   position: relative;
 }
@@ -7832,18 +7896,22 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-message summary {
   cursor: pointer;
 }
+/* The person's turn is set like a reply (the Serif Is Writing Rule), so what tells the speakers
+   apart is the bubble: its shape, and its place on the column's right edge. The tint is about 1.06:1
+   against the paper and counts for nothing on its own. The bubble stops at 28em, well short of the
+   column's 34em, so even a long message keeps to the right. */
 .glosa-chat-message[data-kind="human"] {
   background: var(--surface);
-  border-radius: 14px;
+  border-radius: var(--radius-bubble);
   padding: 12px 16px;
   width: fit-content;
-  max-width: min(80%, 36rem);
+  max-width: min(80%, calc(28 * var(--chat-size)));
   margin-block: 24px;
   margin-left: auto;
-  margin-right: max(0px, calc((100% - 46rem) / 2));
+  margin-right: max(0px, calc((100% - var(--chat-measure)) / 2));
 }
 .glosa-chat-message[data-kind="human"] .glosa-chat-text {
-  font: var(--chat-size) / 1.6 var(--font-sans);
+  text-wrap: pretty;
 }
 .glosa-chat-message[data-kind="detail"] {
   margin-bottom: 10px;
@@ -7855,17 +7923,19 @@ nav.glosa-chat-actions[hidden] {
   font: var(--text-xs) / 1.6 var(--font-mono);
   padding: 10px 12px;
   background: var(--surface);
-  border-radius: 5px;
+  border-radius: var(--radius-tool);
 }
 .glosa-chat-message[data-kind="error"] {
   padding: 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
 }
+/* What a person or a session wrote in the chat: the Conversation style's body, serif at the chat's
+   step on the page's own 1.62 leading. */
 .glosa-chat-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: var(--chat-size) / 1.7 var(--font-serif);
+  font: var(--chat-size) / 1.62 var(--font-serif);
   user-select: text;
 }
 .glosa-chat-pane .glosa-chat-message > button {
@@ -7876,37 +7946,35 @@ nav.glosa-chat-actions[hidden] {
   color: var(--muted);
   border-color: transparent;
 }
+/* A rendered reply, in the Conversation style (its values are at the top of this file); its
+   headings, lists, quotes, code, tables and links are the page's own prose rules. */
 .glosa-chat-markdown {
   white-space: normal;
+  text-wrap: pretty;
+  hanging-punctuation: first;
+  --prose-gap: var(--block-gap);
 }
-.glosa-chat-markdown pre {
-  white-space: pre;
-  overflow: auto;
-  max-width: 100%;
-  padding: 12px;
-  background: var(--surface-sunken);
-  border-radius: 5px;
-  font: var(--chat-code-size) / 1.6 var(--font-mono);
+.glosa-chat-markdown > :last-child {
+  margin-bottom: 0;
 }
-.glosa-chat-markdown :is(p, ul, ol, pre, blockquote) {
-  margin-block: 0.6rem;
+/* A table keeps its words whole, as on the page, until one is too long for any column: then the
+   pane marks it (`data-fit`, chat-pane.js) and its cells break words so it fits the column (the
+   Cell Break Rule). The rest of a reply still wraps a long path or URL anywhere. */
+.glosa-chat-markdown table {
+  overflow-wrap: normal;
 }
-.glosa-chat-markdown :is(h1, h2, h3, h4) {
-  font-family: var(--font-sans);
-  color: var(--ink);
-  margin-block: 18px 8px;
-}
+/* The composer and what sits with it take the reply's column, never a wider one. */
 .glosa-chat-composer,
 .glosa-chat-footer,
 .glosa-chat-utilities,
 .glosa-chat-readiness {
-  width: min(calc(100% - 40px), 48rem);
+  width: min(calc(100% - 2 * var(--chat-gutter)), var(--chat-measure));
   margin-inline: auto;
   flex: none;
 }
 .glosa-chat-composer {
   border: 1px solid var(--border-strong);
-  border-radius: 14px;
+  border-radius: var(--radius-bubble);
   background: var(--surface);
   padding: 4px;
 }
@@ -7921,8 +7989,8 @@ nav.glosa-chat-actions[hidden] {
   min-height: 68px;
   max-height: 25vh;
   padding: 12px 13px;
-  border-radius: 6px;
-  font: var(--chat-size) / 1.55 var(--font-sans);
+  border-radius: var(--radius-control);
+  font: var(--chat-size) / 1.62 var(--font-serif);
   background: transparent;
 }
 .glosa-chat-draft:focus-visible {
@@ -8167,7 +8235,7 @@ nav.glosa-chat-actions[hidden] {
   min-height: 32px;
   padding: 4px 9px;
   white-space: nowrap;
-  border-radius: 16px;
+  border-radius: var(--radius-pill);
 }
 .glosa-chat-pane .glosa-chat-send {
   font-size: var(--text-base);
@@ -8242,7 +8310,7 @@ nav.glosa-chat-actions[hidden] {
 }
 .glosa-chat-mcp[open] {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: 12px;
 }
 .glosa-chat-mcp > button {
@@ -8259,12 +8327,13 @@ nav.glosa-chat-actions[hidden] {
   overflow: auto;
   flex: none;
 }
+/* A decision waiting on the person sits in the reply's column, edge to edge with the composer. */
 .glosa-chat-decision {
-  max-width: 48rem;
+  max-width: min(calc(100% - 2 * var(--chat-gutter)), var(--chat-measure));
   margin: 8px auto;
   padding: 16px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--surface);
 }
 .glosa-chat-decision h3 {
