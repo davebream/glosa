@@ -159,6 +159,8 @@
   --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
   --dur-fast: 150ms;
   --dur-base: 200ms;
+  /* How long a hover-only reveal waits for the pointer to rest before it starts (passage addresses). */
+  --delay-reveal: 200ms;
 
   /* Layout. */
   --nav-width: 232px; /* the contract's width: at 1440 it leaves the pane its 1205px rail floor */
@@ -2888,6 +2890,16 @@ input,
 .glosa-pane[data-mode="review"] .glosa-content > [data-address]:hover::before,
 .glosa-pane[data-mode="review"] .glosa-content > [data-address]:focus-visible::before {
   opacity: 1;
+}
+
+/* A body block's label waits for the pointer to rest on the block, so a pointer travelling down the
+   page does not blink a label beside every paragraph it crosses. The wait is on the way in only: the
+   resting style has none, so the label leaves as soon as the pointer does. Keyboard focus asks for
+   the label, so a focused block shows it at once, and a heading's label is always shown. */
+.glosa-pane[data-mode="review"]
+  .glosa-content
+  > [data-address]:hover:not(:is(h1, h2, h3, h4, h5, h6), :focus-visible)::before {
+  transition-delay: var(--delay-reveal);
 }
 
 .glosa-content .glosa-block-target:focus-visible {
@@ -6512,6 +6524,12 @@ input,
   .glosa-margin-side .glosa-annotation,
   .glosa-margin-side .glosa-composer {
     transition: none;
+  }
+
+  /* A passage address appears and goes without a fade. It still waits for a resting pointer:
+     the wait is not motion, and it is what keeps labels from flashing along a pointer's path. */
+  .glosa-pane[data-mode="review"] .glosa-content > [data-address]::before {
+    transition-duration: 0s;
   }
 
   .glosa-annotation-flash {
