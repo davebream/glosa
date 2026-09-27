@@ -1527,3 +1527,90 @@ than no app.
 **Later.** A Developer ID turns the prompt off: the release job passes `--notarized` to
 `scripts/cask-bump.ts`, which drops the caveat, and `APP_SIGNING_REQUIRED: "true"` stops a tag from
 falling back to an ad-hoc build.
+
+
+## Appearance, registers and the conversation style (2026-09-27)
+
+The [theming and typography study](research/2026-09-27-theming-and-typography.md) asked whether
+glosa should adopt known editor themes, whether its type is right for hours of reading, and how a
+product spec and an essay can each get the type that suits them. The maintainer settled its open
+decisions one at a time, after looking at [rendered comparisons](research/spikes/theming-comps.html).
+Two terms carry most of what follows: the **hand** is the burnt-vermilion colour of the person's own
+marks, and **session ink** is the blue-black of an agent session's marks; **pencil** is the grey of a
+mark not yet sent. Keeping these three distinct is how glosa shows who wrote what.
+
+**Appearance.** glosa keeps its own look and gains reading comfort controls: a text-size control
+first, line width and line spacing later, plus high-contrast light and dark modes selected by
+`prefers-contrast: more` (the CSS media query behind the operating system's Increase contrast
+setting). No high-contrast values exist yet; they are part of the work. Every mode is defined in a
+validated theme file (the study calls it `glosa-theme.json`) that refuses a colour below its
+contrast floor, naming the role: ink at least 4.5:1 against the page (7:1 in themes glosa ships),
+the hand and session ink 4.5:1 as text and 3:1 as a line, pencil 4.5:1, all as WCAG 2 ratios, with
+APCA as advice only. These floors protect solid colours; the translucent washes drawn on marked
+words can composite lower and need their own check.
+
+Three alternative palettes ship with it, each in light and dark: Catppuccin (Latte and Mocha),
+Gruvbox and Rosé Pine. A palette sets the page, surfaces, ink, muted text and borders from its own
+neutral tones; its orange-family accent becomes the hand and its blue-family accent becomes session
+ink. Headings, bold and links stay ink, as they are today, and no other accent is used on the page.
+Each palette is adapted, not copied: a role below its floor is moved in lightness within its own
+hue, and each is credited to its authors (all three are MIT). Editor themes such as One Dark Pro,
+Monokai and Dracula are not offered: they colour code, which glosa does not highlight, and ports of
+the same theme disagree about how prose looks. The chosen three share the risk the study named for
+all palettes, that an accent brings its own meaning; the maintainer accepted it for palettes that
+have official light and dark versions and need little change in dark. The study had recommended
+palettes later, as an importer; the maintainer chose three curated palettes now.
+
+**Text size.** A per-device text-size control, 5 to 7 steps from 15 to 24px with 18px as the
+default, scales every reading surface together: the document, margin notes, the composer and the
+chat, which stays one size below the document (16px beside 18px at the default). Buttons and menus
+follow browser zoom. Headings and code move onto one reading scale relative to the body so a larger
+size keeps the page's proportions, and h4 is never smaller than body.
+
+**Registers.** The per-document face chooser (the More menu's Default, Sans and Mono control)
+becomes a register chooser. Editorial is Source Serif 4 at 18px, as today's Default. Spec is
+Source Sans 3 at 16px / 1.5, a deliberately denser page: prose at about 64ch, tables and code free
+to widen to about 96ch, tables at body size, and its own heading ladder, with values in the study's
+Question 6. Mono keeps today's Mono face (system monospace, 15px / 1.65) until it gets register
+values of its own. Serif versus sans is a genre convention here, not a legibility claim. A folder
+can set a default register, which the daemon stores per workspace like starred folders, so it
+follows the folder into the desktop app and every browser on the machine; the integration metadata
+descriptor is not used for it, because that belongs to an external integration. A document's own
+choice wins over the default and stays per device, as today. Registers never set light or dark, and
+palettes never set a face.
+
+**The conversation.** The chat owns one Conversation style, independent of any document's register:
+agent replies, the person's messages and the draft are all Source Serif 4 at 16px / 1.62, on a
+column capped near 36rem, with the manuscript's rules for headings, code, tables and links. This
+settles a conflict inside [DESIGN.md](../DESIGN.md) in favour of its Serif Is Writing rule: the
+Body entry in the Typography hierarchy and the Conversation Pane section, which set the person's
+chat bubble in sans, change with the implementation. Speakers stay apart by alignment and the
+bubble's shape. A per-person chat font switch can follow if people ask.
+
+**Passage addresses.** The `§2.3` labels (the passage address: here, the third block under the
+second heading, derived on every paint) stay as shipped, shown only while notes are shown, with a
+short hover-in delay. The daemon derives the address while building each delivered note and sends
+it beside the quote. The quote stays the authoritative locator and the address is a hint; neither
+the inbox entry nor anything else stores it. The cost is that the numbering rule now lives in both
+the page and the daemon, and the two must agree. A lookup tool that resolves an address typed in
+chat may follow if it is needed.
+
+**Safari.** The lowest Safari glosa supports rises from 16.4 to 17.2, the first version that paints
+marks through `::highlight()` (the CSS Custom Highlight API, which paints text ranges without
+changing the page's elements). Every supported macOS release can run it: Apple ships Safari 17.2
+for Monterey, Ventura and Sonoma. An older Safari gets a visible notice instead of silently missing
+marks. The platform pins in `docs/appendices/A6-cli-platform.md` change with the implementation.
+
+**Changing an adopted look.** During the alpha, every visible change to type or colour is announced
+in the changelog with its before and after values, with no setting to restore the old look. This
+includes the changes this entry makes. The study had leaned toward a restore path for every such
+change; the maintainer judged its evidence too thin for the cost. Revisit at the first stable
+release.
+
+**Fixed first.** Three rendering bugs the study measured ship on their own ahead of this work: dark
+danger-button text at 2.79:1, a chat reply's `###` heading at 12px, and manuscript code blocks at
+11.05px instead of 13px. Chat reply links, rendered in the browser's default blue, move onto the
+manuscript's link rule in the same change.
+
+**Not decided.** Vendoring Source Code Pro for code, a user font folder and installed fonts,
+"Show all addresses", and a palette importer remain proposals in the study.

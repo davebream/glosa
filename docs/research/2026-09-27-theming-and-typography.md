@@ -1,6 +1,6 @@
 # glosa theming and typography study
 
-Date: 2026-09-27. Status: recommendations; the decisions are at the end.
+Date: 2026-09-27. Status: decided on 2026-09-27; the outcomes are recorded in the decision log under [Appearance, registers and the conversation style](../decisions.md#appearance-registers-and-the-conversation-style-2026-09-27). Two outcomes depart from this report: three adapted palettes ship now rather than later (Question 3), and a change to an adopted look carries a changelog line with before and after values rather than a restore setting (Decision 16).
 
 Why this study: glosa ships one look (warm paper, Source Serif 4, a per-document face chooser) and no reading control beyond zoom. Before building theming or type controls, the maintainer asked the six questions in the first table.
 

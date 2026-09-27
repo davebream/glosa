@@ -137,7 +137,9 @@
   <a class="tab" href="#themes">3 Palettes and themes</a>
   <a class="tab" href="#chat">4 Chat</a>
   <a class="tab" href="#registers">5 Registers</a>
+  <a class="tab" href="#desk">6 Spec page + chat</a>
   <span class="spacer"></span>
+  <button type="button" id="adapt" aria-pressed="false" title="Darken or lighten failing roles within their own hue until each passes glosa's floors">Adapted for glosa</button>
   <button type="button" id="modeLight" aria-pressed="true">Light</button>
   <button type="button" id="modeDark" aria-pressed="false">Dark</button>
 </header>
@@ -161,6 +163,11 @@
     <h2>5 · Registers. A product spec under the editorial register (serif), the shipped Sans face, and a proposed Spec register.</h2>
     <p class="lede">A register is the face plus its scale: body size, leading, heading sizes and weights, table and code treatment. Today the Sans face changes only the body (16px / 1.6) and keeps the serif's heading sizes and weights. The proposed Spec cards tighten the scale (h1 30, h2 22, h3 18, h4 16, semibold), set tables at 14px and lists closer, so a requirements page reads like documentation rather than an essay set in the wrong clothes. Section 1 shows the essay in the editorial register.</p>
     <div class="row" id="registersRow"></div>
+  </section>
+  <section class="group" id="desk">
+    <h2>6 · A Spec page with the chat beside it. Does the chat keep its own serif style, or follow the page into sans?</h2>
+    <p class="lede">Top pair (decided): the chat owns one Conversation style (Source Serif 4 16 / 1.62) beside every register, like margin notes. Lower pair: the chat follows the adjacent document's register, so beside a Spec page its replies turn Source Sans 3 16 / 1.5. The person's turn stays a sans bubble in both, so only the reply face differs.</p>
+    <div class="row" id="deskRow"></div>
   </section>
   <section class="group" id="themes">
     <h2>3 · Palettes and themes, ported onto glosa's semantic tokens. Toggle Light / Dark above.</h2>
@@ -210,6 +217,9 @@ ${labels ? '<div class="label">Session</div>' : ''}
 <div class="composer"><span>Reply to the session…</span><span class="send">Send</span></div>`;
 
 const CHATS = [
+  { id:'turn-serif', name:'16px replies, your turn in serif (decided)', note:'replies Source Serif 4 16/1.62, serif headings · your bubble Source Serif 4 16 · draft serif', size:16, lh:1.62, serif:'"Source Serif 4", serif', hface:'"Source Serif 4", serif', hsize:16, hh:'"Source Serif 4", serif', hhs:17, labels:false, boxed:false, plain:false, draftSerif:true },
+  { id:'size17', name:'17px replies, your turn in serif', note:'replies Source Serif 4 17/1.62, serif headings 18 · your bubble serif 17', size:17, lh:1.62, serif:'"Source Serif 4", serif', hface:'"Source Serif 4", serif', hsize:17, hh:'"Source Serif 4", serif', hhs:18, labels:false, boxed:false, plain:false },
+  { id:'turn-sans', name:'16px replies, your turn in sans (as claude.ai)', note:'replies Source Serif 4 16/1.62, serif headings · your bubble Source Sans 3 15 · draft sans', size:16, lh:1.62, serif:'"Source Serif 4", serif', hface:'"Source Sans 3", sans-serif', hsize:15, hh:'"Source Serif 4", serif', hhs:17, labels:false, boxed:false, plain:false },
   { id:'current', name:'Current (shipped)', note:'reply 15/1.7 serif, unboxed · human 15 sans bubble · headings sans', size:15, lh:1.7, serif:'"Source Serif 4", serif', hface:'"Source Sans 3", sans-serif', hsize:15, hh:'"Source Sans 3", sans-serif', hhs:15, labels:false, boxed:false, plain:false },
   { id:'claudelike', name:'Claude-like register (approximation)', note:'reply 16/1.65 serif, unboxed · serif headings 17/600 · human 15 sans bubble', size:16, lh:1.65, serif:'"Source Serif 4", serif', hface:'"Source Sans 3", sans-serif', hsize:15, hh:'"Source Serif 4", serif', hhs:17, hls:'-0.005em', labels:false, boxed:false, plain:false },
   { id:'allserif', name:'All serif, one step under the manuscript', note:'reply 16/1.62 serif · human 16 serif, no bubble, a hairline instead · serif headings', size:16, lh:1.62, serif:'"Source Serif 4", serif', hface:'"Source Serif 4", serif', hsize:16, hh:'"Source Serif 4", serif', hhs:18, labels:true, boxed:false, plain:true },
@@ -240,7 +250,8 @@ const SPEC_SAMPLE = `
 const REGISTERS = [
   { id:'editorial', name:'Editorial register (shipped default)', note:'serif 18/1.62 · headings 40/26/20/17 · tables sans 15', serif:'"Source Serif 4", serif', sans:'"Source Sans 3", sans-serif', type:{ body:18, lh:1.62, h1:40, h2:26, h3:20, h4:17, w1:650, w2:620, w3:620, w4:600, gap:1.2 }, table:15 },
   { id:'sansface', name:'Shipped Sans face (body only changes)', note:'sans 16/1.6 · headings keep the serif scale 40/26/20/17 · tables 15', serif:'"Source Sans 3", sans-serif', sans:'"Source Sans 3", sans-serif', type:{ body:16, lh:1.6, h1:40, h2:26, h3:20, h4:17, w1:650, w2:620, w3:620, w4:600, gap:1.2 }, table:15 },
-  { id:'spec', name:'Proposed Spec register · Source Sans 3', note:'sans 16/1.55 · headings 30/22/18/16 at 600 · tables 14 · lists closer', serif:'"Source Sans 3", sans-serif', sans:'"Source Sans 3", sans-serif', type:{ body:16, lh:1.55, h1:30, h2:22, h3:18, h4:16, w1:650, w2:600, w3:600, w4:600, gap:1.0 }, table:14, spec:true },
+  { id:'spec16', name:'Spec at 16px (decided: deliberate density)', note:'Source Sans 3 16 / 1.5 · h1 32 · h2 24 · h3 20 · h4 17, all 650 · tables 16 · 64ch', serif:'"Source Sans 3", sans-serif', sans:'"Source Sans 3", sans-serif', type:{ body:16, lh:1.5, h1:32, h2:24, h3:20, h4:17, w1:650, w2:650, w3:650, w4:650, gap:1.0 }, table:16, spec:true, measure:64 },
+  { id:'spec18', name:'Spec at 18px (alternative: same apparent size as the serif)', note:'Source Sans 3 18 / 1.5 · h1 36 · h2 27 · h3 22 · h4 19, all 650 · tables 16 · 64ch', serif:'"Source Sans 3", sans-serif', sans:'"Source Sans 3", sans-serif', type:{ body:18, lh:1.5, h1:36, h2:27, h3:22, h4:19, w1:650, w2:650, w3:650, w4:650, gap:1.0 }, table:16, spec:true, measure:64 },
   { id:'spec-plex', name:'Proposed Spec register · IBM Plex Sans', note:'same scale, a documentation sans with a matching mono family', serif:'"IBM Plex Sans", sans-serif', sans:'"IBM Plex Sans", sans-serif', type:{ body:16, lh:1.55, h1:30, h2:22, h3:18, h4:16, w1:650, w2:600, w3:600, w4:600, gap:1.0 }, table:14, spec:true },
   { id:'spec-inter', name:'Proposed Spec register · Inter', note:'same scale, the product-UI sans most specs are read in', serif:'Inter, sans-serif', sans:'Inter, sans-serif', type:{ body:15.5, lh:1.55, h1:30, h2:22, h3:18, h4:16, w1:650, w2:600, w3:600, w4:600, gap:1.0 }, table:14, spec:true },
   { id:'mono', name:'Mono face (shipped)', note:'system mono 15/1.65 · what a source-minded reader picks', serif:'ui-monospace, "SF Mono", Menlo, monospace', sans:'"Source Sans 3", sans-serif', type:{ body:15, lh:1.65, h1:40, h2:26, h3:20, h4:17, w1:650, w2:620, w3:620, w4:600, gap:1.2 }, table:15 },
@@ -313,6 +324,33 @@ function hue(c) {
 }
 function hueGap(a, b) { const d = Math.abs(hue(a) - hue(b)); return Math.round(Math.min(d, 360 - d)); }
 const f1 = n => (Math.round(n * 10) / 10).toFixed(1);
+function rgbToOklch(c) {
+  const [r, g, b] = parse(c);
+  const l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b, m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b, s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+  const l_ = Math.cbrt(l), m_ = Math.cbrt(m), s_ = Math.cbrt(s);
+  const L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+  const A = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_, B = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+  return [L, Math.hypot(A, B), (Math.atan2(B, A) * 180 / Math.PI + 360) % 360];
+}
+// Move one role's lightness away from the ground, keeping its hue and chroma, until it clears the floor.
+function adaptRole(color, bg, floor) {
+  if (contrast(color, bg) >= floor) return { color, moved: false };
+  let [L, C, h] = rgbToOklch(color);
+  const bgIsLight = lum(parse(bg)) > 0.18;
+  for (let i = 0; i < 100; i++) {
+    L = Math.min(1, Math.max(0, L + (bgIsLight ? -0.01 : 0.01)));
+    const cand = `oklch(${L.toFixed(3)} ${C.toFixed(3)} ${h.toFixed(1)})`;
+    if (contrast(cand, bg) >= floor) return { color: cand, moved: true };
+  }
+  return { color, moved: false };
+}
+const FLOORS = { ink: 7, muted: 4.5, hand: 4.5, session: 4.5, pencil: 4.5 };
+function adaptTheme(t) {
+  const out = { ...t }, moved = [];
+  for (const [k, floor] of Object.entries(FLOORS)) { const r = adaptRole(t[k], t.bg, floor); out[k] = r.color; if (r.moved) moved.push(k); }
+  return { tokens: out, moved };
+}
+let ADAPT = false;
 
 // ---- rendering ----
 function tokenStyle(t) {
@@ -358,10 +396,24 @@ function render() {
   }
   const registersRow = document.getElementById('registersRow'); registersRow.innerHTML = '';
   for (const r of REGISTERS) {
-    const c = card({ wide: true, measure: 68, tokens: g, type: { ...r.type, measure: 68 }, fonts: { serif: r.serif, sans: r.sans, notes: '"Source Serif 4", serif' }, sample: SPEC_SAMPLE, caption: `<b>${r.name}</b><span>${r.note}</span>` });
+    const c = card({ wide: true, measure: r.measure || 68, tokens: g, type: { ...r.type, measure: r.measure || 68 }, fonts: { serif: r.serif, sans: r.sans, notes: '"Source Serif 4", serif' }, sample: SPEC_SAMPLE, caption: `<b>${r.name}</b><span>${r.note}</span>` });
     c.style.setProperty('--table-size', r.table + 'px');
     if (r.spec) c.classList.add('spec');
     registersRow.append(c);
+  }
+  const deskRow = document.getElementById('deskRow'); deskRow.innerHTML = '';
+  const spec = REGISTERS.find(r => r.id === 'spec16');
+  for (const [label, face, lh, hface] of [['Chat keeps its Conversation style (decided)', '"Source Serif 4", serif', 1.62, '"Source Serif 4", serif'], ['Chat follows the page into Spec', '"Source Sans 3", sans-serif', 1.5, '"Source Sans 3", sans-serif']]) {
+    const pair = document.createElement('div');
+    pair.style.cssText = 'display:flex;gap:0;border:1px solid var(--page-line);border-radius:8px;overflow:hidden;';
+    const doc = card({ wide: false, tokens: g, type: { ...spec.type }, fonts: { serif: spec.serif, sans: spec.sans, notes: '"Source Serif 4", serif' }, sample: SPEC_SAMPLE, caption: `<b>${label}</b><span>Spec page, 16px sans</span>` });
+    doc.style.cssText += 'width:440px;border:none;border-right:1px solid var(--rule);border-radius:0;';
+    const ch = document.createElement('article');
+    ch.className = 'card narrow';
+    ch.setAttribute('style', tokenStyle(g) + `--font-chrome:"Source Sans 3", sans-serif;--font-mono:ui-monospace, "SF Mono", Menlo, monospace;--chat-size:16px;--chat-lh:${lh};--chat-serif:${face};--chat-human-face:"Source Sans 3", sans-serif;--chat-human-size:15px;--chat-h-face:${hface};--chat-h-size:17px;width:420px;border:none;border-radius:0;`);
+    ch.innerHTML = `<div class="caption"><b>Chat</b><span>replies ${face.includes('Serif') ? 'Source Serif 4 16 / 1.62' : 'Source Sans 3 16 / 1.5'}</span></div><div class="bar-mini"><span class="path">Session · Codex</span><span class="more">History · ⋯</span></div><div class="chat">${CHAT_SAMPLE(false)}</div>`;
+    pair.append(doc, ch);
+    deskRow.append(pair);
   }
   const chatRow = document.getElementById('chatRow'); chatRow.innerHTML = '';
   for (const ch of CHATS) {
@@ -378,9 +430,11 @@ function render() {
   }
   const themesRow = document.getElementById('themesRow'); themesRow.innerHTML = '';
   for (const th of THEMES) {
-    const t = themeTokens(th);
+    const raw = themeTokens(th);
+    const ad = ADAPT ? adaptTheme(raw) : { tokens: raw, moved: [] };
+    const t = ad.tokens;
     const sw = `<div class="swatches">${['bg', 'surface', 'border', 'muted', 'ink', 'pencil', 'hand', 'session'].map(k => `<i style="background:${t[k]}" title="${k}"></i>`).join('')}</div>`;
-    const c = card({ wide: false, tokens: t, type: { ...currentScale, body: 16, lh: 1.6, h1: 30, h2: 22, h3: 18, h4: 16 }, fonts: currentFonts, caption: `<b>${th.name}</b><span>${th.src}</span><br>${statsCaption(t)}` });
+    const c = card({ wide: false, tokens: t, type: { ...currentScale, body: 16, lh: 1.6, h1: 30, h2: 22, h3: 18, h4: 16 }, fonts: currentFonts, caption: `<b>${th.name}</b><span>${th.src}</span>${ADAPT ? `<span>${ad.moved.length ? 'adapted: ' + ad.moved.join(', ') : 'no change needed'}</span>` : ''}<br>${statsCaption(t)}` });
     c.insertAdjacentHTML('afterbegin', sw);
     themesRow.append(c);
   }
@@ -391,6 +445,7 @@ function setMode(m) {
   document.getElementById('modeDark').setAttribute('aria-pressed', String(m === 'dark'));
   render();
 }
+document.getElementById('adapt').onclick = () => { ADAPT = !ADAPT; document.getElementById('adapt').setAttribute('aria-pressed', String(ADAPT)); render(); };
 document.getElementById('modeLight').onclick = () => setMode('light');
 document.getElementById('modeDark').onclick = () => setMode('dark');
 render();
