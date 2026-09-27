@@ -99,7 +99,9 @@ const SPA_SRC_DIR = fileURLToPath(new URL("../../../spa/src/", import.meta.url))
 // not in this map 404s regardless of what else lives on disk under SPA_SRC_DIR).
 const SPA_ASSETS: Record<string, string> = {
   // Appearance preload is classic/blocking to apply a persisted override before CSS paints;
-  // appearance.js owns the page-lifetime controller and workspace popover.
+  // appearance.js owns the page-lifetime controller and workspace popover. Both read the one list
+  // of appearances, a classic script the preload needs before any module loads (#405).
+  "appearance-list.js": "text/javascript; charset=utf-8",
   "appearance-preload.js": "text/javascript; charset=utf-8",
   "appearance.js": "text/javascript; charset=utf-8",
   // The manuscript face store and its per-artifact control (Default / Sans / Mono).

@@ -6,7 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>glosa</title>
     <!-- Blocking, same-origin preload: explicit appearance overrides land before CSS paints, so
-         boot/error screens and the workspace never flash through the system theme. -->
+         boot/error screens and the workspace never flash through the system theme. The one list
+         of appearances loads first, because the preload resolves the stored id through it. -->
+    <script src="/app/appearance-list.js"></script>
     <script src="/app/appearance-preload.js"></script>
     <link rel="icon" href="/app/glosa-mark.svg" type="image/svg+xml" />
     <!-- dockview's own stylesheet for the multi-artifact dock. app.css's .glosa-dock-theme block

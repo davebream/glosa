@@ -56,15 +56,17 @@ describe("the SPA's terminal-state vocabulary agrees with the daemon's (contract
   }
 
   // Task 11's specific claim: `dismissed` joins `rejected`/`stale` in the SAME whole-card opacity
-  // rule, in both the light block (app.css ~:3345) and its dark-mode contrast override (~:3792) —
-  // not just "styled somewhere", which the generic loop above already covers for every value.
+  // rule — not just "styled somewhere", which the generic loop above already covers for every
+  // value. Since #405 the rule reads one token, `--settled-opacity`: 0.75 on paper, and 1 in the
+  // dark scheme block, the contrast override that used to be a dark-only copy of this selector.
+  // The computed opacity in both schemes is observed in a real engine by
+  // test/acceptance/workbench-real-engine.test.ts; this pins the shared selector.
   test('"dismissed" sits in the same opacity block as "rejected"/"stale", light and dark', () => {
     expect(cssSource).toContain(
-      '.glosa-annotation[data-state="rejected"],\n.glosa-annotation[data-state="stale"],\n.glosa-annotation[data-state="dismissed"] {\n  opacity: 0.75;\n}',
+      '.glosa-annotation[data-state="rejected"],\n.glosa-annotation[data-state="stale"],\n.glosa-annotation[data-state="dismissed"] {\n  opacity: var(--settled-opacity);\n}',
     );
-    expect(cssSource).toContain(
-      ':root[data-theme="dark"] .glosa-annotation[data-state="rejected"],\n:root[data-theme="dark"] .glosa-annotation[data-state="stale"],\n:root[data-theme="dark"] .glosa-annotation[data-state="dismissed"] {',
-    );
+    expect(cssSource).toMatch(/\n {2}--settled-opacity: 0\.75;/);
+    expect(cssSource).toMatch(/\n:root\[data-scheme="dark"\] \{[^}]*\n {2}--settled-opacity: 1;/);
   });
 });
 

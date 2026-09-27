@@ -409,8 +409,8 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(await revalidated.text()).toBe("");
   });
 
-  it("appearance preload + controller are fixed allowlisted JavaScript assets", async () => {
-    for (const name of ["appearance-preload.js", "appearance.js"]) {
+  it("appearance list + preload + controller are fixed allowlisted JavaScript assets", async () => {
+    for (const name of ["appearance-list.js", "appearance-preload.js", "appearance.js"]) {
       const res = await fetch(apiUrl(`/app/${name}`));
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toBe("text/javascript; charset=utf-8");

@@ -147,6 +147,16 @@
   --shadow-tray: 0 -1px 2px oklch(var(--shadow-ink) / 0.05), 0 -12px 32px -8px oklch(var(--shadow-ink) / 0.16);
   --shadow-dialog: 0 2px 6px oklch(var(--shadow-ink) / 0.08), 0 24px 56px -12px oklch(var(--shadow-ink) / 0.24);
 
+  /* What sits above the work: the composer, a question at its passage, dialogs and menus. On paper
+     they share the page's ground and a lift; under the lamp (the dark scheme block below) they
+     step up to the surface instead, and the dialog drops its shadow. Settled margin entries
+     recede to 75% in light only, because whole-card opacity costs too much contrast on a dark
+     ground. Tokens, not per-theme rules, so every theme reaches them (#405). */
+  --elevated-bg: var(--bg);
+  --elevated-border: var(--border-strong);
+  --dialog-shadow: var(--shadow-dialog);
+  --settled-opacity: 0.75;
+
   /* Semantic z scale. */
   --z-sticky: 10;
   --z-drawer: 20;
@@ -209,7 +219,6 @@
    ground, the ink lifted to a warm off-white, the hand lifted only as far as it stays legible
    without glowing. Pencil stays graphite; a session's answers stay ink. */
 :root[data-theme="dark"] {
-  color-scheme: dark;
   --bg: oklch(0.205 0.008 60);
   --surface: oklch(0.235 0.009 60);
   --surface-sunken: oklch(0.275 0.01 60);
@@ -241,6 +250,19 @@
   --shadow-menu: 0 1px 2px oklch(var(--shadow-ink) / 0.35), 0 10px 28px -6px oklch(var(--shadow-ink) / 0.5);
   --shadow-tray: 0 -1px 2px oklch(var(--shadow-ink) / 0.3), 0 -12px 32px -8px oklch(var(--shadow-ink) / 0.5);
   --shadow-dialog: 0 2px 6px oklch(var(--shadow-ink) / 0.4), 0 24px 56px -12px oklch(var(--shadow-ink) / 0.6);
+}
+
+/* What every dark theme shares, whichever palette it carries. `data-scheme` is set beside
+   `data-theme` by the preload and the appearance controller, from the one list of appearances
+   (appearance-list.js), so a dark theme reaches these without a rule naming it (#405). On a dark
+   ground what floats lifts one surface step off the paper (the shadow tokens already carry the
+   tighter, black-based dark values, so menus and the composer keep their lift), the dialog drops
+   its shadow, and settled entries stay at full opacity. */
+:root[data-scheme="dark"] {
+  color-scheme: dark;
+  --elevated-bg: var(--surface);
+  --dialog-shadow: none;
+  --settled-opacity: 1;
 }
 
 /* ---------- 2. Base ---------- */
@@ -2270,8 +2292,8 @@ input,
   gap: 1px;
   min-width: 13rem;
   padding: var(--space-1);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
+  background: var(--elevated-bg);
+  border: 1px solid var(--elevated-border);
   border-radius: var(--radius-panel);
   /* A menu is genuinely above the work while it is open, which is the one case the
      Flat-Until-Floating Rule admits. */
@@ -4093,8 +4115,8 @@ input,
   z-index: var(--z-tray);
   pointer-events: auto;
   padding: var(--space-3) var(--space-4) var(--space-4);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
+  background: var(--elevated-bg);
+  border: 1px solid var(--elevated-border);
   border-top: 2px solid var(--session);
   border-radius: var(--radius-composer);
   box-shadow: var(--shadow-menu);
@@ -4517,7 +4539,7 @@ input,
 .glosa-annotation[data-state="rejected"],
 .glosa-annotation[data-state="stale"],
 .glosa-annotation[data-state="dismissed"] {
-  opacity: 0.75;
+  opacity: var(--settled-opacity);
 }
 
 .glosa-annotation[data-state="stale"] .glosa-state-dot {
@@ -4666,8 +4688,8 @@ input,
    (still the entry-before-it-is-sent rule), and the menu's lift. Sent entries stay hairlines. */
 .glosa-composer {
   padding: var(--space-3) var(--space-4) var(--space-4);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
+  background: var(--elevated-bg);
+  border: 1px solid var(--elevated-border);
   border-top: 2px solid var(--pencil);
   border-radius: var(--radius-composer);
   box-shadow: var(--shadow-menu);
@@ -4890,11 +4912,11 @@ input,
 .glosa-dialog {
   border: 1px solid var(--border);
   border-radius: var(--radius-overlay);
-  background: var(--bg);
+  background: var(--elevated-bg);
   color: var(--ink);
   padding: var(--space-6);
   max-width: 26rem;
-  box-shadow: var(--shadow-dialog);
+  box-shadow: var(--dialog-shadow);
 }
 
 .glosa-dialog::backdrop {
@@ -5112,11 +5134,13 @@ input,
   font-size: var(--text-xs);
 }
 
-/* diff2html ships dark variables but only applies them behind its own utility class. glosa owns
-   theme resolution, so remap the vendor variables at the pane boundary instead of teaching the
-   history module about appearance. */
-:root[data-theme="dark"] .glosa-diff-pane,
-:root[data-theme="dark"] .glosa-diff-surface {
+/* diff2html ships its own light palette (white gutters, grey rules, mint and pink beds) and a dark
+   one behind a utility class. glosa owns theme resolution, so the vendor variables are remapped
+   onto glosa's tokens at the pane boundary in every appearance: the diff and History panes sit on
+   the page's paper with its rules and state colours, and a theme reaches them through its tokens
+   instead of the history module learning about appearance (#405). */
+.glosa-diff-pane,
+.glosa-diff-surface {
   --d2h-bg-color: var(--bg);
   --d2h-border-color: var(--border);
   --d2h-dim-color: var(--muted);
@@ -5140,32 +5164,6 @@ input,
   --d2h-info-border-color: var(--border);
   --d2h-change-label-color: var(--warn);
   --d2h-moved-label-color: var(--primary);
-}
-
-/* On a dark ground the draft lifts one surface step off the paper; the shadow token already
-   carries the tighter, black-based dark value, so it keeps its lift too. */
-:root[data-theme="dark"] .glosa-ask-layer .glosa-agent-card,
-:root[data-theme="dark"] .glosa-composer {
-  background: var(--surface);
-}
-
-:root[data-theme="dark"] .glosa-dialog {
-  background: var(--surface);
-  box-shadow: none;
-}
-
-:root[data-theme="dark"] .glosa-annotation[data-state="rejected"],
-:root[data-theme="dark"] .glosa-annotation[data-state="stale"],
-:root[data-theme="dark"] .glosa-annotation[data-state="dismissed"] {
-  /* Whole-card opacity compounds contrast loss for 12–13px metadata on dark surfaces. */
-  opacity: 1;
-}
-
-/* On a dark ground the menu lifts on the surface step and a stronger border; the shadow token
-   already carries the tighter, black-based dark value every menu shares. */
-:root[data-theme="dark"] .glosa-pane-menu {
-  border-color: var(--border-strong);
-  background: var(--surface);
 }
 
 .glosa-diff-pane:empty {
