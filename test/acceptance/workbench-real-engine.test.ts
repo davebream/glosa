@@ -720,6 +720,14 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         })()`);
       const seconds = (time: string) =>
         time.endsWith("ms") ? Number.parseFloat(time) / 1000 : Number.parseFloat(time);
+      // Pin the motion preference instead of inheriting the host's: a machine that asks for reduced
+      // motion (CI runners can) zeroes the fade under the reduced-motion rule, and the first half of
+      // this test is about the ordinary fade. The preference reaches style on the next frame.
+      const prefer = async (value: "no-preference" | "reduce") => {
+        await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value }] });
+        await tab.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      };
+      await prefer("no-preference");
 
       const rest = await label();
       expect(rest.address).toBe("§0.1");
@@ -738,10 +746,8 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       expect((await label()).delay, "a focused block under a resting pointer still shows it at once").toBe("0s");
 
       await force([]);
-      await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
-      // The emulated preference reaches style on the next frame; a hover forced before it would
-      // start its transition under the old rules.
-      await tab.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      // A hover forced before the new preference reaches style would start under the old rules.
+      await prefer("reduce");
       await force(["hover"]);
       const reduced = await label();
       expect(reduced.duration, "no fade under reduced motion").toBe("0s");
