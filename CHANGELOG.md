@@ -36,6 +36,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   style, Editorial included. glosa keeps the default for the folder in `~/.glosa/folder-styles.json`, so it
   survives restarting glosa and reopening the folder. A single file opened on its own has no folder
   default. API contract 1.21 (#407).
+- High contrast, light and dark: glosa's own palette with stronger ink, marks and edges on the same
+  paper, for `prefers-contrast: more`. When the system asks for more contrast (macOS Increase
+  Contrast does in Safari and Chrome), glosa's own palette turns into High contrast at once and
+  before the page first paints; it is also a palette of its own in Settings > Appearance, which
+  holds with or without the system's request. The desktop app does not receive Increase Contrast
+  yet (Electron does not pass it to pages), so there it is the Settings choice. Paper, surface and
+  sunken ground stay glosa's. High contrast light sets ink `oklch(0.16 0.012 60)`, muted
+  `oklch(0.4 0.014 60)`, faint `oklch(0.55 0.012 65)`, border `oklch(0.76 0.01 75)`, strong border
+  `oklch(0.5 0.014 65)`, the region rule to the ink, the hand `oklch(0.46 0.16 42)`, pencil
+  `oklch(0.5 0.01 65)`, session ink `oklch(0.35 0.11 255)`, danger `oklch(0.38 0.15 22)`, warn
+  `oklch(0.5 0.1 80)`, ok `oklch(0.41 0.08 150)` and the scrim `oklch(0.16 0.012 60 / 0.4)`. High
+  contrast dark sets ink `oklch(0.97 0.008 80)`, muted `oklch(0.8 0.012 75)`, faint
+  `oklch(0.62 0.012 65)`, border `oklch(0.44 0.01 60)`, strong border `oklch(0.7 0.012 65)`, the
+  region rule `oklch(0.86 0.01 80)`, the hand `oklch(0.77 0.13 45)`, pencil `oklch(0.72 0.01 70)`,
+  session ink `oklch(0.84 0.085 250)`, danger `oklch(0.71 0.15 22)`, warn `oklch(0.84 0.1 80)`,
+  ok `oklch(0.82 0.09 150)` and the scrim `oklch(0 0 0 / 0.6)`. Ink and muted text reach 7:1 or
+  more on every ground they are drawn on, and the marks 4.5:1 or more as lines (#409).
+- Every palette glosa paints, its own light, dark and print included, is now a theme file checked
+  against contrast floors before it ships: a theme below a floor is refused with the theme, the
+  role, the ratio and the floor named, and no colour is corrected. Light, dark and print paint
+  exactly the colours they did before, token for token (#409).
+- Settings > Appearance chooses a palette. Its choices sit under three labels, Mode (Use system
+  setting, Light, Dark), Palette and Text size; each palette is a row with its paper and ink as a
+  swatch, its name and a one-line credit, and the chosen one carries a check. When the system's
+  request for more contrast is showing High contrast in place of glosa, a line under the rows says
+  so. The page's introduction now spells glosa in lowercase (#409).
 
 ### Changed
 

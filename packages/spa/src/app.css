@@ -48,53 +48,45 @@
 :root {
   color-scheme: light;
 
-  /* Palette (OKLCH). Neutrals lean warm and low: paper, not white glass. Their chroma stays well
-     under the hand's so nothing on the desk competes with the one colour that means "you". */
-  --bg: oklch(0.99 0.007 85); /* paper — the manuscript and the whole desk */
+  /* The palette is sixteen slots, and a theme file sets them (#409): paper (`--bg`), the two
+     surfaces, ink, muted, faint, the borders, the region rule (`--rule`), the hand, pencil,
+     session ink, danger, warn, ok and the scrim. packages/spa/src/themes/*.json hold glosa's light
+     and dark, High contrast light and dark, and the white of print; each is checked against its
+     contrast floors and rendered into themes.css, which the page loads before this file. What
+     follows is derived from the slots and is the same in every theme: this file reads the slots
+     and never sets them. Neutrals lean warm and low, paper rather than white glass, and their
+     chroma stays well under the hand's, so nothing on the desk competes with the one colour that
+     means "you". */
   --desk: var(--bg); /* top bar, navigator, tab strip: the same paper, divided by ink */
-  --surface: oklch(0.97 0.006 80); /* panels, code beds, the compact tray */
-  --surface-sunken: oklch(0.94 0.009 78); /* hover beds, disabled fills */
-  --ink: oklch(0.2 0.012 60); /* primary text — ~17.8:1 on paper */
-  --muted: oklch(0.47 0.016 60); /* secondary text — ~6.7:1 on paper */
-  --faint: oklch(0.64 0.012 65); /* disabled only, never live text */
-  --border: oklch(0.88 0.01 75); /* quiet structural rules inside a region */
-  --border-strong: oklch(0.6 0.014 65); /* interactive edges — ≥3:1 on paper and on sunken */
-  --rule: var(--ink); /* the hairline between the desk's regions: printed, not greyed */
 
   /* The two hands. `--hand` is the human's mark everywhere it appears: the wash on the words, the
      address, the margin text, the composer, the caret. `--pencil` is the same mark before it is
-     sent. Nothing a session writes ever takes either; its answers are printed in `--ink`. */
-  --hand: oklch(0.52 0.16 42); /* burnt vermilion, #b03f00 — ~5.8:1 on paper */
+     sent. Nothing a session writes ever takes either; its answers are printed in `--ink`. Session
+     ink (`--session`) is a session's MARK on the page (#308): the bracket, its tab and label, the
+     wash on its words, the notice's glyph, the question card's top rule. Never a button, never a
+     panel fill, and a session's words stay printed in ordinary ink. */
   --hand-hover: oklch(0.46 0.15 42);
-  --pencil: oklch(0.56 0.01 65); /* warm graphite — ~4.6:1 on paper */
-  /* Session ink: blue-black, a session's MARK on the page (#308) — the bracket, its tab and label,
-     the wash on its words, the notice's glyph, the question card's top rule. Never a button, never a panel fill, and a
-     session's words stay printed in ordinary ink. ~8.9:1 on paper, so the label's paper-on-ink
-     text clears AA with room. */
-  --session: oklch(0.42 0.11 255);
   --session-wash: color-mix(in oklch, var(--session) 10%, transparent);
   --session-wash-strong: color-mix(in oklch, var(--session) 17%, transparent);
   --hand-wash: color-mix(in oklch, var(--hand) 14%, transparent); /* on the words, in Review */
   --pencil-wash: color-mix(in oklch, var(--pencil) 16%, transparent);
   --hand-line: color-mix(in oklch, var(--hand) 70%, transparent); /* the quiet underline in Read */
   --anchor-wash: color-mix(in oklch, var(--hand) 14%, var(--bg)); /* opaque form, for surfaces */
-  --scrim: oklch(0.2 0.012 60 / 0.3); /* the dim behind a blocking dialog */
 
-  /* Actions are ink. The primary button is the page's own black; it never borrows the hand. */
+  /* Actions are ink. The primary button is the page's own black; it never borrows the hand. Its
+     hover is one lightness per scheme, not yet computed from each theme's ink: glosa's two themes
+     and High contrast share an ink hue, so the value is exact for all four. */
   --primary: var(--ink);
   --primary-hover: oklch(0.34 0.012 60);
   --on-primary: var(--bg);
   --focus: var(--hand);
 
-  /* Semantic state. Danger is a darker crimson, held apart from the vermilion hand by hue and
-     lightness, and always arrives with a label or a shape; success green is also the diff's insert
-     colour, and appears nowhere a human mark could be mistaken for it. */
-  --danger: oklch(0.47 0.17 22);
-  /* Text on a filled danger action. Near-white on the light crimson (~7.3:1); the dark block swaps
-     it for the dark paper, because near-white on the lamplit crimson is ~2.8:1. */
+  /* Semantic state. Danger is a darker crimson, held apart from the vermilion hand by lightness,
+     and always arrives with a label or a shape; success green is also the diff's insert colour,
+     and appears nowhere a human mark could be mistaken for it. Text on a filled danger action is
+     near-white on the light crimson (~7.3:1); the dark scheme swaps it for the dark paper, because
+     near-white on the lamplit crimson is ~2.8:1. */
   --on-danger: oklch(0.99 0 0);
-  --warn: oklch(0.53 0.11 80);
-  --ok: oklch(0.5 0.09 150);
 
   /* Typography. Source Serif 4 sets the manuscript, its headings and every quote of it; Source
      Sans 3, designed as its companion, sets the chrome; mono is for paths, identifiers and the
@@ -385,31 +377,21 @@
 
 /* Dark is the same desk under a reading lamp, never an inverted console: a warm near-black
    ground, the ink lifted to a warm off-white, the hand lifted only as far as it stays legible
-   without glowing. Pencil stays graphite; a session's answers stay ink. */
-:root[data-theme="dark"] {
-  --bg: oklch(0.205 0.008 60);
-  --surface: oklch(0.235 0.009 60);
-  --surface-sunken: oklch(0.275 0.01 60);
-  --ink: oklch(0.93 0.01 80);
-  --muted: oklch(0.72 0.014 70);
-  --faint: oklch(0.52 0.012 65);
-  --border: oklch(0.32 0.01 60);
-  --border-strong: oklch(0.58 0.012 65);
-  /* Ink under lamplight: the same printed hairline, stepped a little below the text ink so a
-     full-width rule does not glare against the dark ground. */
-  --rule: oklch(0.74 0.01 80);
-  --hand: oklch(0.72 0.13 45); /* vermilion under lamplight — ~6.9:1 */
+   without glowing. Pencil stays graphite; a session's answers stay ink. The dark themes set those
+   colours (themes.css); this is what every dark theme shares, whichever palette it carries.
+   `data-scheme` is set beside `data-theme` by the preload and the appearance controller, from the
+   one list of appearances (appearance-list.js), so a dark theme reaches these without a rule
+   naming it (#405). The washes deepen a step, the hovers lift instead of darkening, and text on a
+   filled danger action is the dark paper (~6.3:1 on the lifted crimson, ~4.6:1 under the hover's
+   darkening). On a dark ground what floats lifts one surface step off the paper, the dialog drops
+   its shadow, and settled entries stay at full opacity. */
+:root[data-scheme="dark"] {
+  color-scheme: dark;
   --hand-hover: oklch(0.78 0.12 45);
-  --pencil: oklch(0.64 0.01 70);
-  --session: oklch(0.76 0.1 250); /* the same ink under the lamp — ~8.6:1 on the dark ground */
   --session-wash: color-mix(in oklch, var(--session) 14%, transparent);
   --session-wash-strong: color-mix(in oklch, var(--session) 22%, transparent);
-  --scrim: oklch(0 0 0 / 0.45);
   --primary-hover: oklch(0.84 0.01 80);
-  --danger: oklch(0.7 0.15 22);
-  --on-danger: var(--bg); /* dark paper on the lifted crimson: ~6.3:1, ~4.6:1 under the hover's darkening */
-  --warn: oklch(0.76 0.11 80);
-  --ok: oklch(0.72 0.09 150);
+  --on-danger: var(--bg);
 
   /* Under low light a shadow is a darker patch of the same desk, not haze: black-based and
      tighter, and nothing at rest casts one at all. */
@@ -418,16 +400,7 @@
   --shadow-menu: 0 1px 2px oklch(var(--shadow-ink) / 0.35), 0 10px 28px -6px oklch(var(--shadow-ink) / 0.5);
   --shadow-tray: 0 -1px 2px oklch(var(--shadow-ink) / 0.3), 0 -12px 32px -8px oklch(var(--shadow-ink) / 0.5);
   --shadow-dialog: 0 2px 6px oklch(var(--shadow-ink) / 0.4), 0 24px 56px -12px oklch(var(--shadow-ink) / 0.6);
-}
 
-/* What every dark theme shares, whichever palette it carries. `data-scheme` is set beside
-   `data-theme` by the preload and the appearance controller, from the one list of appearances
-   (appearance-list.js), so a dark theme reaches these without a rule naming it (#405). On a dark
-   ground what floats lifts one surface step off the paper (the shadow tokens already carry the
-   tighter, black-based dark values, so menus and the composer keep their lift), the dialog drops
-   its shadow, and settled entries stay at full opacity. */
-:root[data-scheme="dark"] {
-  color-scheme: dark;
   --elevated-bg: var(--surface);
   --dialog-shadow: none;
   --settled-opacity: 1;
@@ -4082,9 +4055,9 @@ input,
    fenced code block either: a left hairline and muted ink rather than the filled ground
    `.glosa-content pre` gives code, because this is not something the writer is composing.
 
-   `--muted` (app.css:127) and `--border` (:129) are redefined in the dark block, so no companion
+   `--muted` and `--border` are theme slots, set by every theme (themes.css), so no companion
    rule is needed. `--space-3` needs none for a DIFFERENT reason: it is a spacing-scale token,
-   defined once in the base `:root` at :52 and deliberately never redefined per theme. */
+   defined once in the base `:root` and deliberately never redefined per theme. */
 .glosa-rich-surface .glosa-raw {
   background: none;
   border: 0;
@@ -6722,16 +6695,11 @@ input,
 }
 
 @media print {
+  /* Print's own palette, white paper and near-black ink, is a theme file too
+     (themes/print.json, rendered at the end of themes.css), laid over whichever theme is showing. */
   :root,
-  :root[data-theme="dark"] {
+  :root[data-theme] {
     color-scheme: light;
-    --bg: #fff;
-    --ink: #202020;
-    --muted: #454545;
-    --surface: #f4f4f4;
-    --border: #ccc;
-    --border-strong: #777;
-    --primary: #202020;
     background: #fff;
   }
 
@@ -7602,20 +7570,96 @@ input,
   margin: 0 0 8px;
   font: 600 19px / 1.4 var(--font-sans);
 }
+/* Settings > Appearance (#409): Mode, Palette and Text size, each under the same 15px 600 ink
+   label the Text size field carries, so the page reads as three fields of one kind. */
+.glosa-settings-label {
+  margin: var(--space-6) 0 var(--space-2);
+  color: var(--ink);
+  font: 600 var(--text-base) / 1.4 var(--font-sans);
+}
 .glosa-settings-appearance {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
-.glosa-settings-appearance [aria-pressed="true"] {
+.glosa-settings-appearance [aria-pressed="true"],
+.glosa-agent-settings .glosa-settings-palette[aria-pressed="true"] {
   border-color: var(--ink);
   background: var(--surface);
+}
+/* A palette is a row: its paper and ink as a swatch, its name, the one-line credit, and the drawn
+   check on the chosen one (the same check the More menu's rows carry), so the choice never rests
+   on the edge's colour alone. */
+.glosa-settings-palettes {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 30rem;
+}
+.glosa-agent-settings .glosa-settings-palette {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 1rem;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 3.5rem;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  text-align: left;
+}
+/* The swatch's edge is the page's; inside it, `data-theme-swatch` gives the paper and ink of the
+   theme the palette would paint in this scheme (themes.css sets that theme's slots on it). */
+.glosa-settings-palette-swatch {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-micro);
+  overflow: hidden;
+}
+.glosa-settings-palette-paper {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.25rem;
+  background: var(--bg);
+  color: var(--ink);
+  font: 600 1.0625rem / 1 var(--font-serif);
+}
+.glosa-settings-palette-text {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+}
+.glosa-settings-palette-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+.glosa-settings-palette-credit {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.glosa-settings-palette-check {
+  display: grid;
+  visibility: hidden;
+  color: var(--ink);
+}
+.glosa-settings-palette-check svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.glosa-settings-palette[aria-pressed="true"] .glosa-settings-palette-check {
+  visibility: visible;
 }
 .glosa-settings-hint {
   max-width: 43rem;
   margin: var(--space-2) 0 0;
   color: var(--muted);
   font-size: var(--text-sm);
+}
+/* The line that says the system's contrast is showing another palette keeps to the rows' column. */
+.glosa-settings-palettes + .glosa-settings-hint {
+  max-width: 30rem;
 }
 .glosa-agent-account-area {
   padding: 0;

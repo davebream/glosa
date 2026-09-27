@@ -1,0 +1,23 @@
+{
+  "id": "light",
+  "name": "glosa light: warm paper, near-black ink, the vermilion hand",
+  "scheme": "light",
+  "slots": {
+    "bg": "oklch(0.99 0.007 85)",
+    "surface": "oklch(0.97 0.006 80)",
+    "surface-sunken": "oklch(0.94 0.009 78)",
+    "ink": "oklch(0.2 0.012 60)",
+    "muted": "oklch(0.47 0.016 60)",
+    "faint": "oklch(0.64 0.012 65)",
+    "border": "oklch(0.88 0.01 75)",
+    "border-strong": "oklch(0.6 0.014 65)",
+    "rule": "ink",
+    "hand": "oklch(0.52 0.16 42)",
+    "pencil": "oklch(0.56 0.01 65)",
+    "session": "oklch(0.42 0.11 255)",
+    "danger": "oklch(0.47 0.17 22)",
+    "warn": "oklch(0.53 0.11 80)",
+    "ok": "oklch(0.5 0.09 150)",
+    "scrim": "oklch(0.2 0.012 60 / 0.3)"
+  }
+}

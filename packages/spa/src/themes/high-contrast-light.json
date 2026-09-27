@@ -1,0 +1,24 @@
+{
+  "id": "high-contrast-light",
+  "name": "glosa High contrast light: the same paper, deeper ink, marks and edges",
+  "scheme": "light",
+  "contrast": "more",
+  "slots": {
+    "bg": "oklch(0.99 0.007 85)",
+    "surface": "oklch(0.97 0.006 80)",
+    "surface-sunken": "oklch(0.94 0.009 78)",
+    "ink": "oklch(0.16 0.012 60)",
+    "muted": "oklch(0.4 0.014 60)",
+    "faint": "oklch(0.55 0.012 65)",
+    "border": "oklch(0.76 0.01 75)",
+    "border-strong": "oklch(0.5 0.014 65)",
+    "rule": "ink",
+    "hand": "oklch(0.46 0.16 42)",
+    "pencil": "oklch(0.5 0.01 65)",
+    "session": "oklch(0.35 0.11 255)",
+    "danger": "oklch(0.38 0.15 22)",
+    "warn": "oklch(0.5 0.1 80)",
+    "ok": "oklch(0.41 0.08 150)",
+    "scrim": "oklch(0.16 0.012 60 / 0.4)"
+  }
+}

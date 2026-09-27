@@ -27,6 +27,15 @@ overrides forced on every element. Each audits the engine's own text rectangles 
 cuts off, text painted over text and a sideways page scroll. They do not replace the manual zoom
 and text-only enlargement pass below, which covers Safari, the chrome and long names.
 
+Contrast is checked twice. Every theme file glosa ships (light, dark, High contrast light and
+dark, print) passes its WCAG 2 floors on the grounds each role is drawn on, in
+`packages/spa/test/themes.test.ts`, which refuses a theme below a floor by name. And in
+`test/acceptance/workbench-real-engine.test.ts`, Chromium with `prefers-contrast: more` emulated
+paints glosa as High contrast in light and dark, a High contrast palette chosen in Settings holds
+without it, and light, dark and print paint the same colour tokens they did before theme files.
+That emulates the media query; whether an operating system's setting reaches it is the manual item
+below.
+
 The 2026-07-22 browser pass covered light, dark, and system-resolved appearances; a 1440 × 900
 desktop viewport; the browser's 500 × 844 minimum emulated narrow viewport; keyboard traversal;
 and horizontal-overflow checks. The light and dark text/status tokens used for active content met
@@ -46,6 +55,7 @@ exempt from contrast requirements and is not used for active information.
 | History and conversation | Disclosure buttons expose `aria-expanded` and `aria-controls`; comparison checkboxes have complete names; async results and errors are textual live status. |
 | Unsaved-edit dialog | Focus starts on Cancel for a destructive choice, stays trapped by the native modal, and returns to the invoking mode control. |
 | Appearance menu | Arrow keys move through System/Light/Dark; Enter chooses; focus returns to the trigger. |
+| Settings > Appearance | Tab reaches each Mode button and each Palette row, all buttons with `aria-pressed`; the groups are named by their visible labels, Mode and Palette. Space or Enter chooses. |
 | Text size (a document's More menu, Settings > Appearance) | Tab reaches the value, a spinbutton named "Text size" whose value is the step; the arrow keys and Page Up/Page Down step it and Home/End go to 15 and 24, without moving the menu's focus. − and + are for the pointer and outside the tab order. Reset, shown only off 18, returns to 18 and puts focus on the value. No shortcut is added: ⌘+ and ⌘− stay browser and desktop zoom. |
 
 ## Remaining manual assistive-technology checks
@@ -76,4 +86,7 @@ establish practical screen-reader usability:
   the column, the reader's place holds across a change, and VoiceOver reads the stepper's name and
   value.
 - [ ] macOS Reduce Motion and Increase Contrast: confirm state remains understandable when motion
-  is removed and system contrast preferences are enabled.
+  is removed and system contrast preferences are enabled. With Increase Contrast on, Safari should
+  show High contrast with glosa's own palette chosen (WebKit maps it to `prefers-contrast: more`),
+  and the desktop app should not until Electron passes it to pages; there, choose High contrast in
+  Settings > Appearance. Not yet observed on a Mac; the automated check above emulates the query.

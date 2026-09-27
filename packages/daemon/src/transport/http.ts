@@ -115,6 +115,10 @@ const SPA_ASSETS: Record<string, string> = {
   // Passage addresses ("§2.3"), derived from the rendered Markdown structure.
   "address.js": "text/javascript; charset=utf-8",
   "bootstrap.js": "text/javascript; charset=utf-8",
+  // The theme slots (#409): packages/spa/src/themes/*.json, checked against their contrast floors
+  // and rendered into one stylesheet, so a theme reaches the page under `style-src 'self'` rather
+  // than as an injected <style>. The theme files themselves are not served.
+  "themes.css": "text/css; charset=utf-8",
   // The SPA's visual system (design brief docs/design/2026-07-21-workspace-review-surface-brief.md).
   "app.css": "text/css; charset=utf-8",
   // The product mark is a fixed, self-adapting SVG used by the shell and browser chrome.

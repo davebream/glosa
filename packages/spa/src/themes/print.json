@@ -1,0 +1,13 @@
+{
+  "id": "print",
+  "name": "Print: white paper and near-black ink over whichever theme is showing",
+  "media": "print",
+  "slots": {
+    "bg": "#fff",
+    "surface": "#f4f4f4",
+    "ink": "#202020",
+    "muted": "#454545",
+    "border": "#ccc",
+    "border-strong": "#777"
+  }
+}

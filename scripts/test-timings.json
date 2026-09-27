@@ -203,7 +203,6 @@
     "test/acceptance/pairing-durability-real-engine.test.ts": 8.473819,
     "test/acceptance/rich-editor-browser-roundtrip.test.ts": 82.050207,
     "test/acceptance/security-attack-matrix.test.ts": 0.169622,
-    "test/acceptance/workbench-real-engine.test.ts": 9.00038,
     "test/agent-provider-conformance.test.ts": 0.002062,
     "test/oss-release.test.ts": 0.059936,
     "test/plugin-load.test.ts": 0.00474,
@@ -306,6 +305,14 @@
     "packages/spa/test/text-size.test.ts": {
       "seconds": 0.1,
       "reason": "Initial local Bun 1.4.2 estimate for the text size ladder, store, first-paint preload and stepper (14 tests over happy-dom, 0.1 s locally); replace with measured CI medians."
+    },
+    "packages/spa/test/themes.test.ts": {
+      "seconds": 0.05,
+      "reason": "Initial local Bun 1.4.2 estimate for the theme validator over the shipped theme files and the rendered stylesheet (pure, no DOM, no process); replace with measured CI medians."
+    },
+    "test/acceptance/workbench-real-engine.test.ts": {
+      "seconds": 15.0,
+      "reason": "Measured 9.00038 s in CI before #409; #409 adds one real-engine test (a daemon, a browser, a document, Settings) that takes about 10 s of the file's 26 s locally, so about 15 s in CI; replace with measured CI medians."
     }
   }
 }

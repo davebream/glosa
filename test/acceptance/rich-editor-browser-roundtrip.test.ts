@@ -1295,6 +1295,15 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         const { client } = await launchBrowser({ initialUrl: documentUrl("document", path, "edit") });
         cdp = client;
         await waitForLaidOutPane(client);
+        // The colours read below are the page's theme, and the theme follows the host's scheme and
+        // its request for more contrast (#409), so both are pinned rather than read from the host.
+        await client.send("Emulation.setEmulatedMedia", {
+          features: [
+            { name: "prefers-color-scheme", value: "light" },
+            { name: "prefers-reduced-motion", value: "no-preference" },
+            { name: "prefers-contrast", value: "no-preference" },
+          ],
+        });
 
         const mark: any = await client.evaluate(`(async () => {
       const content = () => document.querySelector(".glosa-content");
@@ -1905,7 +1914,8 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         );
         const rendered = renderMarkdown(source);
         const html = `<!doctype html><html><head><meta charset="utf-8"><title>PRIVATE-PRINT-TITLE</title>
-          <link rel="stylesheet" href="/app/vendor/dockview.css"><link rel="stylesheet" href="/app/app.css"></head>
+          <link rel="stylesheet" href="/app/vendor/dockview.css"><link rel="stylesheet" href="/app/themes.css">
+          <link rel="stylesheet" href="/app/app.css"></head>
           <body><div id="app"><div data-screen="ready"><div class="glosa-app"><header class="glosa-topbar">APP-CHROME</header><main class="glosa-main">
           <aside class="glosa-sidebar">SIDEBAR-CHROME</aside><div class="glosa-dock-host"></div></main></div></div></div>
           <script type="module">

@@ -7,15 +7,21 @@ import {
   APPEARANCE_STORAGE_KEY,
   createAppearanceController,
   mountAppearanceControl,
+  PALETTE_STORAGE_KEY,
   readAppearance,
+  readPalette,
   reportAppearanceToShell,
   resolveAppearance,
 } from "../src/appearance.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
 
-function fakeStorage(initial?: string): Storage {
+/** A snapshot's palette fields when glosa's own palette is chosen and paints. */
+const GLOSA = { palette: "glosa", painting: "glosa" } as const;
+
+function fakeStorage(initial?: string, palette?: string): Storage {
   const map = new Map<string, string>();
   if (initial !== undefined) map.set(APPEARANCE_STORAGE_KEY, initial);
+  if (palette !== undefined) map.set(PALETTE_STORAGE_KEY, palette);
   return {
     getItem: (key: string) => map.get(key) ?? null,
     setItem: (key: string, value: string) => void map.set(key, value),
@@ -73,14 +79,14 @@ describe("createAppearanceController", () => {
     const storage = fakeStorage("light");
     const media = fakeMediaQuery(true);
     const first = createAppearanceController({ root: dom.document.documentElement, storage, mediaQuery: media as any });
-    expect(first.getSnapshot()).toEqual({ preference: "light", resolved: "light", scheme: "light" });
+    expect(first.getSnapshot()).toEqual({ ...GLOSA, preference: "light", resolved: "light", scheme: "light" });
     expect(dom.document.documentElement.dataset.theme).toBe("light");
     expect(dom.document.documentElement.dataset.scheme).toBe("light");
     first.destroy();
 
     const newRoot = dom.document.createElement("html");
     const restarted = createAppearanceController({ root: newRoot, storage, mediaQuery: media as any });
-    expect(restarted.getSnapshot()).toEqual({ preference: "light", resolved: "light", scheme: "light" });
+    expect(restarted.getSnapshot()).toEqual({ ...GLOSA, preference: "light", resolved: "light", scheme: "light" });
     restarted.destroy();
   });
 
@@ -88,7 +94,7 @@ describe("createAppearanceController", () => {
     const storage = fakeStorage("dark");
     const media = fakeMediaQuery(false);
     const first = createAppearanceController({ root: dom.document.documentElement, storage, mediaQuery: media as any });
-    expect(first.getSnapshot()).toEqual({ preference: "dark", resolved: "dark", scheme: "dark" });
+    expect(first.getSnapshot()).toEqual({ ...GLOSA, preference: "dark", resolved: "dark", scheme: "dark" });
     first.destroy();
 
     const restarted = createAppearanceController({
@@ -96,7 +102,7 @@ describe("createAppearanceController", () => {
       storage,
       mediaQuery: media as any,
     });
-    expect(restarted.getSnapshot()).toEqual({ preference: "dark", resolved: "dark", scheme: "dark" });
+    expect(restarted.getSnapshot()).toEqual({ ...GLOSA, preference: "dark", resolved: "dark", scheme: "dark" });
     restarted.destroy();
   });
 
@@ -120,11 +126,11 @@ describe("createAppearanceController", () => {
     controller.setPreference("light");
     media.setMatches(false);
     media.setMatches(true);
-    expect(controller.getSnapshot()).toEqual({ preference: "light", resolved: "light", scheme: "light" });
+    expect(controller.getSnapshot()).toEqual({ ...GLOSA, preference: "light", resolved: "light", scheme: "light" });
     expect(storage.getItem(APPEARANCE_STORAGE_KEY)).toBe("light");
 
     controller.setPreference("system");
-    expect(controller.getSnapshot()).toEqual({ preference: "system", resolved: "dark", scheme: "dark" });
+    expect(controller.getSnapshot()).toEqual({ ...GLOSA, preference: "system", resolved: "dark", scheme: "dark" });
     media.setMatches(false);
     expect(controller.getSnapshot().resolved).toBe("light");
     controller.destroy();
@@ -155,7 +161,7 @@ describe("createAppearanceController", () => {
     expect(dom.document.activeElement).toBe(options[1] as any);
 
     (host.querySelector('[data-appearance="dark"]') as any).click();
-    expect(controller.getSnapshot()).toEqual({ preference: "dark", resolved: "dark", scheme: "dark" });
+    expect(controller.getSnapshot()).toEqual({ ...GLOSA, preference: "dark", resolved: "dark", scheme: "dark" });
     expect(storage.getItem(APPEARANCE_STORAGE_KEY)).toBe("dark");
     expect(host.querySelector('[data-appearance="dark"]')?.getAttribute("aria-checked")).toBe("true");
     expect(dom.document.activeElement).toBe(returnFocus);
@@ -163,6 +169,106 @@ describe("createAppearanceController", () => {
     unmount();
     controller.destroy();
     expect(host.childElementCount).toBe(0);
+  });
+
+  test("glosa's own palette follows the system's request for more contrast live; High contrast chosen holds either way (#409)", () => {
+    const storage = fakeStorage("light");
+    const contrast = fakeMediaQuery(false);
+    const controller = createAppearanceController({
+      root: dom.document.documentElement,
+      storage,
+      mediaQuery: fakeMediaQuery(false) as unknown as MediaQueryList,
+      contrastQuery: contrast as unknown as MediaQueryList,
+    });
+    const html = dom.document.documentElement;
+    expect(controller.getSnapshot()).toEqual({ ...GLOSA, preference: "light", resolved: "light", scheme: "light" });
+    contrast.setMatches(true);
+    expect(controller.getSnapshot()).toEqual({
+      preference: "light",
+      palette: "glosa",
+      painting: "high-contrast",
+      resolved: "high-contrast-light",
+      scheme: "light",
+    });
+    expect([html.dataset.palette, html.dataset.theme, html.dataset.scheme]).toEqual([
+      "glosa",
+      "high-contrast-light",
+      "light",
+    ]);
+    contrast.setMatches(false);
+    expect(html.dataset.theme).toBe("light");
+
+    controller.setPalette("high-contrast");
+    expect(storage.getItem(PALETTE_STORAGE_KEY)).toBe("high-contrast");
+    expect(html.dataset.theme).toBe("high-contrast-light");
+    controller.setPreference("dark");
+    expect(html.dataset.theme).toBe("high-contrast-dark");
+    contrast.setMatches(true);
+    contrast.setMatches(false);
+    expect(controller.getSnapshot()).toEqual({
+      preference: "dark",
+      palette: "high-contrast",
+      painting: "high-contrast",
+      resolved: "high-contrast-dark",
+      scheme: "dark",
+    });
+    expect(() => controller.setPalette("solarized")).toThrow(TypeError);
+    expect(readPalette(storage)).toBe("high-contrast");
+    expect(readPalette(fakeStorage(undefined, "solarized"))).toBe("glosa");
+    controller.destroy();
+  });
+
+  test("Settings shows each palette with its credit, chooses one, and says when the system's contrast is showing another", async () => {
+    const storage = fakeStorage("system");
+    const contrast = fakeMediaQuery(false);
+    const controller = createAppearanceController({
+      root: dom.document.documentElement,
+      storage,
+      mediaQuery: fakeMediaQuery(false) as unknown as MediaQueryList,
+      contrastQuery: contrast as unknown as MediaQueryList,
+    });
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const settings = mountAgentSettings(host, {
+      appearance: controller,
+      onChange: undefined,
+      dataAccess: { getAgentStatus: async () => ({ available: true, providers: [], profiles: [] }) },
+    });
+    const rows = [...host.querySelectorAll("[data-palette-choice]")] as unknown as HTMLElement[];
+    expect(
+      rows.map((row) => [
+        row.querySelector(".glosa-settings-palette-name")?.textContent,
+        row.querySelector(".glosa-settings-palette-credit")?.textContent,
+        row.getAttribute("aria-pressed"),
+      ]),
+    ).toEqual([
+      ["glosa", "glosa's own · warm paper, near-black ink, your marks in vermilion", "true"],
+      ["High contrast", "glosa's own · stronger ink, marks and edges on the same paper", "false"],
+    ]);
+    const group = host.querySelector(".glosa-settings-palettes");
+    expect(host.querySelector(`#${group?.getAttribute("aria-labelledby")}`)?.textContent).toBe("Palette");
+    const hint = () => host.querySelector(".glosa-settings-palettes + .glosa-settings-hint") as unknown as HTMLElement;
+    expect(hint().hidden).toBe(true);
+
+    contrast.setMatches(true);
+    expect(hint().hidden).toBe(false);
+    expect(hint().textContent).toBe(
+      "Increase contrast is on for this Mac, so glosa shows High contrast. glosa's own palette returns when it is off.",
+    );
+    // Each row is named by its palette and described by its credit.
+    expect(rows[1]!.getAttribute("aria-labelledby")).toBe("glosa-settings-palette-high-contrast-name");
+    expect(host.querySelector(`#${rows[1]!.getAttribute("aria-describedby")}`)?.textContent).toBe(
+      "glosa's own · stronger ink, marks and edges on the same paper",
+    );
+    expect(rows[0]!.getAttribute("aria-pressed")).toBe("true");
+
+    rows[1]!.click();
+    expect(controller.getSnapshot().palette).toBe("high-contrast");
+    expect(rows.map((row) => row.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
+    expect(hint().hidden).toBe(true);
+    expect(storage.getItem(PALETTE_STORAGE_KEY)).toBe("high-contrast");
+    settings.destroy();
+    controller.destroy();
   });
 
   test("inside the desktop shell the page reports what it resolved as source, scheme and paper; a tab reports nothing", () => {
@@ -185,9 +291,14 @@ describe("createAppearanceController", () => {
     paper = "#fdfaf5";
     controller.setPreference("light");
     expect(reports.at(-1)).toEqual({ source: "light", scheme: "light", background: "#fdfaf5" });
+    // A palette paints its own paper, so choosing one reports again with the paper it painted.
+    paper = "#fefbf8";
+    controller.setPalette("high-contrast");
+    expect(reports.at(-1)).toEqual({ source: "light", scheme: "light", background: "#fefbf8" });
+    expect(reports).toHaveLength(3);
     stop();
     controller.setPreference("dark");
-    expect(reports).toHaveLength(2);
+    expect(reports).toHaveLength(3);
 
     // A browser tab has no bridge: nothing to report to, and nothing throws.
     expect(() => reportAppearanceToShell(controller, null)()).not.toThrow();
@@ -203,12 +314,14 @@ const runClassicScript = (source: string, filename: string) => runInThisContext(
 /** Where appearance-list.js publishes the list, typed for the one field these tests swap. */
 const page = globalThis as { glosaAppearances?: unknown };
 
-describe("the one list of appearances (#405)", () => {
+describe("the one list of appearances (#405, #409)", () => {
   const LIST_SOURCE = readFileSync(new URL("../src/appearance-list.js", import.meta.url), "utf8");
   const PRELOAD_SOURCE = readFileSync(new URL("../src/appearance-preload.js", import.meta.url), "utf8");
-  const LIST_OPENS = "const list = Object.freeze([";
+  const PALETTES_OPEN = "const palettes = Object.freeze([";
+  // A palette with no `moreContrast`, like each one #410 adds: it stays as chosen when the system
+  // asks for more contrast.
   const DUSK =
-    'Object.freeze({ id: "test-dusk", scheme: "dark", label: "Dusk (test)", settingsLabel: "Dusk, a test theme" }),';
+    'Object.freeze({ id: "test-dusk", label: "Dusk (test)", credit: "A test palette · for this file only", themes: Object.freeze({ light: "test-dawn", dark: "test-dusk" }) }),';
   let dom: DomEnv;
   let listed: unknown;
   beforeEach(() => {
@@ -220,39 +333,73 @@ describe("the one list of appearances (#405)", () => {
     dom.teardown();
   });
 
-  test("one entry added to the list resolves before first paint and appears in the popover and in Settings", async () => {
-    // The list and the preload are classic scripts, run as shell.html runs them: from their own
-    // source, in order, before any module has touched this document. The list is removed first, so
-    // the preload can only resolve through the edited copy.
-    expect(LIST_SOURCE).toContain(LIST_OPENS);
+  /** The operating system as the preload asks it: `(prefers-color-scheme: dark)` and
+   * `(prefers-contrast: more)`, each answered from here rather than from happy-dom's defaults. */
+  function system({ dark = false, moreContrast = false } = {}) {
+    (dom.window as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
+      matches:
+        query === "(prefers-color-scheme: dark)" ? dark : query === "(prefers-contrast: more)" ? moreContrast : false,
+      addEventListener() {},
+      removeEventListener() {},
+    });
+  }
+
+  /** Runs the list (optionally with one more palette) and then the preload, as shell.html does:
+   * classic scripts, in order, before any module has touched this document. The list is removed
+   * first, so the preload can only resolve through the copy run here. */
+  function firstPaint(withPalette?: string) {
+    expect(LIST_SOURCE).toContain(PALETTES_OPEN);
     delete page.glosaAppearances;
-    const withDusk = LIST_SOURCE.replace(LIST_OPENS, `${LIST_OPENS}\n    ${DUSK}`);
-    dom.window.localStorage.setItem(APPEARANCE_STORAGE_KEY, "test-dusk");
-    // The operating system is light here, so a dark result can only come from the entry's scheme.
-    expect(dom.window.matchMedia("(prefers-color-scheme: dark)").matches).toBe(false);
-    runClassicScript(withDusk, "appearance-list.js");
+    runClassicScript(
+      withPalette ? LIST_SOURCE.replace(PALETTES_OPEN, `${PALETTES_OPEN}\n    ${withPalette}`) : LIST_SOURCE,
+      "appearance-list.js",
+    );
     runClassicScript(PRELOAD_SOURCE, "appearance-preload.js");
     const html = dom.document.documentElement;
-    expect({
-      colorScheme: html.style.colorScheme,
-      scheme: html.dataset.scheme,
-      theme: html.dataset.theme,
+    return {
       appearance: html.dataset.appearance,
-    }).toEqual({ colorScheme: "dark", scheme: "dark", theme: "test-dusk", appearance: "test-dusk" });
+      palette: html.dataset.palette,
+      theme: html.dataset.theme,
+      scheme: html.dataset.scheme,
+      colorScheme: html.style.colorScheme,
+    };
+  }
 
+  test("one palette entry added to the list resolves before first paint and appears in Settings, not in the popover", async () => {
+    system({ dark: false });
+    dom.window.localStorage.setItem(PALETTE_STORAGE_KEY, "test-dusk");
+    dom.window.localStorage.setItem(APPEARANCE_STORAGE_KEY, "dark");
+    // The system is light here, so a dark result can only come from the stored mode.
+    expect(firstPaint(DUSK)).toEqual({
+      appearance: "dark",
+      palette: "test-dusk",
+      theme: "test-dusk",
+      scheme: "dark",
+      colorScheme: "dark",
+    });
+
+    const html = dom.document.documentElement;
     const controller = createAppearanceController({
       root: html,
       storage: dom.window.localStorage as unknown as Storage,
       mediaQuery: fakeMediaQuery(false) as unknown as MediaQueryList,
+      contrastQuery: fakeMediaQuery(false) as unknown as MediaQueryList,
     });
-    expect(controller.getSnapshot()).toEqual({ preference: "test-dusk", resolved: "test-dusk", scheme: "dark" });
+    expect(controller.getSnapshot()).toEqual({
+      preference: "dark",
+      palette: "test-dusk",
+      painting: "test-dusk",
+      resolved: "test-dusk",
+      scheme: "dark",
+    });
 
+    // The workspace popover chooses the mode only; a palette is chosen in Settings.
     const popover = dom.document.createElement("div");
     dom.document.body.append(popover);
     const unmount = mountAppearanceControl(popover, controller);
-    const row = popover.querySelector('[data-appearance="test-dusk"]');
-    expect(row?.textContent).toBe("Dusk (test)");
-    expect(row?.getAttribute("aria-checked")).toBe("true");
+    expect(
+      [...popover.querySelectorAll("[data-appearance]")].map((row) => row.getAttribute("data-appearance")),
+    ).toEqual(["system", "light", "dark"]);
 
     const settingsHost = dom.document.createElement("div");
     dom.document.body.append(settingsHost);
@@ -261,38 +408,71 @@ describe("the one list of appearances (#405)", () => {
       onChange: undefined,
       dataAccess: { getAgentStatus: async () => ({ available: true, providers: [], profiles: [] }) },
     });
-    const choice = settingsHost.querySelector('[data-theme-choice="test-dusk"]');
-    expect(choice?.textContent).toBe("Dusk, a test theme");
-    expect(choice?.getAttribute("aria-pressed")).toBe("true");
+    const rows = [...settingsHost.querySelectorAll("[data-palette-choice]")];
+    expect(rows.map((row) => row.getAttribute("data-palette-choice"))).toEqual(["test-dusk", "glosa", "high-contrast"]);
+    const dusk = settingsHost.querySelector('[data-palette-choice="test-dusk"]');
+    expect(dusk?.querySelector(".glosa-settings-palette-name")?.textContent).toBe("Dusk (test)");
+    expect(dusk?.querySelector(".glosa-settings-palette-credit")?.textContent).toBe(
+      "A test palette · for this file only",
+    );
+    expect(dusk?.getAttribute("aria-pressed")).toBe("true");
+    // Its swatch paints the theme it would show in the current scheme.
+    expect(dusk?.querySelector(".glosa-settings-palette-paper")?.getAttribute("data-theme-swatch")).toBe("test-dusk");
+    controller.setPreference("light");
+    expect(dusk?.querySelector(".glosa-settings-palette-paper")?.getAttribute("data-theme-swatch")).toBe("test-dawn");
     expect(
       [...settingsHost.querySelectorAll("[data-theme-choice]")].map((button) =>
         button.getAttribute("data-theme-choice"),
       ),
-    ).toEqual(["test-dusk", "system", "light", "dark"]);
+    ).toEqual(["system", "light", "dark"]);
 
     settings.destroy();
     unmount();
     controller.destroy();
   });
 
-  test("an unlisted stored value paints the list's default through the operating system", () => {
+  test("a stored High contrast palette paints before first paint, in the scheme the mode resolves", () => {
+    dom.window.localStorage.setItem(PALETTE_STORAGE_KEY, "high-contrast");
+    system({ dark: false });
+    expect(firstPaint()).toMatchObject({ palette: "high-contrast", theme: "high-contrast-light", scheme: "light" });
+    system({ dark: true });
+    expect(firstPaint()).toMatchObject({ palette: "high-contrast", theme: "high-contrast-dark", scheme: "dark" });
+  });
+
+  test("when the system asks for more contrast, glosa's own palette paints as High contrast before first paint; a palette without that stays as chosen", () => {
+    system({ dark: false, moreContrast: true });
+    expect(firstPaint()).toMatchObject({ appearance: "system", palette: "glosa", theme: "high-contrast-light" });
+    system({ dark: true, moreContrast: true });
+    expect(firstPaint()).toMatchObject({ palette: "glosa", theme: "high-contrast-dark", scheme: "dark" });
+    system({ dark: true, moreContrast: false });
+    expect(firstPaint()).toMatchObject({ palette: "glosa", theme: "dark" });
+
+    dom.window.localStorage.setItem(PALETTE_STORAGE_KEY, "test-dusk");
+    system({ dark: true, moreContrast: true });
+    expect(firstPaint(DUSK)).toMatchObject({ palette: "test-dusk", theme: "test-dusk" });
+  });
+
+  test("an unlisted stored value paints the list's defaults through the operating system", () => {
     dom.window.localStorage.setItem(APPEARANCE_STORAGE_KEY, "sepia");
-    runClassicScript(PRELOAD_SOURCE, "appearance-preload.js");
-    const html = dom.document.documentElement;
-    expect([html.dataset.appearance, html.dataset.theme, html.dataset.scheme, html.style.colorScheme]).toEqual([
-      "system",
-      "light",
-      "light",
-      "light",
-    ]);
+    dom.window.localStorage.setItem(PALETTE_STORAGE_KEY, "solarized");
+    system({ dark: false });
+    expect(firstPaint()).toEqual({
+      appearance: "system",
+      palette: "glosa",
+      theme: "light",
+      scheme: "light",
+      colorScheme: "light",
+    });
   });
 });
 
-test("the list of appearances and the blocking preload load, in that order, before the visual system stylesheet", () => {
+test("the list of appearances and the blocking preload load, in that order, before the theme slots and the visual system stylesheet", () => {
   const shell = readFileSync(new URL("../src/shell.html", import.meta.url), "utf8");
   const list = shell.indexOf('<script src="/app/appearance-list.js"></script>');
   const preload = shell.indexOf('<script src="/app/appearance-preload.js"></script>');
+  const themes = shell.indexOf('<link rel="stylesheet" href="/app/themes.css" />');
   expect(list).toBeGreaterThan(-1);
   expect(preload).toBeGreaterThan(list);
-  expect(preload).toBeLessThan(shell.indexOf("/app/app.css"));
+  expect(themes).toBeGreaterThan(preload);
+  expect(themes).toBeLessThan(shell.indexOf("/app/app.css"));
 });

@@ -18,6 +18,10 @@
          remaps every visual value in it onto glosa's tokens, so this loads FIRST and app.css wins
          every tie. -->
     <link rel="stylesheet" href="/app/vendor/dockview.css" />
+    <!-- The theme slots (#409): each theme file's sixteen colours, checked against their contrast
+         floors and rendered into one stylesheet. The preload above has already named the theme
+         on <html>, so the first frame paints in it. app.css reads the slots and never sets them. -->
+    <link rel="stylesheet" href="/app/themes.css" />
     <!-- The visual system (design brief docs/design/2026-07-21-workspace-review-surface-brief.md),
          served from the same allowlist as bootstrap.js. -->
     <link rel="stylesheet" href="/app/app.css" />
