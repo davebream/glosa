@@ -5141,6 +5141,9 @@ input,
    instead of the history module learning about appearance (#405). */
 .glosa-diff-pane,
 .glosa-diff-surface {
+  /* Mixed in OKLab, not OKLCH: over near-neutral paper an OKLCH mix swings the tint's hue toward the
+     paper's own, and an added and a deleted line came out as two beiges 0.012 apart. OKLab keeps each
+     tint's direction (sage for added, rose for deleted, about 0.048 apart). */
   --d2h-bg-color: var(--bg);
   --d2h-border-color: var(--border);
   --d2h-dim-color: var(--muted);
@@ -5149,17 +5152,17 @@ input,
   --d2h-file-header-border-color: var(--border-strong);
   --d2h-empty-placeholder-bg-color: var(--surface-sunken);
   --d2h-empty-placeholder-border-color: var(--border);
-  --d2h-selected-color: color-mix(in oklch, var(--primary) 18%, var(--bg));
-  --d2h-ins-bg-color: color-mix(in oklch, var(--ok) 14%, var(--bg));
-  --d2h-ins-border-color: color-mix(in oklch, var(--ok) 45%, var(--bg));
-  --d2h-ins-highlight-bg-color: color-mix(in oklch, var(--ok) 35%, var(--bg));
+  --d2h-selected-color: color-mix(in oklab, var(--primary) 18%, var(--bg));
+  --d2h-ins-bg-color: color-mix(in oklab, var(--ok) 22%, var(--bg));
+  --d2h-ins-border-color: color-mix(in oklab, var(--ok) 45%, var(--bg));
+  --d2h-ins-highlight-bg-color: color-mix(in oklab, var(--ok) 35%, var(--bg));
   --d2h-ins-label-color: var(--ok);
-  --d2h-del-bg-color: color-mix(in oklch, var(--danger) 12%, var(--bg));
-  --d2h-del-border-color: color-mix(in oklch, var(--danger) 42%, var(--bg));
-  --d2h-del-highlight-bg-color: color-mix(in oklch, var(--danger) 32%, var(--bg));
+  --d2h-del-bg-color: color-mix(in oklab, var(--danger) 18%, var(--bg));
+  --d2h-del-border-color: color-mix(in oklab, var(--danger) 42%, var(--bg));
+  --d2h-del-highlight-bg-color: color-mix(in oklab, var(--danger) 32%, var(--bg));
   --d2h-del-label-color: var(--danger);
-  --d2h-change-del-color: color-mix(in oklch, var(--warn) 18%, var(--bg));
-  --d2h-change-ins-color: color-mix(in oklch, var(--ok) 20%, var(--bg));
+  --d2h-change-del-color: color-mix(in oklab, var(--warn) 18%, var(--bg));
+  --d2h-change-ins-color: color-mix(in oklab, var(--ok) 20%, var(--bg));
   --d2h-info-bg-color: var(--surface);
   --d2h-info-border-color: var(--border);
   --d2h-change-label-color: var(--warn);

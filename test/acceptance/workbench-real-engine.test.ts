@@ -1536,6 +1536,7 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         paper: string;
         inserted: string;
         insertBed: string;
+        bedSeparation: number;
       }>(`(async()=>{
         const deadline=Date.now()+15000;
         let versions=[];
@@ -1557,14 +1558,29 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
           surface.append(probe);const computed=getComputedStyle(probe).backgroundColor;probe.remove();return computed;};
         // A line only added (a replaced line is a "change" with its own, stronger bed).
         const inserted=surface.querySelector('td.d2h-ins:not(.d2h-change)');
+        // How far apart an added and a deleted line's beds are, in OKLab. Read through a canvas so
+        // the engine's own colour-mix and gamut mapping decide the sRGB the reader sees.
+        const oklab=(value)=>{const x=document.createElement('canvas').getContext('2d');x.fillStyle='#000';
+          x.fillStyle=token(value);x.fillRect(0,0,1,1);const [r,g,b]=[...x.getImageData(0,0,1,1).data].slice(0,3)
+            .map(v=>{v/=255;return v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4;});
+          const l=Math.cbrt(0.4122214708*r+0.5363325363*g+0.0514459929*b),m=Math.cbrt(0.2119034982*r+0.6806995451*g+0.1073969566*b),
+            s=Math.cbrt(0.0883024619*r+0.2817188376*g+0.6299787005*b);
+          return [0.2104542553*l+0.793617785*m-0.0040720468*s,1.9779984951*l-2.428592205*m+0.4505937099*s,0.0259040371*l+0.7827717662*m-0.808675766*s];};
+        const ins=oklab('var(--d2h-ins-bg-color)'),del=oklab('var(--d2h-del-bg-color)');
         return {gutter:getComputedStyle(gutter).backgroundColor,paper:token('var(--bg)'),
           inserted:inserted?getComputedStyle(inserted).backgroundColor:'none',
-          insertBed:token('color-mix(in oklch, var(--ok) 14%, var(--bg))')};
+          insertBed:token('color-mix(in oklab, var(--ok) 22%, var(--bg))'),
+          bedSeparation:Math.hypot(ins[0]-del[0],ins[1]-del[1],ins[2]-del[2])};
       })()`);
       await shots("light-history-diff");
       expect(diff.gutter, "a light diff's line-number gutter is glosa's paper").toBe(diff.paper);
       expect(diff.gutter).not.toBe("rgb(255, 255, 255)");
-      expect(diff.inserted, "an inserted line sits on the sage bed the dark diff already used").toBe(diff.insertBed);
+      expect(diff.inserted, "an inserted line sits on the sage bed, mixed in OKLab").toBe(diff.insertBed);
+      // Mixed in OKLCH over near-neutral paper, both beds drift to the paper's beige and sit 0.012
+      // apart: the + and − alone told an added line from a deleted one.
+      expect(diff.bedSeparation, "an added and a deleted line's beds are told apart by colour").toBeGreaterThanOrEqual(
+        0.04,
+      );
     },
     TEST_TIMEOUT_MS,
   );

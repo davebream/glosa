@@ -37,14 +37,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `#eeeeee` to `#dbd7d0` (`--border`); line numbers from black at 30% to `#625952` (`--muted`); the
   file header and hunk rows from `#f7f7f7` and `#f8fafd` to `#f7f5f1` (`--surface`), the header's
   rule from `#d8d8d8` to `#867f78` and the hunk rows' from `#d5e4f2` to `#dbd7d0`. An added line's
-  bed goes from `#ddffdd` to `#e9e5d7` (`--ok` 14% into paper), its changed words from `#97f295`
-  to `#c5c6ab`, its rule from `#b4e2b4` to `#b3b898`, its label from `#399839` to `#397247`. A
-  deleted line's bed goes from `#fee8e9` to `#f1e5d4` (`--danger` 12%), its changed words from
-  `#ffb6ba` to `#e1be9e`, its rule from `#e9aeae` to `#daa985`, its label from `#cc3333` to
-  `#a51d2b`. A replaced pair goes
-  from `#fdf2d0` and `#ddeedd` to `#e8dfce` and `#dfdccb`, its label from `#d0b44c` to `#8d6300`;
-  a selected line from `#c8e1ff` to `#d0cdc7`; the moved label from `#3572b0` to the ink,
-  `#1a1511` (#405).
+  bed goes from `#ddffdd` to `#d1dcce` (`--ok` 22% into paper, mixed in OKLab), its changed words
+  from `#97f295` to `#b7cab6`, its rule from `#b4e2b4` to `#a4bca4`, its label from `#399839` to
+  `#397247`. A deleted line's bed goes from `#fee8e9` to `#f2d5d0` (`--danger` 18%), its changed
+  words from `#ffb6ba` to `#e8b8b2`, its rule from `#e9aeae` to `#e0a39d`, its label from `#cc3333`
+  to `#a51d2b`. A replaced pair goes from `#fdf2d0` and `#ddeedd` to `#e9dfce` and `#d5dfd1`, its
+  label from `#d0b44c` to `#8d6300`; a selected line from `#c8e1ff` to `#d0ccc7`; the moved label
+  from `#3572b0` to the ink, `#1a1511` (#405).
+- In the dark appearance, the diff's tints are mixed in OKLab instead of OKLCH, so an added and a
+  deleted line are told apart by colour again, not only by `+` and `−`. An added line's bed goes
+  from `#2e271e` to `#2e352a`, its changed words from `#4b432d` to `#3b4838`, its rule from `#575235`
+  to `#445843`; a deleted line's bed from `#2f2219` to `#3b2623`, its changed words from `#553525` to
+  `#563330`, its rule from `#6a3f2c` to `#6b3c39`; a replaced pair from `#392c21` and `#372e22` to
+  `#372d20` and `#2d3228` (#405).
 - The desktop app's window follows glosa's appearance. A window opened while glosa is in Dark
   starts on the dark paper, `#1a1614`, instead of white, `#ffffff`, and in Light on the paper,
   `#fefbf7`; before any window has shown glosa, a new window starts on the paper of macOS's own
