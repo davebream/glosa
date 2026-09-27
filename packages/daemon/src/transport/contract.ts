@@ -71,8 +71,14 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * line after the `quote:` line of the text and an `address` string in `detail`, derived at
  * presentation from the document as it stands and stored nowhere (A1 §5.15). Absent for an
  * orphaned note, a class-F document, or a block with no address. Additive, N/N-1 safe: an N-1
- * client ignores both, and an N-1 daemon simply omits them. */
-export const CONTRACT_VERSION = "1.20";
+ * client ignores both, and an N-1 daemon simply omits them.
+ *
+ * v1.21 (issue #407) adds a folder's default style: `GET`, `PUT` and `DELETE /w/:slug/folder-style`
+ * (A1 §5.23), the `folder-style-not-directory` error slug, and a `folder_style` invalidation frame
+ * on `GET /w/:slug/stream` when the folder's default changes. No route takes a path (A3 §4).
+ * Additive, N/N-1 safe: an N-1 page never calls the routes and ignores the frame, and an N-1 daemon
+ * answers the routes 404, which the page reads as a folder with no default. */
+export const CONTRACT_VERSION = "1.21";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

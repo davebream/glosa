@@ -197,6 +197,21 @@ are shaped so that no request can name one.
 - `stars.json` is written 0600 in `GLOSA_HOME`, like the token. A corrupt file is moved aside, not overwritten.
 - State-changing star routes use the strict Origin rule in the table above; `GET /api/stars` is an authed read.
 
+### Folder default style (contract 1.21, #407)
+A folder's default style (A1 §5.23) is a reading preference, but it is kept by path, so its routes
+follow the star routes' rule.
+- **No path in, ever.** `GET`, `PUT` and `DELETE /w/:slug/folder-style` name the workspace by slug. The
+  default is kept under that registration's own canonical path, which the index already holds; a
+  `path` in the body is ignored. The only value a request supplies is one of three style names,
+  validated against that list, so a page holding the Bearer token can neither name a directory nor
+  write anything else into the file.
+- **Directories only** (`folder-style-not-directory`): a loose-file registration has no folder of its
+  own, and keying one by its file would give a later directory registration nothing to find.
+- `folder-styles.json` is written 0600 in `GLOSA_HOME`, like the token and `stars.json`. A corrupt file
+  is moved aside, not overwritten; a malformed row is dropped on read.
+- `PUT` and `DELETE` use the strict Origin rule in the table above; `GET` is an authed read. The
+  `folder_style` stream frame carries only `{ "changed": true }`, never the path or the style.
+
 ## 4b. Desktop shell (Electron, `packages/shell`; 2026-09-25, #160)
 
 The shell is a window on the same SPA at the same origin `glosa open` links to
@@ -299,6 +314,11 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
     fails closed and the squatter observes no `Authorization` header; plus the run dir is 0700,
     the socket 0600, a `connect(2)` through a chmod-000 directory gets EACCES, and removing the
     socket makes an authed call fail rather than fall back to the port.
+12. Page with the Bearer token tries to make the daemon keep a folder default under a path it
+    chooses (#407) → no folder-style route accepts a path; the default is kept under the slug's own
+    registration path → test (`packages/daemon/test/folder-styles.test.ts`): a `PUT` with a `path` in
+    its body records the workspace's own path and nothing else; an unknown slug → 404 and nothing
+    recorded; no Origin or a foreign one → 403 on `PUT` and `DELETE`; a loose-file registration → 422.
 
 ### Explicit shadow repair (#226)
 

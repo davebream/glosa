@@ -43,6 +43,7 @@ import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-sc
 import { SessionProviderConflict, type SessionRecord, type SessionRegistry } from "../registry/session-registry.ts";
 import { canonicalize } from "../registry/slug.ts";
 import { starName, type WorkspaceStar, WorkspaceStars } from "../registry/workspace-stars.ts";
+import { FolderStyles, isFolderStyle } from "../registry/folder-styles.ts";
 import {
   AdoptionError,
   type WorkspaceEntry,
@@ -273,6 +274,9 @@ export interface ApiContext {
   /** Starred workspaces (`<home>/stars.json`). Optional: defaulted per context from `home`, so
    * production and every hand-built test context get a store without extra wiring. */
   workspaceStars?: WorkspaceStars;
+  /** Each folder's default style (`<home>/folder-styles.json`, #407). Optional and defaulted per
+   * context from `home`, as stars are. */
+  folderStyles?: FolderStyles;
 }
 
 const contextCompositeRegistries = new WeakMap<ApiContext, CompositeDeliveryRegistry>();
@@ -681,6 +685,76 @@ async function handleOpenStar(ctx: ApiContext, id: string, pathname: string): Pr
     return problem(422, "star-folder-missing", "the starred folder no longer exists", undefined, pathname);
   }
   return openWorkspaceAt(ctx, star.path, {}, pathname);
+}
+
+// ---------- a folder's default style (contract 1.21, A1 §5.23, #407) ----------
+
+const contextFolderStyles = new WeakMap<ApiContext, FolderStyles>();
+
+/** One store per context, so the route that sets a default and every stream that announces it
+ * share one cache and one set of listeners. */
+function folderStyles(ctx: ApiContext): FolderStyles {
+  if (ctx.folderStyles) return ctx.folderStyles;
+  let styles = contextFolderStyles.get(ctx);
+  if (!styles) {
+    styles = new FolderStyles({ home: ctx.home ?? glosaHome() });
+    contextFolderStyles.set(ctx, styles);
+  }
+  return styles;
+}
+
+/** The directory registration a folder-style route names by slug, or the refusal. The path the
+ * default is kept under is that registration's own canonical path: no request ever supplies one
+ * (A3 §4 "Folder default style"). */
+function folderStyleWorkspace(ctx: ApiContext, slug: string, pathname: string) {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved;
+  if (resolved.entry.kind !== "directory") {
+    return {
+      ok: false as const,
+      response: problem(
+        422,
+        "folder-style-not-directory",
+        "only a directory workspace has a folder default",
+        undefined,
+        pathname,
+      ),
+    };
+  }
+  return resolved;
+}
+
+/** `GET /w/:slug/folder-style` — `{style}`, null when the folder has no default. */
+function handleGetFolderStyle(ctx: ApiContext, slug: string, pathname: string): Response {
+  const resolved = folderStyleWorkspace(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  return Response.json({ style: folderStyles(ctx).get(resolved.entry.canonical_path) });
+}
+
+/** `PUT /w/:slug/folder-style` `{style}` — sets the folder's default. */
+async function handleSetFolderStyle(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = folderStyleWorkspace(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const style = (body as { style?: unknown } | null)?.style;
+  if (!isFolderStyle(style)) {
+    return problem(400, "validation-failed", "style must be editorial, spec or mono", undefined, url.pathname);
+  }
+  return Response.json({ style: await folderStyles(ctx).set(resolved.entry.canonical_path, style) });
+}
+
+/** `DELETE /w/:slug/folder-style` — clears the folder's default. Idempotent. */
+async function handleClearFolderStyle(ctx: ApiContext, slug: string, pathname: string): Promise<Response> {
+  const resolved = folderStyleWorkspace(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  await folderStyles(ctx).clear(resolved.entry.canonical_path);
+  return Response.json({ style: null });
 }
 
 // peekJournal / hasOpenAttention / pendingCount moved to bus/peek.ts (issue #79) so the
@@ -2796,6 +2870,12 @@ async function handleStream(
     subscribeMetadata: ctx.metadataRegistry
       ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry, listener)
       : undefined,
+    // #407: every window on this folder hears that its default style changed. Directory
+    // registrations only, the one kind that has a folder default.
+    subscribeFolderStyle:
+      resolved.entry.kind === "directory"
+        ? (listener) => folderStyles(ctx).subscribe(resolved.entry.canonical_path, listener)
+        : undefined,
     subscribeArtifacts: ctx.artifactWatcherRegistry
       ? (listener) => ctx.artifactWatcherRegistry!.subscribe(resolved.entry, listener)
       : undefined,
@@ -3132,6 +3212,18 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "DELETE" && (m = pathname.match(/^\/w\/([^/]+)\/metadata$/))) {
     const slug = m[1] as string;
     return { routeClass: "state-changing", handle: () => handleClearMetadata(ctx, slug, pathname) };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/folder-style$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "authed-read", handle: () => handleGetFolderStyle(ctx, slug, pathname) };
+  }
+  if (method === "PUT" && (m = pathname.match(/^\/w\/([^/]+)\/folder-style$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSetFolderStyle(ctx, slug, req) };
+  }
+  if (method === "DELETE" && (m = pathname.match(/^\/w\/([^/]+)\/folder-style$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: () => handleClearFolderStyle(ctx, slug, pathname) };
   }
   if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/session-binding$/))) {
     const slug = m[1] as string;
