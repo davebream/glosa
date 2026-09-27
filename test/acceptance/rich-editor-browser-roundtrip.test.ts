@@ -1890,7 +1890,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
 
   describe("browser harness without an application daemon", () => {
     test(
-      "print specimen escapes dockview clipping, preserves each reading face, and paginates on white paper",
+      "print specimen escapes dockview clipping, preserves each reading face, and paginates on white paper; on screen its code blocks keep the block's size",
       async () => {
         // Print geometry belongs at the real-engine boundary. The renderer, dockview and CSS are
         // production bytes, including the artifact pane. Only API responses are fixtures; this does not prove native
@@ -1968,6 +1968,24 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           })()`);
           expect(screen.height).toBeGreaterThan(100);
           expect(screen.contain).toContain("paint");
+          // On screen a fenced block's code is set at the block's own 13px (DESIGN.md: "code blocks
+          // in prose at 13px / 1.6"). Only code inside a line of prose is set smaller, at 0.85em.
+          const code = await client.evaluate<{ blocks: { code: number; pre: number }[]; inline: number[] }>(`(() => {
+            const article = document.querySelector('[data-printing] .glosa-content');
+            const size = (node) => parseFloat(getComputedStyle(node).fontSize);
+            return {
+              blocks: [...article.querySelectorAll('pre > code')].map(node => ({ code: size(node), pre: size(node.parentElement) })),
+              inline: [...article.querySelectorAll('code')].filter(node => !node.closest('pre'))
+                .map(node => Math.round((size(node) / size(node.parentElement)) * 1000) / 1000),
+            };
+          })()`);
+          expect(code.blocks.length, "the specimen renders fenced code blocks").toBeGreaterThan(1);
+          for (const block of code.blocks) {
+            expect(block.code, "a fenced block's code is set smaller than its block").toBe(block.pre);
+            expect(block.pre).toBe(13);
+          }
+          expect(code.inline.length, "the specimen renders inline code").toBeGreaterThan(1);
+          expect([...new Set(code.inline)], "code inside a line of prose is set at 0.85em").toEqual([0.85]);
           await client.send("Emulation.setEmulatedMedia", { media: "print" });
           for (const [face, family, size] of [
             ["serif", "Source Serif 4", "16px"],

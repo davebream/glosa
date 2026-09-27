@@ -90,6 +90,9 @@
      lightness, and always arrives with a label or a shape; success green is also the diff's insert
      colour, and appears nowhere a human mark could be mistaken for it. */
   --danger: oklch(0.47 0.17 22);
+  /* Text on a filled danger action. Near-white on the light crimson (~7.3:1); the dark block swaps
+     it for the dark paper, because near-white on the lamplit crimson is ~2.8:1. */
+  --on-danger: oklch(0.99 0 0);
   --warn: oklch(0.53 0.11 80);
   --ok: oklch(0.5 0.09 150);
 
@@ -225,6 +228,7 @@
   --scrim: oklch(0 0 0 / 0.45);
   --primary-hover: oklch(0.84 0.01 80);
   --danger: oklch(0.7 0.15 22);
+  --on-danger: var(--bg); /* dark paper on the lifted crimson: ~6.3:1, ~4.6:1 under the hover's darkening */
   --warn: oklch(0.76 0.11 80);
   --ok: oklch(0.72 0.09 150);
 
@@ -2789,6 +2793,8 @@ input,
   background: none;
   border: none;
   padding: 0;
+  /* The block already sets code's size; the 0.85em above is for code inside a line of prose. */
+  font-size: inherit;
 }
 
 /* Tables are set editorially: horizontal rules only, a firmer rule under the head, no cell walls
@@ -2831,7 +2837,9 @@ input,
   height: auto;
 }
 
-.glosa-content a {
+/* A session's reply links the way the manuscript does, not in the browser's default blue. */
+.glosa-content a,
+.glosa-chat-markdown a {
   color: var(--primary);
   text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
   text-underline-offset: 2px;
@@ -4913,7 +4921,7 @@ input,
 .glosa-btn-danger {
   background: var(--danger);
   border-color: var(--danger);
-  color: oklch(0.99 0 0);
+  color: var(--on-danger);
 }
 
 .glosa-btn-danger:hover {
@@ -7386,8 +7394,10 @@ nav.glosa-chat-actions[hidden] {
   margin: 0 auto 28px;
   position: relative;
 }
-.glosa-chat-message h3,
-.glosa-chat-message summary {
+/* The message's own label, a direct child. Scoped by `>` so it never reaches a heading inside the
+   rendered reply, which sits one level down in `.glosa-chat-text`. */
+.glosa-chat-message > h3,
+.glosa-chat-message > summary {
   font: 600 var(--text-xs) / 1.5 var(--font-sans);
   color: var(--muted);
   margin: 0 0 7px;
