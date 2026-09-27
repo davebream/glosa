@@ -174,7 +174,6 @@
     "packages/spa/test/document-grows.test.ts": 5.036657,
     "packages/spa/test/edit-save-guard.test.ts": 5.771056,
     "packages/spa/test/external-write-under-open-block.test.ts": 0.107073,
-    "packages/spa/test/face.test.ts": 0.00666,
     "packages/spa/test/history.test.ts": 0.054078,
     "packages/spa/test/import-boundary.test.ts": 0.036254,
     "packages/spa/test/markdown-preset-parity.test.ts": 0.004397,
@@ -293,8 +292,16 @@
       "reason": "Initial local Bun 1.4.2 estimate for the two marks scenarios (each one daemon subprocess and one headless Chromium over raw CDP), 2.2 s locally where agent-question-real-engine measures 5.3 s locally against 5.1 s in CI; replace with measured CI medians."
     },
     "test/acceptance/reading-scale-real-engine.test.ts": {
-      "seconds": 27.1,
-      "reason": "Initial local Bun 1.4.2 estimate for the six reading-scale scenarios (the two WCAG audits over a long document, a composer and a chat; the default step's sizes in three faces; every step through the More menu and Settings; the note rail's floor bisected at three step and browser font combinations; the reader's place across steps), each one daemon subprocess and one headless Chromium over raw CDP, 27.1 s locally. The rail bisection dominates, one dock relayout per probed width. Replace with measured CI medians."
+      "seconds": 51.1,
+      "reason": "Initial local Bun 1.4.2 estimate for the eight reading and style scenarios (the two WCAG audits over a long document, a composer and a chat; the default step's sizes in three styles; every step through the More menu and Settings; the note rail's floor bisected at three step and browser font combinations; the reader's place across steps; #407's three styles measured at two steps with Spec's wide lane at five pane widths and in the run editor; #407's folder default failing, then reaching a second window), each one daemon subprocess and one headless Chromium over raw CDP, 51.1 s locally. The rail bisection dominates, one dock relayout per probed width; the two #407 scenarios add about 22 s, most of it the page reloads that prove a style is read back before first paint. Replace with measured CI medians."
+    },
+    "packages/spa/test/style.test.ts": {
+      "seconds": 0.1,
+      "reason": "Renamed from face.test.ts (0.00666 s measured) and grown for #407: the style store's precedence, carry-over, folder default and save races, and the Style menu rows (18 tests over happy-dom, 0.1 s locally); replace with measured CI medians."
+    },
+    "packages/daemon/test/folder-styles.test.ts": {
+      "seconds": 0.9,
+      "reason": "Initial local Bun 1.4.2 estimate for #407's folder default: the store, the three routes over a real loopback server with SSE streams, a file from a newer glosa, and one real glosa __daemon restart (12 tests, 0.85 s locally); replace with measured CI medians."
     },
     "packages/spa/test/text-size.test.ts": {
       "seconds": 0.1,

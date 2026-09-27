@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// #406 — the reading surfaces at the sizes a reader asks for, in a real engine.
+// #406 — the reading surfaces at the sizes a reader asks for, in a real engine. #407 — the styles a
+// document is set in (Editorial, Spec, Mono) and a folder's default style, in the same engine.
 //
 // Every claim here is about layout, so none of it can be settled in happy-dom, which lays nothing
 // out: whether text is clipped or overlapped, whether the page scrolls sideways, and how wide the
@@ -10,6 +11,10 @@
 //     the page does not scroll sideways outside a pane's own scrolling.
 //   * WCAG 2.2 SC 1.4.12 (text spacing): with the criterion's four overrides forced on every element,
 //     as the W3C's own bookmarklet forces them, the same surfaces lose nothing.
+//   * #407: one synthetic document holding every element, set in each style at two steps, measured
+//     against the style table (face, sizes, weights, leading, margins, the painted line), with Spec's
+//     wide table and code block widening past the prose line and never under the note rail; and a
+//     folder default set from one window's More menu reaching another window without a reload.
 //
 // Real, not simulated: one real `glosa __daemon` subprocess, one real registered workspace holding a
 // long synthetic document, notes saved through the daemon's own route, one installed Chromium driven
@@ -38,6 +43,64 @@ const DOC = "reading.md";
 /** Words each note is anchored to. Each occurs once in the document, so each note has a place. */
 const NOTED = ["the premise a reader has to take on trust", "a realistic length for section three"] as const;
 const NOTE_BODY = "Earn this before asking for it. A second sentence makes the note wrap across lines.";
+
+/** #407: one document with every element a style sets. The narrow table stays on the prose line in
+ * every style; the wide table and the code block are wider than it, so Spec can widen them. */
+const STYLES_DOC = "styles.md";
+const STYLES_NOTED = "the gap between blocks are all measured";
+function stylesDocument(): string {
+  return [
+    "# Styles, set out in full",
+    "",
+    "The opening paragraph runs long enough to wrap across several lines at every size, so its line length and its leading can both be read off the page, and it carries `inline code` the way a specification names a file or a flag in passing, which is the case a style has to set well.",
+    "",
+    "## A section heading",
+    "",
+    `A paragraph under the section heading, long enough to wrap too, so the space above and below the heading and ${STYLES_NOTED} against real text rather than a single line.`,
+    "",
+    "### A subhead",
+    "",
+    "- A first item in a list",
+    "- A second item, rather longer, so that it wraps onto a second line at the larger sizes",
+    "",
+    "#### A fourth-level heading",
+    "",
+    "Text under the fourth-level heading.",
+    "",
+    "##### A fifth-level heading",
+    "",
+    "Text under the fifth-level heading.",
+    "",
+    "###### A sixth-level heading",
+    "",
+    "Text under the sixth-level heading, then three tables and a code block.",
+    "",
+    "| Term | Meaning |",
+    "| --- | --- |",
+    "| Style | A document's dress |",
+    "| Step | One rung of the ladder |",
+    "",
+    "| Requirement | Owner | State | What it needs before it can be closed, written out at length so the table is wider than the prose line |",
+    "| --- | --- | --- | --- |",
+    "| R-1: the folder default is kept beside the folder | daemon | done | A route that names the workspace by slug and never by path, written atomically at mode 0600 |",
+    "| R-2: every window on the folder follows a change | spa | open | A stream invalidation, read again through the one data-access module, with no reload |",
+    "",
+    "| Digest | Note |",
+    "| --- | --- |",
+    `| ${"0123456789abcdef".repeat(8)} | one word too long to wrap, wider than any lane |`,
+    "",
+    "```",
+    'const style = resolveStyle(document.own, folder.default) ?? "editorial"; // a line long enough to widen the block past the prose line',
+    "```",
+    "",
+    "A closing paragraph after the code block, so the block has a gap on both sides.",
+    "",
+  ].join("\n");
+}
+
+/** Where `GLOSA_SHOTS_DIR` names a directory, the #407 tests save what they measured there as PNGs
+ * for review. Unset (CI), they save nothing. */
+const SHOTS_DIR = Bun.env.GLOSA_SHOTS_DIR ?? "";
 
 /** A document long enough to scroll many screens, with every block the manuscript styles. */
 function readingDocument(sections = 10): string {
@@ -416,6 +479,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
 
     workspaceRoot = mkdtempSync(join(tmpdir(), "glosa-406-ws-"));
     writeFileSync(join(workspaceRoot, DOC), readingDocument());
+    writeFileSync(join(workspaceRoot, STYLES_DOC), stylesDocument());
     chromeProfile = mkdtempSync(join(tmpdir(), "glosa-406-chrome-profile-"));
 
     port = randomPort();
@@ -455,11 +519,24 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       });
       expect(noted.status, `annotation: ${await noted.clone().text()}`).toBe(201);
     }
+    // #407: one note on the styles document, so Review has a rail for Spec's wide blocks to keep clear of.
+    const styled = await fetch(`http://127.0.0.1:${port}/w/${slug}/annotations`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        artifact_path: STYLES_DOC,
+        body: NOTE_BODY,
+        intent: "content",
+        target: { quote: { exact: STYLES_NOTED, prefix: "", suffix: "" } },
+      }),
+    });
+    expect(styled.status, `annotation: ${await styled.clone().text()}`).toBe(201);
   });
 
   afterEach(async () => {
     for (const client of clients) client.close();
     clients = [];
+    browserTarget = null;
     await killAndAwait(chrome);
     chrome = null;
     await killAndAwait(daemon);
@@ -515,7 +592,19 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     }
     const browser = await CdpClient.connect(endpoint.webSocketDebuggerUrl);
     clients.push(browser);
-    const created = await browser.send("Target.createTarget", { url: "about:blank" });
+    browserTarget = { browser, cdpPort };
+    return openPage();
+  }
+
+  /** The browser `launch` started, so a test can open a second window on it. */
+  let browserTarget: { browser: CdpClient; cdpPort: number } | null = null;
+
+  /** One more page target on the launched browser, with its domains enabled. A second window opens
+   * in a window of its own: as a tab it would hide the first, and a hidden page draws no frames. */
+  async function openPage({ newWindow = false } = {}): Promise<CdpClient> {
+    if (!browserTarget) throw new Error("launch() first");
+    const { browser, cdpPort } = browserTarget;
+    const created = await browser.send("Target.createTarget", { url: "about:blank", newWindow });
     const targetId = created.result?.targetId;
     const listDeadline = Date.now() + 15_000;
     while (Date.now() < listDeadline) {
@@ -678,27 +767,27 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     const zero=document.createElement('span');zero.textContent='0';content.append(zero);
     const ch=zero.getBoundingClientRect().width;zero.remove();
     const root=parseFloat(getComputedStyle(document.documentElement).fontSize);
-    return {face:pane.dataset.face??'default',body:read(':scope > p'),h1:read('h1'),h2:read('h2'),h3:read('h3'),
+    return {style:pane.dataset.style,body:read(':scope > p'),h1:read('h1'),h2:read('h2'),h3:read('h3'),
       h4:read('h4'),h5:read('h5'),h6:read('h6'),pre:read('pre'),table:read('table'),th:read('th'),
       leading:parseFloat(getComputedStyle(content).lineHeight)/parseFloat(getComputedStyle(content).fontSize),
       measure:(parseFloat(getComputedStyle(content).maxWidth)-4*root)/ch};
   })()`;
 
-  /** Chooses a face the way a reader does, from the pane's More menu. */
-  async function chooseFace(page: CdpClient, face: "default" | "sans" | "mono"): Promise<void> {
+  /** Chooses a style the way a reader does, from the pane's More menu. */
+  async function chooseStyle(page: CdpClient, style: "editorial" | "spec" | "mono"): Promise<void> {
     await page.evaluate(`(async()=>{const pane=document.querySelector('.glosa-pane');
       pane.querySelector('.glosa-tools-trigger').click();
-      const row=pane.querySelector('.glosa-face-option[data-face="${face}"]');
-      if(!row) throw new Error('the More menu has no ${face} row');
+      const row=pane.querySelector('.glosa-style-option[data-style="${style}"]');
+      if(!row) throw new Error('the More menu has no ${style} row');
       row.click();
       const deadline=Date.now()+3000;
-      while((pane.dataset.face??'default')!=='${face}'){if(Date.now()>deadline) throw new Error('the ${face} face never applied');
+      while(pane.dataset.style!=='${style}'){if(Date.now()>deadline) throw new Error('the ${style} style never applied');
         await new Promise(r=>requestAnimationFrame(r));}})()`);
     await page.evaluate(SETTLE);
   }
 
   test(
-    "#406: at the default step the document keeps its sizes, sets h4 to h6 at the body's size in 650, and each face keeps its own line length",
+    "#406: at the default step the document keeps its sizes, sets h4 to h6 at the body's size in 650, and each style keeps its own line length",
     async () => {
       const page = await launch();
       await pin(page, { width: 1440, height: 900 });
@@ -707,11 +796,12 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         "body" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "pre" | "table" | "th",
         { size: number; weight: number }
       > & {
-        face: string;
+        style: string;
         leading: number;
         measure: number;
       };
       const serif = await page.evaluate<Type>(TYPE);
+      expect(serif.style, "a document with no style of its own and no folder default is Editorial").toBe("editorial");
       // h1 to h3, code and tables keep today's sizes at the default step (the pane is over 800px, so
       // the title and section heading are at their widest).
       expect({
@@ -729,21 +819,23 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       expect(serif.leading).toBeCloseTo(1.62, 2);
       expect(serif.measure, "the serif keeps its 68ch line").toBeCloseTo(68, 0);
 
-      await chooseFace(page, "sans");
+      // #407: the Sans face became the Spec style, 1.5 leading and 650 on every heading, h5 and h6 at
+      // the body's size. The #407 test below holds the rest of the style's values.
+      await chooseStyle(page, "spec");
       const sans = await page.evaluate<Type>(TYPE);
-      expect(sans.face).toBe("sans");
+      expect(sans.style).toBe("spec");
       expect(sans.body.size).toBe(16);
-      expect(sans.leading).toBeCloseTo(1.6, 2);
+      expect(sans.leading).toBeCloseTo(1.5, 2);
       expect(sans.measure, "the sans sets more letters in a ch, so its line is shorter").toBeCloseTo(64, 0);
       expect({ h4: sans.h4, h5: sans.h5, h6: sans.h6 }).toEqual({
-        h4: { size: 17, weight: 600 },
-        h5: { size: 17, weight: 600 },
-        h6: { size: 17, weight: 600 },
+        h4: { size: 17, weight: 650 },
+        h5: { size: 16, weight: 650 },
+        h6: { size: 16, weight: 650 },
       });
 
-      await chooseFace(page, "mono");
+      await chooseStyle(page, "mono");
       const mono = await page.evaluate<Type>(TYPE);
-      expect(mono.face).toBe("mono");
+      expect(mono.style).toBe("mono");
       expect(mono.body.size).toBe(15);
       expect(mono.measure, "mono keeps its 68ch line").toBeCloseTo(68, 0);
       expect(mono.h4).toEqual({ size: 17, weight: 600 });
@@ -996,16 +1088,16 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         await page.evaluate<boolean>(`document.querySelector('${PANE_STEPPER} [data-step="down"]').disabled`),
         "− is disabled at 15",
       ).toBe(true);
-      // In the smaller faces the body stops at its 15px floor; h4 to h6, at the weight of bold text,
-      // must still stand above it, and h3 above them.
-      for (const face of ["sans", "mono"] as const) {
-        await chooseFace(page, face);
-        const faced = await page.evaluate<Reading>(READING);
-        expect(faced.body, `${face} at 15: the body at its floor`).toBe(15);
-        expect(faced.h4, `${face} at 15: h4 stands above the body`).toBeGreaterThan(faced.body);
-        expect(faced.h3, `${face} at 15: h3 stands above h4`).toBeGreaterThan(faced.h4);
+      // In the smaller styles the body stops at its 15px floor; h4 keeps its sixteenth above it (in
+      // Mono at the weight of bold text, where only size can lift it), and h3 stands above h4.
+      for (const style of ["spec", "mono"] as const) {
+        await chooseStyle(page, style);
+        const styled = await page.evaluate<Reading>(READING);
+        expect(styled.body, `${style} at 15: the body at its floor`).toBe(15);
+        expect(styled.h4, `${style} at 15: h4 stands above the body`).toBeGreaterThan(styled.body);
+        expect(styled.h3, `${style} at 15: h3 stands above h4`).toBeGreaterThan(styled.h4);
       }
-      await chooseFace(page, "default");
+      await chooseStyle(page, "editorial");
       await openMoreMenu(page);
       // Up with the keyboard, on the spinbutton, to the top, where it stops.
       await page.evaluate(`document.querySelector('${PANE_STEPPER} [role="spinbutton"]').focus()`);
@@ -1102,6 +1194,657 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         await openInReview(page);
         await openMoreMenu(page);
       }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // ---------- #407: styles and the folder default ----------
+
+  /** The pane showing the document whose words include `text`, as a page expression. A second window
+   * on the workspace may restore another document's tab beside it, so "the first pane" will not do. */
+  const paneOf = (text: string) =>
+    `[...document.querySelectorAll('.glosa-pane')].find(p=>p.getBoundingClientRect().width>0&&p.querySelector('.glosa-content')?.textContent.includes(${JSON.stringify(text)}))`;
+
+  /** Opens `doc` in Review and waits, as openInReview does, for its words and notes and then for the
+   * desk to settle: the pane showing it holds the same width for five frames. */
+  async function openDocument(
+    page: CdpClient,
+    doc: string,
+    text: string,
+    notes: number,
+    mode: "review" | "edit" = "review",
+  ): Promise<void> {
+    await page.navigate(`http://127.0.0.1:${port}/#${new URLSearchParams({ t: TOKEN, w: slug, a: doc, mode })}`);
+    await page.evaluate(`(async()=>{const deadline=Date.now()+15000;
+      const pane=()=>${paneOf(text)};
+      const ready=()=>{const p=pane();return p&&p.dataset.mode==='${mode}'&&p.querySelectorAll('.glosa-annotation').length>=${notes};};
+      while(!ready()){if(Date.now()>deadline) throw new Error('${doc} and its notes never rendered in ${mode}: '+${DESK});
+        await new Promise(r=>setTimeout(r,50));}
+      let last=-1,still=0;
+      while(still<5){
+        if(Date.now()>deadline) throw new Error('the desk never settled on ${doc}: '+${DESK});
+        await new Promise(r=>requestAnimationFrame(r));
+        const width=pane()?.getBoundingClientRect().width??0;
+        still=width>0&&width===last?still+1:0;last=width;}})()`);
+    await page.evaluate(SETTLE);
+  }
+
+  /** Chooses a style for the document whose words include `text`, from its pane's More menu. */
+  async function chooseStyleOf(page: CdpClient, text: string, style: "editorial" | "spec" | "mono"): Promise<void> {
+    await page.evaluate(`(async()=>{const pane=${paneOf(text)};
+      if(pane.querySelector('.glosa-pane-tools').dataset.open!=='true') pane.querySelector('.glosa-tools-trigger').click();
+      const row=pane.querySelector('.glosa-style-option[data-style="${style}"]');
+      if(!row) throw new Error('the More menu has no ${style} row');
+      row.click();
+      const deadline=Date.now()+3000;
+      while(pane.dataset.style!=='${style}'){if(Date.now()>deadline) throw new Error('the ${style} style never applied');
+        await new Promise(r=>requestAnimationFrame(r));}})()`);
+    await page.evaluate(SETTLE);
+  }
+
+  /** Pins the colour scheme the way `pin` pins everything, with motion and contrast still pinned. */
+  async function scheme(page: CdpClient, value: "light" | "dark"): Promise<void> {
+    await page.send("Emulation.setEmulatedMedia", {
+      features: [
+        { name: "prefers-color-scheme", value },
+        { name: "prefers-reduced-motion", value: "reduce" },
+        { name: "prefers-contrast", value: "no-preference" },
+      ],
+    });
+    await page.evaluate(SETTLE);
+  }
+
+  /** Saves what the page shows, when `GLOSA_SHOTS_DIR` asks for it. `selector` crops to an element
+   * with `pad` pixels of context around it. */
+  async function shot(page: CdpClient, name: string, selector?: string, pad = 24): Promise<void> {
+    if (!SHOTS_DIR) return;
+    const clip = selector
+      ? await page.evaluate<{ x: number; y: number; width: number; height: number }>(`(()=>{
+          const r=(${selector}).getBoundingClientRect();
+          const x=Math.max(0,r.left-${pad}),y=Math.max(0,r.top-${pad});
+          return {x,y,width:Math.min(innerWidth-x,r.width+2*${pad}),height:Math.min(innerHeight-y,r.height+2*${pad})};})()`)
+      : undefined;
+    const res = await page.send("Page.captureScreenshot", {
+      format: "png",
+      ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
+    });
+    mkdirSync(SHOTS_DIR, { recursive: true });
+    writeFileSync(join(SHOTS_DIR, `${name}.png`), Buffer.from(res.result.data, "base64"));
+  }
+
+  interface Box {
+    family: string;
+    size: number;
+    weight: number;
+    leading: number;
+    top: number;
+    bottom: number;
+  }
+  interface StyleReading {
+    style: string;
+    step: number;
+    ch: number;
+    loaded: boolean;
+    body: Box;
+    h1: Box;
+    h2: Box;
+    h3: Box;
+    h4: Box;
+    h5: Box;
+    h6: Box;
+    table: Box;
+    th: Box;
+    cell: { top: number; left: number };
+    code: Box;
+    pre: Box;
+    /** The column's text width, the first paragraph's box, and the widest line painted in it. */
+    line: { column: number; paragraph: number; widest: number };
+    column: { left: number; right: number };
+    narrow: { left: number; right: number; width: number };
+    wide: { left: number; right: number; width: number };
+    /** A table with a word too long for any lane, which its cell breaks. */
+    oversize: { left: number; right: number; width: number };
+    /** The right edge of the rightmost table cell on the page, and of what the pane shows. */
+    cells: number;
+    visible: number;
+    /** Spec's wide lane beyond the line, as the page resolved `--wide-extra`: 0 in other styles. */
+    extra: number;
+    /** Each table's `data-fit` mark, in document order. */
+    fit: Array<string | null>;
+    /** Words split across two lines in the cells of every table that is not marked to break words. A
+     * hyphen is a place a line may break, so the parts either side of one count as words. */
+    split: string[];
+    /** The pane's inline size (what `cqi` measures) and the column's painted width it lays out around. */
+    pane: { inline: number; block: number };
+    block: { left: number; right: number; width: number };
+    /** The left edge of every note card in the rail beside the column, when there is a rail. */
+    rail: number[];
+    sideways: number;
+  }
+  /** Everything a style sets in the styles document, read in one evaluate. */
+  const STYLE_READING = `(()=>{
+    const pane=${paneOf(STYLES_NOTED)},content=pane.querySelector('.glosa-content');
+    const q=(selector)=>content.querySelector(selector);
+    const box=(el)=>{const s=getComputedStyle(el),size=parseFloat(s.fontSize);
+      return {family:s.fontFamily.split(',')[0].replace(/["']/g,'').trim(),size,weight:Number(s.fontWeight),
+        leading:parseFloat(s.lineHeight)/size,top:parseFloat(s.marginTop),bottom:parseFloat(s.marginBottom)};};
+    const zero=document.createElement('span');zero.textContent='0';content.append(zero);
+    const ch=zero.getBoundingClientRect().width;zero.remove();
+    const first=q(':scope > p'),range=document.createRange();range.selectNodeContents(first);
+    const rights=new Map();for(const r of range.getClientRects()){if(r.width<1) continue;
+      const top=Math.round(r.top);rights.set(top,Math.max(rights.get(top)??-Infinity,r.right));}
+    const left=first.getBoundingClientRect().left;
+    const cs=getComputedStyle(content),col=content.getBoundingClientRect();
+    const column={left:col.left+parseFloat(cs.paddingLeft),right:col.right-parseFloat(cs.paddingRight)};
+    const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
+    const [narrow,wide,oversize]=[...content.querySelectorAll(':scope > table')];
+    const ps=getComputedStyle(pane),pr=pane.getBoundingClientRect(),main=pane.querySelector('.glosa-pane-main');
+    const cell=getComputedStyle(wide.querySelector('td:nth-child(2)'));
+    return {style:pane.dataset.style,step:Number(document.documentElement.dataset.textSize),ch,
+      loaded:document.fonts.check('16px "Source Serif 4"')&&document.fonts.check('16px "Source Sans 3"'),
+      body:box(first),h1:box(q('h1')),h2:box(q('h2')),h3:box(q('h3')),h4:box(q('h4')),h5:box(q('h5')),h6:box(q('h6')),
+      table:box(wide),th:box(wide.querySelector('th')),cell:{top:parseFloat(cell.paddingTop),left:parseFloat(cell.paddingLeft)},
+      code:box(first.querySelector('code')),pre:box(q(':scope > pre')),
+      line:{column:column.right-column.left,paragraph:first.clientWidth,widest:Math.max(...[...rights.values()].map(r=>r-left))},
+      column,narrow:rect(narrow),wide:rect(wide),oversize:rect(oversize),block:rect(q(':scope > pre')),
+      cells:Math.max(...[...content.querySelectorAll('th,td')].map(c=>c.getBoundingClientRect().right)),
+      visible:main.getBoundingClientRect().left+main.clientWidth,
+      extra:parseFloat(getComputedStyle(content).getPropertyValue('--wide-extra'))||0,
+      fit:[...content.querySelectorAll(':scope > table')].map(t=>t.getAttribute('data-fit')),
+      split:[...content.querySelectorAll(':scope > table:not([data-fit]) :is(th,td)')].flatMap(cell=>{
+        const out=[],walk=document.createTreeWalker(cell,NodeFilter.SHOW_TEXT);
+        for(let node=walk.nextNode();node;node=walk.nextNode()) for(const m of node.data.matchAll(/[^\\s-]+/g)){
+          const r=document.createRange();r.setStart(node,m.index);r.setEnd(node,m.index+m[0].length);
+          if(new Set([...r.getClientRects()].filter(x=>x.width>0).map(x=>Math.round(x.top))).size>1) out.push(m[0]);}
+        return out;}),
+      pane:{inline:pr.width-parseFloat(ps.paddingLeft)-parseFloat(ps.paddingRight)-parseFloat(ps.borderLeftWidth)-parseFloat(ps.borderRightWidth),
+        block:parseFloat(pane.style.getPropertyValue('--manuscript-block'))},
+      rail:[...pane.querySelectorAll('.glosa-margin.glosa-margin-side .glosa-annotation')].map(c=>c.getBoundingClientRect().left),
+      sideways:document.scrollingElement.scrollWidth-document.scrollingElement.clientWidth};
+  })()`;
+
+  type StyleName = "editorial" | "spec" | "mono";
+  type Expected = Record<
+    "body" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "table" | "th" | "code" | "pre",
+    Partial<Box>
+  > & {
+    measure: number;
+    gap: number;
+    cell: { top: number; left: number };
+  };
+
+  /** The style table of #407, on the reading scale: every value at the default step times the step
+   * over 18, each stopping at its floor (no body under 15px, no table under 13px, no code block or
+   * table head under 12px). Margins stay rem. The pane is over 800px wide, so Editorial's title and
+   * section heading are at their largest. */
+  function styleTable(style: StyleName, step: number): Expected {
+    const s = step / 18;
+    const serif = "Source Serif 4";
+    const sans = "Source Sans 3";
+    const mono = "ui-monospace";
+    if (style === "spec") {
+      const body = Math.max(15, 16 * s);
+      const minor = { weight: 650, leading: 1.35, top: 24, bottom: 6 };
+      return {
+        measure: 64,
+        gap: body,
+        body: { family: sans, size: body, weight: 400, leading: 1.5 },
+        h1: { family: sans, size: 32 * s, weight: 650, leading: 1.2, top: 0, bottom: 24 },
+        h2: { size: 24 * s, weight: 650, leading: 1.25, top: 36, bottom: 8 },
+        h3: { size: 20 * s, weight: 650, leading: 1.3, top: 28, bottom: 8 },
+        h4: { size: Math.max(1.0625 * body, 17 * s), ...minor },
+        h5: { size: Math.max(body, 16 * s), ...minor },
+        h6: { size: Math.max(body, 16 * s), ...minor },
+        table: { family: sans, size: body },
+        th: { size: body, weight: 650 },
+        cell: { top: 0.5 * body, left: 0.75 * body },
+        code: { family: mono, size: 0.9 * body },
+        pre: { family: mono, size: Math.max(12, 14 * s), leading: 1.5 },
+      };
+    }
+    const body = style === "mono" ? Math.max(15, 15 * s) : 18 * s;
+    const minor =
+      style === "mono"
+        ? { size: Math.max(1.0625 * body, 17 * s), weight: 600, leading: 1.4, top: 24, bottom: 8 }
+        : { size: Math.max(body, 17 * s), weight: 650, leading: 1.4, top: 24, bottom: 8 };
+    return {
+      measure: 68,
+      gap: 1.2 * body,
+      body: {
+        family: style === "mono" ? mono : serif,
+        size: body,
+        weight: 400,
+        leading: style === "mono" ? 1.65 : 1.62,
+      },
+      h1: { family: style === "mono" ? mono : serif, size: 40 * s, weight: 650, leading: 1.1, top: 0, bottom: 32 },
+      h2: { size: 26 * s, weight: 620, leading: 1.25, top: 48, bottom: 12 },
+      h3: { size: 20 * s, weight: 620, leading: 1.3, top: 32, bottom: 8 },
+      h4: minor,
+      h5: minor,
+      h6: minor,
+      table: { family: sans, size: Math.max(13, 15 * s) },
+      th: { size: Math.max(12, 13 * s), weight: 600 },
+      cell: { top: 8, left: 12 },
+      code: { family: mono, size: 0.85 * body },
+      pre: { family: mono, size: Math.max(12, 13 * s), leading: 1.6 },
+    };
+  }
+
+  const round = (value: number) => Math.round(value * 100) / 100;
+  /** The measured values the table names, rounded to hundredths, for one diff per style and step. */
+  function pick(seen: StyleReading, expected: Expected) {
+    const out: Record<string, unknown> = {};
+    for (const key of ["body", "h1", "h2", "h3", "h4", "h5", "h6", "table", "th", "code", "pre"] as const) {
+      const want = expected[key];
+      const got = seen[key];
+      out[key] = Object.fromEntries(
+        Object.keys(want).map((field) => {
+          const value = got[field as keyof Box];
+          return [field, typeof value === "number" ? round(value) : value];
+        }),
+      );
+    }
+    return {
+      ...out,
+      gap: round(seen.body.bottom),
+      cell: { top: round(seen.cell.top), left: round(seen.cell.left) },
+    };
+  }
+  function want(expected: Expected) {
+    const out: Record<string, unknown> = {};
+    for (const key of ["body", "h1", "h2", "h3", "h4", "h5", "h6", "table", "th", "code", "pre"] as const) {
+      out[key] = Object.fromEntries(
+        Object.entries(expected[key]).map(([field, value]) => [
+          field,
+          typeof value === "number" ? round(value) : value,
+        ]),
+      );
+    }
+    return {
+      ...out,
+      gap: round(expected.gap),
+      cell: { top: round(expected.cell.top), left: round(expected.cell.left) },
+    };
+  }
+
+  test(
+    "#407: each style sets every element of one document to its table at the default step and at 22, Spec's wide table and code block widen past its line to about 96ch and never under the note rail, keep that place when edited in place, and the others stay on the line",
+    async () => {
+      const page = await launch();
+      await pin(page, { width: 1920, height: 1200 });
+      for (const step of [18, 22]) {
+        if (step !== 18) await page.evaluate(`localStorage.setItem('glosa_text_size','${step}')`);
+        await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
+        for (const style of ["editorial", "spec", "mono"] as const) {
+          await chooseStyleOf(page, STYLES_NOTED, style);
+          // A reload reads the style back from where the menu stored it, before the page paints.
+          await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
+          const seen = await page.evaluate<StyleReading>(STYLE_READING);
+          const where = `${style} at ${step}`;
+          expect({ style: seen.style, step: seen.step, loaded: seen.loaded }, where).toEqual({
+            style,
+            step,
+            loaded: true,
+          });
+          const table = styleTable(style, step);
+          expect(pick(seen, table), `${where}: the style table`).toEqual(want(table));
+          // The line length in characters of the body's own face. Measured against a rendered "0",
+          // which a variable face's optical size can set a hair wider than the `ch` the CSS resolved.
+          expect(
+            Math.abs(seen.line.column / seen.ch - table.measure),
+            `${where}: a ${table.measure}ch line`,
+          ).toBeLessThan(0.2);
+          // The line as it paints: the paragraph fills the column, and its longest line reaches within
+          // a word of the column's edge without crossing it.
+          expect(
+            Math.abs(seen.line.paragraph - seen.line.column),
+            `${where}: the paragraph is the column's width`,
+          ).toBeLessThan(1);
+          expect(seen.line.widest, `${where}: no line runs past the column`).toBeLessThanOrEqual(
+            seen.line.column + 0.5,
+          );
+          expect(seen.line.widest, `${where}: the longest line fills the column`).toBeGreaterThan(
+            seen.line.column * 0.85,
+          );
+          expect(seen.sideways, `${where}: the page does not scroll sideways`).toBe(0);
+          expect(seen.cells, `${where}: every table cell ends inside what the pane shows`).toBeLessThanOrEqual(
+            seen.visible + 0.5,
+          );
+          // Only the table with a word too long for any column breaks words; the others keep theirs.
+          expect(seen.fit, `${where}: only the digest table is marked to break words`).toEqual([null, null, "break"]);
+          expect(seen.split, `${where}: no word breaks in the other tables`).toEqual([]);
+          // A narrow table stays at its own width on the prose's left edge in every style.
+          expect(seen.narrow.width, `${where}: the narrow table keeps its own width`).toBeLessThan(seen.line.column);
+          expect(
+            Math.abs(seen.narrow.left - seen.column.left),
+            `${where}: the narrow table on the prose edge`,
+          ).toBeLessThan(0.5);
+          const centre = (seen.column.left + seen.column.right) / 2;
+          if (style === "spec") {
+            // A 1920px desk leaves room beyond a full rail, so both widen to Spec's cap, centred on the
+            // column, and stop short of the rail's cards.
+            for (const [what, block] of [
+              ["the wide table", seen.wide],
+              ["the code block", seen.block],
+            ] as const) {
+              expect(block.width, `${where}: ${what} widens past the line`).toBeGreaterThan(seen.line.column + 1);
+              expect(Math.abs(block.width - 96 * seen.ch), `${where}: ${what} stops near 96ch`).toBeLessThan(1.5);
+              expect(Math.abs((block.left + block.right) / 2 - centre), `${where}: ${what} is centred`).toBeLessThan(1);
+            }
+            expect(seen.rail.length, `${where}: the note is in the rail`).toBeGreaterThan(0);
+            for (const left of seen.rail) {
+              expect(left, `${where}: a rail card starts right of the wide blocks`).toBeGreaterThanOrEqual(
+                Math.max(seen.wide.right, seen.block.right),
+              );
+            }
+            // A word too long for the lane breaks inside its cell, so the table fits the lane: it
+            // starts at the lane's left edge and ends at or inside its right edge.
+            const lane = { left: seen.column.left - seen.extra / 2, right: seen.column.right + seen.extra / 2 };
+            expect(Math.abs(seen.extra - 32 * seen.ch), `${where}: the lane is 32ch past the line`).toBeLessThan(1);
+            expect(seen.oversize.left, `${where}: the digest table starts at the lane's left edge`).toBeGreaterThan(
+              lane.left - 0.5,
+            );
+            expect(seen.oversize.right, `${where}: the digest table fits the lane`).toBeLessThanOrEqual(
+              lane.right + 0.5,
+            );
+          } else {
+            expect(seen.wide.width, `${where}: the wide table stays on the line`).toBeLessThanOrEqual(
+              seen.line.column + 0.5,
+            );
+            expect(
+              Math.abs(seen.wide.left - seen.column.left),
+              `${where}: the wide table on the prose edge`,
+            ).toBeLessThan(0.5);
+            expect(
+              Math.abs(seen.block.width - seen.line.column),
+              `${where}: the code block is the column`,
+            ).toBeLessThan(0.5);
+            // A word too long for the line breaks inside its cell, so the table fits the line.
+            expect(
+              Math.abs(seen.oversize.left - seen.column.left),
+              `${where}: the digest table starts on the line`,
+            ).toBeLessThan(0.5);
+            expect(seen.oversize.right, `${where}: the digest table fits the line`).toBeLessThanOrEqual(
+              seen.column.right + 0.5,
+            );
+          }
+          if (step === 18 && SHOTS_DIR) {
+            await page.send("Emulation.setDeviceMetricsOverride", {
+              width: 1600,
+              height: 2000,
+              deviceScaleFactor: 1,
+              mobile: false,
+            });
+            await page.evaluate(SETTLE);
+            await shot(page, `${style}-light`, paneOf(STYLES_NOTED), 0);
+            if (style === "spec") {
+              await scheme(page, "dark");
+              await shot(page, "spec-dark", paneOf(STYLES_NOTED), 0);
+              await scheme(page, "light");
+            }
+            await pin(page, { width: 1920, height: 1200 });
+            if (style === "spec") {
+              await page.evaluate(
+                `(${paneOf(STYLES_NOTED)}).querySelectorAll('.glosa-content > table')[1].scrollIntoView({block:'center'})`,
+              );
+              await page.evaluate(SETTLE);
+              await shot(page, "spec-wide-table-light", paneOf(STYLES_NOTED), 0);
+            }
+          }
+          if (style === "spec" && step === 18) {
+            // Editing a wide block in place keeps it where it was: the run editor that takes its place
+            // holds the same table, at the same width and on the same line. The digest table too: in
+            // the editor its long word still breaks, so it fits the lane there as on the page.
+            await openDocument(page, STYLES_DOC, STYLES_NOTED, 0, "edit");
+            for (const [index, what] of [
+              [1, "the wide table"],
+              [2, "the digest table"],
+            ] as const) {
+              const editing = await page.evaluate<{
+                before: StyleReading["wide"];
+                after: StyleReading["wide"];
+              }>(`(async()=>{
+                const pane=${paneOf(STYLES_NOTED)},content=pane.querySelector('.glosa-content');
+                const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
+                const frame=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+                const table=content.querySelectorAll(':scope > table')[${index}];table.scrollIntoView({block:'center'});
+                await frame();
+                const before=rect(table),cell=table.querySelector('td').getBoundingClientRect();
+                table.querySelector('td').dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:cell.left+4,clientY:cell.top+4}));
+                const deadline=Date.now()+5000;let host;
+                while(!(host=content.querySelector('.glosa-run-editor'))?.querySelector('table')){
+                  if(Date.now()>deadline) throw new Error('the run editor never opened on ${what}');
+                  await new Promise(r=>setTimeout(r,25));}
+                await frame();
+                const after=rect(host.querySelector('table'));
+                document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+                while(content.querySelector('.glosa-run-editor')){
+                  if(Date.now()>deadline) throw new Error('the run editor on ${what} never closed');
+                  await new Promise(r=>setTimeout(r,25));}
+                await frame();
+                return {before,after};})()`);
+              expect(
+                Math.abs(editing.after.left - editing.before.left),
+                `${what} being edited stays on its line`,
+              ).toBeLessThan(1);
+              expect(Math.abs(editing.after.width - editing.before.width), `${what} keeps its width`).toBeLessThan(1);
+            }
+            await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
+          }
+        }
+      }
+
+      // At a 1440px desk the pane has no room beyond a full rail, so Spec keeps its wide blocks on
+      // the line rather than let them reach the rail. The room is worked out from the pane's width
+      // alone, not from whether the rail is showing, so entering Review cannot move them.
+      await page.evaluate(`localStorage.removeItem('glosa_text_size')`);
+      await pin(page, { width: 1440, height: 900 });
+      await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
+      await chooseStyleOf(page, STYLES_NOTED, "spec");
+      const desk = await page.evaluate<StyleReading>(STYLE_READING);
+      expect(desk.rail.length, "a 1440px desk shows the rail").toBeGreaterThan(0);
+      expect(desk.wide.width, "Spec's wide table stays on the line beside a rail").toBeLessThanOrEqual(
+        desk.line.column + 0.5,
+      );
+      expect(Math.abs(desk.block.width - desk.line.column), "and so does its code block").toBeLessThan(0.5);
+      expect(
+        Math.abs(desk.oversize.left - desk.column.left),
+        "a table with a word too long to fit starts on the line",
+      ).toBeLessThan(0.5);
+      expect(desk.oversize.right, "and fits it").toBeLessThanOrEqual(desk.column.right + 0.5);
+      expect(desk.cells, "every table cell ends inside what the pane shows").toBeLessThanOrEqual(desk.visible + 0.5);
+      expect(desk.split, "no word breaks in the other tables, squeezed onto the line").toEqual([]);
+      for (const left of desk.rail) expect(left).toBeGreaterThanOrEqual(desk.column.right);
+
+      // Between those two desks the room beyond a full rail decides the width: none below a pane of
+      // about 1230px at the default size, all of it in between, and the 96ch cap from about 1485px.
+      const around = await deskAround(page);
+      for (const width of [1225, 1360, 1490]) {
+        await paneAt(page, width, around);
+        const at = await page.evaluate<StyleReading>(STYLE_READING);
+        const room = at.pane.inline - at.pane.block - 2 * 8 - 2 * 320;
+        const extra = Math.max(0, Math.min(32 * at.ch, room));
+        const where = `a ${width}px pane (room ${Math.round(room)}px)`;
+        expect(Math.abs(at.wide.width - (at.line.column + extra)), `${where}: the wide table's width`).toBeLessThan(
+          1.5,
+        );
+        expect(Math.abs(at.block.width - (at.line.column + extra)), `${where}: the code block's width`).toBeLessThan(
+          1.5,
+        );
+        expect(
+          Math.abs(at.oversize.width - (at.line.column + extra)),
+          `${where}: the digest table fills the lane and no more`,
+        ).toBeLessThan(1.5);
+        expect(at.split, `${where}: no word breaks in the other tables`).toEqual([]);
+        if (width === 1225) expect(room, `${where}: no room below about 1230px`).toBeLessThan(0);
+        if (width === 1360) expect(extra, `${where}: the room decides`).toBeGreaterThan(0);
+        if (width === 1360) expect(extra, `${where}: under the cap`).toBeLessThan(32 * at.ch);
+        if (width === 1490) expect(extra, `${where}: the 96ch cap from about 1485px`).toBe(32 * at.ch);
+        for (const left of at.rail) {
+          expect(left, `${where}: a rail card starts right of the wide blocks`).toBeGreaterThanOrEqual(
+            Math.max(at.wide.right, at.block.right),
+          );
+        }
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  interface StyleMenu {
+    heading: string | null;
+    rows: string[];
+    checked: string | null;
+    note: string | null;
+    useAsDefault: string | null;
+    status: string | null;
+    /** Where the status line is: inside the Style group, above the Text size row, and which shown
+     * element it sits directly under. Null while it says nothing. */
+    place: { inGroup: boolean; aboveTextSize: boolean; under: string | null } | null;
+  }
+  /** The Style group of a pane's open More menu, as a reader finds it. */
+  const MENU = (text: string) => `(()=>{const pane=${paneOf(text)},group=pane.querySelector('.glosa-style-group');
+    const shown=(el)=>Boolean(el)&&!el.hidden&&el.getBoundingClientRect().width>0;
+    const menu=pane.querySelector('.glosa-pane-menu'),size=menu.querySelector('.glosa-text-size');
+    const status=[...menu.querySelectorAll('[role="status"]')].find(shown)??null,
+      note=group.querySelector('.glosa-style-folder-note'),use=group.querySelector('.glosa-style-folder');
+    let above=status?.previousElementSibling??null;while(above&&!shown(above)) above=above.previousElementSibling;
+    return {heading:group.querySelector('.glosa-pane-menu-heading')?.textContent??null,
+      rows:[...group.querySelectorAll('.glosa-style-option')].filter(shown).map(r=>r.querySelector('span:last-child').textContent),
+      checked:group.querySelector('.glosa-style-option[aria-checked="true"]')?.dataset.style??null,
+      note:shown(note)?note.textContent:null,useAsDefault:shown(use)?use.textContent:null,
+      status:status?status.textContent:null,
+      place:status?{inGroup:group.contains(status),
+        aboveTextSize:status.getBoundingClientRect().bottom<=size.getBoundingClientRect().top+0.5,
+        under:above?above.className:null}:null};})()`;
+
+  async function openMenuOf(page: CdpClient, text: string): Promise<void> {
+    await page.evaluate(`(async()=>{const pane=${paneOf(text)};
+      if(pane.querySelector('.glosa-pane-tools').dataset.open!=='true') pane.querySelector('.glosa-tools-trigger').click();
+      const deadline=Date.now()+3000;
+      while(!pane.querySelector('.glosa-style-group .glosa-style-option')?.getBoundingClientRect().width){
+        if(Date.now()>deadline) throw new Error('the More menu never showed the Style group');
+        await new Promise(r=>requestAnimationFrame(r));}})()`);
+    await page.evaluate(SETTLE);
+  }
+
+  test(
+    "#407: Use as folder default in one window's More menu sets the folder's style, another window on the folder follows it without a reload, and a document's own Editorial holds against it",
+    async () => {
+      const a = await launch();
+      await pin(a, { width: 1440, height: 900 });
+      await openDocument(a, STYLES_DOC, STYLES_NOTED, 1);
+      const b = await openPage({ newWindow: true });
+      await pin(b, { width: 1440, height: 900 });
+      await openDocument(b, DOC, NOTED[1], NOTED.length);
+      await b.evaluate("window.__sameDocument = true");
+      const styleIn = (page: CdpClient, text: string) => page.evaluate<string>(`(${paneOf(text)}).dataset.style`);
+      expect(await styleIn(b, NOTED[1]), "no choice and no folder default: Editorial").toBe("editorial");
+
+      await chooseStyleOf(a, STYLES_NOTED, "spec");
+      await openMenuOf(a, STYLES_NOTED);
+      const rows = ["Editorial (Serif)", "Spec (Sans)", "Mono"];
+      expect(await a.evaluate<StyleMenu>(MENU(STYLES_NOTED)), "no folder default yet").toEqual({
+        heading: "Style",
+        rows,
+        checked: "spec",
+        note: null,
+        useAsDefault: "Use as folder default",
+        status: null,
+        place: null,
+      });
+      const menu = `(${paneOf(STYLES_NOTED)}).querySelector('.glosa-pane-menu')`;
+      await shot(a, "menu-style-light", menu, 16);
+      await scheme(a, "dark");
+      await shot(a, "menu-style-dark", menu, 16);
+      await scheme(a, "light");
+
+      // A save that never reaches the daemon says so in the menu, changes nothing, and leaves the row
+      // (and the reader's focus) where they were, to try again. The engine itself fails the request.
+      await a.send("Fetch.enable", { patterns: [{ urlPattern: "*/folder-style", requestStage: "Request" }] });
+      const stopFailing = a.on((msg) => {
+        if (msg.method !== "Fetch.requestPaused") return;
+        const { requestId, request } = msg.params;
+        void a.send(
+          request.method === "PUT" ? "Fetch.failRequest" : "Fetch.continueRequest",
+          request.method === "PUT" ? { requestId, errorReason: "ConnectionRefused" } : { requestId },
+        );
+      });
+      await clickAt(a, ".glosa-pane .glosa-style-folder");
+      await a.evaluate(`(async()=>{const deadline=Date.now()+5000;
+        while(!(${MENU(STYLES_NOTED)}).status){if(Date.now()>deadline) throw new Error('the failed save never said so');
+          await new Promise(r=>requestAnimationFrame(r));}})()`);
+      await a.evaluate(SETTLE);
+      expect(await a.evaluate<StyleMenu>(MENU(STYLES_NOTED)), "a failed save changes nothing and says so").toEqual({
+        heading: "Style",
+        rows,
+        checked: "spec",
+        note: null,
+        useAsDefault: "Use as folder default",
+        status: "Couldn't set the folder default, so nothing changed. Try again.",
+        // Said in the Style group, right under the row that failed, above Text size.
+        place: { inGroup: true, aboveTextSize: true, under: "glosa-pane-menu-item glosa-style-folder" },
+      });
+      expect(
+        await a.evaluate<boolean>("document.activeElement?.classList.contains('glosa-style-folder') ?? false"),
+        "focus is back on the row, to try again",
+      ).toBe(true);
+      await shot(a, "menu-style-folder-default-failed-light", menu, 16);
+      stopFailing();
+      await a.send("Fetch.disable");
+
+      await clickAt(a, ".glosa-pane .glosa-style-folder");
+      await a.evaluate(`(async()=>{const deadline=Date.now()+5000;
+        while(!(${MENU(STYLES_NOTED)}).note){if(Date.now()>deadline) throw new Error('the folder default never showed');
+          await new Promise(r=>requestAnimationFrame(r));}})()`);
+      await a.evaluate(SETTLE);
+      expect(
+        await a.evaluate<StyleMenu>(MENU(STYLES_NOTED)),
+        "the folder's default is Spec, and this document follows it",
+      ).toEqual({
+        heading: "Style",
+        rows,
+        checked: "spec",
+        note: "Folder default: Spec",
+        useAsDefault: null,
+        status: "Spec is now this folder's default.",
+        // The row has hidden, so it is said right under "Folder default: Spec", above Text size.
+        place: { inGroup: true, aboveTextSize: true, under: "glosa-style-folder-note" },
+      });
+      expect(
+        await a.evaluate<string>("document.activeElement?.dataset?.style ?? ''"),
+        "focus moves from the row that hid itself to the chosen style",
+      ).toBe("spec");
+      await shot(a, "menu-style-folder-default-light", menu, 16);
+      await scheme(a, "dark");
+      await shot(a, "menu-style-folder-default-dark", menu, 16);
+      await scheme(a, "light");
+
+      // The other window takes the folder's Spec from its stream, with no reload.
+      await b.evaluate(`(async()=>{const deadline=Date.now()+5000;
+        while((${paneOf(NOTED[1])}).dataset.style!=='spec'){
+          if(Date.now()>deadline) throw new Error('the other window never took the folder default');
+          await new Promise(r=>setTimeout(r,50));}})()`);
+      expect(await b.evaluate<boolean>("window.__sameDocument === true"), "no reload").toBe(true);
+
+      // Its own Editorial is a choice of its own: it holds in a Spec folder, and the menu says so.
+      await chooseStyleOf(b, NOTED[1], "editorial");
+      await openMenuOf(b, NOTED[1]);
+      expect(
+        await b.evaluate<StyleMenu>(MENU(NOTED[1])),
+        "overridden: Editorial applies, over a Spec folder",
+      ).toMatchObject({
+        checked: "editorial",
+        note: "Folder default: Spec",
+        useAsDefault: "Use as folder default",
+      });
+      const menuB = `(${paneOf(NOTED[1])}).querySelector('.glosa-pane-menu')`;
+      await shot(b, "menu-style-overridden-light", menuB, 16);
+
+      // Both hold across a reload: the other window's Editorial, and this window's following Spec.
+      await openDocument(b, DOC, NOTED[1], NOTED.length);
+      expect(await styleIn(b, NOTED[1])).toBe("editorial");
+      await openDocument(a, STYLES_DOC, STYLES_NOTED, 1);
+      expect(await styleIn(a, STYLES_NOTED)).toBe("spec");
     },
     TEST_TIMEOUT_MS,
   );

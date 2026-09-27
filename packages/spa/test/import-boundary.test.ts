@@ -264,8 +264,10 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./dialog.js",
     "./artifact-tree.js",
     "./appearance.js",
-    // The writer's per-artifact face: a localStorage preference and a native select, no daemon reach.
-    "./face.js",
+    // A document's style (#407): a localStorage preference and its menu rows. The folder default
+    // it falls back to arrives through the two calls viewer.js hands it from data-access.js, so no
+    // daemon reach of its own.
+    "./style.js",
     // The text size step (#406): a localStorage preference, its ladder and its stepper, no daemon reach.
     "./text-size.js",
     // Passage addresses: pure DOM arithmetic over the rendered blocks, no daemon reach.

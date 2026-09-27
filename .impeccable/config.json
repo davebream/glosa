@@ -2,6 +2,13 @@
   "detector": {
     "ignoreRules": [],
     "ignoreFiles": ["docs/assets/screens/frame.html"],
-    "ignoreValues": []
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "\\s*var\\(--font-manuscript\\)/)",
+        "createdAt": "2026-09-27T21:47:55.767Z",
+        "reason": "false positive: packages/spa/test/style.test.ts asserts in a regex that app.css uses the documented --font-manuscript token; it sets no font (triaged by the assistant, not the user)"
+      }
+    ]
   }
 }

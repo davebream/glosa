@@ -118,7 +118,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.20", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.21", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
@@ -1114,6 +1114,42 @@ wire formats remain in provider packages.
   `503 dictation-credential-unavailable`, and `504 dictation-timeout`; details never forward provider
   response bodies or credentials. Retry is a new foreground user action.
 
+### 5.23 A folder's default style (contract 1.21, issue #407)
+
+A document's style is its typographic dress: `editorial` (Source Serif 4), `spec` (Source Sans 3, a
+denser page) or `mono`. A document's own choice is a per-device reading preference the SPA keeps in
+the browser; a folder's default is kept here, so it follows the folder into the desktop app and every
+browser. The SPA sets a document in its own style, else its folder's default, else `editorial`.
+
+Defaults live in `~/.glosa/folder-styles.json` (atomic temp → fsync → rename, 0600), keyed by the
+folder's canonical path like a star (§5.21), apart from the workspace index, so a default outlives
+the index's GC and `glosa forget` and applies again when the folder is next opened. It is not part
+of the workspace metadata descriptor (§5.14), which belongs to an external integration.
+
+**No folder-style route accepts a path.** Each names a directory registration by slug and keeps the
+default under that registration's own canonical path. See A3 §4 "Folder default style".
+
+- `GET /w/:slug/folder-style` — Bearer required (authed read). **200** `{ "style": "spec" }`, or
+  `{ "style": null }` when the folder has no default.
+- `PUT /w/:slug/folder-style` `{ "style": "spec" }` — Bearer + Origin (state-changing). Sets the
+  default; setting the one it already has changes nothing. **200** `{ "style": "spec" }`.
+  **400** `validation-failed` (not JSON, or `style` not one of `editorial`, `spec`, `mono`).
+- `DELETE /w/:slug/folder-style` — Bearer + Origin. Clears it, idempotently. **200** `{ "style": null }`.
+- All three: **404** `not-found` (no registration with that slug), **409** `workspace-adopting` or
+  `workspace-forgetting` while the workspace is being adopted or forgotten, as on every `/w/:slug`
+  route, and **422** `folder-style-not-directory` for a loose-file registration, whose document has
+  no folder of its own.
+- A `folder-styles.json` that a newer glosa wrote (a `version` above 1, after a rollback) is kept as it
+  is: `GET` answers `{ "style": null }`, and `PUT` and `DELETE` are **409** `conflict` without touching
+  it. A file that is not valid JSON is moved aside, as `stars.json` is.
+
+Setting or clearing a default sends a best-effort `event: folder_style` with `{ "changed": true }` and
+no cursor on every `GET /w/:slug/stream` open on that folder (§8.1), like the `metadata` invalidation
+(§5.14). A page reads the default again through its data-access module, so every window on the
+folder takes it without a reload; after a reconnect it reads it again, since the frame is not
+replayed. An N-1 page ignores the frame; against an N-1 daemon the routes answer 404, and the page
+treats the folder as having no default and offers none.
+
 ## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`/`<path...>`)
 
 **Encoding.** A path capture in a URL is percent-encoded per RFC 3986, one `/`-delimited segment at
@@ -1179,7 +1215,7 @@ wire mechanics.
 Standard SSE framing, hand-parsed client-side (fetch-streaming, not `EventSource` — §2):
 ```
 id: <cursor>
-event: <artifact | journal | heartbeat | snapshot | resync_required | chats_changed | attention_changed>
+event: <artifact | journal | heartbeat | snapshot | resync_required | chats_changed | attention_changed | metadata | folder_style>
 data: <json>
 
 ```

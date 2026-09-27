@@ -1890,7 +1890,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
 
   describe("browser harness without an application daemon", () => {
     test(
-      "print specimen escapes dockview clipping, preserves each reading face, and paginates on white paper; on screen its code blocks keep the block's size",
+      "print specimen escapes dockview clipping, preserves each style's face, and paginates on white paper; on screen its code blocks keep the block's size",
       async () => {
         // Print geometry belongs at the real-engine boundary. The renderer, dockview and CSS are
         // production bytes, including the artifact pane. Only API responses are fixtures; this does not prove native
@@ -1987,14 +1987,14 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           expect(code.inline.length, "the specimen renders inline code").toBeGreaterThan(1);
           expect([...new Set(code.inline)], "code inside a line of prose is set at 0.85em").toEqual([0.85]);
           await client.send("Emulation.setEmulatedMedia", { media: "print" });
-          for (const [face, family, size] of [
-            ["serif", "Source Serif 4", "16px"],
-            ["sans", "Source Sans 3", "16px"],
+          for (const [style, family, size] of [
+            ["editorial", "Source Serif 4", "16px"],
+            ["spec", "Source Sans 3", "16px"],
             ["mono", "monospace", "16px"],
           ]) {
             const state = await client.evaluate<any>(`(async () => {
               document.documentElement.dataset.theme = 'dark';
-              const pane = document.querySelector('[data-printing]'); pane.dataset.face = ${JSON.stringify(face)};
+              const pane = document.querySelector('[data-printing]'); pane.dataset.style = ${JSON.stringify(style)};
               await document.fonts.ready;
               const article = pane.querySelector('.glosa-content'); const style = getComputedStyle(article);
               const ancestors = []; for(let node = article; node; node = node.parentElement) {

@@ -4,7 +4,7 @@
 // document's More menu, where reading preferences live (DESIGN.md: never in primary chrome), and in
 // Settings > Appearance.
 //
-// Storage is the same non-sensitive localStorage appearance.js and face.js use. A bad stored value
+// Storage is the same non-sensitive localStorage appearance.js and style.js use. A bad stored value
 // reads as the default, and a storage failure never prevents a page-local change.
 
 // The ladder and the first-paint application (text-size-preload.js), a classic script shell.html
@@ -61,7 +61,7 @@ export function createTextSizeStore({ root, storage } = {}) {
     size = next;
     ladder().apply(target, size);
     try {
-      // The default leaves nothing behind, as face.js does.
+      // The default leaves nothing behind.
       if (size === DEFAULT_TEXT_SIZE) targetStorage?.removeItem(TEXT_SIZE_STORAGE_KEY);
       else targetStorage?.setItem(TEXT_SIZE_STORAGE_KEY, String(size));
     } catch {

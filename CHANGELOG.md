@@ -29,6 +29,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   pane. Headings, code blocks and tables grow with the text, and h3 stays larger than the text at
   every size. Notes sit two steps under the document and the chat one step under, neither below
   15px (#406).
+- A folder can have a default style. Choose a style for any document, then "Use as folder default"
+  in the same menu: every document in the folder that has no style of its own opens in it, in every
+  browser and in the desktop app, and windows already open on the folder change at once. The menu
+  then names it, for example "Folder default: Spec", and a document you set otherwise keeps its own
+  style, Editorial included. glosa keeps the default for the folder in `~/.glosa/folder-styles.json`, so it
+  survives restarting glosa and reopening the folder. A single file opened on its own has no folder
+  default. API contract 1.21 (#407).
 
 ### Changed
 
@@ -78,6 +85,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   1205px, reaches its full 320px at 1344px instead of 1363px, and Review asks a split for 1271px
   instead of 1290px. The Edit column's toolbar and Save row are 688px wide instead of 707px, and
   the note dots beside the text sit 9.5px closer to it (#406).
+- In every style, a table with a word too long for any of its columns (a digest, a long path or URL)
+  now breaks that word inside its cell, so the table fits the page, on screen and in the editor as it
+  already did in print. Before, such a word ran past the line, and past the pane's edge it was cut
+  off where nothing could scroll to it. Tables whose words fit keep them whole, as before (#407).
+- The "Manuscript face" group in each document's More menu is now "Style", and its rows Default,
+  Sans and Mono are now Editorial (Serif), Spec (Sans) and Mono. A style sets the whole page, not
+  only its face: size, leading, headings, the gap between blocks, tables, code and line length.
+  Editorial and Mono pages otherwise look as they did, and each document keeps the choice it had: Sans is
+  Spec, Mono is Mono. Choosing Editorial is now kept as a choice of its own, where choosing Default
+  used to leave nothing behind (#407).
+- A page set in Sans is now set in Spec, a denser page for specifications, with one heading weight
+  and its own ladder; the table below gives each value at the default text size, and every value
+  moves with the text size. A wide table or code block now widens past the line to about 96ch,
+  centred on the column, but only into room the pane has beyond a full note rail: at the default
+  size it starts to widen in a pane about 1230px wide and reaches 96ch at about 1485px. So widening
+  never takes it to the rail, and entering Review moves nothing. In a narrower pane it stays on the
+  line as before (#407).
+
+| Value | Before (Sans) | After (Spec) |
+|---|---|---|
+| Leading | 1.6 | 1.5 |
+| Gap between blocks | 1.2em (19.2px) | 1em (16px) |
+| h1 | 30 to 40px, 650, leading 1.1, 32px below | 32px, 650, leading 1.2, 24px below |
+| h2 | 24 to 26px, 620, 48px above and 12px below | 24px, 650, 36px above and 8px below |
+| h3 | 20px, 620, 32px above and 8px below | 20px, 650, 28px above and 8px below |
+| h4 | 17px, 600, leading 1.4, 24px above and 8px below | 17px, 650, leading 1.35, 24px above and 6px below |
+| h5, h6 | 17px, 600 | 16px, 650, spaced as h4 |
+| Tables | 15px sans, a 13px muted head at 600 | 16px sans, a 16px ink head at 650 |
+| Inline code | 0.85em | 0.9em |
+| Code blocks | 13px, leading 1.6 | 14px, leading 1.5 |
+| Line length | 64ch | 64ch for prose; a wide table or code block up to about 96ch |
 
 ### Fixed
 

@@ -16,6 +16,7 @@ export type SseEventType =
   | "artifact"
   | "artifact_index"
   | "metadata"
+  | "folder_style"
   | "chats_changed"
   | "attention_changed"
   | "heartbeat"

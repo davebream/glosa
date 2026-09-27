@@ -47,6 +47,8 @@ export interface StreamOptions {
   subscribeArtifacts?: (listener: (event: ArtifactWatcherEvent) => void) => () => void;
   shutdownSignal?: AbortSignal;
   subscribeMetadata?: (listener: () => void) => () => void;
+  /** This folder's default style changed (#407). */
+  subscribeFolderStyle?: (listener: () => void) => () => void;
   /** Chat changes daemon-wide. `slug` names the workspace when known (#389). */
   subscribeChats?: (listener: (change?: { slug?: string }) => void) => () => void;
   /** Attention changes daemon-wide, one call per workspace affected (#389). */
@@ -85,6 +87,7 @@ export function createJournalStreamResponse(
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let shutdownListener: (() => void) | null = null;
   let unsubscribeMetadata: (() => void) | null = null;
+  let unsubscribeFolderStyle: (() => void) | null = null;
   let unsubscribeChats: (() => void) | null = null;
   let unsubscribeAttention: (() => void) | null = null;
   let chatTimer: ReturnType<typeof setTimeout> | undefined;
@@ -98,6 +101,7 @@ export function createJournalStreamResponse(
     closed = true;
     unsubscribe?.();
     unsubscribeMetadata?.();
+    unsubscribeFolderStyle?.();
     unsubscribeChats?.();
     unsubscribeAttention?.();
     clearTimeout(chatTimer);
@@ -146,6 +150,12 @@ export function createJournalStreamResponse(
       unsubscribeMetadata =
         opts.subscribeMetadata?.(() => {
           send(encodeSseFrame({ event: "metadata", data: { changed: true } }));
+        }) ?? null;
+      // Contract 1.21 (#407): an invalidation like `metadata`'s, with no cursor. The page reads the
+      // folder's default again through its data-access module; an N-1 page ignores the frame.
+      unsubscribeFolderStyle =
+        opts.subscribeFolderStyle?.(() => {
+          send(encodeSseFrame({ event: "folder_style", data: { changed: true } }));
         }) ?? null;
 
       // Defense-in-depth (review item #3): everything from here on is pure setup (no I/O that's
