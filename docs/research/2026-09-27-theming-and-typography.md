@@ -39,14 +39,14 @@ Editor themes cover only the appearance row: they set no face, size or spacing. 
 
 ## Fix first: defects found while researching
 
-The first four rows were re-measured in Chrome 154 and WebKit against the shipped stylesheet. Three were re-read with their fix injected; the danger-button fix (a new `--on-danger` token) was not. The other rows come from Part 1's code audits.
+The first four rows were measured in Chrome 154 and WebKit against the shipped stylesheet, then re-measured in Chrome on v0.1.0-alpha.36 after the print rework (#398): unchanged. Three were re-read with their fix injected; the danger-button fix (a new `--on-danger` token) was not. The other rows come from Part 1's code audits.
 
-| Defect | Measured value | Class | Where (origin/main 6a77f15) | Fix |
+| Defect | Measured value | Class | Where (main at 8ed3767, v0.1.0-alpha.36) | Fix |
 |---|---|---|---|---|
 | Danger button text, dark mode | `oklch(0.99 0 0)` (OKLCH: a perceptual colour space) on dark `--danger`: 2.79:1 at 13px, re-measured (the evidence's 2.78:1 predates it). WCAG AA (the usual accessibility bar) needs 4.5:1; light is 7.28:1 | Bug (accessibility) | `packages/spa/src/app.css:4913-4917` | An `--on-danger` token, darker in dark |
-| `###` in a chat reply | 12px, weight 600, sans, below the 15px reply: a label rule reaches Markdown headings | Bug | `packages/spa/src/app.css:7253-7258`, `:7321-7325` | Scope the label rule to the row's own label, or size Markdown headings (17.55px once set) |
+| `###` in a chat reply | 12px, weight 600, sans, below the 15px reply: a label rule reaches Markdown headings | Bug | `packages/spa/src/app.css:7389-7394`, `:7457-7461` | Scope the label rule to the row's own label, or size Markdown headings (17.55px once set) |
 | Manuscript code blocks | 11.05px, not the 13px in `DESIGN.md:290`: inline code's 0.85em compounds inside `pre` | Bug (minor) | `packages/spa/src/app.css:2768-2792` | `.glosa-content pre code { font-size: inherit }` |
-| Links in chat replies | No rule, so browser blue: 9.1:1 light, 7.5:1 dark | Design flaw: off-system, hue near the session's ink | `packages/spa/src/app.css:7306-7325`; manuscript rule `:2834-2838` | Reuse the manuscript rule (17.7:1 light, 14.6:1 dark) |
+| Links in chat replies | No rule, so browser blue: 9.1:1 light, 7.5:1 dark | Design flaw: off-system, hue near the session's ink | `packages/spa/src/app.css:7442-7461`; manuscript rule `:2834-2838` | Reuse the manuscript rule (17.7:1 light, 14.6:1 dark) |
 | Scheme list (which themes are light or dark) | Copied in three files; the preload (the script that applies the theme before first paint) cannot learn a named theme's scheme | Tech debt | `packages/spa/src/appearance.js`, `appearance-preload.js`, `agent-settings.js` | One source, mapped by theme id |
 | Dark overrides | Five component rules outside the token block; the diff pane's colour remap applies in dark only | Tech debt | `packages/spa/src/app.css:5090-5141` | Three elevation tokens (shared values for raised surfaces); an unconditional diff remap |
 | `html lang` | Hard-coded `en`, so spellcheck and screen readers treat Polish as English | Missing guardrail | `packages/spa/src/shell.html:3` | Set it per document |
@@ -170,7 +170,7 @@ Recommendations, in priority order:
 
 1. Keep the default as shipped (no work). A block beside a session's mark (drawn as a bracket in the margin) still shows no address there; the session's tab carries it instead.
 2. A hover-in delay of about 150 to 300 ms, none on hover-out (XS). Hover's real cost is motion: an 11px vermilion label blinks as the cursor tracks each paragraph.
-3. Decide print on purpose (XS). Today a print made while notes are shown carries heading addresses; one with notes hidden does not.
+3. Print is settled (no work). Since the print rework (#398), no address or mark prints, whatever the page state.
 4. If dense review needs it, an opt-in "Show all addresses" in the More menu, stored like the face chooser (S). A product choice, not an evidence-backed need.
 5. A VoiceOver pass before any screen-reader policy (S). The label is in the accessibility tree on every top-level block while notes are shown; whether that helps is untested.
 
@@ -327,7 +327,7 @@ Phase 5: on request.
 - Every claim a recommendation depends on was checked twice: against its source, and for whether it applies to glosa's readers and constraints. Contested claims appear in their weaker form; a claim failing both checks was dropped.
 - Part 1's two follow-up strands, surfaces and user voice, came after a completeness review and did not go through the two checks.
 - The four re-measured code defects (see Fix first) override the evidence where it disagrees.
-- Code references are to origin/main at 6a77f15 (v0.1.0-alpha.35).
+- Code references in both documents are to main at 8ed3767 (v0.1.0-alpha.36), which includes the print rework merged in #398.
 
 | Part | Claims checked | Confirmed | Contested | Dropped |
 |---|---|---|---|---|

@@ -14,9 +14,9 @@ It holds four studies:
 How to read it:
 
 - Source numbers are local to each part. `[12]` in Question 5 points at Question 5's own source list.
-- Code references (`packages/spa/src/app.css:4913`) are to `origin/main` at 6a77f15 (v0.1.0-alpha.35).
+- Code references (`packages/spa/src/app.css:4913`) are to `main` at 8ed3767 (v0.1.0-alpha.36). The studies read 6a77f15 (alpha.35); the print rework merged since then (#398) rewrote only the print block and moved every later `app.css` line by 136, so those references were remapped and the print passages describe #398 as merged.
 - Every claim a recommendation depends on was checked twice: once against its cited sources, and once for whether it applies to glosa's readers and constraints. A claim that failed one check keeps its wording and is followed by the objection; a claim that failed both was removed. Each part states its tally.
-- Four code defects were re-measured in Chrome 154 and WebKit against the shipped stylesheet; those results, listed in the decision report, override anything here that disagrees.
+- Four code defects were re-measured in Chrome 154 and WebKit against the shipped stylesheet, and again in Chrome on alpha.36; those results, listed in the decision report, override anything here that disagrees.
 
 Visual comparisons of the font pairs, proportions, palettes, chat treatments and registers: [`spikes/theming-comps.html`](spikes/theming-comps.html). Open it in any browser.
 
@@ -89,7 +89,7 @@ Two code audits read every number below from the repository at 6a77f15 on 2026-0
 | Payload | 710,896 bytes (694 KiB). Serif roman 218 KB and italic 185 KB, 374 glyphs (Basic Latin, Latin-1, Latin Extended-A). Sans roman 170 KB and italic 138 KB, 1,615 glyphs, unsubset. Served from a fixed allowlist as bytes, with a sha256 ETag, `Cache-Control: private, no-cache` and `font-display: swap`. No subsetting recipe is recorded anywhere in the repo. | tech debt (the subset cannot be reproduced) |
 | Diacritics | All 18 Polish letters (ą ć ę ł ń ó ś ź ż and their capitals) are present in all four files. The audit's fontTools check reports `missing []` for each. Neither font has a Polish `locl` variant (language-specific glyph forms), and Polish needs none. The serif subset lacks ș ț ẞ, U+2011, Greek, Cyrillic and ≠ ≤ ≥, which fall back to another face mid-line. `html` is hard-coded to `lang=en`. | limit of the subset. The missing `lang` is a missing guardrail. |
 | Contrast (WCAG ratios computed from the OKLCH tokens; OKLCH is a perceptual colour space of lightness, chroma and hue) | Light: ink 17.62:1, muted 6.66, hand 5.74, pencil 4.53, session 8.27 (`DESIGN.md` says about 8.9), danger 7.26. Dark: ink 14.59, muted 7.22, hand 6.91, pencil 5.32, session 8.40. The danger button's text is a raw `oklch(0.99 0 0)`, which gives 2.78:1 on the dark `--danger`. | bug in dark mode (AA needs 4.5:1) |
-| Theme-readiness | Score 6 of 10. Token discipline 9/10: outside the token blocks and print there are 3 literal colours and 2 `black` keywords (lines 4916, 4920 to 4921, 7143 and 7414 of `packages/spa/src/app.css`), and 0 in JS. Dark overrides outside the token block: 5 component rules plus 1 print rule. Four of them collapse into three tokens, and one (the diff2html remap) should be unconditional. Plumbing 3/10. The scheme list lives in `packages/spa/src/appearance.js`, `packages/spa/src/appearance-preload.js` and `packages/spa/src/agent-settings.js` with no shared source. The preload cannot learn a named theme's scheme before paint. The Electron shell sets no `backgroundColor` and never sets `nativeTheme.themeSource`. Accessibility hooks 0/10. `@supports` blocks: 0. | tech debt |
+| Theme-readiness | Score 6 of 10. Token discipline 9/10: outside the token blocks and print there are 3 literal colours and 2 `black` keywords (lines 4916, 4920 to 4921, 7279 and 7550 of `packages/spa/src/app.css`), and 0 in JS. Dark overrides outside the token block: 5 component rules plus 1 print rule. Four of them collapse into three tokens, and one (the diff2html remap) should be unconditional. Plumbing 3/10. The scheme list lives in `packages/spa/src/appearance.js`, `packages/spa/src/appearance-preload.js` and `packages/spa/src/agent-settings.js` with no shared source. The preload cannot learn a named theme's scheme before paint. The Electron shell sets no `backgroundColor` and never sets `nativeTheme.themeSource`. Accessibility hooks 0/10. `@supports` blocks: 0. | tech debt |
 
 The typography audit made two side findings. They are not about theming, but they touch the reading surface.
 
@@ -190,7 +190,7 @@ There is precedent for a reading tool with one identity and a few named variants
 | Address labels | 11px bold tabular | macOS minimum 10pt [15]. Material label small 11 [14]. NN/g at least 10pt [23]. | Fine as a label. Never use it for a sentence. | [14][15][23] |
 | Code block in prose | 13px mono / 1.6 (0.72x body). It is fixed at `--text-sm`, so a size control built on `--manuscript-size` would not reach it (added after the completeness pass). | No authoritative range found | Unrated, and visibly small next to 18px prose. Decision 7 moves it to 14 to 15px. That figure matches Source Code Pro's apparent size and is not a sourced range. Decision 26 derives it from the reading scale. | [37][273] |
 | Manuscript tables | The chrome sans at 15px, not the manuscript face | No source found | No verdict. Whether tables should match the manuscript face is a consistency question to settle with a side-by-side mock-up (decision 27). | audit |
-| Print | 12pt / 1.55 (`packages/spa/src/app.css:6290`), always in Source Serif 4. Print is being reworked in open issue #340; this is the state at 6a77f15 | Butterick 10 to 12pt for print [3] | Fine | [3] |
+| Print | 12pt / 1.45 in the page's own face since the print rework (#398, `packages/spa/src/app.css:6243-6453`); headings 24, 18, 15, 13, 12 and 12pt; code and table text at least 12pt | Butterick 10 to 12pt for print, 120 to 145 percent line spacing [3] | Fine | [3] |
 | Text contrast, light | ink 17.62:1, muted 6.66, hand 5.74, pencil 4.53, session 8.27 | AA requires 4.5:1 for all glosa text, because nothing reaches the 24px large-text threshold. AAA requires 7:1 [19][20]. | AA is fine everywhere. Muted, hand and pencil miss AAA. Pencil has 0.03 of headroom. | [19][20] |
 | Text contrast, dark | hand 6.91, session 8.40, pencil 5.32 | as above | AA is fine. Hand misses AAA by 0.1. | [20] |
 | WCAG mechanisms | untested | SC 1.4.4 needs text resizable to 200 percent without loss. SC 1.4.12 needs the layout to survive line-height 1.5, paragraph spacing 2em, letter spacing 0.12em and word spacing 0.16em [21][13]. | Owed: two cheap tests against the pane. The fixed 3rem top bar, the 36px strip and hanging punctuation are where to look. | [13][21] |
@@ -308,7 +308,7 @@ The model above covers the rendered Markdown manuscript: tokens on `:root`, and 
 | Diff and History panes (diff2html) | Dark mode, through a variable remap scoped to dark only | In light mode the panes keep diff2html's own white palette. In every mode they keep its own fonts: Menlo at 13px, and "Source Sans Pro", which is not vendored. | Unscope the remap (decision 18). Override the table and wrapper fonts (decision 25). | tech debt | [262][272][273] |
 | Class F: agent-written HTML in a sandboxed, cross-origin frame | Partly dark mode, through the browser, in Chromium 129 and later | Tokens, size, face and hand. Saved marks are never drawn on the words. There is no print path. | See the levers table below | limit of the approach, plus dead code | [241][243][245][249][251][264][266][267][269][270] |
 | Agent-login terminal (xterm) | Nothing | It shows xterm's default white on black at a fixed 13px, in a raw `#161616` box. In light mode it is an inverted console, which the dark theme's own brief rules out. | A theme object built from the tokens, a contrast floor and the mono stack (decision 24) | design gap | [258][259][260][261][271][273] |
-| Print (Markdown documents only) | Nothing: print always sets Source Serif 4 at 12pt / 1.55 with literal light colours | By design, colours are forced light with literal values under `!important`, marks are stripped, and no palette token is reset. Print is being reworked in open issue #340 | Decide what a preset or register may carry into print, and reset or override every token it can set (decision 32) | missing guardrail | [241][268][273] |
+| Print (Markdown documents only) | The face, since #398 | A white palette: 7 palette tokens are reset, and marks and addresses are hidden, at 12pt / 1.45. `--hand`, `--session`, `--pencil`, `--rule` and `--surface-sunken` are not reset | Reset or override every token a preset can set (decision 32) | missing guardrail | [241][268][273] |
 | Electron window and blocking page | Nothing | The window keeps Electron's default white background. The blocking page is hard-coded light. | `backgroundColor` from the resolved theme, and a themed blocking page (decisions 18, 25) | tech debt | [206][263][274] |
 
 Class F in more detail:
@@ -343,8 +343,8 @@ Other surfaces: fixes
 
 Other surfaces: decisions and guards
 
-- **Chat.** Agent replies are long prose set at a fixed 15px `--font-serif` (`packages/spa/src/app.css:7295`). The lane recommends giving them the reading scale and `--font-manuscript`. A human's turn is a surface bubble and does not use the hand colour. A message is not a mark, so today's choice is consistent with the invariant, but it should be made on purpose [273].
-- **Print.** `@media print` (`packages/spa/src/app.css:6226`) forces a light page with literal colours (`#ffffff` paper, `#1f1f1f` text) under `!important`, sets the manuscript in Source Serif 4 at 12pt / 1.55 whatever face the page uses, and resets no palette tokens. That is harmless only because print hides the marks. Print is being reworked in open issue #340, so this describes 6a77f15. Class F has no print path: the print function returns early for anything that is not a Markdown document (`packages/spa/src/artifact-pane.js:1169-1170`) [241][268].
+- **Chat.** Agent replies are long prose set at a fixed 15px `--font-serif` (`packages/spa/src/app.css:7431`). The lane recommends giving them the reading scale and `--font-manuscript`. A human's turn is a surface bubble and does not use the hand colour. A message is not a mark, so today's choice is consistent with the invariant, but it should be made on purpose [273].
+- **Print.** Since the print rework (#398), `@media print` (`packages/spa/src/app.css:6243-6453`) keeps the page's face (`--font-manuscript`) on white paper at 12pt / 1.45, resets 7 palette tokens (`--bg`, `--ink`, `--muted`, `--surface`, `--border`, `--border-strong`, `--primary`) and hides every passage address and mark. `--hand`, `--session`, `--pencil`, `--rule` and `--surface-sunken` are not reset, which is harmless only because marks do not print. It sets `print-color-adjust: economy`, so the browser may lighten colours further. Class F has no print path: the print function returns early for anything that is not a Markdown document (`packages/spa/src/artifact-pane.js:1169-1170`) [241][268].
 - **A forward risk, low confidence.** The CSS working group has reportedly resolved that `color-scheme` should affect `prefers-color-scheme` in every context, not only in embedded ones [247]. If browsers ship that, "Use system setting" could start reading back glosa's own choice instead of the OS. The reason: `packages/spa/src/appearance-preload.js:14` reads `prefers-color-scheme` and then sets the root scheme [265]. Chrome 154 had not shipped the change. The Media Queries 5 draft lists a `ua-color-scheme` feature for the user's own preference, but the fetched text was cut off before that section [248].
 
 #### Invariants a theme must honour, with the contrast floors
@@ -574,7 +574,7 @@ Faces and settings:
 |---|---|---|---|---|
 | 20 | Tests owed before controls ship | 200 percent zoom (WCAG 1.4.4) and the 1.4.12 spacing override, both against the pane. The ablation test for the theme validator. | S | Shipping any reading control |
 | 21 | Design values that are proposals, not standards | Hand-to-session hue distance of about 90 degrees. A pencil chroma ceiling of about 0.03. A minimum hand-to-danger distance: glosa's `--danger` (hue 22) sits only 20 degrees from `--hand` (hue 42), and a colour-vision simulation found the pair close for everyone and closer under tritanopia. Adopt these or replace them, but write them down. | XS | The validator (15) |
-| 32 (added) | Print contract | Every token a preset can set is either reset under `@media print` or comes from a dedicated print block. Today the print block resets no palette tokens and wins with literal light colours under `!important`; that is harmless only because print hides marks. Add a test that prints under each preset and asserts literal light colours. Today print always uses the serif at 12pt; whether a register's face should reach print is part of this decision, alongside the print rework in issue #340. | S | Any preset |
+| 32 (added) | Print contract | Every token a preset can set is either reset under `@media print` or comes from a dedicated print block. Since #398 the print block resets 7 palette tokens; `--hand`, `--session`, `--rule`, `--surface-sunken` and `--pencil` are not reset, which is harmless only because print hides marks. Add a test that prints under each preset and asserts the white palette. The page's face reaches print (#398); the screen size does not. | S | Any preset |
 | 33 (added) | A guard for "Use system setting" | Add a test that "system" follows an emulated OS change while the root scheme is set explicitly. Plan a fallback OS signal: `ua-color-scheme` once it ships, or `nativeTheme.shouldUseDarkColors` in Electron. Confidence is low, so confirm the reported CSS working group resolution first. | XS | none |
 | 34 (added) | Stability of the shipped look | Between releases, do not retune the hand, pencil or session hues, the faces, or the body size and measure without an opt-back path and a changelog line. | XS | none |
 
@@ -672,7 +672,7 @@ The two added lanes had limits. WebSearch was exhausted, so all their sources ca
 - A3 §4b lists four shell bridge calls, not three.
 - The live SPA CSP at `packages/daemon/src/security/csp.ts:31` still allows `style-src 'unsafe-inline'`. The claim that glosa means to drop it is now marked as an inference from the comment at `packages/daemon/src/transport/http.ts:180`.
 
-The surfaces lane read a working copy that carried another change's uncommitted print edits; every print value in this report was re-checked against 6a77f15 (12pt / 1.55, always serif, no token resets).
+The surfaces lane read a working copy of the print rework before it merged as #398; the print values in this report are those of #398 as merged.
 
 **Editorial pass.** This version applies the critic's structure notes:
 
@@ -763,13 +763,13 @@ Hues are OKLCH degrees, computed from each theme's published hex values. glosa's
 
 ### Appendix 2: detail from the added lanes (not adversarially verified)
 
-These two lanes ran later against a working copy that carried another change's uncommitted print edits. Their `app.css` line numbers and print values were re-checked against 6a77f15 and corrected where they differed.
+These two lanes ran against a working copy that carried the print rework before it merged as #398. Their print values match #398 as merged, and their line numbers are alpha.36 numbers.
 
 #### 2a. Which surfaces a theme, dark mode, a size control, the face chooser and the hand colour reach today
 
 | Surface | Colour tokens | Dark mode | Size | Face | Hand colour | Print | Mechanism needed | Crosses class-F bridge? |
 |---|---|---|---|---|---|---|---|---|
-| Rendered manuscript `.glosa-content` (Markdown) | Yes | Yes | Body only via `--manuscript-size`; h1 to h6 and code blocks fixed rem; rail ladder fixed px (707, 1205) | Yes, `--font-manuscript` per pane | Yes: `::selection`, `::highlight` washes, margin text | Own sheet: 12pt / 1.55, always serif, colours forced light, marks stripped | Derive headings, code and rail from one reading scale | No |
+| Rendered manuscript `.glosa-content` (Markdown) | Yes | Yes | Body only via `--manuscript-size`; h1 to h6 and code blocks fixed rem; rail ladder fixed px (707, 1205) | Yes, `--font-manuscript` per pane | Yes: `::selection`, `::highlight` washes, margin text | Own sheet since #398: 12pt / 1.45, face kept, white palette, marks and addresses hidden | Derive headings, code and rail from one reading scale | No |
 | Rich editor (ProseMirror on `.glosa-content`) | Yes | Yes | Same as manuscript | Yes | Caret, selection | Not printed (rendered snapshot is) | Inherits the manuscript fix | No |
 | Source editor textarea | Yes | Yes | No: 13px `--text-sm` | Mono only, by design | Caret | Not printed | Decide whether reading size applies | No |
 | Margin notes, composer, session Note | Yes | Yes, plus component overrides | No: 15px serif, quotes 13px | Quotes follow face; note body fixed serif | Yes, `--hand` text | Hidden | Tie to the reading scale if wanted | No |
@@ -778,7 +778,7 @@ These two lanes ran later against a working copy that carried another change's u
 | Diff pane and History diff (diff2html) | Dark only; light keeps d2h's #fff palette | Yes, variable remap | No: 13px table, 15px file name, px | No: Menlo/Consolas; "Source Sans Pro" falls back to Helvetica | N/A: ins `--ok`, del `--danger` (dark only) | Hidden | Unscope the remap; override `.d2h-diff-table` fonts | No |
 | Class-F foreign HTML (sandboxed cross-origin iframe) | No | Partial, browser-governed: owner `color-scheme` in Chromium 129+; undeclared documents become a white slab in dark; Safari follows OS | No; page zoom only (owner `zoom` works in Chromium) | No; glosa faces unreachable; bundled fonts CORS-blocked (probe) | No: system highlight inside frame; saved marks never drawn; yellow rule is dead CSS | No print path | Owner `color-scheme` plus frame ground; owner `zoom`; serve-time `@layer` injection; `Access-Control-Allow-Origin` on fonts | Only for live theme switching and drawing saved marks |
 | Agent-login terminal (xterm) | No: xterm default white on black in a `#161616` box | Always dark, ignores light | No: fontSize 13 | No: xterm default `monospace` | No: white cursor | N/A | ITheme from tokens, `minimumContrastRatio: 4.5`, fontFamily, re-set on change | No |
-| Print output (Markdown only) | Forced literal light; no tokens reset | Forced light | 12pt / 1.55, fixed | Always Source Serif 4 | Stripped by design | Itself | Reset or override every preset token; decide whether the face follows | No |
+| Print output (Markdown only) | White palette; 7 tokens reset | Forced light | 12pt / 1.45, fixed | Follows the page face (#398) | Stripped by design | Itself | Reset or override every preset token; keep the face | No |
 | Electron window and blocking page | No: default #FFF window, inline light page | No | N/A | System | N/A | N/A | `backgroundColor` from theme; theme the page; optional `nativeTheme.themeSource` | No |
 
 #### 2b. Class-F iframe colour behaviour by case (Chromium probe against Safari compat data)
@@ -811,7 +811,7 @@ In the probe the OS was dark while the parent page's own root was light, and the
 | `minimumContrastRatio` | Not set | 1 (do nothing) | 4.5 (WCAG AA) | xterm.d.ts; VS Code terminal default 4.5 [260][261] |
 | `fontFamily` | Not set | "monospace" | `--font-mono` stack | ITerminalOptions [259] |
 | `fontSize` | 13 | 15 | From the chosen size scale | ITerminalOptions [259] |
-| Container background | `#161616` raw | N/A | A token, matching the theme background | `packages/spa/src/app.css:7143` [273] |
+| Container background | `#161616` raw | N/A | A token, matching the theme background | `packages/spa/src/app.css:7279` [273] |
 | Updating | Never | N/A | Assign a new theme object on appearance change | xterm.d.ts on object options [260] |
 
 #### 2e. User-voice ledger: appearance complaints by product (identity against comfort)
@@ -1237,7 +1237,7 @@ The address is derived, never stored. `addressBlocks()` walks the top-level bloc
 | Ask notice strip under the document bar | Visible text when the passage can be located | The person | Derived |
 | Run editor (Edit mode, in-place block editing) | Accessible label only: "Editing §2.3" | Screen-reader users | Derived |
 | Chat and conversation panes | Never; nothing parses a § in free text | Nobody | Not present |
-| Print | No dedicated rule. The print block changes neither the pane's mode nor the pseudo-element, so a print from Review carries the heading labels and a print from Read carries none. Cards, dots and the composer are hidden | Nobody, in practice | Not present |
+| Print | Never, since the print rework (#398): the print block hides every generated address and every mark, whatever the pane's mode. Cards, dots and the composer are hidden too | Nobody | Not present |
 | Agent payload (inbox entry, monitor line, Codex inject, MCP get and pull) | Never. The delivered text is a `workspace:` line, then the fixed header (id, `artifact:` path, intent, quote, position, resolution, comment), the comment body and an apply-protocol block; the structured detail is artifact_path, body, intent, target and resolution | Nobody; the agent re-finds a passage by `quote {exact, prefix, suffix}` and by the resolution's source line range (path, start_line, end_line, matched_quote, confidence) | Not sent. A Markdown selection's target holds quote and position (class-F targets may add `chunk_id`); the posted record adds body, intent, artifact_path and captured_rendered_sha256. `glosa_ask` names a passage by quote and has no address parameter |
 
 Three facts that shape the rest of this section:
@@ -1401,7 +1401,7 @@ What survives of B, concretely:
 1. Default unchanged: headings always, body blocks on hover or focus, Read and Edit clean, the session's bracket still wins the spot.
 2. A hover-in delay of roughly 150 to 300 ms on `[data-address]:hover::before`, none on hover-out: the NN/g "pointer stopped" heuristic in one CSS line, on evidence that was not challenged [56].
 3. An opt-in "Show all addresses" for Review in the pane's More menu, stored per workspace and document like the face chooser in `packages/spa/src/face.js`, never leaking into Read. This is a product choice: the precedent for it is opt-in line numbering for out-of-band reference, not evidence that in-place review needs every paragraph numbered.
-4. Print decided on purpose: either a print rule that shows heading addresses regardless of mode, or one that hides all of them; today a print from Review carries them and a print from Read does not.
+4. Print: settled by the print rework (#398), which hides every address and mark in print. No work.
 
 Withdrawn: the "one screen-reader policy" item (a visually hidden span with `aria-describedby`, the palette's `aria-hidden` dropped). Its basis, the SC 1.4.13 and 2.1.1 reading and the three-policies finding, was dropped in verification. What remains verified is only that the label sits in the accessibility tree on every top-level block in Review; a VoiceOver pass is the first step before any policy, and nothing in this section says what that policy should be.
 
@@ -1509,7 +1509,7 @@ Verification of this part: 2 confirmed, 5 contested, 1 dropped.
 
 Where the numbers come from: every size below was read from the CSS cascade and then confirmed as a computed style in headless Chrome, against a fixture that reproduces the chat DOM and links the real `app.css` with the vendored fonts loaded (pane 720px wide, manuscript container 800px, viewport 1440x900). The fixture and its computed-style dump were kept outside the repository. "UA" below means the browser's default stylesheet applies because glosa has no rule. Source numbers in square brackets point at the list at the end of this section.
 
-Line numbers: `packages/spa/src/app.css` references are from origin/main at 6a77f15.
+Line numbers: `packages/spa/src/app.css` references are to main at 8ed3767 (v0.1.0-alpha.36), remapped from the 6a77f15 lines the audit read (every line after the print block moved by 136).
 
 Two glossed terms used throughout: **measure** is line length in characters; **leading** is line spacing, written here as a multiplier of the font size.
 
@@ -1519,63 +1519,63 @@ Table 5.1a: the transcript, the surfaces a reader actually reads. Line numbers a
 
 | Element | Face | Size / leading | Weight | Colour | Boxed? | Max width | Where |
 |---|---|---|---|---|---|---|---|
-| Pane base `.glosa-chat-pane` | Source Sans 3 | 15 / 1.5 | 400 | --ink on --bg | no | pane | 6404-6410 |
-| Empty state "What would you like to work on?" | Source Serif 4 | clamp(21, 4cqw, 28) / 1.3 | 400 | --ink | no | 32rem | 7236-7240; chat-pane.js:95 |
-| Assistant reply body (Markdown paragraphs) | Source Serif 4 | 15 / 1.7 | 400 | --ink | no | 46rem = 736px (633px painted in a 720px pane) | 7248-7252, 7292-7297; chat-pane.js:846-857 |
-| Assistant reply before the renderer resolves, or non-Markdown | Source Serif 4 | 15 / 1.7, pre-wrap | 400 | --ink | no | 46rem | 7292-7297; chat-pane.js:806-812 |
-| Reply h1 / h2 / h4 | Source Sans 3 | 30 / 22.5 / 15 (UA 2em, 1.5em, 1em), leading 1.7 inherited | 700 (UA) | --ink | no | column | 7321-7325 |
-| Reply h3 | Source Sans 3 | 12 / 1.5 (label rule leaks in) | 600 | --ink | no | column | 7253-7258 and 7321-7325 |
+| Pane base `.glosa-chat-pane` | Source Sans 3 | 15 / 1.5 | 400 | --ink on --bg | no | pane | 6540-6546 |
+| Empty state "What would you like to work on?" | Source Serif 4 | clamp(21, 4cqw, 28) / 1.3 | 400 | --ink | no | 32rem | 7372-7376; chat-pane.js:95 |
+| Assistant reply body (Markdown paragraphs) | Source Serif 4 | 15 / 1.7 | 400 | --ink | no | 46rem = 736px (633px painted in a 720px pane) | 7384-7388, 7428-7433; chat-pane.js:846-857 |
+| Assistant reply before the renderer resolves, or non-Markdown | Source Serif 4 | 15 / 1.7, pre-wrap | 400 | --ink | no | 46rem | 7428-7433; chat-pane.js:806-812 |
+| Reply h1 / h2 / h4 | Source Sans 3 | 30 / 22.5 / 15 (UA 2em, 1.5em, 1em), leading 1.7 inherited | 700 (UA) | --ink | no | column | 7457-7461 |
+| Reply h3 | Source Sans 3 | 12 / 1.5 (label rule leaks in) | 600 | --ink | no | column | 7389-7394 and 7457-7461 |
 | Reply h5 / h6 (not in any selector) | Source Serif 4 (inherited) | 12.45 / 10.05 (UA) | 700 (UA) | --ink | no | column | no rule |
 | Reply strong / em | Source Serif 4 | 15 / 1.7 | 700 (UA) / italic | --ink | no | inline | no rule |
 | Reply inline code | generic `monospace` (UA), not --font-mono | 15 / 1.7 | 400 | --ink | no bed | inline | no rule |
 | Reply link | Source Serif 4 | 15 / 1.7 | 400 | browser default: rgb(0,0,238) light, rgb(158,158,255) dark (UA), underlined | no | inline | no rule; chat-markdown.js:7-15 |
-| Reply list / list item | Source Serif 4 | 15 / 1.7 | 400 | --ink, markers --ink | UA padding-left 40px | column | 7318-7320 |
-| Reply blockquote | Source Serif 4 | 15 / 1.7, upright | 400 | --ink | UA margin-inline 40px, no rule | column | 7318-7320 |
-| Reply code block `pre` | ui-monospace on `pre`; a verification render found the inner `code` resolves to generic monospace (Menlo), because the browser's `code` rule overrides the inherited stack | 12 / 1.6 | 400 | --ink | --surface-sunken bed, radius 5, padding 12 | 100% | 7309-7317 |
+| Reply list / list item | Source Serif 4 | 15 / 1.7 | 400 | --ink, markers --ink | UA padding-left 40px | column | 7454-7456 |
+| Reply blockquote | Source Serif 4 | 15 / 1.7, upright | 400 | --ink | UA margin-inline 40px, no rule | column | 7454-7456 |
+| Reply code block `pre` | ui-monospace on `pre`; a verification render found the inner `code` resolves to generic monospace (Menlo), because the browser's `code` rule overrides the inherited stack | 12 / 1.6 | 400 | --ink | --surface-sunken bed, radius 5, padding 12 | 100% | 7445-7453 |
 | Reply table | Source Serif 4 | 15 / 1.7 | th 700 (UA) | --ink | UA: 1px cell padding, no rules, no overflow handling | column | no rule |
 | Reply hr | n/a | 1px | n/a | grey inset (UA) | full width | column | no rule |
-| Block gap inside a reply (p, ul, ol, pre, blockquote) | n/a | margin-block 0.6rem = 9.6px | n/a | n/a | n/a | n/a | 7318-7320 |
-| Human message | Source Sans 3 | 15 / 1.6, pre-wrap, never Markdown | 400 | --ink | --surface bubble, radius 14, padding 12 16, right edge aligned to the reply column | min(80%, 36rem = 576px), fit-content | 7262-7274; chat-pane.js:838 |
-| Message label (h3 / summary) | Source Sans 3 | 12 / 1.5 | 600 | --muted | no | column | 7253-7258; hidden on human and assistant rows |
-| Detail row summary ("Model and effort", tool name · status, "Reasoning summary", "Usage & limits") | Source Sans 3 | 12 / 1.5 | 400 | --muted | no | column | 7278-7280; chat-pane.js:842, 850-853 |
-| Detail row body | ui-monospace | 12 / 1.6, pre-wrap | 400 | --ink | --surface bed, radius 5, padding 10 12 | column | 7281-7286 |
-| Error row "Needs attention" | Source Sans 3 label over Source Serif 4 text | 12 / 1.5 over 15 / 1.7 | 600 / 400 | --muted / --ink | 1px --border-strong, radius 6, padding 12 | 46rem | 7287-7291 |
-| Copy button glyph | Source Sans 3 | 17 / 1 | 400 | --muted | 28x28 box, opacity 0 until hover | n/a | 7841-7864, 7979-7997 |
-| Decision card (agent question, approval) | Source Sans 3 | 15 / 1.5; title h3 15 / 1.5 700 (UA); detail pre mono 12 / 1.5 | 400 | --ink | --surface card, 1px --border-strong, radius 8, padding 16 | 48rem | 7684-7744; chat-pane.js:922-1028 |
+| Block gap inside a reply (p, ul, ol, pre, blockquote) | n/a | margin-block 0.6rem = 9.6px | n/a | n/a | n/a | n/a | 7454-7456 |
+| Human message | Source Sans 3 | 15 / 1.6, pre-wrap, never Markdown | 400 | --ink | --surface bubble, radius 14, padding 12 16, right edge aligned to the reply column | min(80%, 36rem = 576px), fit-content | 7398-7410; chat-pane.js:838 |
+| Message label (h3 / summary) | Source Sans 3 | 12 / 1.5 | 600 | --muted | no | column | 7389-7394; hidden on human and assistant rows |
+| Detail row summary ("Model and effort", tool name · status, "Reasoning summary", "Usage & limits") | Source Sans 3 | 12 / 1.5 | 400 | --muted | no | column | 7414-7416; chat-pane.js:842, 850-853 |
+| Detail row body | ui-monospace | 12 / 1.6, pre-wrap | 400 | --ink | --surface bed, radius 5, padding 10 12 | column | 7417-7422 |
+| Error row "Needs attention" | Source Sans 3 label over Source Serif 4 text | 12 / 1.5 over 15 / 1.7 | 600 / 400 | --muted / --ink | 1px --border-strong, radius 6, padding 12 | 46rem | 7423-7427 |
+| Copy button glyph | Source Sans 3 | 17 / 1 | 400 | --muted | 28x28 box, opacity 0 until hover | n/a | 7977-8000, 8115-8133 |
+| Decision card (agent question, approval) | Source Sans 3 | 15 / 1.5; title h3 15 / 1.5 700 (UA); detail pre mono 12 / 1.5 | 400 | --ink | --surface card, 1px --border-strong, radius 8, padding 16 | 48rem | 7820-7880; chat-pane.js:922-1028 |
 | Truncation note "Display shortened. Export the chat for the complete message." | Source Serif 4 | 15 / 1.7 | 400 | --ink | no | column | chat-markdown.js:17-18; chat-pane.js:854 |
 
 Table 5.1b: the composer and controls, top to bottom, at a 720px pane.
 
 | Position | What the reader sees | Measured style | Where |
 |---|---|---|---|
-| Above the composer, only when the account cannot send | Readiness sentence with "Load models" or "Manage account" | 12 / 1.5 sans --muted; buttons 13px kit | 7613-7627; chat-pane.js:98-117 |
-| Composer frame | One rounded field on --surface, 1px --border-strong, --ink when focused | radius 14, padding 4, width min(100% - 40px, 48rem) = 680px here | 7326-7342 |
-| Draft field | Placeholder "What would you like to work on?", grows from 3 rows to 25vh | Source Sans 3 15 / 1.55, padding 12 13, caret --hand | 7343-7357, 7790-7793 |
-| Attachment chips | "name ×" pills | 12px sans, 1px --border, radius 6, 32px tall | 7602-7612 |
-| Queue notice | "A message is waiting. Model and effort changes apply after it." | 13 / 1.5 --muted, no inline padding, 4px from the frame edge while the draft sits at 17px | 7130-7135 |
-| Bottom row, left | "+" attach glyph, borderless | 23px in a 28x28 box, --muted | 7582-7588 |
-| Bottom row | Model picker trigger: icon, model name, chevron | 13 / 1.4 --muted, 30px tall, no border | 7370-7401 |
-| Bottom row | Effort select: four bars, label, chevron; tooltip on hover | 13 / 1.4 --muted, 30px tall; tooltip 13 / 1.4 on --surface, max 16rem | 7532-7567, 7951-7978 |
-| Bottom row, right | Stop (while working), Send as a filled ink circle with "↑" | Stop: 13px kit; Send: 15px 600 --bg on --ink, 32x32, radius 16 | 6431-6440, 7592-7601 |
-| Below the composer | "Tools & workspace access" disclosure; "Send feedback · N" | 12px --muted summary; 12px --ink button | 7642-7677 |
-| Footer | Status line and "Enter to send · Shift Enter for a new line" | 12 / 1.5 --muted; hint hidden under 440px | 7628-7641, 7770-7772 |
-| Under 440px | Header inset 12px, composer 24px narrower, effort capped at 145px | n/a | 7750-7782 |
+| Above the composer, only when the account cannot send | Readiness sentence with "Load models" or "Manage account" | 12 / 1.5 sans --muted; buttons 13px kit | 7749-7763; chat-pane.js:98-117 |
+| Composer frame | One rounded field on --surface, 1px --border-strong, --ink when focused | radius 14, padding 4, width min(100% - 40px, 48rem) = 680px here | 7462-7478 |
+| Draft field | Placeholder "What would you like to work on?", grows from 3 rows to 25vh | Source Sans 3 15 / 1.55, padding 12 13, caret --hand | 7479-7493, 7926-7929 |
+| Attachment chips | "name ×" pills | 12px sans, 1px --border, radius 6, 32px tall | 7738-7748 |
+| Queue notice | "A message is waiting. Model and effort changes apply after it." | 13 / 1.5 --muted, no inline padding, 4px from the frame edge while the draft sits at 17px | 7266-7271 |
+| Bottom row, left | "+" attach glyph, borderless | 23px in a 28x28 box, --muted | 7718-7724 |
+| Bottom row | Model picker trigger: icon, model name, chevron | 13 / 1.4 --muted, 30px tall, no border | 7506-7537 |
+| Bottom row | Effort select: four bars, label, chevron; tooltip on hover | 13 / 1.4 --muted, 30px tall; tooltip 13 / 1.4 on --surface, max 16rem | 7668-7703, 8087-8114 |
+| Bottom row, right | Stop (while working), Send as a filled ink circle with "↑" | Stop: 13px kit; Send: 15px 600 --bg on --ink, 32x32, radius 16 | 6567-6576, 7728-7737 |
+| Below the composer | "Tools & workspace access" disclosure; "Send feedback · N" | 12px --muted summary; 12px --ink button | 7778-7813 |
+| Footer | Status line and "Enter to send · Shift Enter for a new line" | 12 / 1.5 --muted; hint hidden under 440px | 7764-7777, 7906-7908 |
+| Under 440px | Header inset 12px, composer 24px narrower, effort capped at 145px | n/a | 7886-7918 |
 
 Table 5.1c: what the audit found wrong, named by class. A **bug** is visible to readers now; a **design gap** is a missing decision; a **design flaw in the record** is a design document that contradicts itself; **tech debt** is a duplicated value nothing guards.
 
 | Finding | Class | Effect on a reader | Where |
 |---|---|---|---|
-| A `###` heading inside a reply paints at 12px 600 sans, smaller than the 15px body next to it and smaller than a `####` (15px 700). The label rule `.glosa-chat-message h3, .glosa-chat-message summary` matches Markdown h3s because the Markdown sits inside the message article. The Markdown heading rule has equal specificity, (0,1,1), and overrides only family, colour and margin. Confirmed in a browser render | Bug | A sub-heading looks like a footnote | app.css:7253-7258, 7321-7325 (7389-7394, 7457-7461 on the current branch) |
-| Links inside replies have no rule, so they take the browser's default link colour: rgb(0,0,238) in light (9.1:1) and, because the dark theme sets `color-scheme: dark`, rgb(158,158,255) in dark (7.5:1), re-measured in Chrome 154 and WebKit | Design flaw | Off-system browser blue whose hue sits near the session's blue-black ink. Not a contrast failure: an earlier fixture that did not apply `color-scheme: dark` measured 1.4:1, and that figure was withdrawn | app.css:7306-7325; tokens at 208 |
-| Reply headings are browser sizes in Source Sans 3: h1 30px 700, h2 22.5px, h4 15px bold, all at 1.7 leading; h5 and h6 are unstyled serif at 12.45px and 10.05px | Design gap | A reply's h1 outranks every manuscript heading; an h4 is bold body text | app.css:7321-7325 |
-| Inline code, strong, blockquote, list padding and markers, hr, tables all fall through to browser defaults | Design gap | Replies with structure look unstyled beside the manuscript | app.css:7306-7325 vs 2712-2838 |
-| The human's words are sans in the bubble (15 / 1.6) and the draft (15 / 1.55), while the same person's margin notes are serif (15 / 1.45). DESIGN.md contradicts itself here. The Serif Is Writing Rule (:295) says serif. The Body role (:285, "the conversation") and the Conversation Pane section (:412, "right-aligned human bubbles (sans...)") call for exactly the sans that ships. The rule was written on 2026-09-16, before the chat (Conversation Pane added 2026-09-24), and its listed cases are margin notes. The shipped reply size matches neither Note (serif 15 / 1.45) nor Body (sans 15 / 1.6) | Design flaw in the record (the code follows :285 and :412; the conflict is inside DESIGN.md, not drift) | Two faces for one author on one desk | DESIGN.md:283, 285, 295, 412; app.css:7273, 7295, 7352 |
-| Reply column 46rem = 736px = 93.6ch of Source Serif 4 at 15px; composer, footer and readiness rows 48rem, wider than the replies at every width | Design gap | About 104 to 108 characters per line, over Butterick's 90 and Bringhurst's 75 (WCAG 1.4.8 does not cap a resizable column; see table 5.3a row 3); the input is wider than what it produces | app.css:7249, 7267, 7330 |
-| Radii 5 / 6 / 8 / 12 / 14 / 16px as literals, block gap 0.6rem literal beside the manuscript's --prose-gap, `box-shadow: 0 3px 8px #0002` beside --shadow-menu, `#161616` on the terminal, `color: var(--ink)` re-declared on headings that inherit it | Tech debt | None today; drifts silently | app.css:7140, 7143, 7285, 7290, 7315, 7319, 7323-7324, 7336, 7351, 7413-7414, 7597, 7672, 7694 |
+| A `###` heading inside a reply paints at 12px 600 sans, smaller than the 15px body next to it and smaller than a `####` (15px 700). The label rule `.glosa-chat-message h3, .glosa-chat-message summary` matches Markdown h3s because the Markdown sits inside the message article. The Markdown heading rule has equal specificity, (0,1,1), and overrides only family, colour and margin. Confirmed in a browser render | Bug | A sub-heading looks like a footnote | app.css:7389-7394, 7457-7461 |
+| Links inside replies have no rule, so they take the browser's default link colour: rgb(0,0,238) in light (9.1:1) and, because the dark theme sets `color-scheme: dark`, rgb(158,158,255) in dark (7.5:1), re-measured in Chrome 154 and WebKit | Design flaw | Off-system browser blue whose hue sits near the session's blue-black ink. Not a contrast failure: an earlier fixture that did not apply `color-scheme: dark` measured 1.4:1, and that figure was withdrawn | app.css:7442-7461; tokens at 208 |
+| Reply headings are browser sizes in Source Sans 3: h1 30px 700, h2 22.5px, h4 15px bold, all at 1.7 leading; h5 and h6 are unstyled serif at 12.45px and 10.05px | Design gap | A reply's h1 outranks every manuscript heading; an h4 is bold body text | app.css:7457-7461 |
+| Inline code, strong, blockquote, list padding and markers, hr, tables all fall through to browser defaults | Design gap | Replies with structure look unstyled beside the manuscript | app.css:7442-7461 vs 2712-2838 |
+| The human's words are sans in the bubble (15 / 1.6) and the draft (15 / 1.55), while the same person's margin notes are serif (15 / 1.45). DESIGN.md contradicts itself here. The Serif Is Writing Rule (:295) says serif. The Body role (:285, "the conversation") and the Conversation Pane section (:412, "right-aligned human bubbles (sans...)") call for exactly the sans that ships. The rule was written on 2026-09-16, before the chat (Conversation Pane added 2026-09-24), and its listed cases are margin notes. The shipped reply size matches neither Note (serif 15 / 1.45) nor Body (sans 15 / 1.6) | Design flaw in the record (the code follows :285 and :412; the conflict is inside DESIGN.md, not drift) | Two faces for one author on one desk | DESIGN.md:283, 285, 295, 412; app.css:7409, 7431, 7488 |
+| Reply column 46rem = 736px = 93.6ch of Source Serif 4 at 15px; composer, footer and readiness rows 48rem, wider than the replies at every width | Design gap | About 104 to 108 characters per line, over Butterick's 90 and Bringhurst's 75 (WCAG 1.4.8 does not cap a resizable column; see table 5.3a row 3); the input is wider than what it produces | app.css:7385, 7403, 7466 |
+| Radii 5 / 6 / 8 / 12 / 14 / 16px as literals, block gap 0.6rem literal beside the manuscript's --prose-gap, `box-shadow: 0 3px 8px #0002` beside --shadow-menu, `#161616` on the terminal, `color: var(--ink)` re-declared on headings that inherit it | Tech debt | None today; drifts silently | app.css:7276, 7279, 7421, 7426, 7451, 7455, 7459-7460, 7472, 7487, 7549-7550, 7733, 7808, 7830 |
 | Manuscript defect found in passing: code inside a manuscript code block renders at 11.05px because `.glosa-content code { font-size: 0.85em }` also hits the `<code>` inside `<pre>` (13 x 0.85) and `.glosa-content pre code` does not reset font-size; DESIGN.md says 13px | Bug (manuscript) | Code blocks are smaller than the record says | app.css:2768-2792; DESIGN.md:290 |
-| In-history action rows ("Continue held message" and friends) have no 46rem cap or auto margins, so they sit at the history's left edge while every message is centred | Layout nit | Misaligned buttons | app.css:7211-7216; chat-pane.js:864-877 |
+| In-history action rows ("Continue held message" and friends) have no 46rem cap or auto margins, so they sit at the history's left edge while every message is centred | Layout nit | Misaligned buttons | app.css:7347-7352; chat-pane.js:864-877 |
 | A truncated streamed reply can carry "Display shortened…" twice: once from the renderer as a `<p>`, once from the pane as plain text | Nit | Duplicate sentence | chat-pane.js:798-812, 854; chat-markdown.js:17-18 |
-| Six leadings in one pane: 1.7 reply, 1.6 bubble and detail body, 1.55 draft, 1.5 base and labels, 1.4 buttons and selects; the note beside it is 1.45 and the manuscript 1.62 | Note | Uneven rhythm | app.css:7295, 7273, 7282, 7352, 6408, 7255, 6421 |
+| Six leadings in one pane: 1.7 reply, 1.6 bubble and detail body, 1.55 draft, 1.5 base and labels, 1.4 buttons and selects; the note beside it is 1.45 and the manuscript 1.62 | Note | Uneven rhythm | app.css:7431, 7409, 7418, 7488, 6544, 7391, 6557 |
 | Correction to the study brief: no `:root[data-theme="dark"]` rule names a chat selector; the overrides at app.css:5119-5121 target `.glosa-composer` (the margin composer) and `.glosa-ask-layer .glosa-agent-card`. The chat pane is themed through tokens only, which is the good case | Note | None | app.css:206-238, 5119-5121 |
 
 ### 5.2 Catalogue: how assistant chat interfaces set text
@@ -1722,44 +1722,44 @@ Table 5.4a: element by element. `.glosa-content` is the manuscript; `.glosa-chat
 
 | Element | Manuscript `.glosa-content` | Chat reply `.glosa-chat-markdown` | Other chat text | Where |
 |---|---|---|---|---|
-| Body face / size / leading | Source Serif 4, 18 / 1.62 | Source Serif 4, 15 / 1.7 | note 15 / 1.45 serif; human bubble 15 / 1.6 sans; draft 15 / 1.55 sans; DESIGN.md Body 15 / 1.6 sans and Note 15 / 1.45 serif | 2615-2617, 7295, 4400-4406, 7273, 7352; DESIGN.md:283, 285 |
-| Heading face | Source Serif 4 (inherits --font-manuscript) | Source Sans 3 (explicit) | DESIGN.md:295 says anything a session wrote is serif | 2615, 7322 |
-| Heading sizes | h1 clamp 30..40, h2 clamp 24..26, h3 20, h4..h6 17 | h1 30 (UA), h2 22.5 (UA), h3 12 (label leak), h4 15 (UA), h5 12.45 serif, h6 10.05 serif | n/a | 2643-2672, 7253-7258, 7321-7325 |
+| Body face / size / leading | Source Serif 4, 18 / 1.62 | Source Serif 4, 15 / 1.7 | note 15 / 1.45 serif; human bubble 15 / 1.6 sans; draft 15 / 1.55 sans; DESIGN.md Body 15 / 1.6 sans and Note 15 / 1.45 serif | 2615-2617, 7431, 4400-4406, 7409, 7488; DESIGN.md:283, 285 |
+| Heading face | Source Serif 4 (inherits --font-manuscript) | Source Sans 3 (explicit) | DESIGN.md:295 says anything a session wrote is serif | 2615, 7458 |
+| Heading sizes | h1 clamp 30..40, h2 clamp 24..26, h3 20, h4..h6 17 | h1 30 (UA), h2 22.5 (UA), h3 12 (label leak), h4 15 (UA), h5 12.45 serif, h6 10.05 serif | n/a | 2643-2672, 7389-7394, 7457-7461 |
 | Heading weight | 650 / 620 / 620 / 600 | 700 (UA) except h3 600 | n/a | 2646, 2653, 2661, 2670 |
-| Heading line height | 1.1 / 1.25 / 1.3 / 1.4 | 1.7 inherited (h3 1.5) | n/a | 2645, 2628, 2660, 2669, 7295 |
-| Heading margins | h1 0 0 2rem; h2 3rem 0 0.75rem; h3 2rem 0 0.5rem; h4 1.5rem 0 0.5rem; a block directly under a heading closes to 0 | 18px 8px for h1..h4; no closing rule; h5 / h6 UA margins about 20.8 / 23.4px | n/a | 2648-2692, 7324 |
+| Heading line height | 1.1 / 1.25 / 1.3 / 1.4 | 1.7 inherited (h3 1.5) | n/a | 2645, 2628, 2660, 2669, 7431 |
+| Heading margins | h1 0 0 2rem; h2 3rem 0 0.75rem; h3 2rem 0 0.5rem; h4 1.5rem 0 0.5rem; a block directly under a heading closes to 0 | 18px 8px for h1..h4; no closing rule; h5 / h6 UA margins about 20.8 / 23.4px | n/a | 2648-2692, 7460 |
 | Emphasis | strong 600 | strong 700 (UA) | n/a | 2712-2715 |
-| Block gap | 1.2em = 21.6px via --prose-gap | 0.6rem = 9.6px literal | n/a | 2620, 7318-7320 |
+| Block gap | 1.2em = 21.6px via --prose-gap | 0.6rem = 9.6px literal | n/a | 2620, 7454-7456 |
 | Lists | padding-left 1.5rem, li margin-bottom 0.3em, markers --muted tabular, nested top 0.25rem | UA padding-left 40px, li 0, markers --ink | n/a | 2739-2758 |
-| Blockquote | margin 1.5rem 0, padding-left 1rem, 1px --border-strong left rule, --muted, italic | UA margin-inline 40px, margin-block 0.6rem, no rule, upright, --ink | n/a | 2717-2723, 7318 |
+| Blockquote | margin 1.5rem 0, padding-left 1rem, 1px --border-strong left rule, --muted, italic | UA margin-inline 40px, margin-block 0.6rem, no rule, upright, --ink | n/a | 2717-2723, 7454 |
 | Inline code | --font-mono, 0.85em (15.3px), --surface bed, radius 4, padding 0.1em 0.35em | UA generic monospace, 15px, no bed | n/a | 2768-2774 |
-| Code block | mono 13 / 1.6, --surface, 1px --border, radius 8, padding 16, margin 1.2em; inner code actually 11.05px (0.85em leak) | mono 12 / 1.6, --surface-sunken, no border, radius 5, padding 12, margin 0.6rem | detail rows mono 12 / 1.6 on --surface radius 5; decision pre mono 12 / 1.5 unboxed | 2776-2792, 7309-7317, 7281-7286, 7701-7707; DESIGN.md:290 |
+| Code block | mono 13 / 1.6, --surface, 1px --border, radius 8, padding 16, margin 1.2em; inner code actually 11.05px (0.85em leak) | mono 12 / 1.6, --surface-sunken, no border, radius 5, padding 12, margin 0.6rem | detail rows mono 12 / 1.6 on --surface radius 5; decision pre mono 12 / 1.5 unboxed | 2776-2792, 7445-7453, 7417-7422, 7837-7843; DESIGN.md:290 |
 | Links | --primary (ink), underline at 40% mix, offset 2px | UA default link colour (rgb(0,0,238) light, rgb(158,158,255) dark), underlined | n/a | 2834-2838 |
 | Tables | sans 15, tabular numerals, th 13 600 --muted with a --border-strong rule, td 8px 12px with --border rules | UA: serif 15, th 700, padding 1px, no rules, no overflow handling | n/a | 2796-2827 |
 | Horizontal rule | 4rem centred, 1px --border-strong, 2rem margins | UA 1px inset grey, full width | n/a | 2761-2766 |
 | Images | max-width 100% | replaced by the text "[Image: alt]" | n/a | 2829-2832; chat-markdown.js:5 |
-| Measure | 68ch = 624px measured, about 76 characters | 46rem = 736px = 93.6ch, about 104 to 108 characters (633px, about 89, in a 720px pane) | human bubble 576px = 77ch sans, about 90 | 168, 2612, 7249, 7267 |
-| Wrapping | text-wrap pretty, hanging-punctuation first | none; overflow-wrap anywhere | n/a | 2618-2619, 7294 |
-| Who is serif | the human's margin notes and the session's words in the manuscript | the session's words; the human's words are sans in the bubble and the draft | the Serif Is Writing Rule (DESIGN.md:295) says both are serif; the Conversation Pane section (DESIGN.md:412) says the bubble is sans | 4400-4406, 7273, 7352; DESIGN.md:295, 412 |
-| Boxing | manuscript unboxed; notes unboxed on the margin | reply unboxed; human bubble boxed --surface radius 14; detail bodies boxed; error rows boxed | composer frame boxed --surface radius 14 | 7262-7291, 7334-7339 |
-| Colour of prose | --ink; quotes --muted | --ink everywhere; nothing --muted inside a reply | labels --muted | 2721, 7323 |
-| Column vs controls width | 68ch plus 2 x 2rem gutters | replies 46rem; composer, footer, readiness 48rem, wider than the replies at every width | n/a | 2612, 7249, 7330 |
+| Measure | 68ch = 624px measured, about 76 characters | 46rem = 736px = 93.6ch, about 104 to 108 characters (633px, about 89, in a 720px pane) | human bubble 576px = 77ch sans, about 90 | 168, 2612, 7385, 7403 |
+| Wrapping | text-wrap pretty, hanging-punctuation first | none; overflow-wrap anywhere | n/a | 2618-2619, 7430 |
+| Who is serif | the human's margin notes and the session's words in the manuscript | the session's words; the human's words are sans in the bubble and the draft | the Serif Is Writing Rule (DESIGN.md:295) says both are serif; the Conversation Pane section (DESIGN.md:412) says the bubble is sans | 4400-4406, 7409, 7488; DESIGN.md:295, 412 |
+| Boxing | manuscript unboxed; notes unboxed on the margin | reply unboxed; human bubble boxed --surface radius 14; detail bodies boxed; error rows boxed | composer frame boxed --surface radius 14 | 7398-7427, 7470-7475 |
+| Colour of prose | --ink; quotes --muted | --ink everywhere; nothing --muted inside a reply | labels --muted | 2721, 7459 |
+| Column vs controls width | 68ch plus 2 x 2rem gutters | replies 46rem; composer, footer, readiness 48rem, wider than the replies at every width | n/a | 2612, 7385, 7466 |
 
 Table 5.4b: values duplicated between the two rule sets, and what could share a token.
 
 | Property | Manuscript (line) | Chat reply (line) | Shared today? | Candidate |
 |---|---|---|---|---|
-| Code font family | var(--font-mono) (2769, 2777) | var(--font-mono) (7316) on `pre`; the inner `code` falls back to generic monospace | partly | set it on `pre code` too |
-| Code block size | var(--text-sm) 13 (2778) | var(--text-xs) 12 (7316) | no | one `--code-size` in em of the prose |
-| Code bed and radius | var(--surface), var(--radius-panel) 8 (2780-2782) | var(--surface-sunken), 5px literal (7314-7315) | no | one bed token, one radius token |
-| Code padding | var(--space-4) 16 (2783) | 12px literal (7313) | no | a space token |
-| Block gap | var(--prose-gap) 1.2em (2620) | 0.6rem literal (7319) | no | set `--prose-gap` on `.glosa-chat-markdown`, reuse one `:is(p, ul, ol, pre, blockquote)` rule |
-| Heading margins | space tokens (2648-2671) | 18px 8px literal (7324) | no | space tokens |
-| Heading family | inherited --font-manuscript (2615) | var(--font-sans) (7322) | no | drop the override |
-| Body white-space | normal | `.glosa-chat-text` pre-wrap (7293) reset to normal (7307), pre forced back (7310) | chat-only workaround | render Markdown rows without pre-wrap and both resets go |
+| Code font family | var(--font-mono) (2769, 2777) | var(--font-mono) (7452) on `pre`; the inner `code` falls back to generic monospace | partly | set it on `pre code` too |
+| Code block size | var(--text-sm) 13 (2778) | var(--text-xs) 12 (7452) | no | one `--code-size` in em of the prose |
+| Code bed and radius | var(--surface), var(--radius-panel) 8 (2780-2782) | var(--surface-sunken), 5px literal (7450-7451) | no | one bed token, one radius token |
+| Code padding | var(--space-4) 16 (2783) | 12px literal (7449) | no | a space token |
+| Block gap | var(--prose-gap) 1.2em (2620) | 0.6rem literal (7455) | no | set `--prose-gap` on `.glosa-chat-markdown`, reuse one `:is(p, ul, ol, pre, blockquote)` rule |
+| Heading margins | space tokens (2648-2671) | 18px 8px literal (7460) | no | space tokens |
+| Heading family | inherited --font-manuscript (2615) | var(--font-sans) (7458) | no | drop the override |
+| Body white-space | normal | `.glosa-chat-text` pre-wrap (7429) reset to normal (7443), pre forced back (7446) | chat-only workaround | render Markdown rows without pre-wrap and both resets go |
 | Rules only the manuscript has | strong, blockquote, lists and markers, hr, inline code, pre code reset, table, img, a, h5 / h6, heading-plus-block closing, first / last child margins | none | no | one prose vocabulary scoped to `:is(.glosa-content, .glosa-chat-markdown)` with size and measure as variables |
 | Radii literals in the chat region | tokens | 5px = --radius-tool; 6px = --radius-control; 8px = --radius-panel; 12px = --radius-overlay; 14px and 16px have no token | partly | use the tokens; decide one bubble-and-composer radius token |
-| Shadow and colour literals | tokens | `0 3px 8px #0002` (7414); `#161616` (7143) | no | --shadow-menu; a dark-safe token |
+| Shadow and colour literals | tokens | `0 3px 8px #0002` (7550); `#161616` (7279) | no | --shadow-menu; a dark-safe token |
 
 ### 5.5 Recommendation: concrete changes, ordered by effect
 
@@ -1769,7 +1769,7 @@ Effort is sized by complexity, not time: **S** is a few declarations in one file
 |---|---|---|---|---|---|---|
 | 1 | Reply size and leading | Source Serif 4 15 / 1.7; paragraph gap 0.6rem (9.6px) | Source Serif 4 16 / 1.62 (one step under the manuscript's 18 / 1.62, the same ratio); paragraph gap about 0.9em of the reply; keep `font-optical-sizing: auto`, do not pin opsz | On a laptop at 50 cm, 15px of this serif subtends about 0.17 degrees of x-height, below the 0.2 degree critical print size. 16px (0.178) and 17px (0.188) narrow the gap without closing it, so the print-size evidence argues softly for a larger reply but does not pick between 16 and 17 (table 5.3c). The serif peers set replies at 16px: Perplexity 16 / 26, claude.ai's prose tokens 16 / 24 at comfortable density. ChatGPT's 16 / 26 is a sans, which Source Serif 4 matches optically only at about 17 to 18px. 1.7 is looser than every peer measured live (1.625); claude.ai's wrapper declares 1.65rem, not measured live. One ratio gives both columns one rhythm | [38] [39] [43] [2] [3] [7] [50] [61] | S |
 | 2 | Reply measure | 46rem = 736px, about 104 to 108 characters at 15px (89 painted in a 720px pane) | Cap paragraph text at about 36rem, or 60 to 65ch of the reply size (75 to 90 characters); state the cap in ch or em of the reply so a size step keeps it; lists, code and tables may keep the wider column | Over Butterick's 90 and Bringhurst's 75. Bringhurst gives 40 to 50 for multi-column work, which fits a secondary column beside the manuscript. ChatGPT holds 640px; claude.ai has a 65ch utility and a 36rem cap (CSS only); the manuscript holds about 76. Two supports from the draft no longer count: WCAG 1.4.8 does not cap a resizable column, and Perplexity's 65ch cap is inert (its paragraphs run about 86 to 97 characters). The case rests on the practitioner guidance | [42] [49] [7] [2] | S |
-| 3 | The `###` bug | A Markdown h3 inside a reply paints at 12px 600 sans, smaller than its body and smaller than a `####` | Scope the label rule to the row's own label (`.glosa-chat-message > h3`, `> summary`) or give the Markdown heading rule an explicit size and weight; ablate it: a `### heading` fixture row must measure above the body size before the fix counts | Readers see it now. The two rules have equal specificity, (0,1,1), and the later one overrides only family, colour and margin. Confirmed in a browser render | audit fixture row mdh3 [81] [82]; app.css:7253-7258, 7321-7325 (7389-7394, 7457-7461 on the current branch) [75] | S |
+| 3 | The `###` bug | A Markdown h3 inside a reply paints at 12px 600 sans, smaller than its body and smaller than a `####` | Scope the label rule to the row's own label (`.glosa-chat-message > h3`, `> summary`) or give the Markdown heading rule an explicit size and weight; ablate it: a `### heading` fixture row must measure above the body size before the fix counts | Readers see it now. The two rules have equal specificity, (0,1,1), and the later one overrides only family, colour and margin. Confirmed in a browser render | audit fixture row mdh3 [81] [82]; app.css:7389-7394, 7457-7461 [75] | S |
 | 4 | Headings inside replies | Source Sans 3 at browser sizes (h1 30, h2 22.5, h4 15, all 700, leading 1.7); h5 / h6 unstyled serif | Source Serif 4, weight 600 to 620, a compact scale that never exceeds the manuscript's h3 (20px): h1 and h2 1.25em, h3 1.125em, h4 to h6 1em; line-height 1.25 to 1.3; about 1.5em above and 0.5em below, closing to 0 when a block follows directly; leave optical sizing to `font-optical-sizing: auto` | claude.ai keeps reply headings in the reply face at 600, shifts every level down one so its largest reachable reply heading is 1.375em, and relies on automatic optical sizing. Perplexity keeps them serif (h2 at 635), ChatGPT in its own sans at 600, VS Code in one family. No observed product switches family. A reply h1 at 30px 700 outranks any manuscript heading. The Serif Is Writing Rule; Butterick's smallest visible step; scanning research wants headings kept, not enlarged | [2] [3] [7] [10] [45] [46] [53] [54] [78] | S |
 | 5 | Links | No rule: browser default blue, rgb(0,0,238) light and rgb(158,158,255) dark (7.5:1) | The manuscript's link rule: --primary with a 40% underline, offset 2px | Browser blue is off-system and sits near the session's blue ink in hue; the manuscript already solved this. Not a contrast bug: re-measured at 7.5:1 in dark | app.css:2834-2838 [75]; [33] | S |
 | 6 | Code inside replies | Inline: generic monospace at 15px, not --font-mono, no bed; block: 12px / 1.6 (0.80em) on `pre`, inner `code` in generic monospace | Inline: --font-mono at 0.85em on a --surface bed (the manuscript rule) with `font-size-adjust` so a code span does not grow its line. Block: set `pre code` to --font-mono so the ui-monospace stack applies, and hold the block's x-height ratio to the reply (about 0.9 today, about 13px at a 16px reply) rather than moving to a fixed 0.875em. Fix the manuscript's 11.05px `pre code` leak in the same pass | Inline code today is unstyled monospace at 100%, visibly larger than the serif around it. GitHub (85%) and Tailwind (0.875em) set code a step below the body, which makes 12px (0.80em) look small. Contested: those ratios are for sans bodies, and by x-height the shipped 12px Menlo block is about 0.92 of the 15px serif, at or above GitHub's 0.88 and Tailwind's 0.906, so the block has no ratio case for growing | [71] [69] [60] [63] | S |
@@ -2052,7 +2052,7 @@ Values are px on a 16px rem. "Ships today" is the Default (serif) face unless th
 | Requirement keywords and ids | Plain text | No change | No parsing. Tabular numerals in list text so R-12 and FR-3.2 align (tables and list markers already have them); ids stay plain text, not code font; MUST, SHOULD, MAY stay the author's caps | RFC 2119 keywords are often capitalised [26]; NASA: one thought per requirement, uniquely numbered, with rationale [27]; Google's code-font list does not cover requirement ids [28] | Spec: tabular numerals in list text new |
 | Margin notes, composer, session note | Source Serif 4, 15px / 1.45, whatever the page face | Unchanged | Unchanged | No product opened puts notes in a different face; Craft and Obsidian keep the chrome face constant while the page changes [67][69]. A design choice: notes are the person's writing, one voice in every register | Nothing. The alternative (notes follow the page face) has no precedent either way |
 | Chrome | Source Sans 3, 13px on the fixed rem scale | Unchanged | Unchanged | Craft: "The UI continues to use system fonts" [67]; Obsidian: interface font separate from text font [69]; 13px matches the UI systems' component rows [19][17] | Nothing |
-| Print | Serif 12pt / 1.55 | Unchanged | Inherit the register's face; keep the shipped sizes until printed output is studied | Ulysses and iA keep an export register separate from the editor [50][72][80] | Face inheritance only |
+| Print | Since #398: the page's face at 12pt / 1.45 on white paper | Unchanged | Unchanged: the register's face already reaches print, at print's own 12pt scale | Ulysses and iA keep an export register separate from the editor [50][72][80] | Nothing |
 
 Why the Sans face today is not a Spec register: it takes the serif's heading sizes and weights, the serif's 3rem h2 margins, the serif's 1.2em block gap, 15px tables that are smaller than its own body, and no room for a wide table. It is the serif page in a sans costume.
 
