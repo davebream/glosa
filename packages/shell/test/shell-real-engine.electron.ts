@@ -12,12 +12,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tokenPath } from "../../daemon/src/security/token.ts";
 import { randomPort, superviseDaemonHome } from "../../daemon/test/helpers.ts";
+import { PAPER } from "../src/policy.ts";
 
 const SHELL_DIR = fileURLToPath(new URL("..", import.meta.url));
 const REPO = fileURLToPath(new URL("../../..", import.meta.url));
 const ELECTRON = join(SHELL_DIR, "node_modules", ".bin", "electron");
 const MAIN_PATH = join(REPO, "packages", "cli", "src", "main.ts");
 const PROBE = join(REPO, "docs", "research", "spikes", "electron-classf-probe.html");
+const SHELL_PRELOAD = join(SHELL_DIR, "src", "preload.cjs");
 const TOKEN = "shell-test-durable-token-0123456789abcdef0123456789abcdef";
 const electronInstalled = existsSync(ELECTRON);
 
@@ -78,6 +80,17 @@ class Cdp {
       sessionId,
     );
     if (r.exceptionDetails) throw new Error(`evaluate threw: ${r.exceptionDetails.text}`);
+    return r.result.value;
+  }
+  /** Evaluates in Electron's MAIN process over its Node inspector (`--inspect`), where the
+   * inspector's command-line API supplies `require`, so `require('electron')` reads the real
+   * `BrowserWindow` and `nativeTheme` the shell drives. */
+  async evaluateInMain<T>(expression: string): Promise<T> {
+    const r = await this.send<{ result: { value: T }; exceptionDetails?: { text: string; exception?: unknown } }>(
+      "Runtime.evaluate",
+      { expression, awaitPromise: true, returnByValue: true, includeCommandLineAPI: true },
+    );
+    if (r.exceptionDetails) throw new Error(`main-process evaluate threw: ${JSON.stringify(r.exceptionDetails)}`);
     return r.result.value;
   }
   close(): void {
@@ -274,6 +287,116 @@ describe.skipIf(!electronInstalled)(
       await Bun.sleep(500);
       const after = (await (await fetch(`http://127.0.0.1:${port}/api/handshake`)).json()) as Handshake;
       expect(after.instance_id).toBe(before.instance_id);
+    }, 120_000);
+
+    test("switching glosa to Dark and Light sets the window's paper and themeSource, keeps the Dock on macOS's appearance, and refuses the call from a window the shell did not open for the SPA (#405)", async () => {
+      const inspectPort = randomPort();
+      launchShell([workspace, "readme.md", `--inspect=${inspectPort}`]);
+      const spaOrigin = `http://glosa.localhost:${port}`;
+      const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+      expect(
+        page,
+        `SPA page target; targets seen: ${JSON.stringify(lastTargets)}; shell stderr:\n${stderrText}`,
+      ).not.toBeNull();
+      let mainUrl: string | null = null;
+      for (let i = 0; i < 100 && !mainUrl; i++) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${inspectPort}/json/list`, { signal: AbortSignal.timeout(500) });
+          mainUrl = ((await res.json()) as Array<{ webSocketDebuggerUrl?: string }>)[0]?.webSocketDebuggerUrl ?? null;
+        } catch {
+          /* not yet */
+        }
+        if (!mainUrl) await Bun.sleep(100);
+      }
+      expect(mainUrl, `main-process inspector on ${inspectPort}; shell stderr:\n${stderrText}`).not.toBeNull();
+      const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
+      const main = await Cdp.connect(mainUrl!);
+      try {
+        // The appearance control exists once the page has paired and mounted the workspace.
+        let ready = false;
+        for (let i = 0; i < 150 && !ready; i++) {
+          try {
+            ready = await cdp.evaluate<boolean>(
+              "Boolean(document.querySelector('.glosa-appearance-option[data-appearance=\"dark\"]'))",
+            );
+          } catch {
+            ready = false; // the context can be replaced while the page loads
+          }
+          if (!ready) await Bun.sleep(200);
+        }
+        expect(ready, `the workspace's appearance control; shell stderr:\n${stderrText}`).toBe(true);
+
+        const osDark = await main.evaluateInMain<boolean>(
+          "require('electron').systemPreferences.getUserDefault('AppleInterfaceStyle', 'string') === 'Dark'",
+        );
+        const windowState = () =>
+          main.evaluateInMain<{ themeSource: string; dark: boolean; background: string | null }>(`(() => {
+            const { BrowserWindow, nativeTheme } = require('electron');
+            const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().startsWith(${JSON.stringify(spaOrigin)}));
+            return { themeSource: nativeTheme.themeSource, dark: nativeTheme.shouldUseDarkColors,
+              background: win ? win.getBackgroundColor().toLowerCase() : null };
+          })()`);
+        const pagePaper = () =>
+          cdp.evaluate<{ paper: string; prefersDark: boolean }>(`(() => {
+            const context = document.createElement('canvas').getContext('2d');
+            context.fillStyle = getComputedStyle(document.body).backgroundColor;
+            context.fillRect(0, 0, 1, 1);
+            const paper = '#' + [...context.getImageData(0, 0, 1, 1).data].slice(0, 3)
+              .map((v) => v.toString(16).padStart(2, '0')).join('');
+            return { paper, prefersDark: matchMedia('(prefers-color-scheme: dark)').matches };
+          })()`);
+        const choose = async (scheme: "light" | "dark") => {
+          await cdp.evaluate(`document.querySelector('.glosa-appearance-option[data-appearance="${scheme}"]').click()`);
+          let seen = await windowState();
+          for (let i = 0; i < 50 && seen.themeSource !== scheme; i++) {
+            await Bun.sleep(100);
+            seen = await windowState();
+          }
+          return seen;
+        };
+
+        // Light first, then Dark: whichever the OS is, one of the two is the opposite of it, which
+        // is where a Dock that followed `nativeTheme` would have changed.
+        for (const scheme of ["light", "dark"] as const) {
+          const seen = await choose(scheme);
+          const painted = await pagePaper();
+          expect(seen.themeSource, `themeSource after choosing ${scheme}; shell stderr:\n${stderrText}`).toBe(scheme);
+          expect(seen.dark).toBe(scheme === "dark");
+          expect(seen.background, `the window's paper in ${scheme}`).toBe(painted.paper);
+          expect(painted.paper, "the shell's own first-frame paper is the page's").toBe(PAPER[scheme]);
+          // themeSource reaches the page too: prefers-color-scheme follows glosa, not the OS.
+          expect(painted.prefersDark).toBe(scheme === "dark");
+        }
+        const dockLines = stderrText.match(/dock icon follows macOS: (dark|light)/g) ?? [];
+        expect(dockLines, `the Dock icon was set once, from macOS's appearance; shell stderr:\n${stderrText}`).toEqual([
+          `dock icon follows macOS: ${osDark ? "dark" : "light"}`,
+        ]);
+
+        // A window the shell did not open for the SPA: the shell's own preload, told the daemon's
+        // IP origin, on a page at that origin. The preload exposes the bridge there, so the call
+        // reaches the main process, and only its origin check stands between the page and the
+        // process-wide themeSource.
+        const refused = await main.evaluateInMain<string>(`(async () => {
+          const { BrowserWindow } = require('electron');
+          const other = new BrowserWindow({ show: false, webPreferences: { preload: ${JSON.stringify(SHELL_PRELOAD)},
+            sandbox: true, contextIsolation: true, additionalArguments: ['--glosa-spa-origin=http://127.0.0.1:${port}'] } });
+          try {
+            await other.loadURL('http://127.0.0.1:${port}/api/handshake');
+            return await other.webContents.executeJavaScript(
+              "window.glosaShell.reportAppearance({ source: 'light', scheme: 'light', background: '#000000' })" +
+              ".then(() => 'accepted', (error) => String(error.message))");
+          } finally {
+            other.destroy();
+          }
+        })()`);
+        expect(refused).toContain("rejected: not the SPA origin");
+        const after = await windowState();
+        expect(after.themeSource, "a refused call leaves themeSource alone").toBe("dark");
+        expect(after.background, "and the SPA window's paper").toBe(PAPER.dark);
+      } finally {
+        cdp.close();
+        main.close();
+      }
     }, 120_000);
 
     test("a glosa:// link opens the folder as a companion window, pairs over the bridge, and carries the link's route (#392)", async () => {

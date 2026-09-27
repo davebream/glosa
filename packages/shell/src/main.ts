@@ -13,11 +13,24 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeTheme, session, shell } from "electron";
 import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  Notification,
+  nativeTheme,
+  session,
+  shell,
+  systemPreferences,
+} from "electron";
+import {
+  appearanceDecision,
   cliCandidates,
   compatibility,
   egressDecision,
+  firstFrameColor,
   linkFromArgv,
   loopbackApiOrigin,
   navigationDecision,
@@ -244,11 +257,31 @@ async function openLink(url: string): Promise<void> {
   win.focus();
 }
 
+// ---------- the window follows glosa's appearance, the Dock follows macOS (#405) ----------
+
+/**
+ * The operating system's own appearance. `nativeTheme.shouldUseDarkColors`,
+ * `shouldUseDarkColorsForSystemIntegratedUI` and `systemPreferences.getEffectiveAppearance()` all
+ * follow `nativeTheme.themeSource` once the page has set it (Electron 44 docs, and measured: with
+ * macOS in Dark and themeSource "light", all three read light). The user default
+ * `AppleInterfaceStyle` is macOS's setting itself: "Dark" in Dark mode, absent otherwise.
+ */
+function osIsDark(): boolean {
+  if (process.platform !== "darwin") return nativeTheme.shouldUseDarkColors;
+  return systemPreferences.getUserDefault("AppleInterfaceStyle", "string") === "Dark";
+}
+
+/** The paper the last page reported, for every window opened after it (brief §9). */
+let lastReportedPaper: string | null = null;
+
 function createWindow(origin: string | null): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
     title: "glosa",
+    // The frame before the page paints: the last paper any window reported, else the paper of the
+    // operating system's scheme, so a window opened while glosa is in Dark never flashes white.
+    backgroundColor: firstFrameColor(lastReportedPaper, osIsDark()),
     webPreferences: {
       preload: PRELOAD,
       sandbox: true,
@@ -441,6 +474,17 @@ function installIpc(): void {
       note.show();
     }
   });
+  // What the page resolved (#405). `themeSource` is process-wide: native dialogs, menus, the title
+  // bar and `prefers-color-scheme` in every frame follow glosa's choice. The background is the
+  // reporting window's own, and the first frame of every window opened after it.
+  ipcMain.handle("glosa:appearance", (event, payload: unknown) => {
+    if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
+    const decision = appearanceDecision(payload);
+    if (!decision) throw new Error("rejected: not an appearance");
+    lastReportedPaper = decision.background;
+    if (nativeTheme.themeSource !== decision.themeSource) nativeTheme.themeSource = decision.themeSource;
+    BrowserWindow.fromWebContents(event.sender)?.setBackgroundColor(decision.background);
+  });
 }
 
 function installEgressGate(): void {
@@ -486,14 +530,25 @@ app.on("second-instance", (_event, argv) => {
 
 app.whenReady().then(async () => {
   if (!primary) return;
-  // The Dock image follows the system appearance: paper squircle in light, ink in dark. An .icns
-  // carries one image, so the Finder icon stays the light one; this is the Dock only.
+  // The Dock image follows macOS's appearance, not glosa's (brief §9: the Dock is the system's
+  // surface): paper squircle in light, ink in dark. An .icns carries one image, so the Finder icon
+  // stays the light one; this is the Dock only. It reads the OS setting itself (`osIsDark`),
+  // because once a page sets `themeSource`, `nativeTheme` answers with glosa's choice, and
+  // `nativeTheme` may not report an OS change while it is overridden, so the system's own
+  // notification is watched too.
+  let dockIsDark: boolean | null = null;
   const dockIcon = () => {
     if (process.platform !== "darwin") return;
-    const name = nativeTheme.shouldUseDarkColors ? "icon-dark-512.png" : "icon-512.png";
-    app.dock?.setIcon(join(here, "..", "assets", name));
+    const dark = osIsDark();
+    if (dark === dockIsDark) return;
+    dockIsDark = dark;
+    app.dock?.setIcon(join(here, "..", "assets", dark ? "icon-dark-512.png" : "icon-512.png"));
+    log(`dock icon follows macOS: ${dark ? "dark" : "light"}`);
   };
   nativeTheme.on("updated", dockIcon);
+  if (process.platform === "darwin") {
+    systemPreferences.subscribeNotification("AppleInterfaceThemeChangedNotification", dockIcon);
+  }
   dockIcon();
   installEgressGate();
   installIpc();

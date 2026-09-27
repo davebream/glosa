@@ -216,17 +216,24 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   equals the SPA origin exactly, and every `ipcMain` handler re-checks `event.senderFrame.origin`
   before acting; that handler check is the boundary (a class-F document reports a `null` origin under
   its CSP sandbox and is refused even by a deliberately unscoped preload). The class-F frame receives
-  no preload. The bridge carries four calls: a one-shot presentation token, "open folder", an OS
-  notification, and "reveal in Finder". No call takes a path from the page. Reveal in Finder takes no
-  argument at all: the main process derives the file from the window's own URL (`a=`) under the
-  folder `glosa open` answered with (`data.path`, the workspace's absolute `worktree_path`), reveals
-  nothing when the URL's workspace (`w=`) is not the one that window opened, and requires the file's
-  real path to stay inside the folder's real path, so a symlink in a workspace cannot point Finder
-  outside it (#160). The notification call takes one message, `{ id, title, body, badge }`, and no
+  no preload. The bridge carries five calls: a one-shot presentation token, "open folder", an OS
+  notification, "reveal in Finder", and the page's resolved appearance. No call takes a path from
+  the page. Reveal in Finder takes no argument at all: the main process derives the file from the
+  window's own URL (`a=`) under the folder `glosa open` answered with (`data.path`, the workspace's
+  absolute `worktree_path`), reveals nothing when the URL's workspace (`w=`) is not the one that
+  window opened, and requires the file's real path to stay inside the folder's real path, so a
+  symlink in a workspace cannot point Finder outside it (#160). The notification call takes one message, `{ id, title, body, badge }`, and no
   path: the main process sets the Dock badge from a whole number from zero up (the latest value, since
   every window reports the same daemon-wide count), clamps title and body, shows a notification at
   most once per id, and focuses the reporting window on click. The page's own web Notification and
-  permission requests stay denied (#391).
+  permission requests stay denied (#391). The appearance call takes one message,
+  `{ source, scheme, background }`, and no path: `source` is `system`, `light` or `dark` (whether
+  the page follows macOS or fixed a scheme), `scheme` is `light` or `dark` and must equal a fixed
+  `source`, and `background` is the page's paper as exactly `#rrggbb`. A message with any other
+  key or value is refused and changes nothing. The main process sets `nativeTheme.themeSource`
+  from `source`, so native dialogs, menus and `prefers-color-scheme` follow glosa's choice, and
+  paints the reporting window's background and every later window's first frame with the
+  paper; the Dock icon reads macOS's own `AppleInterfaceStyle` and never follows the page (#405).
 - **The pairing token never travels in a URL the shell loads.** The main process runs the same
   `glosa open <folder> --url --json` the CLI runs, strips `p=` from the fragment, loads the tokenless
   URL and hands the token to the page over the bridge once per window load; the page redeems it as it
