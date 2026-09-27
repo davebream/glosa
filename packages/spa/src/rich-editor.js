@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/spa — the rich markdown editor (Edit mode's default face; the source textarea remains
-// one toggle away and stays the byte-exact fallback). Built on the vendored ProseMirror bundle
+// @glosa/spa — the rich markdown editor (the full-page editor's default face under More, and the
+// engine behind Edit's block editing; the source textarea remains one toggle away in the full-page
+// editor and stays the byte-exact fallback). Built on the vendored ProseMirror bundle
 // (vendor/prosemirror.js) with prosemirror-markdown's CommonMark schema, so what this editor
 // parses and re-serializes is plain markdown — no HTML persistence, no hidden format.
 //
@@ -309,10 +310,10 @@ export const editorSchema = new Schema({
       attrs: { kind: { default: RAW_KIND.METADATA } },
       // A LABEL, WHERE THERE WAS DELIBERATELY NONE BEFORE (app.css's own comment on `.glosa-raw`
       // explains why: naming a syntax family — "YAML front matter" — would put back the enumeration
-      // the rule exists to avoid). Two flavors now share this node, and only #175 changes what Read/
-      // Review does with them (hides both) — so the rich face, which already showed the metadata
+      // the rule exists to avoid). Two flavors now share this node, and only #175 changes what reading
+      // and Note do with them (hides both) — so the rich face, which already showed the metadata
       // header verbatim, has to tell the writer WHICH non-manuscript region they are looking at
-      // before they can trust that Read/Review will not show it. `data-glosa-kind` names the
+      // before they can trust that reading and Note will not show it. `data-glosa-kind` names the
       // FUNCTION ("metadata" / "comment"), never a dialect; app.css reads it for the `::before` text.
       toDOM: (node) => ["pre", { class: "glosa-raw", "data-glosa-kind": node.attrs.kind }, ["code", 0]],
       parseDOM: [
@@ -336,7 +337,7 @@ export const editorSchema = new Schema({
         {
           class: "glosa-comment-inline",
           "data-glosa-kind": RAW_KIND.COMMENT,
-          title: "Private note, hidden from Read/Review",
+          title: "Private note, hidden outside Edit",
         },
         0,
       ],

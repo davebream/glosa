@@ -61,7 +61,7 @@ export interface OpenPresentationOptions {
   mode?: PresentationMode;
   bindSessionId?: string;
   /** Overrides the default: a bind makes a companion surface, no bind makes a desk one. MCP
-   * `glosa_present` always says companion, since an agent is presenting even in read mode. */
+   * `glosa_present` always says companion, since an agent is presenting even with `mode=read`. */
   surfaceKind?: SurfaceKind;
 }
 

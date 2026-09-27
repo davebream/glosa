@@ -10,7 +10,7 @@
 // (`serializeNodes`, `runIsModelled`, `runsOverlap`, `collateralFor`).
 //
 // PURE, AND DELIBERATELY IMPORT-FREE. `blockLayout()` lives in rich-editor.js, which carries the
-// vendored ProseMirror bundle, and `import-boundary.test.ts` pins that the Read/Review static graph
+// vendored ProseMirror bundle, and `import-boundary.test.ts` pins that the reading/Note static graph
 // cannot reach that bundle. So this module takes the spans it is given rather than computing them:
 // the caller already had to be past the lazy import to have an editor to mount. Being import-free
 // is also what makes every function here testable without a DOM, a daemon, or a 400 KB bundle.
