@@ -7,6 +7,7 @@ import { closeSync, fsyncSync, openSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
+import { addressLabels } from "../../spa/src/address.js";
 import {
   installDataLineStamp,
   installNonManuscriptRules,
@@ -45,6 +46,47 @@ export function renderMarkdownLayout(source: string) {
 
 export function renderMarkdown(source: string): string {
   return renderer.render(source);
+}
+
+/** One top-level block of a rendered Markdown document: its 0-based source lines (`endLine`
+ * exclusive, markdown-it's own `map`) and its passage address, or null for a block the page never
+ * shows. */
+export interface PassageBlock {
+  startLine: number;
+  endLine: number;
+  address: string | null;
+}
+
+/** The passage address (packages/spa/src/address.js) of every top-level block of `source`, as the
+ * document stands now. The page numbers the top-level elements `renderMarkdown` produces; this
+ * numbers the tokens those elements come from, through the same `addressLabels` rule, so the two
+ * agree without the daemon building a DOM. A top-level token becomes one `data-line` element
+ * unless it is hidden: the metadata header and a `%%` comment render nothing, so the page cannot
+ * number them. They keep a row with a null address, which is what stops a line inside them from
+ * borrowing a neighbour's label. */
+export function passageAddresses(source: string): PassageBlock[] {
+  const blocks = renderer
+    .parse(source, {})
+    .filter((token) => token.level === 0 && token.block && token.map && token.nesting >= 0 && token.type !== "inline");
+  const visible = blocks.filter((token) => !token.hidden);
+  const labels = addressLabels(
+    visible.map((token) => (token.type === "heading_open" ? Number(token.tag.slice(1)) : 0)),
+  );
+  let next = 0;
+  return blocks.map((token) => {
+    const [startLine, endLine] = token.map as [number, number];
+    return { startLine, endLine, address: token.hidden ? null : (labels[next++] ?? null) };
+  });
+}
+
+/** The address of a passage that runs from 0-based source line `first` to `last`, inclusive: the
+ * top-level block holding its last line, the way the page names a selection by the block its end
+ * sits in (address.js `addressForRange`), else the block holding its first. Null when neither line
+ * sits in a block the page shows. */
+export function passageAddressOf(source: string, first: number, last: number): string | null {
+  const blocks = passageAddresses(source);
+  const at = (line: number) => blocks.find((block) => line >= block.startLine && line < block.endLine)?.address ?? null;
+  return at(last) ?? at(first);
 }
 
 /** Atomic temp -> fsync -> rename write for an artifact's source content (P3.3 addition, the

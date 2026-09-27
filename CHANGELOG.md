@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A note delivered to a session now names its passage the way the page does: an `address: §2.3`
+  line beside the quote and an `address` field in the entry's detail. glosa works the label out
+  from the document at the moment of delivery and stores it nowhere, so after an edit that
+  renumbers the page the next delivery says the new one. The quote stays the anchor. A note whose
+  words are gone, a note on an HTML document and a note inside a `%%` comment get no address.
+  Managed chats now receive notes the same way, resolved against the document, where before every
+  note reached them unresolved. API contract 1.20 (#411).
+
 ### Fixed
 
 - In the dark appearance, the button that confirms a destructive action (Delete chat, Discard

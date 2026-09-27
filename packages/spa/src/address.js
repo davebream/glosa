@@ -4,7 +4,8 @@
 // Markdown structure every time it is asked for, so it needs no markup in the document and it is
 // a display label, never an identity: insert a paragraph above and everything after it renumbers,
 // while the annotation itself stays anchored to its words (the anchor is the quote and its source
-// range, not this label).
+// range, not this label). The daemon derives the same label when it delivers a note, from the
+// document as it stands at that moment, and sends it beside the quote; nothing stores it.
 //
 // Sections are headings, numbered by document order within their level (1, 1.1, 1.2, 2). A block
 // under a heading takes the heading's number plus its own position since that heading. Blocks
@@ -19,6 +20,44 @@ function topLevelBlocks(root) {
 }
 
 /**
+ * The address of each top-level block, from the one thing the numbering reads of a block: its
+ * heading level (1 to 6), or 0 for anything that is not a heading. This is the ONE numbering rule.
+ * The page feeds it the rendered manuscript's top-level elements (`addressBlocks` below); the
+ * daemon feeds it the same document's top-level markdown-it tokens when it delivers a note
+ * (packages/daemon/src/artifact-render.ts `passageAddresses`), so the label a session is told is
+ * the label the reader sees. Pure and dependency-free, so both sides load this one module.
+ * @param {readonly number[]} levels heading level per block, in document order; 0 for a non-heading
+ * @returns {string[]} one address per block, in the same order
+ */
+export function addressLabels(levels) {
+  const hasHeadings = levels.some((level) => level > 0);
+  // A lone leading h1 is the document's title, not its first section: sections then count from
+  // h2, so the first section reads §1 and not §1.1, and the title itself is §0.
+  const titleIndex = levels[0] === 1 && levels.filter((level) => level === 1).length === 1 ? 0 : -1;
+  /** Section counters by heading level; a deeper heading resets everything below it. */
+  const counters = [0, 0, 0, 0, 0, 0];
+  let section = hasHeadings ? "0" : "";
+  let sinceHeading = 0;
+  return levels.map((level, index) => {
+    if (index === titleIndex) return "§0";
+    if (level > 0) {
+      const depth = level - 1;
+      counters[depth] += 1;
+      for (let i = depth + 1; i < counters.length; i += 1) counters[i] = 0;
+      // Levels above the first one used stay at 0 and are dropped, so a document that starts
+      // at `##` reads §1, §2 rather than §0.1, §0.2.
+      const parts = counters.slice(0, depth + 1);
+      while (parts.length > 1 && parts[0] === 0) parts.shift();
+      section = parts.join(".");
+      sinceHeading = 0;
+      return `§${section}`;
+    }
+    sinceHeading += 1;
+    return hasHeadings ? `§${section}.${sinceHeading}` : `¶${sinceHeading}`;
+  });
+}
+
+/**
  * The address of every top-level block, in document order. One pass, so a long document is
  * numbered once per render rather than once per mark.
  * @param {{ querySelectorAll: (selector: string) => Iterable<any> } | null} root
@@ -29,36 +68,10 @@ export function addressBlocks(root) {
   const out = new Map();
   if (!root) return out;
   const blocks = topLevelBlocks(root);
-  const hasHeadings = blocks.some((b) => HEADING.test(b.tagName));
-  // A lone leading h1 is the document's title, not its first section: sections then count from
-  // h2, so the first section reads §1 and not §1.1, and the title itself is §0.
-  const h1s = blocks.filter((b) => b.tagName === "H1");
-  const titleBlock = h1s.length === 1 && blocks[0] === h1s[0] ? h1s[0] : null;
-  /** Section counters by heading level; a deeper heading resets everything below it. */
-  const counters = [0, 0, 0, 0, 0, 0];
-  let section = hasHeadings ? "0" : "";
-  let sinceHeading = 0;
-  for (const block of blocks) {
-    if (block === titleBlock) {
-      out.set(block, "§0");
-      continue;
-    }
-    if (HEADING.test(block.tagName)) {
-      const level = Number(block.tagName[1]) - 1;
-      counters[level] += 1;
-      for (let i = level + 1; i < counters.length; i += 1) counters[i] = 0;
-      // Levels above the first one used stay at 0 and are dropped, so a document that starts
-      // at `##` reads §1, §2 rather than §0.1, §0.2.
-      const parts = counters.slice(0, level + 1);
-      while (parts.length > 1 && parts[0] === 0) parts.shift();
-      section = parts.join(".");
-      sinceHeading = 0;
-      out.set(block, `§${section}`);
-      continue;
-    }
-    sinceHeading += 1;
-    out.set(block, hasHeadings ? `§${section}.${sinceHeading}` : `¶${sinceHeading}`);
-  }
+  const labels = addressLabels(blocks.map((b) => (HEADING.test(b.tagName) ? Number(b.tagName[1]) : 0)));
+  blocks.forEach((block, index) => {
+    out.set(block, labels[index]);
+  });
   return out;
 }
 

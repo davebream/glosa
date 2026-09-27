@@ -85,6 +85,11 @@ const APPLY_PROTOCOL = (id: string) =>
     "leaves the annotation open forever and the edit attributed to nobody.",
   ].join("\n");
 
+/** Said beside every address, so a session reads it as the reader's label for a passage today and
+ * not as a place to find the words: the quote is what locates them. */
+const ADDRESS_NOTE =
+  "(the passage's label in the document as it stands now; an edit can renumber it, the quote is the anchor)";
+
 export interface BuildPresentationOptions {
   status: string;
   resolution?: Resolution;
@@ -98,6 +103,13 @@ export interface BuildPresentationOptions {
   /** Live claims on this entry or its file (issue #155). Their text is reserved out of `maxBytes`
    * BEFORE the body is sized, so the body truncates and the claims never do. */
   claims?: readonly PresentationClaim[];
+  /** The passage address (`§2.3`, packages/spa/src/address.js) of the block an annotation resolves
+   * to, derived by the caller from the document as it stands at delivery. Only an annotation with a
+   * `source_range` resolution reads it, and only beside its quote: the quote is the anchor, the
+   * address a label the next edit can renumber. It lives in the fixed header, so it is reserved out
+   * of `maxBytes` before the comment is sized and a long comment truncates instead. Never stored:
+   * not in the inbox entry, not in the journal. */
+  address?: string;
 }
 
 function annotationPresentation(
@@ -115,11 +127,15 @@ function annotationPresentation(
   const offset = decodePresentationCursor(opts.cursor, id);
   const remainingBody = body.slice(offset);
   const resolution = opts.resolution ?? { kind: "orphaned", reason: "no_source_map" as const };
+  // A label for a block the note does not resolve to would be a guess, so an address rides only
+  // with a source range, whatever the caller passed.
+  const address = resolution.kind === "source_range" && opts.address ? opts.address : undefined;
   const fixed = [
     `glosa annotation ${id}`,
     `artifact: ${artifactPath}`,
     `intent: ${intent}`,
     `quote: ${JSON.stringify(quote)}`,
+    ...(address ? [`address: ${address} ${ADDRESS_NOTE}`] : []),
     `position: ${JSON.stringify(target.position ?? null)}`,
     `resolution: ${JSON.stringify(resolution)}`,
     "comment:",
@@ -144,7 +160,14 @@ function annotationPresentation(
     status: opts.status,
     text,
     bytes: utf8Bytes(text),
-    detail: { artifact_path: artifactPath, body: sliced.value, intent, target, resolution },
+    detail: {
+      artifact_path: artifactPath,
+      body: sliced.value,
+      intent,
+      target,
+      ...(address ? { address } : {}),
+      resolution,
+    },
     truncation: { truncated: sliced.omitted > 0, omitted_bytes: sliced.omitted, omitted_hunks: 0 },
     retrieval: retrieve,
   };

@@ -65,8 +65,14 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * `pending_count` for that workspace) and `decision_count` (its chats with a decision waiting on the
  * person); every `GET /w/:slug/stream` also emits `attention_changed {slug}` for any workspace's
  * attention change; `chats_changed` gains `slugs` (and `slug` when exactly one). Additive, N/N-1
- * safe: an N-1 client ignores the fields and the new frame, and an N-1 daemon omits them. */
-export const CONTRACT_VERSION = "1.19";
+ * safe: an N-1 client ignores the fields and the new frame, and an N-1 daemon omits them.
+ *
+ * v1.20 (issue #411) names a note's passage in its annotation presentation: an `address: §2.3 (…)`
+ * line after the `quote:` line of the text and an `address` string in `detail`, derived at
+ * presentation from the document as it stands and stored nowhere (A1 §5.15). Absent for an
+ * orphaned note, a class-F document, or a block with no address. Additive, N/N-1 safe: an N-1
+ * client ignores both, and an N-1 daemon simply omits them. */
+export const CONTRACT_VERSION = "1.20";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };
