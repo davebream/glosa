@@ -41,6 +41,8 @@ export interface OpenPresentationData {
   slug?: string;
   path?: string;
   url?: string;
+  /** The same open as a `glosa://` link the desktop app answers (#392); no token. */
+  app_url?: string;
   focus?: string;
   /** The registration kind the daemon resolved. `loose-file` means `path` is the file's containing
    * directory, not a project root — callers must not offer to write agent config there (#96). */
@@ -207,6 +209,30 @@ export function buildPresentationUrl(
   return `http://${hostname}:${port}/#${params.toString()}`;
 }
 
+/**
+ * The `glosa://open?...` link the desktop app answers (#392): the same open as the SPA URL, without
+ * any token, since the app mints its own by running `glosa open` (R-P1). `path` is the workspace
+ * folder, `focus` the workspace-relative document. The shell's `parseGlosaUrl`
+ * (packages/shell/src/policy.ts) reads exactly these fields.
+ */
+export function buildAppUrl(opts: {
+  path: string;
+  focus?: string;
+  kind: SurfaceKind;
+  surface: OpenSurface;
+  mode: PresentationMode;
+  readLock: boolean;
+}): string {
+  const params = new URLSearchParams();
+  params.set("path", opts.path);
+  if (opts.focus) params.set("focus", opts.focus);
+  params.set("kind", opts.kind);
+  params.set("surface", opts.surface);
+  params.set("mode", opts.mode);
+  if (opts.readLock) params.set("lock", "read");
+  return `glosa://open?${params.toString()}`;
+}
+
 export async function runOpenPresentation(
   target: string,
   focus: string | undefined,
@@ -348,6 +374,7 @@ export async function runOpenPresentation(
   }
 
   const focusRel = opened.focus;
+  const kind: SurfaceKind = options.surfaceKind ?? (options.bindSessionId ? "companion" : "desk");
   const url = buildPresentationUrl(client.port, {
     slug: opened.slug,
     focus: focusRel,
@@ -355,7 +382,15 @@ export async function runOpenPresentation(
     mode,
     readLock,
     pairing,
-    kind: options.surfaceKind ?? (options.bindSessionId ? "companion" : "desk"),
+    kind,
+  });
+  const appUrl = buildAppUrl({
+    path: opened.path,
+    focus: focusRel,
+    kind,
+    surface: classified.surface,
+    mode,
+    readLock,
   });
 
   if (options.launchBrowser !== false) deps.openBrowser(url);
@@ -368,6 +403,7 @@ export async function runOpenPresentation(
       slug: opened.slug,
       path: opened.path,
       url,
+      app_url: appUrl,
       ...(focusRel ? { focus: focusRel } : {}),
       ...(opened.kind ? { kind: opened.kind } : {}),
       surface: classified.surface,

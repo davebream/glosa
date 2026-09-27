@@ -18,15 +18,22 @@ import {
   cliCandidates,
   compatibility,
   egressDecision,
+  linkFromArgv,
   loopbackApiOrigin,
   navigationDecision,
+  needsConfirmation,
   type OpenedWorkspace,
+  openArgsFor,
+  parseGlosaUrl,
   parseOpenEnvelope,
+  type RoutedWindow,
   representedFile,
   revealTarget,
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  windowFor,
+  withRoute,
 } from "./policy.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -60,13 +67,15 @@ function resolveCli(): string {
   return "glosa";
 }
 
-/** `glosa open <target> --url --json`: registers the folder, ensures a daemon (the CLI's own
- * spawn-only-when-absent, R-O3), mints a one-shot presentation token into the URL fragment. */
-function runOpen(target: string, focus: string | null = null): Promise<OpenedWorkspace> {
+/** `glosa open <args> --url --json`: registers the folder, ensures a daemon (the CLI's own
+ * spawn-only-when-absent, R-O3), mints a one-shot presentation token into the URL fragment. `args`
+ * are the positionals and flags before `--url --json`: a target and focus, or what a `glosa://`
+ * link maps to (`openArgsFor`). */
+function runOpen(args: readonly string[]): Promise<OpenedWorkspace> {
   return new Promise((resolve, reject) => {
     execFile(
       resolveCli(),
-      ["open", target, ...(focus ? [focus] : []), "--url", "--json"],
+      ["open", ...args, "--url", "--json"],
       { env: scrubChildEnv(process.env), timeout: 30_000, maxBuffer: 1 << 20 },
       (error, stdout, stderr) => {
         if (error && !stdout) return reject(new Error(`glosa open failed: ${stderr.trim() || error.message}`));
@@ -116,29 +125,35 @@ function blockingScreen(title: string, command: string): string {
   )}`;
 }
 
+interface OpenOptions {
+  /** The window `glosa open`'s answer goes into, or null for a new window for its origin. */
+  reuse: (opened: OpenedWorkspace, origin: string) => BrowserWindow | null;
+  /** Where a refusal is shown; null creates a window for it. */
+  errorWindow: BrowserWindow | null;
+  /** Rewrites the answered URL's route before it loads (a link's kind and mode). */
+  route?: (url: string) => string;
+}
+
 /**
- * Opens `target` in `existing` when that window already serves the same origin, otherwise in a new
- * window created for that origin. The origin is only known after `glosa open` answers, and the
- * preload must learn it at window creation (R-P3), which is why the window comes second.
+ * Runs `glosa open` with `args` and loads its answer into the window `reuse` picks, or into a new
+ * window for that origin. The origin is only known after `glosa open` answers, and the preload must
+ * learn it at window creation (R-P3), which is why the window comes second.
  */
-async function openInWindow(
-  target: string,
-  existing: BrowserWindow | null,
-  focus: string | null = null,
-): Promise<BrowserWindow> {
+async function openWith(args: readonly string[], options: OpenOptions): Promise<BrowserWindow> {
   let opened: OpenedWorkspace;
   const started = Date.now();
   try {
-    opened = await runOpen(target, focus);
+    opened = await runOpen(args);
   } catch (e) {
     log(`glosa open failed after ${Date.now() - started} ms via ${resolveCli()}: ${(e as Error).message}`);
-    const win = existing ?? createWindow(null);
+    const win = options.errorWindow ?? createWindow(null);
     await win.loadURL(blockingScreen("glosa could not open that folder", (e as Error).message));
     return win;
   }
   log(`glosa open answered in ${Date.now() - started} ms for ${opened.slug}`);
-  const origin = new URL(opened.url).origin;
-  const win = existing && windows.get(existing.webContents.id)?.origin === origin ? existing : createWindow(origin);
+  const url = options.route ? options.route(opened.url) : opened.url;
+  const origin = new URL(url).origin;
+  const win = options.reuse(opened, origin) ?? createWindow(origin);
   const compat = compatibility(await handshake(loopbackApiOrigin(origin)), pkg.glosa.minimumDaemon);
   if (compat.state !== "ok") {
     log(`compatibility: ${compat.state}`);
@@ -150,16 +165,81 @@ async function openInWindow(
     await win.loadURL(blockingScreen(titles[compat.state], compat.command));
     return win;
   }
-  const { tokenlessUrl, token } = splitPresentationToken(opened.url);
+  const { tokenlessUrl, token } = splitPresentationToken(url);
   if (token) pendingTokens.set(win.webContents.id, token);
   windows.set(win.webContents.id, {
     origin,
     folder: opened.path,
     slug: opened.slug,
-    kind: surfaceKind(opened.url),
+    kind: surfaceKind(url),
   });
   await win.loadURL(tokenlessUrl);
   return win;
+}
+
+/** Opens `target` in `existing` when that window already serves the same origin, otherwise in a
+ * new window: the folder picker and a folder named on launch. */
+function openInWindow(
+  target: string,
+  existing: BrowserWindow | null,
+  focus: string | null = null,
+): Promise<BrowserWindow> {
+  return openWith([target, ...(focus ? [focus] : [])], {
+    reuse: (_opened, origin) => (existing && windows.get(existing.webContents.id)?.origin === origin ? existing : null),
+    errorWindow: existing,
+  });
+}
+
+/** Every open window as link routing sees it. */
+function routedWindows(): RoutedWindow[] {
+  const routed: RoutedWindow[] = [];
+  for (const win of BrowserWindow.getAllWindows()) {
+    const state = windows.get(win.webContents.id);
+    if (state) routed.push({ id: win.webContents.id, origin: state.origin, folder: state.folder, kind: state.kind });
+  }
+  return routed;
+}
+
+/**
+ * Asks before a link opens a folder no window shows (#392). `GLOSA_SHELL_CONFIRM=yes` answers for
+ * the person, and is read only by an unpackaged app: it is how the real-Electron test drives a link
+ * without a dialog, never a way to silence the question in a shipped app.
+ */
+async function confirmOpen(path: string): Promise<boolean> {
+  if (!app.isPackaged && process.env.GLOSA_SHELL_CONFIRM === "yes") return true;
+  const answer = await dialog.showMessageBox({
+    type: "question",
+    buttons: ["Open", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `Open ${path} in glosa?`,
+    detail: "A glosa:// link asked to open it. Links can come from any page or app.",
+  });
+  return answer.response === 0;
+}
+
+/**
+ * A `glosa://open?...` link (#392): parsed and refused unless well formed, confirmed when no window
+ * shows its folder, opened through `glosa open` like any other open, then routed. A window is
+ * reused only when origin, folder and kind all match; otherwise the link gets a new window.
+ */
+async function openLink(url: string): Promise<void> {
+  const link = parseGlosaUrl(url);
+  if (!link) {
+    log("ignored a glosa:// link that does not parse");
+    return;
+  }
+  if (needsConfirmation(link.path, routedWindows()) && !(await confirmOpen(link.path))) return;
+  const win = await openWith(openArgsFor(link), {
+    route: (answered) => withRoute(answered, { kind: link.kind, mode: link.mode }),
+    reuse: (opened, origin) => {
+      const id = windowFor({ origin, folder: opened.path, kind: link.kind }, routedWindows());
+      return id === null ? null : (BrowserWindow.getAllWindows().find((w) => w.webContents.id === id) ?? null);
+    },
+    errorWindow: null,
+  });
+  if (win.isMinimized()) win.restore();
+  win.focus();
 }
 
 function createWindow(origin: string | null): BrowserWindow {
@@ -227,7 +307,10 @@ async function chooseFolder(win: BrowserWindow | null): Promise<string | null> {
 async function openFolderFlow(existing: BrowserWindow | null): Promise<void> {
   const folder = await chooseFolder(existing);
   if (!folder) return;
-  await openInWindow(folder, existing);
+  // A companion window keeps its kind (feature map decision 5): a person opening a folder from it
+  // gets a new window rather than turning an agent's presentation into a desk.
+  const reusable = existing && windows.get(existing.webContents.id)?.kind !== "companion" ? existing : null;
+  await openInWindow(folder, reusable);
 }
 
 /**
@@ -350,7 +433,38 @@ function installEgressGate(): void {
 
 app.setAboutPanelOptions({ applicationName: "glosa", applicationVersion: pkg.version });
 
+// ---------- glosa:// links arrive before, at and after launch (#392) ----------
+
+// One app per user data directory: a second launch (a link clicked while the app runs, or
+// `open -a glosa <folder>`) hands its arguments to this one and quits.
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.quit();
+
+// macOS delivers a link that launched the app before `ready`, so the listener is registered now and
+// links wait until windows can be created.
+let ready = false;
+const waitingLinks: string[] = [];
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (ready) void openLink(url);
+  else waitingLinks.push(url);
+});
+
+app.on("second-instance", (_event, argv) => {
+  const link = linkFromArgv(argv);
+  if (link) {
+    void openLink(link);
+    return;
+  }
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
 app.whenReady().then(async () => {
+  if (!primary) return;
   // The Dock image follows the system appearance: paper squircle in light, ink in dark. An .icns
   // carries one image, so the Finder icon stays the light one; this is the Dock only.
   const dockIcon = () => {
@@ -363,8 +477,22 @@ app.whenReady().then(async () => {
   installEgressGate();
   installIpc();
   buildMenu();
-  // `glosa-shell <folder> [artifact]`, the same two positionals `glosa open` takes.
+  // A packaged app declares the scheme in its bundle (build.protocols); this makes it the default
+  // handler. An unpackaged run does not claim it, so tests and `bun run start` never register the
+  // development Electron.app with LaunchServices.
+  if (app.isPackaged && !app.isDefaultProtocolClient("glosa")) app.setAsDefaultProtocolClient("glosa");
+  ready = true;
+  // `glosa-shell <folder> [artifact]`, the same two positionals `glosa open` takes, or a glosa://
+  // link, which is also how the tests hand one over.
   const positionals = process.argv.slice(app.isPackaged ? 1 : 2).filter((a) => !a.startsWith("-"));
+  const argvLink = linkFromArgv(positionals);
+  const links = [...(argvLink ? [argvLink] : []), ...waitingLinks];
+  waitingLinks.length = 0;
+  if (links.length > 0) {
+    for (const link of links) await openLink(link);
+    if (BrowserWindow.getAllWindows().length === 0) app.quit();
+    return;
+  }
   const target = positionals[0] ?? null;
   if (target) {
     await openInWindow(target, null, positionals[1] ?? null);

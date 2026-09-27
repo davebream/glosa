@@ -126,6 +126,23 @@ describe.skipIf(!electronInstalled)(
     let electron: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
     let cli: string;
     let stderrText = "";
+    let env: Record<string, string>;
+
+    /** Starts the shell with `args` after the app directory, the way `open -a` or a link would. */
+    const launchShell = (args: string[], extra: Record<string, string> = {}) => {
+      electron = Bun.spawn({
+        cmd: [ELECTRON, SHELL_DIR, ...args, `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userData}`],
+        env: { ...env, GLOSA_SHELL_CLI: cli, ANTHROPIC_API_KEY: "sk-must-never-reach-a-child", ...extra },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      stderrText = "";
+      const started = electron;
+      void (async () => {
+        for await (const chunk of started.stderr) stderrText += new TextDecoder().decode(chunk);
+      })();
+    };
 
     beforeEach(async () => {
       home = mkdtempSync(join(tmpdir(), "glosa-shell-home-"));
@@ -146,7 +163,7 @@ describe.skipIf(!electronInstalled)(
 
       port = randomPort();
       cdpPort = randomPort();
-      const env: Record<string, string> = {
+      env = {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: userHome,
         GLOSA_HOME: home,
@@ -162,25 +179,6 @@ describe.skipIf(!electronInstalled)(
       });
       const hs = await waitForHandshake(port, 15_000, daemon);
       expect(hs, "daemon handshake").not.toBeNull();
-
-      electron = Bun.spawn({
-        cmd: [
-          ELECTRON,
-          SHELL_DIR,
-          workspace,
-          "classf/probe.html",
-          `--remote-debugging-port=${cdpPort}`,
-          `--user-data-dir=${userData}`,
-        ],
-        env: { ...env, GLOSA_SHELL_CLI: cli, ANTHROPIC_API_KEY: "sk-must-never-reach-a-child" },
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      stderrText = "";
-      void (async () => {
-        for await (const chunk of electron!.stderr) stderrText += new TextDecoder().decode(chunk);
-      })();
     }, 60_000);
 
     afterEach(async () => {
@@ -195,6 +193,7 @@ describe.skipIf(!electronInstalled)(
     });
 
     test("pairs over the bridge with no token in any URL, keeps class-F sandboxed, denies leaving the SPA origin, and leaves the daemon running on quit", async () => {
+      launchShell([workspace, "classf/probe.html"]);
       const spaOrigin = `http://glosa.localhost:${port}`;
       const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
       expect(
@@ -206,7 +205,13 @@ describe.skipIf(!electronInstalled)(
         // Paired through the preload bridge: the window URL never carried p= or t=.
         let durable: string | null = null;
         for (let i = 0; i < 100 && !durable; i++) {
-          durable = await cdp.evaluate<string | null>("localStorage.getItem('glosa_token')");
+          try {
+            durable = await cdp.evaluate<string | null>("localStorage.getItem('glosa_token')");
+          } catch {
+            // The page's context can be replaced while it loads; a throw here is a retry, not a
+            // verdict (one run in five failed on it before this).
+            durable = null;
+          }
           if (!durable) await Bun.sleep(200);
         }
         expect(durable, `paired via bridge; shell stderr:\n${stderrText}`).toBeString();
@@ -269,6 +274,43 @@ describe.skipIf(!electronInstalled)(
       await Bun.sleep(500);
       const after = (await (await fetch(`http://127.0.0.1:${port}/api/handshake`)).json()) as Handshake;
       expect(after.instance_id).toBe(before.instance_id);
+    }, 120_000);
+
+    test("a glosa:// link opens the folder as a companion window, pairs over the bridge, and carries the link's route (#392)", async () => {
+      const link = `glosa://open?${new URLSearchParams({
+        path: workspace,
+        focus: "readme.md",
+        kind: "companion",
+        mode: "read",
+      }).toString()}`;
+      // No window shows this folder yet, so the shell would ask; the unpackaged-only override answers.
+      launchShell([link], { GLOSA_SHELL_CONFIRM: "yes" });
+      const spaOrigin = `http://glosa.localhost:${port}`;
+      const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+      expect(page, `SPA page for the link; shell stderr:\n${stderrText}`).not.toBeNull();
+      const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
+      try {
+        let durable: string | null = null;
+        for (let i = 0; i < 100 && !durable; i++) {
+          try {
+            durable = await cdp.evaluate<string | null>("localStorage.getItem('glosa_token')");
+          } catch {
+            // The page's context can be replaced while it loads; a throw here is a retry, not a
+            // verdict (one run in five failed on it before this).
+            durable = null;
+          }
+          if (!durable) await Bun.sleep(200);
+        }
+        expect(durable, `paired via bridge; shell stderr:\n${stderrText}`).toBeString();
+        const href = await cdp.evaluate<string>("location.href");
+        expect(href).not.toMatch(/[#&](p|t)=/);
+        const route = new URLSearchParams(new URL(href).hash.slice(1));
+        expect(route.get("kind")).toBe("companion");
+        expect(route.get("mode")).toBe("read");
+        expect(route.get("a")).toBe("readme.md");
+      } finally {
+        cdp.close();
+      }
     }, 120_000);
   },
 );

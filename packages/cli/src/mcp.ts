@@ -807,6 +807,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       }
       return toolResult({
         url: data.url,
+        ...(data.app_url ? { app_url: data.app_url } : {}),
         slug: data.slug,
         path: data.path,
         ...(data.focus ? { focus: data.focus } : {}),

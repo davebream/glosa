@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   workspace's attention tray shows, and `decision_count`, its chats waiting on a decision. Every
   workspace stream now also says when any workspace's attention changes (`attention_changed`), and
   `chats_changed` names the workspaces whose chats changed. API contract 1.19 (#389).
+- The desktop app answers `glosa://open?path=…` links, and `glosa open --json` and `glosa_present`
+  now return the same open as `app_url`. A link carries a folder, an optional document, the surface
+  kind and the mode, never a token: the app mints its own. It asks before opening a folder no window
+  shows, and a companion link beside a desk window on the same folder opens its own window (#392).
 
 ### Fixed
 

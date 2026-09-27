@@ -1423,6 +1423,7 @@ describe("official TypeScript MCP SDK contract", () => {
         expect(result.isError).not.toBe(true);
         const body = structured(result) as {
           url: string;
+          app_url?: string;
           preview: boolean;
           surface: string;
           mode: string;
@@ -1433,6 +1434,13 @@ describe("official TypeScript MCP SDK contract", () => {
         expect(body.url).toContain("lock=read");
         expect(body.url).toContain("kind=companion");
         expect(body.url).not.toContain("t=");
+        // The same presentation as a link the desktop app opens (#392): companion, read-locked,
+        // and never carrying the presentation token.
+        const appUrl = new URL(String(body.app_url));
+        expect(appUrl.protocol).toBe("glosa:");
+        expect(appUrl.searchParams.get("kind")).toBe("companion");
+        expect(appUrl.searchParams.get("lock")).toBe("read");
+        expect(String(body.app_url)).not.toContain("ephemeral-present-token");
         expect(body.preview).toBe(true);
         expect(body.surface).toBe("document");
         expect(body.mode).toBe("read");

@@ -283,3 +283,144 @@ export function cliCandidates(lookup: CliLookup): string[] {
   );
   return candidates;
 }
+
+// ---------- glosa:// links (#392) ----------
+
+/** What a `glosa://open?...` link asks for. Never a token: the shell mints its own by running
+ *  `glosa open` (R-P1), so a link carries only route state. */
+export interface GlosaLink {
+  /** Absolute folder or file. */
+  path: string;
+  /** Workspace-relative document to focus. */
+  focus: string | null;
+  kind: "desk" | "companion";
+  surface: "document" | "workspace" | null;
+  mode: "read" | "review" | "edit" | null;
+  readLock: boolean;
+}
+
+/** True when `path` is made only of plain segments: no `.`, `..` or empty segment, no backslash,
+ *  no NUL. `absolute` decides whether it must start with `/` or must not. */
+export function plainPath(path: string, absolute: boolean): boolean {
+  if (path.length === 0 || path.length > 4096 || path.includes("\\") || path.includes("\0")) return false;
+  if (absolute !== path.startsWith("/")) return false;
+  const segments = (absolute ? path.slice(1) : path).split("/");
+  return !segments.some((segment) => segment === "" || segment === "." || segment === "..");
+}
+
+function oneOf<T extends string>(value: string | null, allowed: readonly T[]): T | null | undefined {
+  if (value === null) return null;
+  return (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+}
+
+/**
+ * Parses `glosa://open?path=<abs>[&focus=<rel>][&kind=desk|companion][&surface=document|workspace]
+ * [&mode=read|review|edit][&lock=read]`. Anything else answers null: a wrong scheme or action, a
+ * path that is not absolute and plain, a focus that is not relative and plain, an unknown value, a
+ * repeated or unknown parameter, and so any token (`p`, `t`). A missing kind is a companion, the
+ * SPA's own default.
+ */
+export function parseGlosaUrl(url: string): GlosaLink | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "glosa:" || parsed.hostname !== "open") return null;
+  if (parsed.pathname !== "" && parsed.pathname !== "/") return null;
+  if (parsed.hash !== "" || parsed.username !== "" || parsed.password !== "" || parsed.port !== "") return null;
+  const known = new Set(["path", "focus", "kind", "surface", "mode", "lock"]);
+  const keys = [...parsed.searchParams.keys()];
+  if (keys.some((key) => !known.has(key)) || new Set(keys).size !== keys.length) return null;
+  const params = parsed.searchParams;
+  const path = params.get("path");
+  if (path === null || !plainPath(path, true)) return null;
+  const focus = params.get("focus");
+  if (focus !== null && !plainPath(focus, false)) return null;
+  const kind = oneOf(params.get("kind"), ["desk", "companion"] as const);
+  const surface = oneOf(params.get("surface"), ["document", "workspace"] as const);
+  const mode = oneOf(params.get("mode"), ["read", "review", "edit"] as const);
+  const lock = oneOf(params.get("lock"), ["read"] as const);
+  if (kind === undefined || surface === undefined || mode === undefined || lock === undefined) return null;
+  return { path, focus, kind: kind ?? "companion", surface, mode, readLock: lock === "read" };
+}
+
+/**
+ * The `glosa open` arguments that reproduce a link, before `--url --json`. A document surface with a
+ * focus opens the file itself, since the CLI refuses `--document` beside a second positional.
+ * `lock=read` is `--read`; kind and mode have no flag and are set on the answered URL (`withRoute`).
+ */
+export function openArgsFor(link: GlosaLink): string[] {
+  const read = link.readLock ? ["--read"] : [];
+  if (link.surface === "document") {
+    const target = link.focus ? `${link.path.replace(/\/+$/, "")}/${link.focus}` : link.path;
+    return [target, "--document", ...read];
+  }
+  return [
+    link.path,
+    ...(link.focus ? [link.focus] : []),
+    ...(link.surface === "workspace" ? ["--workspace"] : []),
+    ...read,
+  ];
+}
+
+/** Sets `kind=` and, when given, `mode=` in an SPA URL's fragment; every other entry keeps its
+ *  place. A URL that does not parse is returned unchanged. */
+export function withRoute(
+  httpUrl: string,
+  route: { kind: "desk" | "companion"; mode?: "read" | "review" | "edit" | null },
+): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(httpUrl);
+  } catch {
+    return httpUrl;
+  }
+  const hash = parsed.hash.startsWith("#") ? parsed.hash.slice(1) : parsed.hash;
+  const params = new URLSearchParams(hash);
+  params.set("kind", route.kind);
+  if (route.mode) params.set("mode", route.mode);
+  parsed.hash = params.toString();
+  return parsed.toString();
+}
+
+/** A window as link routing sees it. */
+export interface RoutedWindow {
+  id: number;
+  origin: string;
+  folder: string | null;
+  kind: "desk" | "companion" | null;
+}
+
+/**
+ * The window a link reuses: one with the same origin, folder AND kind. Anything else opens a new
+ * window, so a companion link beside a desk window on the same folder gets its own window and each
+ * window keeps one kind (feature map decision 5).
+ */
+export function windowFor(
+  opened: { origin: string; folder: string; kind: "desk" | "companion" },
+  windows: readonly RoutedWindow[],
+): number | null {
+  const match = windows.find((w) => w.origin === opened.origin && w.folder === opened.folder && w.kind === opened.kind);
+  return match ? match.id : null;
+}
+
+/**
+ * True when no window shows `path`, as its folder or inside it. Any web page can fire a `glosa://`
+ * link, so a link to a folder the person has not opened asks first.
+ */
+export function needsConfirmation(path: string, windows: readonly RoutedWindow[]): boolean {
+  const target = path.replace(/\/+$/, "");
+  return !windows.some((w) => {
+    if (!w.folder) return false;
+    const folder = w.folder.replace(/\/+$/, "");
+    return target === folder || target.startsWith(`${folder}/`);
+  });
+}
+
+/** The first `glosa://` link in an argument list: how a cold launch and a second instance hand one
+ *  over, and what the tests drive. */
+export function linkFromArgv(argv: readonly string[]): string | null {
+  return argv.find((arg) => arg.startsWith("glosa://")) ?? null;
+}

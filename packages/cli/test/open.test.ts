@@ -409,6 +409,37 @@ describe("glosa open", () => {
     expect(browserCalls).toHaveLength(0);
   });
 
+  test("the envelope carries the same open as a glosa:// app_url, with no token in it (#392)", async () => {
+    const { deps, client } = makeDeps({
+      dirExists: (d) => d === "/ws/essays",
+      fileExists: (p) => p === "/ws/essays/07-manuscript.md",
+      isRegularFile: (p) => p === "/ws/essays/07-manuscript.md",
+    });
+    client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays", focus: "07-manuscript.md" };
+    const result = await runOpen("/ws/essays/07-manuscript.md", deps, { launchBrowser: false });
+    const appUrl = new URL(String(result.data.app_url));
+    expect(appUrl.protocol).toBe("glosa:");
+    expect(appUrl.hostname).toBe("open");
+    expect(Object.fromEntries(appUrl.searchParams)).toEqual({
+      path: "/ws/essays",
+      focus: "07-manuscript.md",
+      kind: "desk",
+      surface: "document",
+      mode: "review",
+    });
+    expect(String(result.data.app_url)).not.toContain("present-token-abc");
+    expect(String(result.data.app_url)).not.toContain("test-token-abc");
+
+    const bound = await runOpen(freshDir(), makeDeps().deps, {
+      bindSessionId: "sess-1",
+      readLock: true,
+      launchBrowser: false,
+    });
+    const boundUrl = new URL(String(bound.data.app_url));
+    expect(boundUrl.searchParams.get("kind")).toBe("companion");
+    expect(boundUrl.searchParams.get("lock")).toBe("read");
+  });
+
   // --- #152: no init, no wiring warnings. Connection state is the only signal. ---
 
   test("open never emits an init/wiring warning and never reaches for an init module", async () => {

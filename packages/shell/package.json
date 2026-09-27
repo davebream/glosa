@@ -45,6 +45,15 @@
     ],
     "afterPack": "scripts/after-pack.cjs",
     "artifactName": "glosa-${version}-${arch}.${ext}",
+    "protocols": [
+      {
+        "name": "glosa",
+        "schemes": [
+          "glosa"
+        ],
+        "role": "Viewer"
+      }
+    ],
     "mac": {
       "icon": "assets/icon.icns",
       "category": "public.app-category.productivity",

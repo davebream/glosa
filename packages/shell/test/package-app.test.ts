@@ -148,6 +148,10 @@ describe("package-app: electron-builder config", () => {
     expect(config.artifactName).toBe("glosa-${version}-${arch}.${ext}");
     expect(config.afterPack).toBe("scripts/after-pack.cjs");
   });
+  test("the app declares the glosa:// scheme, which electron-builder writes as CFBundleURLTypes (#392)", () => {
+    const config = renderBuilderConfig(build, { arch: "arm64", unsigned: true, notarize: false });
+    expect(config.protocols).toEqual([{ name: "glosa", schemes: ["glosa"], role: "Viewer" }]);
+  });
   test("rendering never mutates package.json's build block", () => {
     renderBuilderConfig(build, { arch: "arm64", unsigned: true, notarize: false });
     expect((build.mac as Record<string, unknown>).identity).toBeUndefined();
