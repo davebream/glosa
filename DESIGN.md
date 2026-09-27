@@ -29,6 +29,29 @@ colors:
   dark-hand: "oklch(0.72 0.13 45)"
   dark-pencil: "oklch(0.64 0.01 70)"
   dark-session: "oklch(0.76 0.1 250)"
+  high-contrast-ink: "oklch(0.16 0.012 60)"
+  high-contrast-muted: "oklch(0.4 0.014 60)"
+  high-contrast-faint: "oklch(0.55 0.012 65)"
+  high-contrast-border: "oklch(0.76 0.01 75)"
+  high-contrast-border-strong: "oklch(0.5 0.014 65)"
+  high-contrast-hand: "oklch(0.46 0.16 42)"
+  high-contrast-pencil: "oklch(0.5 0.01 65)"
+  high-contrast-session: "oklch(0.35 0.11 255)"
+  high-contrast-danger: "oklch(0.38 0.15 22)"
+  high-contrast-warn: "oklch(0.5 0.1 80)"
+  high-contrast-ok: "oklch(0.41 0.08 150)"
+  high-contrast-dark-ink: "oklch(0.97 0.008 80)"
+  high-contrast-dark-muted: "oklch(0.8 0.012 75)"
+  high-contrast-dark-faint: "oklch(0.62 0.012 65)"
+  high-contrast-dark-border: "oklch(0.44 0.01 60)"
+  high-contrast-dark-border-strong: "oklch(0.7 0.012 65)"
+  high-contrast-dark-rule: "oklch(0.86 0.01 80)"
+  high-contrast-dark-hand: "oklch(0.77 0.13 45)"
+  high-contrast-dark-pencil: "oklch(0.72 0.01 70)"
+  high-contrast-dark-session: "oklch(0.84 0.085 250)"
+  high-contrast-dark-danger: "oklch(0.71 0.15 22)"
+  high-contrast-dark-warn: "oklch(0.84 0.1 80)"
+  high-contrast-dark-ok: "oklch(0.82 0.09 150)"
 typography:
   manuscript-title:
     fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
@@ -321,7 +344,34 @@ Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand
 
 **The Manuscript Contrast Rule.** Body copy, placeholders and 12–13px metadata meet WCAG 2.2 AA in both appearances. Pencil sits exactly at the 4.5:1 floor, so it is never lightened further; Faint never carries live text.
 
-**The Scheme Rule.** A theme is a palette; a scheme is light or dark. `<html>` carries both, `data-theme` (which palette) and `data-scheme` (which scheme), set before first paint from the one list of appearances (`packages/spa/src/appearance-list.js`: each entry's id, scheme and labels, read by the preload, the workspace popover and Settings). What every dark theme shares lives on `:root[data-scheme="dark"]`, never on a theme's name. Outside the token blocks and the print block, no selector depends on the theme.
+**The Scheme Rule.** A theme is one palette in one scheme; a scheme is light or dark. `<html>` carries `data-theme` (the theme that paints), `data-scheme` (its scheme) and, beside them, `data-appearance` (the chosen mode) and `data-palette` (the chosen palette), all set before first paint from the one list of appearances (`packages/spa/src/appearance-list.js`: the modes, and the palettes with the theme each paints in light and in dark, read by the preload, the workspace popover and Settings). What every dark theme shares lives on `:root[data-scheme="dark"]`, never on a theme's name. Outside the theme stylesheet and the print block, no selector depends on the theme.
+
+### Theme Files
+Every palette glosa paints is a theme file (#409): `packages/spa/src/themes/<id>.json`, a light-or-dark `scheme` and sixteen slots, `bg`, `surface`, `surface-sunken`, `ink`, `muted`, `faint`, `border`, `border-strong`, `rule`, `hand`, `pencil`, `session`, `danger`, `warn`, `ok` and `scrim`. A slot is an OKLCH or hex colour, or the name of another slot (glosa light's `rule` is `ink`, and stays ink in print). Only the scrim may be translucent. The files are rendered into one served stylesheet, `themes.css`, which sets each theme's slots on `:root[data-theme="<id>"]`; the first theme, glosa light, is also the bare `:root` default. The stylesheet is checked in, since the SPA has no build step: `bun run themes:render` writes it, and a test fails whenever it is not what the files render to. Everything derived from the slots (the washes, `--desk`, `--primary`, `--on-primary`, `--focus`, `--anchor-wash`, the shadows, the elevated tokens) stays in `app.css`, which reads the slots and never sets them. Two hovers, `--hand-hover` and `--primary-hover`, are still one lightness per scheme rather than computed from each theme's own hand and ink: exact for glosa and High contrast, which share those hues. Print is a theme file too (`print.json`, `"media": "print"`): white paper, near-black ink and grey edges laid over whichever theme is showing; it sets only those slots, because marks do not print.
+
+**The Contrast Floor Rule.** Every theme is checked before it ships (`packages/spa/src/themes/validate.js`, run over every shipped file by `packages/spa/test/themes.test.ts`). A theme below a floor is refused, and the refusal names the theme, the role, the measured ratio and the floor; a colour is never repaired, because a vermilion lightened until it passes is no longer the theme a person chose. Floors are WCAG 2 ratios, measured on the grounds each role is actually drawn on, not on every ground:
+
+| Role | Drawn on | Floor | High contrast |
+|---|---|---|---|
+| Ink | paper, surface, sunken | 7:1 | 7:1 |
+| Muted | paper, surface, sunken | 4.5:1 | 7:1 |
+| Hand | paper, surface, sunken | 4.5:1 as text, 3:1 as a line | 4.5:1 as a line |
+| Pencil | the composer's ground: paper in light, surface in dark | 4.5:1 as text, 3:1 as a line | 4.5:1 as a line |
+| Session ink | text on paper and surface; lines on paper, surface, sunken | 4.5:1 as text, 3:1 as a line | 4.5:1 as a line |
+| Danger | paper, surface, sunken | 4.5:1 as text, 3:1 as a line | 4.5:1 as a line |
+| Warn | text on paper and surface; its dot on paper, surface, sunken | 4.5:1 as text, 3:1 as a line | 4.5:1 as a line |
+| Ok | paper, surface | 4.5:1 as text, 3:1 as a line | 4.5:1 as a line |
+| Strong Border | paper, surface, sunken | 3:1 | 3:1 |
+| Faint | nowhere live | exempt; refused if any live text role is mapped to it | exempt |
+
+Glosa light's pencil is 4.53:1 on the paper its composer sits on and 4.27:1 on the surface, where it is never drawn, so the table keeps glosa's own values. These floors protect solid colours; the translucent washes and the hand's 70% underline composite lower and have no floor yet.
+
+**The Hue Rules.** Two rules keep a person's marks apart whatever the palette. The hand and Session Ink sit at least 90 degrees apart in OKLCH hue (glosa light 147°, dark 155°). Danger may sit near the hand's hue (glosa's own are about 20 degrees apart); it is held apart by lightness, its OKLCH lightness at least 0.02 from the hand's, and it always arrives with a label or a shape (The Status Needs Shape Rule). The lightness floor is glosa dark's own gap (0.72 against 0.70), the smallest shipped, so it only refuses a danger at the hand's lightness; the label or shape does the real separating. The validator refuses a theme that breaks either rule.
+
+### High Contrast
+glosa's own palette in a second pair of theme files, `high-contrast-light` and `high-contrast-dark`, made for `prefers-contrast: more` and held to its stricter floors. It keeps glosa's paper, surface and sunken ground in each scheme, so a desktop window opened under Increase Contrast starts on the right paper, and the page stays the same desk. It deepens (light) or lifts (dark) everything that reads on it, within its own hue: ink `{colors.high-contrast-ink}` (18.9:1 on paper) and `{colors.high-contrast-dark-ink}` (16.4:1); muted `{colors.high-contrast-muted}` (9.0:1) and `{colors.high-contrast-dark-muted}` (9.6:1); the hand `{colors.high-contrast-hand}` (7.4:1) and `{colors.high-contrast-dark-hand}` (8.3:1); pencil `{colors.high-contrast-pencil}` (5.8:1) and `{colors.high-contrast-dark-pencil}` (6.7:1 on the dark composer's surface); Session Ink `{colors.high-contrast-session}` (11.1:1) and `{colors.high-contrast-dark-session}` (11.0:1); Danger `{colors.high-contrast-danger}` (10.5:1, 0.08 darker than the hand) and `{colors.high-contrast-dark-danger}` (6.5:1, 0.06 below the hand); Warning `{colors.high-contrast-warn}` and `{colors.high-contrast-dark-warn}`; Success `{colors.high-contrast-ok}` and `{colors.high-contrast-dark-ok}`; Quiet Border `{colors.high-contrast-border}` and `{colors.high-contrast-dark-border}`; Strong Border `{colors.high-contrast-border-strong}` (5.8:1) and `{colors.high-contrast-dark-border-strong}` (6.7:1); the dark Region Rule `{colors.high-contrast-dark-rule}`; the scrim deepens to 40% ink in light and 60% black in dark. Pencil stays lighter than the hand in light and below it in dark, so the unsent mark still reads as graphite beside the sent one. Every ratio on each ground, the hue distances and a colour-vision simulation are on the comps page (`docs/research/spikes/theming-comps.html`, section 7).
+
+It is chosen two ways. The operating system's request for more contrast (`prefers-contrast: more`, which macOS Increase Contrast sets in Safari and Chrome) turns glosa's own palette into High contrast, live, before first paint; a palette chosen by name stays as chosen. And High contrast is a palette of its own in Settings > Appearance, which holds whatever the system says. The desktop app does not yet see Increase Contrast (Electron does not pass it to the page), so there it is the Settings choice.
 
 ## Typography
 
@@ -552,7 +602,7 @@ Managed chat is set in the Conversation style (see The Conversation Style): unbo
 The composer has a borderless text area and compact, borderless model and effort controls sized to their selected labels, with accessible names. The model button opens a versioned model list plus the current Subscription row. Selecting that row replaces the model list with a compact subscription view and Back action; do not stack both lists. Same-agent subscriptions stay with the chat, while another agent opens a new chat after submission. Attachments, Stop, Send and native tool approvals remain operable; no Plan mode selector is shown. Model and effort share the same quiet control treatment and explanatory hover/focus tooltips. Effort adds a compact monochrome four-bar indicator, consistently mapped across providers. Model labels always include the provider-reported version; retain resolved alias metadata and never hardcode a family’s latest version. Older entries without version metadata say “version not reported” until models are refreshed. The picker shows one row per resolved model; default status belongs in its tooltip, not a duplicate row. A context suffix appears in the label only when the discovered catalog contains a distinct context variant. Existing chats retain their selected wire alias. Tooltips expose the concrete model ID, context and alias relationship. At narrow pane widths controls wrap. The sidebar shows at most 20 title-only conversation rows, pinned first, without a count or separate search field. A hover/focus menu supplies Pin/Unpin; older chats remain searchable. Row hover text contains only the title, never account metadata, and hover is quieter than the selected state.
 
 ### Settings
-The sidebar footer and shared palette open Settings. Agents & accounts and Appearance are separate destinations within the page. Appearance lists the same choices as the workspace popover, from the one list of appearances (Use system setting, Light, Dark), under each entry's Settings label, and the Text size field: the same stepper as the document's More menu. Small monochrome Claude asterisk and OpenAI knot marks follow the selected reference; local Lobe Icons geometry carries its MIT attribution. Show installation first when a runtime is missing. Installation reports its native phase, elapsed time, completed package count and approximate completed archive bytes beside an indeterminate indicator. A quiet installer and an interrupted status connection have distinct notices; polling continues until the outcome is known. No percentage or transfer rate is inferred from incomplete counters. Installation disables dependent controls; account setup remains visibly disabled until the runtime and the build are ready. Account navigation displays a compact list and one selected detail pane, preserving identity, default, enable/disable, authentication, model discovery, MCP and cleanup actions.
+The sidebar footer and shared palette open Settings. Agents & accounts and Appearance are separate destinations within the page. Appearance has three fields under 15px 600 ink labels: Mode, the same choices as the workspace popover from the one list of appearances (Use system setting, Light, Dark), under each entry's Settings label; Palette; and Text size, the same stepper as the document's More menu. Palette is a column of rows (30rem at most), one per palette in the list, each a button: a swatch (a 44 × 36px square of the palette's paper with "Aa" in its ink, in the serif, drawn from the theme it would paint in the current scheme, inside a 1px Strong Border), the palette's name in 600 ink and a one-line credit in 12px Muted under it, and on the chosen row an ink edge, a Surface bed and the drawn check. While the system asks for more contrast and the chosen palette answers it, a line under the rows says so ("Your system asks for more contrast, so glosa shows High contrast."). The workspace popover keeps the mode only; a palette is chosen here. Small monochrome Claude asterisk and OpenAI knot marks follow the selected reference; local Lobe Icons geometry carries its MIT attribution. Show installation first when a runtime is missing. Installation reports its native phase, elapsed time, completed package count and approximate completed archive bytes beside an indeterminate indicator. A quiet installer and an interrupted status connection have distinct notices; polling continues until the outcome is known. No percentage or transfer rate is inferred from incomplete counters. Installation disables dependent controls; account setup remains visibly disabled until the runtime and the build are ready. Account navigation displays a compact list and one selected detail pane, preserving identity, default, enable/disable, authentication, model discovery, MCP and cleanup actions.
 
 Healthy runtime maintenance is a collapsed disclosure above Accounts; missing, failed and active installations retain the prominent setup treatment. Account labels wrap and show the signed-in identity, with connection health separate from the Default marker. At narrow widths a compact account chooser reveals the list and closes after selection, keeping the selected account's controls in view. Disabled accounts lead with Enable account and explain its scope; Disable account lives with sign-out and removal in a separate account-access menu group. Eligible accounts expose Make default beside their routine action. Menus fit their contents, keep compact rows, and return keyboard focus on dismissal. Rename account focuses the editable name; Escape restores its saved value. Failed actions retain their message and offer Refresh settings; refresh preserves unfinished account labels and stays available during uncertain installation status. Settings controls have 36px targets, expanded to 44px for coarse pointers.
 
@@ -584,6 +634,7 @@ One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms 
 - **Do** break a word too long for any column inside its cell, and only then, so no table runs past what the pane shows and no other table splits a word.
 - **Do** write every size read in the document, the margin or the chat on the reading scale, and let chrome follow zoom.
 - **Do** serve every face from the vendored OFL woff2 files; the runtime never reaches a font service.
+- **Do** add a palette as one entry in the one list of appearances and two theme files that pass the validator; let a refusal stand and change the theme, never the floor.
 
 ### Don't:
 - **Don't** use the hand for a button, a link, a panel fill or a session's output.
@@ -599,3 +650,4 @@ One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms 
 - **Don't** let colour be the only signal for waiting, delivered, applied, stale, human, session or unknown.
 - **Don't** set uppercase tracked labels above headlines as lead-ins; they only head a list.
 - **Don't** lighten the pencil or use Faint for live text; both are already at their floor.
+- **Don't** give a palette a third accent, or colour headings, bold text or links; a palette changes the neutrals, the hand and Session Ink, nothing more.
