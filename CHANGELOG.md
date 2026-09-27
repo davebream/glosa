@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.35] — 2026-09-27
+
 ### Added
 
 - The desktop app has a Dock badge and notifications. The badge counts what waits on you across every
@@ -1404,7 +1406,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.34...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.35...HEAD
+[0.1.0-alpha.35]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.34...v0.1.0-alpha.35
 [0.1.0-alpha.34]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.33...v0.1.0-alpha.34
 [0.1.0-alpha.33]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.32...v0.1.0-alpha.33
 [0.1.0-alpha.32]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.31...v0.1.0-alpha.32
