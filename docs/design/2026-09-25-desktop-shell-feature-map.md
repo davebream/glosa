@@ -111,6 +111,10 @@ Preload exposes at most `openFolder()`, `notify()`, `revealInFinder()`, beside t
 token. No daemon route gains a path. `revealInFinder()` exists (#160): it takes no argument, and the
 main process derives the file from the window's URL and the folder `glosa open` answered with. The
 File menu's "Reveal in Finder" (⌥⌘R) does the same for the focused window without a preload call.
+`notify()` carries the Dock badge as well as notifications (#391): `notify({ id, title, body, badge })`,
+so the bridge stays at these three calls. The SPA sums every workspace's `attention_count` and
+`decision_count` for the badge, and notifies, only while its window is unfocused, for a new request
+that asks something, a chat that starts waiting on a decision, and on a desk surface a finished reply.
 
 ## 4. Decisions before the shell exists
 

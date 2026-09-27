@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- The desktop app has a Dock badge and notifications. The badge counts what waits on you across every
+  workspace: attention requests and chats waiting on a decision. While the app is not in front, it
+  notifies you when an agent asks a question, a review or an approval, when a chat starts waiting on
+  a decision, and on a desk window when a chat reply finishes. Clicking a notification brings its
+  window back; the same event is never shown twice (#391).
 - The desktop app can reveal a document in Finder: File, Reveal in Finder (⌥⌘R), or a document
   pane's More menu. The page sends no path; the app works out the file from its own window and
   refuses anything that resolves outside the workspace folder. The window's folder is now the

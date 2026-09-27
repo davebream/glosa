@@ -108,7 +108,7 @@ export function canonicalMode(raw) {
  *   surfaceKind: SurfaceKind,
  *   appearance: ReturnType<typeof createAppearanceController> | null,
  *   onFocusChange: (next: FocusChange) => void,
- *   shell: { revealInFinder?: () => Promise<unknown> } | null,
+ *   shell: { revealInFinder?: () => Promise<unknown>, notify?: (message: any) => Promise<unknown> } | null,
  * }} BootstrapMountOptions */
 
 /**

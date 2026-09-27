@@ -12,12 +12,14 @@ import {
   loopbackApiOrigin,
   navigationDecision,
   needsConfirmation,
+  notifyDecision,
   openArgsFor,
   parseGlosaUrl,
   parseOpenEnvelope,
   plainPath,
   preloadShouldExpose,
   quitDecision,
+  RecentIds,
   type RoutedWindow,
   representedFile,
   revealTarget,
@@ -397,5 +399,53 @@ describe("glosa:// links (#392)", () => {
       "glosa://open?path=%2Fx",
     );
     expect(linkFromArgv(["/tmp/folder"])).toBeNull();
+  });
+});
+
+describe("notify: the Dock badge and notifications from the SPA (#391)", () => {
+  test("a badge is a whole number from zero up; anything else is ignored", () => {
+    const seen = new RecentIds();
+    expect(notifyDecision({ badge: 3 }, seen)).toEqual({ badge: 3 });
+    expect(notifyDecision({ badge: 0 }, seen)).toEqual({ badge: 0 });
+    for (const badge of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "2", null])
+      expect(notifyDecision({ badge }, seen)).toEqual({});
+  });
+
+  test("a badge alone shows nothing", () => {
+    expect(notifyDecision({ badge: 2 }, new RecentIds()).show).toBeUndefined();
+  });
+
+  test("the same id is shown once, however many windows report it", () => {
+    const seen = new RecentIds();
+    const message = { id: "attention:b:q1", title: "beta", body: "Should the second section go?" };
+    expect(notifyDecision(message, seen).show).toEqual({ title: "beta", body: "Should the second section go?" });
+    expect(notifyDecision(message, seen).show).toBeUndefined();
+    expect(notifyDecision({ ...message, id: "attention:b:q2" }, seen).show).toBeDefined();
+  });
+
+  test("title and body are clamped as before, and a missing title reads glosa", () => {
+    const shown = notifyDecision({ id: "x", title: "t".repeat(200), body: "b".repeat(600) }, new RecentIds()).show;
+    expect(shown?.title.length).toBe(120);
+    expect(shown?.body.length).toBe(400);
+    expect(notifyDecision({ body: "only a body" }, new RecentIds()).show).toEqual({
+      title: "glosa",
+      body: "only a body",
+    });
+  });
+
+  test("nothing to show without a title or a body; junk payloads are ignored", () => {
+    const seen = new RecentIds();
+    expect(notifyDecision({ id: "x" }, seen)).toEqual({});
+    expect(notifyDecision(null, seen)).toEqual({});
+    expect(notifyDecision("text", seen)).toEqual({});
+  });
+
+  test("the remembered ids are bounded: the oldest is forgotten past the limit", () => {
+    const seen = new RecentIds(2);
+    expect(seen.add("1")).toBe(true);
+    expect(seen.add("2")).toBe(true);
+    expect(seen.add("3")).toBe(true);
+    expect(seen.add("1")).toBe(true);
+    expect(seen.add("3")).toBe(false);
   });
 });

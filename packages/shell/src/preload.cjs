@@ -14,8 +14,10 @@ if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin
     presentationToken: () => ipcRenderer.invoke("glosa:presentation-token"),
     /** Opens the native folder picker; the main process runs `glosa open` on the choice. */
     openFolder: () => ipcRenderer.invoke("glosa:open-folder"),
-    /** An OS notification. Title and body only; the main process truncates both. */
-    notify: (title, body) => ipcRenderer.invoke("glosa:notify", { title, body }),
+    /** The Dock badge and OS notifications (#391): `{ id, title, body, badge }`, all optional.
+     * A badge alone sets the count; a title or body shows a notification once per id. It carries
+     * no path. The main process validates and clamps every field. */
+    notify: (message) => ipcRenderer.invoke("glosa:notify", message),
     /** Shows the document this window's route names, or its folder, in Finder. Takes no argument:
      * the main process works out the path from the window's own URL and folder (A3, #160). */
     revealInFinder: () => ipcRenderer.invoke("glosa:reveal"),

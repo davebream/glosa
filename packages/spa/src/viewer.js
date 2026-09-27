@@ -20,6 +20,7 @@ import { mountAppearanceControl } from "./appearance.js";
 import { createArtifactPane, MODES } from "./artifact-pane.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAttentionTray } from "./attention-tray.js";
+import { createAttentionWatch } from "./attention-watch.js";
 import { createChatPane } from "./chat-pane.js";
 import { createDataAccess } from "./data-access.js";
 import { createDictationController } from "./dictation.js";
@@ -118,7 +119,7 @@ export { INTENTS, initialModeState, isParked, MODES, modeReducer, morphArtifactC
  *   layoutStorage?: any,
  *   faceStore?: any,
  *   dictationController?: any,
- *   shell?: { revealInFinder?: () => Promise<unknown> } | null,
+ *   shell?: { revealInFinder?: () => Promise<unknown>, notify?: (message: any) => Promise<unknown> } | null,
  * }} [options]
  */
 export function mountApp(
@@ -161,6 +162,17 @@ export function mountApp(
   // pre-seeding made refreshWorkspaces' "already selected" guard skip the deep-link entirely.
   let currentSlug = null;
   let stopStream = null;
+  // The Dock badge and OS notifications (#391): only inside the desktop shell, never in a tab.
+  const attentionWatch =
+    typeof desktopShell?.notify === "function"
+      ? createAttentionWatch({
+          dataAccess,
+          bridge: /** @type {any} */ (desktopShell),
+          desk,
+          currentSlug: () => currentSlug,
+          hasFocus: () => document.hasFocus(),
+        })
+      : null;
   let dock = null;
   let knownArtifacts = new Map(); // path → summary, for restore validation and tab state
   /** @type {Map<string, any>} */
@@ -1374,8 +1386,10 @@ export function mountApp(
         for (const pane of panes.values()) void pane.refreshArtifact?.();
         void attentionTray.refresh();
         void refreshAgentFeedback();
+        attentionWatch?.resync();
       },
       onEvent: (frame) => {
+        attentionWatch?.handleFrame(frame);
         if (frame.event === "artifact" && frame.data?.path) refreshOpenArtifact(frame.data.path);
         if (frame.event === "artifact_index") void refreshArtifactIndex();
         if (frame.event === "journal") {
@@ -1732,17 +1746,20 @@ export function mountApp(
 
   // Coming back to the tab is when another workspace may have been opened or closed in a terminal.
   const onWindowFocus = () => {
+    attentionWatch?.refresh();
     if (singlePane || unmounted) return;
     void loadWorkspaces()
       .then(() => refreshStars())
       .catch(() => {});
   };
   window.addEventListener("focus", onWindowFocus);
+  attentionWatch?.start();
 
   void refreshWorkspaces().catch(showWorkspaceError);
 
   const unmount = () => {
     unmounted = true;
+    attentionWatch?.destroy();
     clearTimeout(chatsRefreshTimer);
     stopChatsStream?.();
     document.removeEventListener("keydown", onShortcut);

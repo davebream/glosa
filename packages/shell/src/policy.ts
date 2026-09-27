@@ -424,3 +424,51 @@ export function needsConfirmation(path: string, windows: readonly RoutedWindow[]
 export function linkFromArgv(argv: readonly string[]): string | null {
   return argv.find((arg) => arg.startsWith("glosa://")) ?? null;
 }
+
+/** Ids of notifications already shown, bounded so a long session cannot grow it (#391). Several
+ * windows report the same attention, so the first report shows and the rest are dropped. */
+export class RecentIds {
+  private readonly ids = new Set<string>();
+  private readonly limit: number;
+  constructor(limit = 500) {
+    this.limit = limit;
+  }
+  /** Records `id`. True when it was new; the oldest id is forgotten past the limit. */
+  add(id: string): boolean {
+    if (this.ids.has(id)) return false;
+    this.ids.add(id);
+    if (this.ids.size > this.limit) {
+      const oldest = this.ids.values().next().value;
+      if (oldest !== undefined) this.ids.delete(oldest);
+    }
+    return true;
+  }
+}
+
+export interface NotifyDecision {
+  /** The Dock badge to set: the latest count, never summed across windows. 0 clears it. */
+  badge?: number;
+  /** A notification to show, once per id. */
+  show?: { title: string; body: string };
+}
+
+/**
+ * What one `notify({ id, title, body, badge })` from the SPA does (#391). A badge must be a
+ * whole number from 0 up; anything else is ignored rather than shown. A notification needs a
+ * title or a body, and one whose id was already shown is dropped. Title and body are clamped as
+ * before (120 and 400 characters). The message never carries a path (A3 "Desktop shell").
+ */
+export function notifyDecision(payload: unknown, seen: RecentIds): NotifyDecision {
+  const p = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+  const decision: NotifyDecision = {};
+  if (typeof p.badge === "number" && Number.isInteger(p.badge) && p.badge >= 0) decision.badge = p.badge;
+  const hasText =
+    (typeof p.title === "string" && p.title.length > 0) || (typeof p.body === "string" && p.body.length > 0);
+  if (!hasText) return decision;
+  if (typeof p.id === "string" && p.id.length > 0 && !seen.add(p.id)) return decision;
+  decision.show = {
+    title: typeof p.title === "string" && p.title.length > 0 ? p.title.slice(0, 120) : "glosa",
+    body: typeof p.body === "string" ? p.body.slice(0, 400) : "",
+  };
+  return decision;
+}

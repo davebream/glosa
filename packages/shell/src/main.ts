@@ -13,7 +13,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeTheme, session, shell } from "electron";
 import {
   cliCandidates,
   compatibility,
@@ -22,10 +22,12 @@ import {
   loopbackApiOrigin,
   navigationDecision,
   needsConfirmation,
+  notifyDecision,
   type OpenedWorkspace,
   openArgsFor,
   parseGlosaUrl,
   parseOpenEnvelope,
+  RecentIds,
   type RoutedWindow,
   representedFile,
   revealTarget,
@@ -413,12 +415,31 @@ function installIpc(): void {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     return revealIn(BrowserWindow.fromWebContents(event.sender));
   });
+  // Dock badge and notifications (#391). Every window reports the same daemon-wide attention, so
+  // the badge is the latest value (never a sum) and a notification id already shown is dropped.
+  const shownNotifications = new RecentIds();
+  // Held until clicked or closed: an unreferenced Notification can be collected, and its click
+  // handler with it.
+  const liveNotifications = new Set<Notification>();
   ipcMain.handle("glosa:notify", (event, payload: unknown) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
-    const p = payload as { title?: unknown; body?: unknown } | null;
-    const title = typeof p?.title === "string" ? p.title.slice(0, 120) : "glosa";
-    const body = typeof p?.body === "string" ? p.body.slice(0, 400) : "";
-    if (Notification.isSupported()) new Notification({ title, body }).show();
+    const decision = notifyDecision(payload, shownNotifications);
+    if (decision.badge !== undefined) app.setBadgeCount(decision.badge);
+    if (decision.show && Notification.isSupported()) {
+      const note = new Notification(decision.show);
+      liveNotifications.add(note);
+      note.on("close", () => liveNotifications.delete(note));
+      const sender = BrowserWindow.fromWebContents(event.sender);
+      note.on("click", () => {
+        liveNotifications.delete(note);
+        if (!sender || sender.isDestroyed()) return;
+        if (sender.isMinimized()) sender.restore();
+        sender.show();
+        sender.focus();
+        app.focus({ steal: true });
+      });
+      note.show();
+    }
   });
 }
 
