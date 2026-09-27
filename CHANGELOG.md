@@ -19,8 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   underline and wash, a session's question or pointer) is drawn with the CSS Custom Highlight API,
   and without it the page showed no marks and no warning. Such a browser now shows one notice
   across the top of the page, however many documents are open: "This browser can't show marks on
-  the page. Use Safari 17.2 or later, or Chrome." Notes, the composer and chat work as before
-  (#412).
+  the page. Use Safari 17.2 or later, or Chrome." Notes still list in the margin (#412).
 
 ### Changed
 
