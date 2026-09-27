@@ -271,6 +271,9 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     // Which bytes a run of top-level blocks owns: pure arithmetic over spans, imports nothing.
     "./run-spans.js",
     "./attention-tray.js",
+    // The desktop shell's Dock badge and notifications (#391): reads through the data-access object
+    // it is handed and talks only to the shell's bridge, no daemon reach of its own.
+    "./attention-watch.js",
     "./agent-feedback.js",
     "./viewer-shell.js",
     "./viewer-context-surfaces.js",

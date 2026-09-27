@@ -687,6 +687,38 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(calls).toEqual([[]]);
   });
 
+  test("the Dock badge is reported only in the desktop shell; a browser tab builds no watcher (#391)", async () => {
+    // A tab: no bridge, so nothing reads attention across workspaces or talks to a shell.
+    const browserRoot = dom.document.createElement("div");
+    dom.document.body.append(browserRoot);
+    const browserData = fakeDataAccess();
+    let browserWorkspaceReads = 0;
+    const getWorkspaces = browserData.getWorkspaces.bind(browserData);
+    browserData.getWorkspaces = async () => {
+      browserWorkspaceReads++;
+      return getWorkspaces();
+    };
+    const unmountBrowser = mountApp(browserRoot, { dataAccess: browserData });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const tabReads = browserWorkspaceReads;
+    unmountBrowser();
+    browserRoot.remove();
+
+    // The shell: the watcher reads the workspace list once more and reports the badge.
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const messages: unknown[] = [];
+    const unmount = mountApp(root, {
+      dataAccess: fakeDataAccess(),
+      shell: { notify: async (message: unknown) => void messages.push(message) },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    unmount();
+    expect(messages).toContainEqual({ badge: 0 });
+    // Without a bridge the page read the workspace list only for its own navigator.
+    expect(tabReads).toBeLessThanOrEqual(1);
+  });
+
   test("Class-F artifacts do not offer copy or print tools", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);

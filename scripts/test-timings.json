@@ -216,6 +216,10 @@
     "test/workspace.test.ts": 0.00926
   },
   "estimates": {
+    "packages/spa/test/attention-watch.test.ts": {
+      "seconds": 0.05,
+      "reason": "Initial local Bun 1.4.2 estimate for the attention watcher's pure tests (fake data access, manual timers, no DOM); replace with measured CI medians."
+    },
     "packages/cli/test/install-link.test.ts": {
       "seconds": 0.6,
       "reason": "Initial local Bun 1.4.2 estimate for the recorded-executable link tests (temp homes plus one spawn of main.ts --version); replace with measured CI medians."

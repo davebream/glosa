@@ -132,6 +132,8 @@ const SPA_ASSETS: Record<string, string> = {
   "annotate.js": "text/javascript; charset=utf-8",
   // The agent's half of the Review margin: source→rendered quote resolution and card shaping.
   "agent-request.js": "text/javascript; charset=utf-8",
+  // The desktop shell's Dock badge and notifications (#391); loaded only inside the shell.
+  "attention-watch.js": "text/javascript; charset=utf-8",
   "vendor/idiomorph.js": "text/javascript; charset=utf-8",
   // P3.5 additions — the checkpoint/diff timeline pane and its ONE vendored rendering dependency.
   "history.js": "text/javascript; charset=utf-8",
