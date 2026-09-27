@@ -42,7 +42,7 @@ export function plainHeadingText(raw) {
 }
 
 /**
- * Headings out of a rendered artifact (Read, Review, and Edit's rich face all paint real DOM).
+ * Headings out of a rendered artifact (reading, Note, Edit and the full-page Rich editor all paint real DOM).
  *
  * @param {{ querySelectorAll: (selector: string) => Iterable<any> } | null} root
  * @returns {{ level: number, text: string, el: Element }[]}

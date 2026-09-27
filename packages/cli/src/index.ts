@@ -189,7 +189,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         url: { type: "boolean", description: "Print the ready URL without opening a browser" },
         read: {
           type: "boolean",
-          description: "Open locked in Read mode (hides Review/Edit affordances)",
+          description: "Open read-only: the Note and Edit controls are hidden",
         },
         preview: {
           type: "boolean",

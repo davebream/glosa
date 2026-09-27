@@ -146,7 +146,7 @@ const SPA_ASSETS: Record<string, string> = {
   "attention-tray.js": "text/javascript; charset=utf-8",
   // Which bytes a run of top-level blocks owns (#271). Statically imported by artifact-pane.js —
   // it is pure arithmetic with no imports of its own, so it stays outside the lazy editor bundle
-  // and has to be served with the Read/Review modules rather than beside the editor below.
+  // and has to be served with the reading modules rather than beside the editor below.
   "run-spans.js": "text/javascript; charset=utf-8",
   // Rich markdown editor (the byte-exact source view) + its vendored ProseMirror bundle.
   "rich-editor.js": "text/javascript; charset=utf-8",

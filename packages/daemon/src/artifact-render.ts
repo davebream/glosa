@@ -29,7 +29,7 @@ export function sourceSha256(raw: Buffer): string {
 // re-registering the plugin on every render.
 const renderer = new MarkdownIt(MARKDOWN_PRESET, { ...MARKDOWN_OPTIONS });
 renderer.use(installDataLineStamp);
-// #175 — issue title: "consistent non-manuscript markdown regions". Read/Review must not show a
+// #175 — issue title: "consistent non-manuscript markdown regions". Reading and Note must not show a
 // document's own metadata header or a `%%`-fenced authoring comment (block OR inline) as
 // manuscript; both stay recoverable in source editing, and the rich editor's Edit face carries
 // either verbatim/marked and LABELED rather than hidden (rich-editor.js). `installNonManuscriptRules`

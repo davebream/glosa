@@ -456,7 +456,8 @@ export const askOutputSchema = z
   .strict();
 
 /** Accepts both vocabularies and emits only the current one, so an agent written against the
- * Preview/Annotate names keeps working while the wire converges on Read/Review. */
+ * Preview/Annotate names keeps working while the wire converges on read/review. These are state
+ * names on the wire, not UI labels: the page shows Note and Edit toggles (decisions.md). */
 const presentationMode = z
   .enum(["read", "review", "edit", "preview", "annotate"])
   .transform((value) => (value === "preview" ? "read" : value === "annotate" ? "review" : value))
@@ -466,8 +467,10 @@ export const presentInputSchema = z
   .object({
     path: absoluteFilePath,
     mode: presentationMode.describe(
-      "Initial presentation mode. read creates a read-locked visit; review and edit select an unlocked initial " +
-        "mode. The former names preview and annotate are accepted and normalize to read and review.",
+      "Initial presentation mode. read creates a read-locked visit (plain document, Note and Edit hidden); " +
+        "review opens unlocked with Note on; edit opens unlocked with Edit on. These are link values, not UI " +
+        "labels: the page shows Note and Edit toggles. The former names preview and annotate are accepted and " +
+        "normalize to read and review.",
     ),
     session_id: sessionId
       .optional()

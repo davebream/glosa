@@ -1615,7 +1615,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         // `content` computes to a CSS-quoted string ("\"Private note …\""); a substring match through
         // the quoting is what proves the LABEL TEXT itself, not merely that some `content` exists.
         expect(label.beforeContent).toContain("Private note");
-        expect(label.beforeContent).toContain("hidden from Read/Review");
+        expect(label.beforeContent).toContain("hidden outside Edit");
 
         try {
           await client.keyPress("X");
@@ -1691,7 +1691,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       })()`);
           if (name.includes("inline")) {
             expect(inline.label).toContain("Private note");
-            expect(inline.title).toContain("hidden from Read/Review");
+            expect(inline.title).toContain("hidden outside Edit");
           }
           if (inline.raw !== null) expect(inline.raw).toBe("%%\nprivate note\n%%");
           if (name === "heading inline") expect(inline.headings).toEqual(["Public title"]);

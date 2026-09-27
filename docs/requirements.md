@@ -25,7 +25,11 @@ normative product contract.
 
 ## 0. What changed from v1 (orientation for anyone who read v1)
 - **No cmux coupling** anywhere. SPA runs in any browser over localhost; delivery uses each agent's own push transport plus MCP, not keystroke injection.
-- **In-app editor is IN scope** (Read / Review / Edit modes). v1's "no editing" non-goal is removed.
+- **In-app editor is IN scope.** v1's "no editing" non-goal is removed. A document page has two
+  toggles, **Note** and **Edit**, that turn each other off; neither pressed is plain reading. The
+  full-page editor (Rich or Source) is a tool under More, reached from Edit. `read`, `review` and
+  `edit` remain the state names in links, `glosa open` and `glosa_present`; they are not UI labels
+  (decisions.md: "Note and Edit, two states that turn each other off").
 - **Explicit session binding** is authoritative; terminal cwd is only a generic fallback (F01).
 - **Declarative workspace metadata** replaces embedded producer/domain adapters. An external
   integration describes artifacts through the public CLI or MCP contract; glosa owns no integration
@@ -56,7 +60,7 @@ plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a no
 ```
  user's terminal: interactive `claude` (or `codex`) session(s)      browser (any: Safari-dock / tab / later Electron)
    plugin monitor / app-server attach → register + push stream ·        glosa SPA (served by daemon over http://127.0.0.1)
-   MCP shim (`glosa mcp`) pull/ack/bind · `glosa resolve`/`apply-begin`  Read/Review/Edit · 4 viewers · workspace switcher
+   MCP shim (`glosa mcp`) pull/ack/bind · `glosa resolve`/`apply-begin`  Note/Edit toggles · 4 viewers · workspace switcher
                     │ push stream (SSE), MCP(stdio), CLI — over run/api.sock        │ fetch + streaming-SSE, Bearer (SPA origin)
              ┌──────▼──────────────────────────────────────────────────────────────▼──────┐
              │ glosa daemon — singleton per machine: 2 ports (4646 SPA/API, 4647 class-F)   │
@@ -414,7 +418,7 @@ registration epochs prevent filename collisions and restoration into a replaceme
   version, or compare first. "Moved" is measured by the concurrency identity, which normalizes line
   endings before hashing, so a change that only rewrites them is not a move; the content itself is
   never normalized, on any path (A4 §F05). **Non-manuscript regions** — a leading document
-  metadata header and paired `%%` authoring comments — are hidden in Read/Review and excluded from
+  metadata header and paired `%%` authoring comments — are hidden outside Edit and excluded from
   outline headings. Inline pairs stay within one CommonMark inline block; own-line pairs may span
   multiple lines within their container. Escaped/unmatched delimiters and markers in code remain
   literal. Source Edit retains the source; rich Edit labels metadata and private notes and preserves
@@ -425,9 +429,9 @@ registration epochs prevent filename collisions and restoration into a replaceme
   separate 4647 origin under a capability, document HTML/CSS/JS unmodified except one namespaced glosa
   bridge appended before `</body>`; strict CSP (`sandbox allow-scripts`, `connect-src 'none'`,
   separate origin) makes it safe even opened top-level and enforces "no external calls"; annotation via
-  nonce-authenticated **MessageChannel** bridge to the parent (A3 §1-2). **Edit mode on class F**
+  nonce-authenticated **MessageChannel** bridge to the parent (A3 §1-2). **Edit on class F**
   follows the generic **derived-from edge** (see R7) → opens the source artifact; if the artifact has no
-  derived-from edge it is opaque (Read + Review only, no Edit).
+  derived-from edge it is opaque (reading and Note only, no Edit).
 - **Diff pane**: shadow-git diffs via diff2html; **full history** (compare any two checkpoints, `restore`
   with dirty-worktree guard) per the user scope decision (A6 §F31 3.B). Human vs session vs unknown
   attribution shown; writer-register labels.
@@ -592,8 +596,8 @@ registration epochs prevent filename collisions and restoration into a replaceme
   **Codex provider** (per T2a; app-server push + MCP pull); `resolve`/`apply-begin`/MCP tools. Gate: each
   capability delivers for each provider; monitor-unavailable MCP fallback still delivers; journal records correct
   transport `outcome`.
-- **T3 — SPA shell + class R viewer + three modes + diff/history**: handshake/pairing screens; switcher/
-  sidebar/tabs/follow-mode; markdown Read/Review/Edit; streaming-SSE (fetch) with reconnect replay;
+- **T3 — SPA shell + class R viewer + Note/Edit + diff/history**: handshake/pairing screens; switcher/
+  sidebar/tabs/follow-mode; markdown reading, Note and Edit; streaming-SSE (fetch) with reconnect replay;
   idiomorph; diff2html with full compare + restore. Gate: E2E — annotate a live-updating md file (anchors
   correct, morph preserves scroll); edit-in-glosa attributed `human`; restore with dirty-guard; SSE
   reconnect loses no events; the arrangement AND every pane's state survive a reload in a real
