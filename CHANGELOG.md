@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A text size for reading, chosen per device: 15, 16, 18, 20, 22 or 24, with 18 the default. It
   sets the document, its margin notes, the composer and the chat together; buttons, menus, tabs
   and the navigator keep following zoom, and ⌘+ and ⌘− stay zoom. It is in each document's More
-  menu under the face, as "Text size" with a − value + stepper and "Reset" whenever it is not 18,
+  menu, under the face, as "Text size" with a − value + stepper and "Reset" whenever it is not 18,
   and in Settings > Appearance, where it changes the same setting. It applies at once, before the
   page first paints on the next visit, and keeps the paragraph you were reading at the top of the
   pane. Headings, code blocks and tables grow with the text, and h3 stays larger than the text at
@@ -72,7 +72,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   against 75, 65 on average against 61); at 64ch they match. Serif and Mono keep 68ch (#406).
 - A chat reply goes from 15px to 16px, one step under the document's 18px, and so do the person's
   own messages and the draft (both sans, 15px before). A `###` inside a reply grows with it, from
-  17.55px to 18.72px; code blocks in a reply stay 12px (#406).
+  17.55px to 18.72px; code blocks in a reply stay 12px at the default size (#406).
 - The note rail is laid out around the document column as it paints, not a 707px estimate. At the
   default size in the serif the column is 688px, so the rail opens from a 1186px pane instead of
   1205px, reaches its full 320px at 1344px instead of 1363px, and Review asks a split for 1271px
