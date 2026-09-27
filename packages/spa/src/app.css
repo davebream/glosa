@@ -6221,59 +6221,83 @@ input,
 
 /* ---------- 14. Reduced motion ---------- */
 
-/* Native print/PDF uses the rendered Class-R manuscript, never the application workbench. Literal
-   colors deliberately bypass dark-theme custom properties so the exported page remains readable. */
+/* Native print is the saved manuscript, composed for paper. Follow the selected pane's actual
+   ancestor chain: dockview renders documents in absolutely positioned, paint-contained overlays,
+   not just its split-view tree. Resetting glosa's own boxes cannot release those constraints. */
+@page {
+  margin: 20mm;
+
+  /* An authored (empty) header keeps Chromium from adding its date and document title. */
+  @top-center {
+    content: "";
+  }
+
+  @bottom-center {
+    content: counter(page);
+    font-family: "Source Sans 3", sans-serif;
+    font-size: 12pt;
+    color: #555;
+  }
+}
+
 @media print {
   :root,
   :root[data-theme="dark"] {
     color-scheme: light;
-    background: #ffffff;
+    --bg: #fff;
+    --ink: #202020;
+    --muted: #454545;
+    --surface: #f4f4f4;
+    --border: #ccc;
+    --border-strong: #777;
+    --primary: #202020;
+    background: #fff;
   }
 
+  html,
   body,
-  .glosa-app,
-  .glosa-main,
-  .glosa-pane,
-  .glosa-pane-main,
-  .glosa-content {
-    background: #ffffff !important;
-    color: #1f1f1f !important;
-  }
-
   .glosa-app,
   .glosa-main,
   .glosa-dock-host,
   .glosa-panel,
   .glosa-pane,
-  .glosa-pane-main {
+  .glosa-pane-main,
+  body :has(.glosa-pane[data-printing]) {
     display: block !important;
-    overflow: visible !important;
+    position: static !important;
+    inset: auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
     height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    contain: none !important;
+    container-type: normal !important;
+    transform: none !important;
+    will-change: auto !important;
+    visibility: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    scrollbar-gutter: auto;
+    background: #fff !important;
+    color: #202020 !important;
   }
 
-  /* Several artifacts can be open; exactly one asked to print. artifact-pane.js stamps the pane
-     that did, so the export is never ambiguous about which document it is. */
-  .glosa-app:has(.glosa-pane[data-printing]) .glosa-pane:not([data-printing]) {
-    display: none !important;
-  }
-
+  /* Keep only the branch containing the requested manuscript. This also removes dockview's
+     empty split tree, other tabs, chat/settings panels and overlays outside the app root. */
+  body:has(.glosa-pane[data-printing]) > :not(:has(.glosa-pane[data-printing])),
+  body :has(.glosa-pane[data-printing]) > :not(:has(.glosa-pane[data-printing])):not(.glosa-pane[data-printing]),
+  .glosa-app:has(.glosa-pane[data-printing]) .glosa-pane:not([data-printing]),
+  .glosa-pane > :not(.glosa-pane-main),
+  .glosa-pane-main > :not(.glosa-content),
   .glosa-topbar,
   .glosa-sidebar,
   .glosa-banner,
-  .glosa-artifact-bar,
-  .dv-tabs-and-actions-container,
   .glosa-watermark,
-  .glosa-approval-strip,
-  .glosa-annotate-instructions,
-  .glosa-empty,
-  .glosa-skeleton,
-  .glosa-classf,
-  .glosa-edit-wrap,
-  .glosa-margin,
-  .glosa-markers,
-  .glosa-history,
-  .glosa-conversation,
-  .glosa-shortcuts,
   .glosa-dialog-backdrop,
   .glosa-dialog {
     display: none !important;
@@ -6281,38 +6305,150 @@ input,
 
   .glosa-content {
     display: block !important;
-    width: auto;
-    max-width: none;
-    margin: 0;
+    flex: none;
+    width: 100%;
+    max-width: var(--measure);
+    margin: 0 auto;
     padding: 0;
-    font-family: "Source Serif 4", "Iowan Old Style", Charter, Georgia, serif;
-    font-size: 12pt;
-    line-height: 1.55;
-    text-wrap: wrap;
-    print-color-adjust: exact;
-    -webkit-print-color-adjust: exact;
+    background: #fff !important;
+    color: var(--ink) !important;
+    font-family: var(--font-manuscript);
+    /* Print uses physical points, independently of the selected face's screen size.
+       GOV.UK Accessible communication formats (updated June 2026): minimum 12pt.
+       Butterick's Practical Typography: 120–145% line spacing for printed body text. */
+    --manuscript-size: 12pt;
+    --manuscript-leading: 1.45;
+    font-size: var(--manuscript-size);
+    line-height: var(--manuscript-leading);
+    --prose-gap: 0.85em;
+    overflow-wrap: anywhere;
+    orphans: 3;
+    widows: 3;
+    print-color-adjust: economy;
+    -webkit-print-color-adjust: economy;
   }
 
+  /* Printed headings follow the document scale, never a pane's screen-sized container query. */
+  .glosa-content :is(h1, h2, h3, h4, h5, h6) {
+    break-after: avoid;
+    break-inside: avoid;
+    color: var(--ink);
+  }
+  .glosa-content h1 {
+    font-size: 2em;
+    margin-bottom: 0.8em;
+  }
+  .glosa-content h2 {
+    font-size: 1.5em;
+    margin-top: 1.65em;
+    margin-bottom: 0.45em;
+  }
+  .glosa-content h3 {
+    font-size: 1.25em;
+    margin-top: 1.35em;
+    margin-bottom: 0.35em;
+  }
+  .glosa-content h4 {
+    font-size: 13pt;
+  }
+  .glosa-content h5 {
+    font-size: 1em;
+  }
+  .glosa-content h6 {
+    font-size: 1em;
+    font-style: italic;
+  }
+  .glosa-content :is(h4, h5, h6) {
+    margin-top: 1.1em;
+    margin-bottom: 0.3em;
+  }
+  .glosa-content > :first-child {
+    margin-top: 0;
+  }
+
+  .glosa-content :is(li, tr) {
+    break-inside: avoid;
+  }
+  .glosa-content li:has(p ~ p) {
+    break-inside: auto;
+  }
   .glosa-content blockquote {
-    color: #4a4a4a !important;
+    color: var(--muted);
+    margin-block: 1em;
+    padding-left: 1em;
+    border-color: var(--border-strong);
   }
   .glosa-content hr {
-    border-color: #d9d2c8 !important;
-  }
-  .glosa-content code,
-  .glosa-content pre {
-    background: #f5f0e8 !important;
+    border-color: var(--border-strong);
+    margin-block: 1.6em;
   }
   .glosa-content pre {
-    border-color: #d9d2c8 !important;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow: visible;
+    orphans: 4;
+    widows: 4;
+    font-size: 1em;
+    line-height: 1.5;
+    border-radius: 0;
+    padding: 0.8em;
+    box-decoration-break: clone;
   }
-  .glosa-content th,
-  .glosa-content td {
-    border-color: #d9d2c8 !important;
+  .glosa-content code {
+    font-size: inherit;
+  }
+  .glosa-content table {
+    width: 100%;
+    max-width: 100%;
+    table-layout: auto;
+    font-family: var(--font-manuscript);
+    font-size: 1em;
+    line-height: 1.45;
+    margin-block: 1em;
+    break-inside: auto;
+  }
+  .glosa-content thead {
+    display: table-header-group;
+  }
+  .glosa-content table:has(tr > :nth-child(5)) {
+    table-layout: fixed;
+  }
+  .glosa-content :is(th, td) {
+    min-width: 12ch;
+    padding: 0.5em 0.6em;
+    overflow-wrap: anywhere;
+  }
+  .glosa-content th {
+    color: var(--ink);
+    font-size: inherit;
+  }
+  .glosa-content img {
+    max-width: 100%;
+    max-height: 220mm;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    break-inside: avoid;
   }
   .glosa-content a {
-    color: #1a1511 !important;
-    text-decoration-color: #867f78 !important;
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: var(--muted);
+  }
+
+  /* Review marks are not manuscript content, including generated addresses and CSS highlights. */
+  .glosa-pane[data-mode] .glosa-content [data-address]::before {
+    content: none;
+  }
+  .glosa-pane[data-mode] .glosa-content::highlight(glosa-anchors),
+  .glosa-content::highlight(glosa-anchor),
+  .glosa-content::highlight(glosa-composer-selection),
+  .glosa-content::highlight(glosa-session-asks),
+  .glosa-content::highlight(glosa-session-lit),
+  .glosa-content::highlight(glosa-session-points) {
+    background-color: transparent;
+    color: inherit;
+    text-decoration: none;
   }
 }
 

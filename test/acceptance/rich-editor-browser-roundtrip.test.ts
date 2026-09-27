@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { renderMarkdown } from "../../packages/daemon/src/artifact-render.ts";
 import { tokenPath } from "../../packages/daemon/src/security/token.ts";
 import { randomPort, waitUntil } from "../../packages/daemon/test/helpers.ts";
 
@@ -1888,6 +1889,154 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
   });
 
   describe("browser harness without an application daemon", () => {
+    test(
+      "print specimen escapes dockview clipping, preserves each reading face, and paginates on white paper",
+      async () => {
+        // Print geometry belongs at the real-engine boundary. The renderer, dockview and CSS are
+        // production bytes, including the artifact pane. Only API responses are fixtures; this does not prove native
+        // dialog interaction or a physical printer. PDFs are also inspected during visual review.
+        chromiumPath = await installedChromium(childEnv, (proc) => {
+          probeProcess = proc;
+        });
+        probeProcess = null;
+        const source = readFileSync(
+          new URL("../../packages/spa/test/fixtures/print-specimen.md", import.meta.url),
+          "utf8",
+        );
+        const rendered = renderMarkdown(source);
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>PRIVATE-PRINT-TITLE</title>
+          <link rel="stylesheet" href="/app/vendor/dockview.css"><link rel="stylesheet" href="/app/app.css"></head>
+          <body><div id="app"><div data-screen="ready"><div class="glosa-app"><header class="glosa-topbar">APP-CHROME</header><main class="glosa-main">
+          <aside class="glosa-sidebar">SIDEBAR-CHROME</aside><div class="glosa-dock-host"></div></main></div></div></div>
+          <script type="module">
+          import { createDockview } from '/app/vendor/dockview.js';
+          import { createArtifactPane } from '/app/artifact-pane.js';
+          const content = ${JSON.stringify(rendered).replaceAll("<", "\\u003c")};
+          const source = ${JSON.stringify(source).replaceAll("<", "\\u003c")};
+          const panes = [];
+          const dataAccess = {
+            getArtifact: async (_, path) => ({source_path:path, source_sha256:'fixture', class:'R',
+              content: path === 'specimen.md' ? source : '# Other pane',
+              rendered_html:path === 'specimen.md' ? content : '<h1>OTHER-PANE</h1>'}),
+            getAnnotations: async () => [], getCheckpoints: async () => []
+          };
+          const host = document.querySelector('.glosa-dock-host');
+          const dock = createDockview(host, {defaultRenderer:'always', createComponent: () => {
+            const element = document.createElement('div'); element.className = 'glosa-panel';
+            return {element, init({params}) {
+              const pane = createArtifactPane(element, {dataAccess, slug:'print-fixture',
+                path:params.printing ? 'specimen.md' : 'other.md', initialMode:'review'});
+              panes.push(pane);
+              if (params.printing) pane.element.setAttribute('data-printing','true');
+            }};
+          }});
+          dock.addPanel({id:'specimen',component:'document',params:{printing:true}});
+          dock.addPanel({id:'other',component:'document',params:{printing:false},position:{referencePanel:'specimen',direction:'right'}});
+          await Promise.all(panes.map(pane => pane.ready));
+          dock.layout(1400,750);
+          await document.fonts.ready;
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          window.printFixtureReady = true;
+          </script></body></html>`;
+        const server = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch(req) {
+            const path = new URL(req.url).pathname;
+            if (path === "/") return new Response(html, { headers: { "Content-Type": "text/html" } });
+            if (!path.startsWith("/app/") || path.includes("..")) return new Response("", { status: 404 });
+            const file = new URL(`../../packages/spa/src/${path.slice(5)}`, import.meta.url);
+            return existsSync(file) ? new Response(Bun.file(file)) : new Response("", { status: 404 });
+          },
+        });
+        try {
+          port = server.port!;
+          const { client } = await launchBrowser();
+          cdp = client;
+          expect(
+            await client.evaluate<boolean>(`(async () => {
+            for (let i=0; i<200 && !window.printFixtureReady; i++) await new Promise(r=>setTimeout(r,25));
+            return window.printFixtureReady === true && document.querySelectorAll('[data-printing] h1').length >= 2
+              && document.querySelectorAll('[data-printing] table').length >= 3;
+          })()`),
+          ).toBe(true);
+          const screen = await client.evaluate<any>(`(() => {
+            const pane = document.querySelector('[data-printing]');
+            const overlay = pane.closest('.dv-render-overlay');
+            return {width: overlay.getBoundingClientRect().width, height: overlay.getBoundingClientRect().height,
+              contain: getComputedStyle(overlay).contain};
+          })()`);
+          expect(screen.height).toBeGreaterThan(100);
+          expect(screen.contain).toContain("paint");
+          await client.send("Emulation.setEmulatedMedia", { media: "print" });
+          for (const [face, family, size] of [
+            ["serif", "Source Serif 4", "16px"],
+            ["sans", "Source Sans 3", "16px"],
+            ["mono", "monospace", "16px"],
+          ]) {
+            const state = await client.evaluate<any>(`(async () => {
+              document.documentElement.dataset.theme = 'dark';
+              const pane = document.querySelector('[data-printing]'); pane.dataset.face = ${JSON.stringify(face)};
+              await document.fonts.ready;
+              const article = pane.querySelector('.glosa-content'); const style = getComputedStyle(article);
+              const ancestors = []; for(let node = article; node; node = node.parentElement) {
+                const s = getComputedStyle(node);
+                if(s.overflow !== 'visible' || s.contain !== 'none' || s.position === 'absolute') ancestors.push(node.id || node.className);
+              }
+              return {font:style.fontFamily, size:style.fontSize, leading:style.lineHeight, background:style.backgroundColor, ancestors,
+                smallText:[...article.querySelectorAll('p,li,blockquote,code,th,td')].filter(n=>parseFloat(getComputedStyle(n).fontSize)<16).map(n=>n.tagName),
+                end:article.textContent.includes('END-OF-PRINT-SPECIMEN'),
+                overflow:[...article.querySelectorAll('*')].filter(n=>n.getBoundingClientRect().right > article.getBoundingClientRect().right + 1).map(n=>n.tagName),
+                chrome:[...document.querySelectorAll('.glosa-topbar,.glosa-sidebar,.glosa-provenance,.glosa-artifact-bar,.glosa-pane:not([data-printing])')].filter(n=>n.getBoundingClientRect().height>0).map(n=>n.className)};
+            })()`);
+            expect(
+              state.ancestors,
+              "no screen-sized or paint-contained ancestor can clip the printed manuscript",
+            ).toEqual([]);
+            expect(state.font).toContain(family);
+            expect(state.size).toBe(size);
+            expect(parseFloat(state.leading)).toBeCloseTo(23.2, 1);
+            expect(state.smallText, "manuscript text, including code and tables, stays at least 12pt").toEqual([]);
+            expect(state.background).toBe("rgb(255, 255, 255)");
+            expect(state.end).toBe(true);
+            expect(state.overflow, "tables, code and long identifiers fit the manuscript column").toEqual([]);
+            expect(state.chrome, "only the requested manuscript is printable").toEqual([]);
+            const pdf = await client.send("Page.printToPDF", {
+              paperWidth: 8.2677,
+              paperHeight: 11.6929,
+              printBackground: false,
+              displayHeaderFooter: true,
+            });
+            expect(pdf.error).toBeUndefined();
+            const bytes = Buffer.from(pdf.result.data, "base64");
+            // Chromium writes each PDF page dictionary uncompressed. A print-media DOM assertion
+            // alone does not prove its pagination engine actually emitted more than one page.
+            const pages = bytes.toString("latin1").match(/\/Type\s*\/Page\b/g)?.length ?? 0;
+            expect(pages, "the long specimen produces real PDF pages beyond the original viewport").toBeGreaterThan(5);
+          }
+          await client.send("Emulation.setEmulatedMedia", { media: "screen" });
+          // Dockview restores its overlay through asynchronous resize/layout work. Observe the
+          // expected geometry instead of assuming that two animation frames are sufficient.
+          const restored = await client.evaluate<any>(
+            `(async () => {
+              const n=document.querySelector('[data-printing]').closest('.dv-render-overlay');
+              const expected=${JSON.stringify(screen)}; const deadline=Date.now()+5000; let state;
+              do {
+                const rect=n.getBoundingClientRect();
+                state={width:rect.width,height:rect.height,contain:getComputedStyle(n).contain};
+                if(state.width===expected.width && state.height===expected.height && state.contain===expected.contain) return state;
+                await new Promise(r=>setTimeout(r,25));
+              } while(Date.now()<deadline);
+              return state;
+            })()`,
+          );
+          expect(restored).toEqual(screen);
+        } finally {
+          server.stop(true);
+        }
+      },
+      TEST_TIMEOUT_MS,
+    );
     test(
       "failure path: a Chromium that never opens CDP is reported with argv and streams, and does not survive",
       async () => {
