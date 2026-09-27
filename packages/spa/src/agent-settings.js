@@ -4,9 +4,10 @@ import { mountMcpSettings } from "./agent-mcp-settings.js";
 import { appearanceList } from "./appearance.js";
 import { actionMenu, agentIcon, agentName } from "./agent-ui.js";
 import { confirmDialog } from "./dialog.js";
+import { mountTextSizeControl } from "./text-size.js";
 import { createElement as el } from "./viewer-shell.js";
 
-export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
+export function mountAgentSettings(host, { dataAccess, onChange, appearance, textSize = null }) {
   let disposed = false,
     login,
     busy = false,
@@ -72,7 +73,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
   ]);
   for (const [label, panel] of [
     ["Agents & accounts", agents],
-    ...(appearance ? [["Appearance", appearancePage]] : []),
+    ...(appearance || textSize ? [["Appearance", appearancePage]] : []),
   ]) {
     const item = el("button", {
       type: "button",
@@ -103,7 +104,19 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
       }),
     );
   }
-  appearancePage.append(appearanceOptions);
+  if (appearance) appearancePage.append(appearanceOptions);
+  // The text size step (#406): the same control and the same store as the document's More menu,
+  // so a change in either is the other's too.
+  const textSizeField = el("div");
+  const textSizeHint = el("p", {
+    id: "glosa-settings-text-size-hint",
+    className: "glosa-settings-hint",
+    textContent: "Sets the document, its notes and the chat. Menus and buttons follow zoom (⌘+ and ⌘−).",
+  });
+  const textSizeControl = textSize
+    ? mountTextSizeControl(textSizeField, textSize, { variant: "settings", describedBy: textSizeHint.id })
+    : null;
+  if (textSizeControl) appearancePage.append(textSizeField, textSizeHint);
   const stopAppearance = appearance?.subscribe(({ preference }) => {
     for (const button of appearanceOptions.children)
       button.setAttribute("aria-pressed", String(button.dataset.themeChoice === preference));
@@ -765,6 +778,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
       disposed = true;
       stopInstallationPolling();
       stopAppearance?.();
+      textSizeControl?.destroy();
       loginAbort.abort();
       void login?.destroy().catch(() => {});
       root.remove();

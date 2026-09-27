@@ -20,6 +20,7 @@ export const CONTRACT_VERSION = "1.20";
 import { mountApp } from "./viewer.js";
 import { createDataAccess } from "./data-access.js";
 import { createAppearanceController, reportAppearanceToShell } from "./appearance.js";
+import { createTextSizeStore } from "./text-size.js";
 
 // Constructed before `main()` performs its handshake so all four screens inherit appearance.
 // appearance-preload.js already applied the same resolution synchronously before first paint;
@@ -28,6 +29,9 @@ const appearance = typeof window === "undefined" ? null : createAppearanceContro
 // Inside the desktop shell, the window's first frame and native UI follow what the page resolved
 // (#405). A no-op in a browser tab, which has no bridge.
 if (appearance) reportAppearanceToShell(appearance, /** @type {any} */ (window).glosaShell);
+// The text size step (#406), likewise applied before first paint by text-size-preload.js; this
+// store takes over changing and persisting it for the page lifetime.
+const textSize = typeof window === "undefined" ? null : createTextSizeStore();
 
 const MESSAGES = {
   down: "glosa daemon isn't running: run `glosa open`.",
@@ -110,6 +114,7 @@ export function canonicalMode(raw) {
  *   readLock: boolean,
  *   surfaceKind: SurfaceKind,
  *   appearance: ReturnType<typeof createAppearanceController> | null,
+ *   textSize: ReturnType<typeof createTextSizeStore> | null,
  *   onFocusChange: (next: FocusChange) => void,
  *   shell: { revealInFinder?: () => Promise<unknown>, notify?: (message: any) => Promise<unknown> } | null,
  * }} BootstrapMountOptions */
@@ -475,6 +480,7 @@ async function main() {
       readLock,
       surfaceKind: route.kind ?? "companion",
       appearance,
+      textSize,
       // The desktop shell's bridge, present only in its own window on the SPA's origin (R-P3).
       shell: /** @type {any} */ (window).glosaShell ?? null,
       onFocusChange: (next) =>

@@ -417,6 +417,16 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     }
   });
 
+  it("the text size preload and its store are fixed allowlisted JavaScript assets", async () => {
+    // shell.html loads the preload blocking, before the stylesheet; unserved, every page would lose
+    // its stored text size and text-size.js, which every pane imports, would fail to load.
+    for (const name of ["text-size-preload.js", "text-size.js"]) {
+      const res = await fetch(apiUrl(`/app/${name}`));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("text/javascript; charset=utf-8");
+    }
+  });
+
   it("the dock engine and its stylesheet are allowlisted, so the SPA needs no bundler and no inline style", async () => {
     // The workbench vendors dockview-core rather than importing it by bare specifier, because the
     // SPA has no build step (docs/requirements.md:343). Its stylesheet is served as a real

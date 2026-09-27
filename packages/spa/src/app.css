@@ -102,19 +102,47 @@
   --font-serif: "Source Serif 4", "Iowan Old Style", Charter, Georgia, serif;
   --font-sans: "Source Sans 3", system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  /* The reading scale (#406). One step sets the size of every reading surface: the document now,
+     and the notes and the chat with it once a reader can choose the step. The step is a number of
+     pixels at the browser's default font size, 18 by default, and everything read in the document
+     is a rem value times `--reading-scale`, its ratio to 18. So at the default step each size is
+     exactly what it was, and a browser set to a larger default font carries the whole page with it.
+     Below the default the smaller sizes stop at a floor instead of shrinking with the body: no
+     face's body under 15px, the ladder's own floor; no table under 13px; no code block or table
+     head under 12px. Chrome (buttons, menus, tabs, the navigator, labels) never reads the scale: it
+     follows zoom. */
+  --reading-step: 18;
+  --reading-scale: calc(var(--reading-step) / 18);
+  --reading-size: calc(var(--reading-step) * 0.0625rem);
+  /* Margin notes, the composer and a session's message sit two steps under the document and stop
+     at 15, the ladder's foot and their size at the default step (text-size-preload.js writes the
+     step). Quotes in the margin keep their ratio to the note. */
+  --note-step: 15;
+  --note-scale: calc(var(--note-step) / 15);
+  --note-size: calc(var(--note-step) * 0.0625rem);
+  /* The chat sits one step under the document and stops at 15: 16 beside the default 18. Its code
+     keeps 12px at the default step and grows with it, never under 12. */
+  --chat-step: 16;
+  --chat-size: calc(var(--chat-step) * 0.0625rem);
+  --chat-code-size: max(0.75rem, calc(0.75rem * var(--chat-step) / 16));
+
   /* The manuscript's face and size. A pane sets these from its artifact's chosen face
-     (`.glosa-pane[data-face]`, below); Default is the serif. */
+     (`.glosa-pane[data-face]`, below); Default is the serif, at the step itself. */
   --font-manuscript: var(--font-serif);
-  --manuscript-size: var(--text-body-serif);
+  --manuscript-size: var(--reading-size);
   --manuscript-leading: 1.62;
+  /* h4 to h6: the serif sets them at the body's size, so weight carries the step down from h3, and
+     600 is what bold body text already is; 650 keeps a heading a heading. `--heading-minor-floor`
+     is the least they may be, in em of the body. */
+  --heading-minor-weight: 650;
+  --heading-minor-floor: 1em;
 
   /* Fixed rem scale, ratio ~1.125 (product register). */
   --text-2xs: 0.6875rem; /* 11 — counts, navigator section labels */
   --text-xs: 0.75rem; /* 12 — state labels, timestamps */
   --text-sm: 0.8125rem; /* 13 — chrome default, annotations */
   --text-base: 0.9375rem; /* 15 — panel body */
-  --text-md: 1.0625rem; /* 17 — h4–h6 */
-  --text-body-serif: 1.125rem; /* 18 — the manuscript body in Source Serif 4 */
+  --text-md: 1.0625rem; /* 17: settings section headings; h4 to h6 in the sans and mono faces */
   --text-lg: 1.1875rem; /* 19 — panel titles */
   --text-xl: 1.375rem; /* 22 — screen headlines */
 
@@ -173,37 +201,46 @@
   --delay-reveal: 200ms;
 
   /* Layout. */
-  --nav-width: 232px; /* the contract's width: at 1440 it leaves the pane its 1205px rail floor */
+  --nav-width: 232px; /* the contract's width: at 1440 it leaves the pane room for the note rail */
   --margin-width: 320px;
   --topbar-height: 3rem;
   --artifact-bar-height: 40px;
   --nav-foot-height: 44px;
   --strip-height: 36px; /* the tab strip; the navigator's first row shares this band */
   --tray-strip-height: 35px; /* the collapsed annotations tray: its 34px toggle over a 1px rule */
+  /* The line length, in the manuscript's own face: `ch` resolves where it is used, inside
+     .glosa-content. The sans face sets its own, below. */
   --measure: 68ch;
-  /* The painted width of the manuscript column: a 68ch serif measure plus its two 2rem gutters.
-     Fixed in px because the annotation ladder below has to reason about it from OUTSIDE the
-     manuscript context, where `68ch` would measure the chrome face and lie by ~110px. MEASURED
-     from the built page when the serif was Iowan Old Style (643px plus two 2rem gutters). Source
-     Serif 4 at 18px sets narrower (68ch = 624px, 688px painted), as do the sans and mono faces, so
-     the ladder stays conservative for all three and the rail floor did not move with the face. Keep in step with
-     --measure, .glosa-content's padding, and artifact-pane.js's MARGIN_RAIL_FLOOR. */
+  /* The painted width of the manuscript column: the measure plus its two 2rem gutters.
+     `68ch` can only be resolved inside the manuscript's face, and the rail, the Edit column and
+     the gutter dots reason about the column from outside it. So artifact-pane.js measures the
+     column as it paints (at every step, face and browser default font size) and sets this on the
+     pane. This value is only the fallback until it has: what the column measured when the serif
+     was Iowan Old Style at 17px. */
   --manuscript-block: 707px;
 }
 
 /* The writer's face, per artifact. artifact-pane.js stamps the pane from face.js; the whole
    manuscript surface — rendered, rich editor, quotes that echo it — reads the same variable.
-   Default (no attribute) is the serif. */
+   Default (no attribute) is the serif. Each face keeps its own size in proportion to the step. */
 .glosa-pane[data-face="sans"] {
   --font-manuscript: var(--font-sans);
-  --manuscript-size: 1rem;
+  --manuscript-size: max(0.9375rem, calc(1rem * var(--reading-scale)));
   --manuscript-leading: 1.6;
+  /* At 600, the weight of bold text, h4 to h6 need size to stand above the body: a sixteenth more. */
+  --heading-minor-weight: 600;
+  --heading-minor-floor: 1.0625em;
+  /* The sans sets more letters in a `ch` than the serif: at 68ch its lines averaged about 79
+     characters. 64ch brings it back near the serif's line. */
+  --measure: 64ch;
 }
 
 .glosa-pane[data-face="mono"] {
   --font-manuscript: var(--font-mono);
-  --manuscript-size: 0.9375rem;
+  --manuscript-size: max(0.9375rem, calc(0.9375rem * var(--reading-scale)));
   --manuscript-leading: 1.65;
+  --heading-minor-weight: 600;
+  --heading-minor-floor: 1.0625em;
 }
 
 /* Registered so `100ch` is computed where it is DECLARED — inside the source face's mono context
@@ -2277,6 +2314,184 @@ input,
   font-family: var(--font-mono);
 }
 
+/* The text size stepper (#406, text-size.js): one control in two places, the pane's More menu
+   (a row under the face) and Settings > Appearance. A label, then one outline track holding
+   − value +, in the secondary button's vocabulary: no fill, a Strong Border edge, ink. The value
+   is the control, a spinbutton, so the whole track takes the focus ring when it has focus. − and
+   + take the pointer; hover lays a Sunken bed, a press a Quiet Border one, and at an end of the
+   ladder the one that would do nothing turns Faint with no bed. Reset is a recessive verb, shown
+   only off the default, placed where its arrival moves nothing. */
+.glosa-text-size {
+  --stepper-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.glosa-stepper {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  height: var(--stepper-height);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+}
+
+.glosa-stepper:has(.glosa-stepper-value:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.glosa-text-size .glosa-stepper-step {
+  display: grid;
+  place-items: center;
+  width: calc(var(--stepper-height) - 2px);
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  /* 6px track less its 1px edge: concentric. */
+  border-radius: calc(var(--radius-control) - 1px);
+  background: none;
+  color: var(--muted);
+  opacity: 1;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-text-size .glosa-stepper-step:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-text-size .glosa-stepper-step:active:not(:disabled) {
+  background: var(--border);
+  color: var(--ink);
+}
+
+.glosa-text-size .glosa-stepper-step:disabled {
+  display: grid;
+  background: none;
+  color: var(--faint);
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.glosa-stepper-step svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.glosa-stepper-value {
+  display: grid;
+  place-items: center;
+  min-width: 2.5em;
+  padding: 0 var(--space-1);
+  border-inline: 1px solid var(--border);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: default;
+  user-select: none;
+}
+
+.glosa-stepper .glosa-stepper-value:focus-visible {
+  outline: none;
+}
+
+.glosa-text-size .glosa-text-size-reset {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-text-size .glosa-text-size-reset:hover:not(:disabled) {
+  background: none;
+  color: var(--ink);
+}
+
+.glosa-text-size .glosa-text-size-reset[hidden] {
+  display: none;
+}
+
+/* In the menu it is one row, laid out like the rows around it: the icon column, a Muted label,
+   and the track at the row's end. It is not itself a button, so it takes no hover bed. Its 4px of
+   air above and below is what the track's focus ring needs inside the menu's edge. */
+.glosa-text-size[data-variant="menu"] {
+  padding: var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.glosa-text-size[data-variant="menu"] .glosa-text-size-label {
+  flex: 1 1 auto;
+}
+
+/* The row opens its own section of the menu, so it is never read as a fourth face. */
+.glosa-text-size[data-variant="menu"] {
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.glosa-text-size-icon {
+  display: grid;
+  flex: 0 0 auto;
+}
+
+.glosa-text-size-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* In Settings it is a field of the Appearance page: the label over the track, Settings' 36px
+   targets, and Reset beside the track. */
+.glosa-text-size[data-variant="settings"] {
+  --stepper-height: 36px;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-6);
+  font-size: var(--text-sm);
+}
+
+.glosa-text-size[data-variant="settings"] .glosa-text-size-label {
+  flex: 1 0 100%;
+  color: var(--ink);
+  font: 600 var(--text-base) / 1.4 var(--font-sans);
+}
+
+@media (pointer: coarse) {
+  .glosa-text-size,
+  .glosa-text-size[data-variant="settings"] {
+    --stepper-height: 44px;
+  }
+
+  .glosa-text-size .glosa-text-size-reset {
+    min-height: 44px;
+  }
+}
+
 .glosa-pane-tools {
   position: relative;
   flex: 0 0 auto;
@@ -2675,9 +2890,17 @@ input,
    nearest container), not the viewport, and fluidly, so dragging a sash never makes them jump. The
    title is 40px from an 800px pane and bottoms out at 30px from 400px down; set at 40px in a 300px
    column it broke a short title into three lines of display type. The section heading keeps 26px
-   to about 670px and bottoms out at 24px, so the step between the two holds at every width. */
+   to about 670px and bottoms out at 24px, so the step between the two holds at every width.
+
+   Every size is on the reading scale: those pixel values hold at the default step, and each whole
+   clamp, the pane's share included, scales with the step, so the widths at which a heading steps
+   down do not move with it. */
 .glosa-content h1 {
-  font-size: clamp(1.875rem, 1.25rem + 2.5cqi, 2.5rem);
+  font-size: clamp(
+    calc(1.875rem * var(--reading-scale)),
+    calc((1.25rem + 2.5cqi) * var(--reading-scale)),
+    calc(2.5rem * var(--reading-scale))
+  );
   line-height: 1.1;
   font-weight: 650;
   letter-spacing: -0.015em;
@@ -2685,25 +2908,32 @@ input,
 }
 
 .glosa-content h2 {
-  font-size: clamp(1.5rem, 1.25rem + 0.9cqi, 1.625rem);
+  font-size: clamp(
+    calc(1.5rem * var(--reading-scale)),
+    calc((1.25rem + 0.9cqi) * var(--reading-scale)),
+    calc(1.625rem * var(--reading-scale))
+  );
   font-weight: 620;
   letter-spacing: -0.01em;
   margin: var(--space-12) 0 var(--space-3);
 }
 
 .glosa-content h3 {
-  font-size: 1.25rem;
+  font-size: calc(1.25rem * var(--reading-scale));
   line-height: 1.3;
   font-weight: 620;
   margin: var(--space-8) 0 var(--space-2);
 }
 
+/* Never smaller than the text under them: at the body's own size in the serif, and in the smaller
+   sans and mono faces at 17px of the default step, as before, and always a sixteenth above their
+   body where that floor meets it. */
 .glosa-content h4,
 .glosa-content h5,
 .glosa-content h6 {
-  font-size: var(--text-md);
+  font-size: max(var(--heading-minor-floor), calc(var(--text-md) * var(--reading-scale)));
   line-height: 1.4;
-  font-weight: 600;
+  font-weight: var(--heading-minor-weight);
   margin: var(--space-6) 0 var(--space-2);
 }
 
@@ -2744,7 +2974,7 @@ input,
   margin: var(--prose-gap) 0;
 }
 
-/* The serif's true bold is a shout at 17px; semibold is the copy editor's emphasis. */
+/* The serif's true bold is a shout at 18px; semibold is the copy editor's emphasis. */
 .glosa-content strong,
 .glosa-content b {
   font-weight: 600;
@@ -2811,7 +3041,7 @@ input,
 
 .glosa-content pre {
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-size: max(var(--text-xs), calc(var(--text-sm) * var(--reading-scale)));
   line-height: 1.6;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2834,7 +3064,7 @@ input,
 .glosa-content table {
   border-collapse: collapse;
   font-family: var(--font-sans);
-  font-size: var(--text-base);
+  font-size: max(var(--text-sm), calc(var(--text-base) * var(--reading-scale)));
   font-variant-numeric: tabular-nums;
   margin: 0 0 var(--space-6);
 }
@@ -2850,7 +3080,7 @@ input,
 .glosa-content th {
   border-bottom-color: var(--border-strong);
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: max(var(--text-xs), calc(var(--text-sm) * var(--reading-scale)));
   font-weight: 600;
 }
 
@@ -3228,8 +3458,8 @@ input,
    as `calc(var(--measure) + 2 * var(--space-8))` here, the editor column therefore came out 86px
    narrower than the very text it was editing, and the mode switch read as the document shrinking
    and jumping left. `--manuscript-block` exists for exactly this: the manuscript's painted width
-   as a resolved length, usable from outside the serif context. Same token, same column, so the
-   inner surface's own serif `68ch` lands inside it exactly. */
+   as a resolved length, measured by artifact-pane.js in the manuscript's own face and size, usable
+   from outside that context. Same column, so the inner surface's own `68ch` lands inside it. */
 .glosa-edit-wrap {
   flex: 1 0 auto;
   display: flex;
@@ -3759,10 +3989,11 @@ input,
   max-width: 100%;
 }
 
-/* Side rail (annotate mode, pane ≥1130px — artifact-pane.js sets the class off one observed pane
-   width, so the rail/tray decision and the card geometry never disagree): a transparent right
-   rail inside the scroll container; each card is absolutely positioned beside its anchor by
-   layoutMargin. It overlays whitespace, so the manuscript below it never moves. */
+/* Side rail (Review, in a pane wide enough to hold 240px beside the painted column: artifact-pane.js
+   sets the class off one observed pane width and one measured column, so the rail/tray decision
+   and the card geometry never disagree): a transparent right rail inside the scroll container; each
+   card is absolutely positioned beside its anchor by layoutMargin. It overlays whitespace, so the
+   manuscript below it never moves. */
 .glosa-margin-side {
   position: absolute;
   top: 0;
@@ -3794,28 +4025,29 @@ input,
    and the 320px the design asks for (§7).
 
    The `- var(--space-2)` is the pane's own scrollbar. `100cqi` is the PANE's inline size, but the
-   manuscript scrolls inside .glosa-pane-main, whose scrollbar eats ~8px the container query
-   cannot see — without this the rail's edge crosses the manuscript's gutter by a few pixels at
-   every width below 1363. The cards' own 12px rail padding hid that, which is exactly the kind of
-   accidental correctness that breaks the next time the padding changes.
+   manuscript scrolls inside .glosa-pane-main, whose scrollbar eats ~8px `cqi` cannot see — without
+   this the rail's edge crosses the manuscript's gutter by a few pixels near the floor. The cards'
+   own 12px rail padding hid that, which is exactly the kind of accidental correctness that breaks
+   the next time the padding changes.
 
-   At the measured 707px manuscript block that gives the full 320px rail from 1363px of pane, and
-   the 240px floor at 1203px — below which artifact-pane.js stops setting .glosa-margin-side at
-   all and the compact tray takes over. Keep the threshold below in step with MARGIN_RAIL_FLOOR. */
-@container pane (min-width: 1205px) {
-  .glosa-margin-side,
-  .glosa-annotations-tray[data-beside] {
-    --margin-width: clamp(240px, calc((100cqi - var(--manuscript-block)) / 2 - var(--space-2)), 320px);
-  }
+   `--manuscript-block` is the column as it paints, measured by artifact-pane.js, which also sets
+   .glosa-margin-side and the tray's `data-beside` only while the pane holds 240px beside it
+   (`marginRailFloor`). So there is no fixed pane width here. The serif at the default step paints
+   a 688px column, so the rail opens from 1186px of pane and reaches 320px at about 1344px; a
+   larger text size, face or browser font widens the column and opens the rail later, never over
+   the text. */
+.glosa-margin-side,
+.glosa-annotations-tray[data-beside] {
+  --margin-width: clamp(240px, calc((100cqi - var(--manuscript-block)) / 2 - var(--space-2)), 320px);
+}
 
-  /* Beside the rail the tray is the rail's own drawer: the same column, at the pane's foot, holding
-     what the rail cannot place (settled notes, notes that lost their passage). Spanning the pane it
-     would put a 1200px sheet of notes over the manuscript to show a 300px column's worth of cards. */
-  .glosa-annotations-tray[data-beside] {
-    justify-self: end;
-    width: var(--margin-width);
-    border-left: 1px solid var(--border);
-  }
+/* Beside the rail the tray is the rail's own drawer: the same column, at the pane's foot, holding
+   what the rail cannot place (settled notes, notes that lost their passage). Spanning the pane it
+   would put a 1200px sheet of notes over the manuscript to show a 300px column's worth of cards. */
+.glosa-annotations-tray[data-beside] {
+  justify-self: end;
+  width: var(--margin-width);
+  border-left: 1px solid var(--border);
 }
 
 /* The card↔anchor thread (CSS Custom Highlight API): every annotated passage carries a quiet
@@ -4175,7 +4407,7 @@ input,
   font-family: var(--font-manuscript);
   font-style: italic;
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: calc(var(--text-sm) * var(--note-scale));
   margin: 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -4451,7 +4683,7 @@ input,
 .glosa-composer-input,
 .glosa-agent-message {
   font-family: var(--font-serif);
-  font-size: var(--text-base);
+  font-size: var(--note-size);
   line-height: 1.45;
 }
 
@@ -4463,7 +4695,7 @@ input,
   font-family: var(--font-manuscript);
   font-style: italic;
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: calc(var(--text-sm) * var(--note-scale));
   margin: 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -4709,7 +4941,7 @@ input,
 .glosa-composer-quote {
   font-family: var(--font-manuscript);
   font-style: italic;
-  font-size: var(--text-sm);
+  font-size: calc(var(--text-sm) * var(--note-scale));
   color: var(--muted);
   margin: 0;
   display: -webkit-box;
@@ -7159,6 +7391,12 @@ input,
   border-color: var(--ink);
   background: var(--surface);
 }
+.glosa-settings-hint {
+  max-width: 43rem;
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
 .glosa-agent-account-area {
   padding: 0;
   margin: 0;
@@ -7443,7 +7681,7 @@ nav.glosa-chat-actions[hidden] {
   margin-right: max(0px, calc((100% - 46rem) / 2));
 }
 .glosa-chat-message[data-kind="human"] .glosa-chat-text {
-  font: var(--text-base) / 1.6 var(--font-sans);
+  font: var(--chat-size) / 1.6 var(--font-sans);
 }
 .glosa-chat-message[data-kind="detail"] {
   margin-bottom: 10px;
@@ -7465,7 +7703,7 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: var(--text-base) / 1.7 var(--font-serif);
+  font: var(--chat-size) / 1.7 var(--font-serif);
   user-select: text;
 }
 .glosa-chat-pane .glosa-chat-message > button {
@@ -7486,7 +7724,7 @@ nav.glosa-chat-actions[hidden] {
   padding: 12px;
   background: var(--surface-sunken);
   border-radius: 5px;
-  font: var(--text-xs) / 1.6 var(--font-mono);
+  font: var(--chat-code-size) / 1.6 var(--font-mono);
 }
 .glosa-chat-markdown :is(p, ul, ol, pre, blockquote) {
   margin-block: 0.6rem;
@@ -7522,7 +7760,7 @@ nav.glosa-chat-actions[hidden] {
   max-height: 25vh;
   padding: 12px 13px;
   border-radius: 6px;
-  font: var(--text-base) / 1.55 var(--font-sans);
+  font: var(--chat-size) / 1.55 var(--font-sans);
   background: transparent;
 }
 .glosa-chat-draft:focus-visible {
