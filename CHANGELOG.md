@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- In the dark appearance, the button that confirms a destructive action (Delete chat, Discard
+  edits, Restore version) set its label in near-white on the lifted crimson at 2.8:1, below the
+  4.5:1 WCAG AA asks of a 13px label. It now uses the dark paper colour: 6.3:1 at rest and 4.6:1
+  while hovered. The light appearance is unchanged at 7.3:1.
+- A `###` heading inside a chat reply rendered at 12px, smaller than the reply's 15px text, because
+  the style for the label above each message also reached headings inside the reply. It now renders
+  at 17.55px, larger than the text it heads.
+- Code in a fenced code block rendered at 11.05px, 0.85 of the block's 13px, instead of the 13px the
+  design system sets for code blocks. It now renders at 13px. Code inside a line of prose keeps its
+  0.85em.
+- Links in a chat reply used the browser's default blue, rgb(0, 0, 238) in light and
+  rgb(158, 158, 255) in dark. They now take the page's ink with the same muted underline as links in
+  a document.
+
 ## [0.1.0-alpha.36] · 2026-09-27
 
 ### Fixed

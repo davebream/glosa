@@ -912,7 +912,7 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   );
 
   test(
-    "managed chat renders safely, preserves selection while streaming, and sends real keyboard input",
+    "managed chat renders safely and on the design system in both themes, preserves selection while streaming, and sends real keyboard input",
     async () => {
       const { browser, cdpPort } = await launchBrowser();
       const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
@@ -926,7 +926,7 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         configRevision:1, draftRevision:0, draft:'', draftAttachments:[], archived:false,
         settings:{model:'model',effort:'high',permissionMode:'default'},
         turns:[{id:'first',text:'Review my outline',status:'completed'}],
-        content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:'A **clear opening**. <img src=x onerror=alert(1)>'}], decisions:[] };
+        content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:'A **clear opening**. <img src=x onerror=alert(1)>\\n\\n### Next steps\\n\\nRead [the outline guide](https://example.com/guide) before revising.'}], decisions:[] };
       window.chatFixture = { state, sends:[], answers:[], uploads:[], moves:[] };
       const access = {
         getAgentStatus: async () => ({available:true,profiles:[{id:'a',provider:'claude-code',label:'Personal',enabled:true}],capabilities:{a:{models:[{id:'model',name:'Model',efforts:['high']}]}}}),
@@ -1061,6 +1061,102 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       })()`);
       expect(await tab.evaluate<string>("chatFixture.uploads[0].text")).toBe("# Previous outline\n\nA public answer.");
       expect(await tab.evaluate<number>("chatFixture.moves[0].sourceRevision")).toBe(3);
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(1);
+
+      // A reply's own Markdown is set on the conversation's scale. The label above each message is
+      // 12px sans; a `###` inside the reply sits one level down and must not inherit it.
+      const reply = await tab.evaluate<{ heading: number; body: number }>(`(()=>{
+        const reply=document.querySelector('.glosa-chat-history .glosa-chat-markdown');
+        const size=(node)=>parseFloat(getComputedStyle(node).fontSize);
+        return {heading:size(reply.querySelector('h3')),body:size(reply.querySelector('p'))};
+      })()`);
+      expect(reply.heading, "a heading inside a reply is set no larger than the reply's text").toBeGreaterThan(
+        reply.body,
+      );
+      // Colour is read as what paints, never as a token name: `--primary` is resolved on a probe in
+      // the reply's own cascade, and every colour goes through a canvas to sRGB for the WCAG ratio.
+      // The danger button is the chat's own Delete chat confirmation, opened through its menu.
+      const colours = () =>
+        tab.evaluate<{
+          theme: string;
+          link: string;
+          primary: string;
+          danger: { text: string; background: string; ratio: number; x: number; y: number };
+        }>(`(async()=>{
+        const canvas=Object.assign(document.createElement('canvas'),{width:1,height:1});
+        const ctx=canvas.getContext('2d',{willReadFrequently:true});
+        const srgb=(css)=>{ctx.fillStyle='#010203';ctx.fillStyle=css;
+          if(ctx.fillStyle==='#010203') throw new Error('the canvas could not parse '+css);
+          ctx.clearRect(0,0,1,1);ctx.fillRect(0,0,1,1);return [...ctx.getImageData(0,0,1,1).data].slice(0,3);};
+        const lum=(css)=>{const [r,g,b]=srgb(css).map(c=>{c/=255;return c<=0.04045?c/12.92:((c+0.055)/1.055)**2.4;});
+          return 0.2126*r+0.7152*g+0.0722*b;};
+        window.contrast=(a,b)=>{const [hi,lo]=[lum(a),lum(b)].sort((x,y)=>y-x);return (hi+0.05)/(lo+0.05);};
+        const reply=document.querySelector('.glosa-chat-history .glosa-chat-markdown');
+        const probe=document.createElement('span');probe.style.color='var(--primary)';reply.append(probe);
+        const primary=getComputedStyle(probe).color;probe.remove();
+        document.querySelector('[aria-label="Chat actions"]').click();
+        [...document.querySelectorAll('.glosa-agent-menu button')].find(b=>b.textContent==='Delete chat').click();
+        const deadline=Date.now()+3000;
+        while(!document.querySelector('dialog[open] .glosa-btn-danger')) {
+          if(Date.now()>deadline) throw new Error('Delete chat did not ask first');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        const button=document.querySelector('dialog[open] .glosa-btn-danger'),style=getComputedStyle(button),box=button.getBoundingClientRect();
+        return {theme:document.documentElement.dataset.theme,link:getComputedStyle(reply.querySelector('a')).color,primary,
+          danger:{text:style.color,background:style.backgroundColor,ratio:contrast(style.color,style.backgroundColor),
+            x:box.left+box.width/2,y:box.top+box.height/2}};
+      })()`);
+      // Hover darkens the fill toward the dark theme's text, so the hovered state is measured too.
+      const hoveredDanger = async (at: { x: number; y: number }) => {
+        await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at });
+        const hovered = await tab.evaluate<{
+          hover: boolean;
+          text: string;
+          background: string;
+          ratio: number;
+        }>(`(async()=>{
+          const button=document.querySelector('dialog[open] .glosa-btn-danger');
+          await Promise.all(button.getAnimations().map(a=>a.finished));
+          const style=getComputedStyle(button);
+          return {hover:button.matches(':hover'),text:style.color,background:style.backgroundColor,
+            ratio:contrast(style.color,style.backgroundColor)};
+        })()`);
+        await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1, y: 1 });
+        await tab.evaluate(`(async()=>{
+          [...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Cancel').click();
+          const deadline=Date.now()+3000;
+          while(document.querySelector('dialog[open]')) {
+            if(Date.now()>deadline) throw new Error('Cancel did not close the Delete chat dialog');
+            await new Promise(resolve=>requestAnimationFrame(resolve));
+          }
+        })()`);
+        return hovered;
+      };
+      const setScheme = async (value: "light" | "dark") => {
+        await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value }] });
+        await tab.evaluate(`(async()=>{const deadline=Date.now()+3000;
+          while(document.documentElement.dataset.theme!==${JSON.stringify(value)}) {
+            if(Date.now()>deadline) throw new Error('the app never resolved the ${value} system appearance');
+            await new Promise(resolve=>requestAnimationFrame(resolve));
+          }})()`);
+      };
+      for (const scheme of ["light", "dark"] as const) {
+        await setScheme(scheme);
+        const seen = await colours();
+        expect(seen.theme).toBe(scheme);
+        expect(seen.link, `a reply's link is not the page's action ink in ${scheme}`).toBe(seen.primary);
+        expect(
+          seen.danger.ratio,
+          `danger button text ${seen.danger.text} on ${seen.danger.background} in ${scheme}`,
+        ).toBeGreaterThanOrEqual(4.5);
+        const hovered = await hoveredDanger(seen.danger);
+        expect(hovered.hover).toBe(true);
+        expect(
+          hovered.ratio,
+          `hovered danger button text ${hovered.text} on ${hovered.background} in ${scheme}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+      await setScheme("light");
       expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(1);
       await tab.send("Emulation.setDeviceMetricsOverride", {
         width: 480,

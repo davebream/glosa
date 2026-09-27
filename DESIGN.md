@@ -240,7 +240,7 @@ Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand
 - **Session Wash** (Session Ink at 10% over transparent, 14% in dark): the wash on the exact words a question is about, and the ground under a session's quote on its card. The words of the request the reader is on, or whose card is hovered or focused, take a second wash over the first, so they read deeper without a third colour.
 
 ### Semantic
-- **Danger, Crimson** (`{colors.danger}`; 7.3:1): errors, destructive actions, the Remove hover, diff deletions. Held apart from the hand by hue and lightness.
+- **Danger, Crimson** (`{colors.danger}`; 7.3:1): errors, destructive actions, the Remove hover, diff deletions. Held apart from the hand by hue and lightness. Text on a filled danger button is **On Danger** (`--on-danger`): near-white in light (7.3:1), the dark paper in dark (6.3:1, 4.6:1 while hovered), because near-white on the lifted crimson is only 2.8:1.
 - **Warning, Ochre** (`{colors.warn}`; 5.2:1): stale entries, "Lost its place", attention notices.
 - **Success, Sage** (`{colors.ok}`; 5.6:1): the "applied" state and the diff's insert colour; never anywhere a human mark could be mistaken for it.
 
