@@ -35,10 +35,10 @@ the exit criteria that close it.
   Shipped in alpha.18 through alpha.21. Track:
   [#164](https://github.com/davebream/glosa/issues/164).
 - **Phase 0: the loop works again.** A daemon that stops responding recovers, sessions re-register
-  on their next MCP tool call after a daemon restart, an Edit-mode save rewrites only the blocks you
+  on their next MCP tool call after a daemon restart, a save from Edit rewrites only the blocks you
   changed, and the inbox can be listed and cleared from the CLI. Shipped in alpha.18. Track:
   [#163](https://github.com/davebream/glosa/issues/163).
-- **Review mode.** An agent can point at a passage, ask about it, and wait for the answer you give
+- **Questions in the margin.** An agent can point at a passage, ask about it, and wait for the answer you give
   in the margin. Shipped in alpha.17.
 - **Actionable agent feedback.** Bounded annotation context and human-edit hunks now reach Claude
   Code and Codex through their supported hook, gate, and MCP paths, with honest delivery accounting.

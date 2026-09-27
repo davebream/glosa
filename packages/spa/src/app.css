@@ -3594,7 +3594,7 @@ input,
   padding: var(--space-2) 0 0 var(--space-3);
 }
 
-/* Labels distinguish source-only regions from the manuscript shown in Read/Review. */
+/* Labels distinguish source-only regions from the manuscript shown outside Edit. */
 .glosa-rich-surface .glosa-raw::before {
   display: block;
   font-size: 0.75em;
@@ -3604,11 +3604,11 @@ input,
 }
 
 .glosa-rich-surface .glosa-raw[data-glosa-kind="metadata"]::before {
-  content: "Document metadata, hidden from Read/Review";
+  content: "Document metadata, hidden outside Edit";
 }
 
 .glosa-rich-surface .glosa-raw[data-glosa-kind="comment"]::before {
-  content: "Private note, hidden from Read/Review";
+  content: "Private note, hidden outside Edit";
 }
 
 .glosa-rich-surface .glosa-comment-inline {

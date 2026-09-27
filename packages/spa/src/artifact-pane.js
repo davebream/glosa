@@ -420,7 +420,7 @@ export function createArtifactPane(host, deps) {
    * document as it was before the session wrote, indefinitely and silently. */
   let heldExternalRefresh = false;
   /** Lazily fetched editor module namespace: `mountRichEditor`, `blockLayout`, `renderMarkdown`.
-   * A dynamic import, so the Read/Review static graph still cannot reach the ProseMirror bundle
+   * A dynamic import, so the reading/Note static graph still cannot reach the ProseMirror bundle
    * (import-boundary.test.ts pins exactly that). */
   let editorKitPromise = null;
   let sourceFace = false; // within the full-page editor: rich (default) or byte-exact source
@@ -1720,7 +1720,7 @@ export function createArtifactPane(host, deps) {
 
   /** The editor module, fetched once and remembered.
    *
-   * A dynamic import on purpose: `import-boundary.test.ts` pins that the Read/Review static graph
+   * A dynamic import on purpose: `import-boundary.test.ts` pins that the reading/Note static graph
    * cannot reach `vendor/prosemirror.js`, and a static import here would drag 400 KB into the first
    * paint of a document nobody may ever edit. Warmed when an editable artifact opens rather than on
    * the first click, so the reader does not wait for a fetch at the moment they meant to type. */
