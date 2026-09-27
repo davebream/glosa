@@ -291,6 +291,10 @@
     "test/acceptance/marks-real-engine.test.ts": {
       "seconds": 2.3,
       "reason": "Initial local Bun 1.4.2 estimate for the two marks scenarios (each one daemon subprocess and one headless Chromium over raw CDP), 2.2 s locally where agent-question-real-engine measures 5.3 s locally against 5.1 s in CI; replace with measured CI medians."
+    },
+    "test/acceptance/reading-scale-real-engine.test.ts": {
+      "seconds": 13.5,
+      "reason": "Initial local Bun 1.4.2 estimate for the two WCAG scenarios (200 percent zoom and forced text spacing), each one daemon subprocess and one headless Chromium over raw CDP auditing four scroll positions of a long document, a composer and a chat, 13.5 s locally; replace with measured CI medians."
     }
   }
 }
