@@ -1950,12 +1950,20 @@ input,
   display: none;
 }
 
-/* Connection banner: a thin, honest strip across the whole workbench. One banner, never one per
-   pane (2026-09-04 §11) — the connection either holds or it does not, and saying so six times
-   would not make it truer. */
-.glosa-banner {
+/* The banner row holds what is true of the whole workbench, never of one pane (2026-09-04 §11):
+   the connection banner, and the notice for a browser that cannot paint marks (#412). Stacked, so
+   both can be said at once. The row collapses to nothing while neither is shown. */
+.glosa-banners {
   grid-area: banner;
   z-index: var(--z-sticky);
+}
+
+/* Connection banner: a thin, honest strip across the whole workbench. One banner, never one per
+   pane (2026-09-04 §11) — the connection either holds or it does not, and saying so six times
+   would not make it truer. The marks notice is the same strip for the same reason: a browser
+   without the highlight API cannot paint a mark in any pane. */
+.glosa-banner,
+.glosa-marks-notice {
   background: color-mix(in oklch, var(--warn) 12%, var(--bg));
   color: var(--warn);
   border-bottom: 1px solid color-mix(in oklch, var(--warn) 35%, var(--bg));
@@ -6316,7 +6324,7 @@ input,
   .glosa-pane-main > :not(.glosa-content),
   .glosa-topbar,
   .glosa-sidebar,
-  .glosa-banner,
+  .glosa-banners,
   .glosa-watermark,
   .glosa-dialog-backdrop,
   .glosa-dialog {

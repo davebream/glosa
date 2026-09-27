@@ -556,7 +556,7 @@ registration epochs prevent filename collisions and restoration into a replaceme
 
 ## 4. Non-functional  (detail: A6 §F30)
 - **Platform: macOS-only v1** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
-  Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. Non-Darwin →
+  Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥17.2. Non-Darwin →
   exit 5.
 - **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
   unconfigured external runtime calls. After versioned consent, a configured provider may receive

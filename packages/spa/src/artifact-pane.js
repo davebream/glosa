@@ -126,16 +126,24 @@ const HL_SESSION_POINTS = "glosa-session-points";
 const HL_SESSION_LIT = "glosa-session-lit";
 const PANE_HIGHLIGHTS = [HL_ANCHORS, HL_ANCHOR, HL_COMPOSER, HL_SESSION_ASKS, HL_SESSION_POINTS, HL_SESSION_LIT];
 
-const highlightsAvailable = () => typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
+/** Whether this browser can paint a mark at all. Every mark on a document's words is a
+ * `::highlight()` range, and Safari gained the API in 17.2, which is why that is glosa's Safari
+ * floor (requirements §4). A feature test on the two names painting needs, never the user-agent
+ * string. The workspace takes it as an injectable default (viewer.js `highlightsAvailable`). */
+export const highlightsAvailable = () =>
+  typeof CSS !== "undefined" && Boolean(CSS.highlights) && typeof Highlight !== "undefined";
 
 /** name -> (pane token -> that pane's ranges). A Map keyed by object identity so a torn-down
  * pane's contribution is dropped with it and never leaks into another artifact's marks. */
 const highlightContributions = new Map();
 
 /** Replaces one pane's ranges under `name` and repaints the union. An empty array withdraws this
- * pane's contribution; the key itself is deleted only once no pane contributes to it. */
+ * pane's contribution; the key itself is deleted only once no pane contributes to it.
+ *
+ * Returns false, having painted nothing, in a browser without the API. The caller says so: a
+ * page that quietly lacks every mark reads as a document nobody has marked (#412). */
 function contributeHighlight(name, token, ranges) {
-  if (!highlightsAvailable()) return;
+  if (!highlightsAvailable()) return false;
   let byPane = highlightContributions.get(name);
   if (!byPane) highlightContributions.set(name, (byPane = new Map()));
   if (ranges.length) byPane.set(token, ranges);
@@ -143,6 +151,7 @@ function contributeHighlight(name, token, ranges) {
   const all = [...byPane.values()].flat();
   if (all.length) CSS.highlights.set(name, new Highlight(...all));
   else CSS.highlights.delete(name);
+  return true;
 }
 
 // The pane inline size at which the right-hand whitespace beside the manuscript stops holding a
@@ -350,6 +359,10 @@ export function createArtifactPane(host, deps) {
     // such capability and the pane offers no row for it. It takes no path: the shell works out the
     // file from its own window.
     revealInFinder = null,
+    // Called whenever this pane tries to paint a mark in a browser that cannot (see
+    // `contributeHighlight`). The workspace turns it into one notice for the page, however many
+    // panes call it and however often; a pane on its own shows nothing.
+    onMarksUnavailable = () => {},
   } = deps;
 
   let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?, valid_utf8?}
@@ -2980,12 +2993,18 @@ export function createArtifactPane(host, deps) {
 
   const paneHighlightToken = {}; // this pane's identity in the document-global highlight registry
 
+  /** Every mark this pane paints goes through here: its ranges under `name`, or, in a browser
+   * with no highlight API, word to the workspace that the marks are missing. */
+  function paintHighlight(name, ranges) {
+    if (!contributeHighlight(name, paneHighlightToken, ranges)) onMarksUnavailable();
+  }
+
   /** The open composer owns a temporary, persistent selection wash. It deliberately lives in a
    * separate highlight from saved annotation underlines, so closing/sending a draft cannot erase
    * the durable annotation state. */
   function paintComposerSelection() {
     const range = composer ? rangeForTarget(composer.record?.target) : null;
-    contributeHighlight(HL_COMPOSER, paneHighlightToken, range ? [range] : []);
+    paintHighlight(HL_COMPOSER, range ? [range] : []);
   }
 
   let anchoredRanges = []; // [{item, range}] cache from the last underline pass — hit-testing reuses it
@@ -3006,9 +3025,8 @@ export function createArtifactPane(host, deps) {
         if (range) anchoredRanges.push({ item, range });
       }
     }
-    contributeHighlight(
+    paintHighlight(
       HL_ANCHORS,
-      paneHighlightToken,
       anchoredRanges.map((a) => a.range),
     );
   }
@@ -3117,8 +3135,8 @@ export function createArtifactPane(host, deps) {
     }
     // A card whose request was answered or withdrawn under the pointer never gets its mouseleave.
     if (hoveredRequestId && !sessionRanges.has(hoveredRequestId)) hoveredRequestId = null;
-    contributeHighlight(HL_SESSION_ASKS, paneHighlightToken, asks);
-    contributeHighlight(HL_SESSION_POINTS, paneHighlightToken, points);
+    paintHighlight(HL_SESSION_ASKS, asks);
+    paintHighlight(HL_SESSION_POINTS, points);
     paintSessionLit();
     if (located.length > 0) drawSessionBrackets(located);
     renderNotice();
@@ -3203,7 +3221,7 @@ export function createArtifactPane(host, deps) {
     const lit = [...new Set([focusedRequestId, hoveredRequestId])]
       .map((id) => (id ? sessionRanges.get(id) : null))
       .filter(Boolean);
-    contributeHighlight(HL_SESSION_LIT, paneHighlightToken, lit);
+    paintHighlight(HL_SESSION_LIT, lit);
   }
 
   /** The pointer's tab glyph, drawn rather than typed: an arrow character takes its weight and
@@ -3753,7 +3771,7 @@ export function createArtifactPane(host, deps) {
       cardEl.classList.toggle("glosa-annotation-hover", Boolean(item) && cardEl._glosaItem === item);
     }
     const hit = item ? anchoredRanges.find((a) => a.item === item) : null;
-    contributeHighlight(HL_ANCHOR, paneHighlightToken, hit ? [hit.range] : []);
+    paintHighlight(HL_ANCHOR, hit ? [hit.range] : []);
     // The pointer thread's other half: the passage itself offers what the rail would have shown
     // beside it — the note, its delivery state, and the two things you can still do to it.
     if (item) openAnnotationPreview(item);
@@ -3792,9 +3810,9 @@ export function createArtifactPane(host, deps) {
   function connectAnchorHighlight(cardEl, item) {
     const on = () => {
       const range = rangeForTarget(item.record?.target ?? item.target);
-      contributeHighlight(HL_ANCHOR, paneHighlightToken, range ? [range] : []);
+      paintHighlight(HL_ANCHOR, range ? [range] : []);
     };
-    const off = () => contributeHighlight(HL_ANCHOR, paneHighlightToken, []);
+    const off = () => paintHighlight(HL_ANCHOR, []);
     cardEl.addEventListener("mouseenter", on);
     cardEl.addEventListener("mouseleave", off);
     cardEl.addEventListener("focusin", on);

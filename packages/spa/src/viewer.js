@@ -17,7 +17,7 @@ import { isQuestion, selectArrivals } from "./agent-request.js";
 import { mountAgentSettings } from "./agent-settings.js";
 import { actionMenu, agentName } from "./agent-ui.js";
 import { mountAppearanceControl } from "./appearance.js";
-import { createArtifactPane, MODES } from "./artifact-pane.js";
+import { createArtifactPane, highlightsAvailable, MODES } from "./artifact-pane.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAttentionTray } from "./attention-tray.js";
 import { createAttentionWatch } from "./attention-watch.js";
@@ -120,6 +120,7 @@ export { INTENTS, initialModeState, isParked, MODES, modeReducer, morphArtifactC
  *   faceStore?: any,
  *   dictationController?: any,
  *   shell?: { revealInFinder?: () => Promise<unknown>, notify?: (message: any) => Promise<unknown> } | null,
+ *   highlightsAvailable?: () => boolean,
  * }} [options]
  */
 export function mountApp(
@@ -143,6 +144,10 @@ export function mountApp(
     // The desktop shell's bridge (`window.glosaShell`), or null in a browser. The SPA reaches the
     // daemon only through dataAccess (R6); this is the one other way out, and only in the shell.
     shell: desktopShell = null,
+    // Whether this browser paints marks: artifact-pane.js's feature test. Injected so a test DOM
+    // with no highlight registry, which is every happy-dom test, can stand in for a browser that
+    // has one instead of raising the notice below in tests about something else.
+    highlightsAvailable: browserPaintsMarks = highlightsAvailable,
   } = {},
 ) {
   root.textContent = "";
@@ -223,9 +228,18 @@ export function mountApp(
     artifactListEmpty,
     shortcutsEl,
     bannerEl,
+    marksNoticeEl,
     dockHost,
     sidebarEl,
   } = shell.elements;
+  // A browser without the highlight API paints no mark on any document, and every pane finds that
+  // out for itself. The page says it once (#412). Only where this page's own check agrees: that
+  // check is the one a test can replace.
+  const onMarksUnavailable = browserPaintsMarks()
+    ? undefined
+    : () => {
+        marksNoticeEl.hidden = false;
+      };
 
   let chatList = [],
     externalSessions = [],
@@ -1116,6 +1130,7 @@ export function mountApp(
         singlePane ? null : (tabLabels().get(decodePanelId(id)[1]) ?? decodePanelId(id)[1].split("/").pop()),
       faceStore,
       dictationController,
+      onMarksUnavailable,
       // The shell reveals the document the window's route names, and the route follows the active
       // pane (reflectFocus). So a pane's own "Reveal in Finder" makes that pane active first, then
       // yields a turn so the address bar has caught up before the shell reads it (#160).

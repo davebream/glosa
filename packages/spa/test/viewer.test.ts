@@ -3,8 +3,20 @@
 // wrapper (happy-dom), and a mounted-app integration test against a fake data-access object (no
 // real daemon, no real fetch — mountApp never gets to touch either directly).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { initialModeState, isParked, modeReducer, morphArtifactContent, mountApp } from "../src/viewer.js";
+import {
+  initialModeState,
+  isParked,
+  modeReducer,
+  morphArtifactContent,
+  mountApp as mountViewer,
+} from "../src/viewer.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
+
+/** happy-dom has no CSS Custom Highlight registry, so every pane here would report that it cannot
+ * paint marks and raise the notice a real browser without the API gets (#412). These tests are
+ * about other things, so they mount the app as a browser that paints marks. */
+const mountApp: typeof mountViewer = (root, options = {}) =>
+  mountViewer(root, { highlightsAvailable: () => true, ...options });
 
 describe("modeReducer — pure Read/Review/Edit state machine", () => {
   test("read -> review -> edit, all legal, none dirty", () => {
