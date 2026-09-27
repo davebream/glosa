@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.36] · 2026-09-27
+
+### Fixed
+
+- Print / Save as PDF includes the complete Markdown manuscript across pages, without clipping
+  to the docked pane’s screen dimensions. It preserves the selected reading font on white paper,
+  uses 12 pt body, code and table text, and adds a clear heading scale, wrapping code, repeating
+  table headers and page numbers. Chromium’s automatic date, title and workspace URL decorations
+  are suppressed. The print layout has been checked against a reusable synthetic Markdown specimen
+  in all three fonts, both themes and A4/Letter paper (#340).
+
 ## [0.1.0-alpha.35] — 2026-09-27
 
 ### Added
@@ -1406,7 +1417,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.35...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.36...HEAD
+[0.1.0-alpha.36]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.35...v0.1.0-alpha.36
 [0.1.0-alpha.35]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.34...v0.1.0-alpha.35
 [0.1.0-alpha.34]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.33...v0.1.0-alpha.34
 [0.1.0-alpha.33]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.32...v0.1.0-alpha.33
