@@ -1399,14 +1399,27 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
             Buffer.from(shot.result.data, "base64"),
           );
         });
+      // Every media preference this test's paint depends on is pinned, never read from the host:
+      // CI's macOS runner reports reduced motion and a local run does not. `motion` is a parameter
+      // only so the same assertions can be run under `reduce` to show they do not depend on it.
+      const motion = "no-preference";
       const setScheme = async (value: "light" | "dark") => {
-        await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value }] });
+        await tab.send("Emulation.setEmulatedMedia", {
+          features: [
+            { name: "prefers-color-scheme", value },
+            { name: "prefers-reduced-motion", value: motion },
+            { name: "prefers-contrast", value: "no-preference" },
+          ],
+        });
         await tab.evaluate(`(async()=>{const deadline=Date.now()+3000;
           while(document.documentElement.dataset.scheme!==${JSON.stringify(value)}) {
             if(Date.now()>deadline) throw new Error('the app never resolved the ${value} system scheme');
             await new Promise(resolve=>requestAnimationFrame(resolve));
-          }})()`);
+          }
+          for (let frame=0; frame<2; frame++) await new Promise(resolve=>requestAnimationFrame(resolve));
+        })()`);
       };
+      await setScheme("light");
 
       // The composer is the real one: a word selected in Review opens it through the pane's own
       // mouseup handler. A session's question card and three settled entries are the production
