@@ -551,7 +551,15 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     await page.evaluate(SETTLE);
   }
 
-  /** The document, notes shown, laid out and settled: its words on the page and its notes listed. */
+  /** What the desk holds, for a failure message: each pane's mode and width, the tabs, the window. */
+  const DESK = `JSON.stringify({panes:[...document.querySelectorAll('.glosa-pane')].map(p=>({mode:p.dataset.mode,
+    width:Math.round(p.getBoundingClientRect().width)})),tabs:document.querySelectorAll('.dv-tab').length,window:innerWidth})`;
+
+  /** The document, notes shown, laid out and settled: its words on the page, its notes listed, and
+   * the desk done laying out, with the document as its only pane and that pane's width unchanged for
+   * five frames. Every query below reads the first `.glosa-pane`, and the rail's measurements take
+   * the desk around it from the pane's width, so a pane read before the desk has placed it (a
+   * layout restored on reload, a group still settling) would mislead every measurement after it. */
   async function openInReview(page: CdpClient): Promise<void> {
     await page.navigate(
       `http://127.0.0.1:${port}/#${new URLSearchParams({ t: TOKEN, w: slug, a: DOC, mode: "review" })}`,
@@ -561,7 +569,14 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         return pane&&pane.querySelector('.glosa-content')?.textContent.includes(${JSON.stringify(NOTED[1])})
           &&pane.querySelectorAll('.glosa-annotation').length>=${NOTED.length};};
       while(!ready()){if(Date.now()>deadline) throw new Error('the document and its notes never rendered in Review');
-        await new Promise(r=>setTimeout(r,50));}})()`);
+        await new Promise(r=>setTimeout(r,50));}
+      let last=-1,still=0;
+      while(still<5){
+        if(Date.now()>deadline) throw new Error('the desk never settled on the document alone: '+${DESK});
+        await new Promise(r=>requestAnimationFrame(r));
+        const panes=document.querySelectorAll('.glosa-pane');
+        const width=panes.length===1&&panes[0].dataset.mode==='review'?panes[0].getBoundingClientRect().width:0;
+        still=width>0&&width===last?still+1:0;last=width;}})()`);
     await page.evaluate(SETTLE);
   }
 
@@ -885,7 +900,10 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     if (!open) await clickAt(page, ".glosa-pane .glosa-tools-trigger");
     await page.evaluate(`(async()=>{const deadline=Date.now()+3000;
       while(!document.querySelector('${PANE_STEPPER}')?.getBoundingClientRect().width){
-        if(Date.now()>deadline) throw new Error('the More menu never showed the text size stepper');
+        if(Date.now()>deadline) throw new Error('the More menu never showed the text size stepper: '+JSON.stringify({
+          open:document.querySelector('.glosa-pane .glosa-pane-tools')?.dataset.open??null,
+          stepper:Boolean(document.querySelector('${PANE_STEPPER}')),focus:document.activeElement?.className??null,
+          desk:JSON.parse(${DESK})}));
         await new Promise(r=>requestAnimationFrame(r));}})()`);
   }
 
