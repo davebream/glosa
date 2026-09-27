@@ -33,7 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   in the same menu: every document in the folder that has no style of its own opens in it, in every
   browser and in the desktop app, and windows already open on the folder change at once. The menu
   then names it, for example "Folder default: Spec", and a document you set otherwise keeps its own
-  style, Editorial included. glosa keeps the default beside the folder in `~/.glosa/folder-styles.json`, so it
+  style, Editorial included. glosa keeps the default for the folder in `~/.glosa/folder-styles.json`, so it
   survives restarting glosa and reopening the folder. A single file opened on its own has no folder
   default. API contract 1.21 (#407).
 
