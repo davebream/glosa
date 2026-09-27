@@ -395,7 +395,7 @@ const AUDIT = `(()=>{
   // Overlap is checked within each reading surface, and between the margin and the document. The
   // composer and the collection tray float over the page by design, so neither is compared with it.
   const surfaces={document:'.glosa-pane .glosa-content',margin:'.glosa-margin',composer:'.glosa-composer-layer',
-    chat:'.glosa-chat-history',draft:'.glosa-chat-composer'};
+    chat:'.glosa-chat-history',draft:'.glosa-chat-composer',decision:'.glosa-chat-decision'};
   const runs={};
   for(const [key,selector] of Object.entries(surfaces)){
     runs[key]=[];
@@ -422,6 +422,8 @@ interface ChatFixture {
   reply: string;
   person: string;
   draft: string;
+  /** Decisions waiting on the person, in the shape the daemon's chat store keeps them. */
+  decisions?: unknown[];
 }
 /** A reply with a heading, a list, a code block and a link, a question from the person and a draft. */
 const CHAT_FIXTURE: ChatFixture = {
@@ -452,7 +454,8 @@ const mountChat = (
     draft:fixture.draft,draftAttachments:[],archived:false,
     settings:{model:'model',effort:'high',permissionMode:'default'},
     turns:[{id:'first',text:fixture.person,status:'completed'}],
-    content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:fixture.reply}],decisions:[]};
+    content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:fixture.reply}],
+    decisions:(fixture.decisions??[]).map(d=>({...d,expiresAt:new Date(Date.now()+9*60000).toISOString()}))};
   const access={
     getAgentStatus:async()=>({available:true,profiles:[{id:'a',provider:'claude-code',label:'Personal',enabled:true}],capabilities:{a:{models:[{id:'model',name:'Model',efforts:['high']}]}}}),
     getChat:async()=>structuredClone(state),openChatStream:()=>()=>{},
@@ -1920,6 +1923,59 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     person:
       "Review my outline, and say where the argument is weakest. The second section feels thin, and I am not sure the example in it earns its place, so tell me whether to cut it or move it.",
     draft: "A draft that runs long enough to wrap across two lines of the composer before it is sent.",
+    // A question Claude Code's AskUserQuestion raises, as its provider maps it: the questions as the
+    // detail, two questions with the longest labels and descriptions a reply like this one invites,
+    // and "Submit answers", the longest button a provider sends.
+    decisions: [
+      {
+        id: "decision",
+        nativeId: "native-decision",
+        generation: 1,
+        turnId: "first",
+        kind: "question",
+        status: "pending",
+        title: "AskUserQuestion",
+        detail: JSON.stringify({
+          questions: [
+            { question: "Which part of the second section should carry the comparison it promises?" },
+            { question: "Which examples should stay in the outline once the section is revised?" },
+          ],
+        }),
+        choices: [
+          { id: "allow", label: "Submit answers" },
+          { id: "deny", label: "Cancel" },
+        ],
+        allowText: true,
+        questions: [
+          {
+            id: "comparison",
+            question: "Which part of the second section should carry the comparison it promises?",
+            multiple: false,
+            options: [
+              {
+                label: "Move the comparison up so that it opens the second section",
+                description: "The section then leads with what it promised, and the example follows as support.",
+              },
+              {
+                label: "Keep the order and close the section with a paragraph that makes the comparison",
+                description: "Nothing moves; the promise is kept at the end, where a reader may have stopped.",
+              },
+              { label: "Cut the promise from the section's opening sentence instead" },
+            ],
+          },
+          {
+            id: "examples",
+            question: "Which examples should stay in the outline once the section is revised?",
+            multiple: true,
+            options: [
+              { label: "The long path, packages/spa/src/chat-pane.js, in its own paragraph" },
+              { label: "The table of terms" },
+              { label: "The quotation" },
+            ],
+          },
+        ],
+      },
+    ],
   };
 
   interface Type {
@@ -2058,6 +2114,39 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       draft: serif(size, 400, 1.62),
     };
   }
+  interface DecisionReading {
+    shown: boolean;
+    card: Rect;
+    column: Rect;
+    /** The card's content box, inside its border and padding. */
+    inner: { left: number; right: number };
+    options: number;
+    buttons: Array<{ label: string; left: number; right: number; overflow: number }>;
+    /** How far the card, and each of its question groups, runs past its own box sideways. */
+    overflow: number[];
+    /** Options whose radio or checkbox is not on the first line of the option's own words. */
+    apart: string[];
+  }
+  /** The decision card waiting on the person, against the reply's column, in one evaluate. */
+  const DECISION_READING = `(()=>{
+    const r2=(v)=>Math.round(v*100)/100;
+    const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r2(r.left),right:r2(r.right),width:r2(r.width)};};
+    const card=document.querySelector('.glosa-chat-decision');
+    const column=document.querySelector('.glosa-chat-history .glosa-chat-markdown').closest('.glosa-chat-message');
+    const s=getComputedStyle(card),box=card.getBoundingClientRect();
+    return {shown:!card.hidden&&box.width>0,card:rect(card),column:rect(column),
+      inner:{left:r2(box.left+parseFloat(s.borderLeftWidth)+parseFloat(s.paddingLeft)),
+        right:r2(box.right-parseFloat(s.borderRightWidth)-parseFloat(s.paddingRight))},
+      options:card.querySelectorAll('fieldset label').length,
+      buttons:[...card.querySelectorAll(':scope > button')].map(b=>({label:b.textContent,...rect(b),overflow:b.scrollWidth-b.clientWidth})),
+      overflow:[card,...card.querySelectorAll('fieldset')].map(el=>el.scrollWidth-el.clientWidth),
+      apart:[...card.querySelectorAll('fieldset label')].flatMap(label=>{
+        const control=label.querySelector('input').getBoundingClientRect(),words=document.createRange();
+        const text=[...label.childNodes].find(n=>n.nodeType===3&&n.data.trim());words.selectNodeContents(text);
+        const first=[...words.getClientRects()].find(r=>r.width>0);
+        return first&&control.bottom>first.top&&control.top<first.bottom?[]:[text.data.slice(0,40)];})};
+  })()`;
+
   /** What a person or a session wrote in a reply: set in the serif, in ink (quotes excepted). */
   const WRITING = ["p", "li", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "person", "draft"] as const;
   const HEADINGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
@@ -2073,9 +2162,16 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
       await page.evaluate(mountChat("beside", CONVERSATION, 720));
       await page.evaluate(SETTLE);
+      const DECISIONS = "document.querySelector('.glosa-chat-decisions')";
+      const decisions: Record<number, DecisionReading> = {
+        18: await page.evaluate<DecisionReading>(DECISION_READING),
+      };
+      const audits: Record<number, Audit> = { 18: await page.evaluate<Audit>(AUDIT) };
       await shot(page, "chat-light", CHAT, 0);
+      await shot(page, "decision-card-light", DECISIONS, 120);
       await scheme(page, "dark");
       await shot(page, "chat-dark", CHAT, 0);
+      await shot(page, "decision-card-dark", DECISIONS, 120);
       await scheme(page, "light");
       const styles: Partial<Record<StyleName, ChatReading>> = {};
       for (const style of ["editorial", "spec", "mono"] as const) {
@@ -2091,7 +2187,11 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         await page.evaluate(mountChat("beside", CONVERSATION, 960));
         await page.evaluate(SETTLE);
         steps[step] = await page.evaluate<ChatReading>(CHAT_READING);
-        if (step === 24) await shot(page, "chat-largest", CHAT, 0);
+        if (step === 24) {
+          decisions[step] = await page.evaluate<DecisionReading>(DECISION_READING);
+          audits[step] = await page.evaluate<Audit>(AUDIT);
+          await shot(page, "chat-largest", CHAT, 0);
+        }
       }
 
       const editorial = styles.editorial as ChatReading;
@@ -2175,6 +2275,41 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       for (const step of [18, 24]) {
         expect(lines[step], `at step ${step}: a reading line of about 70 characters`).toBeGreaterThanOrEqual(62);
         expect(lines[step], `at step ${step}: a reading line of about 70 characters`).toBeLessThanOrEqual(78);
+      }
+      // A decision waiting on the person sits in the reply's column, edge to edge with the composer,
+      // and nothing in it is cut off, painted over or pushed out of the card: not its longest option,
+      // not its buttons.
+      for (const step of [18, 24]) {
+        const where = `at step ${step}`;
+        const seen = decisions[step] as DecisionReading;
+        expect(seen.shown, `${where}: the question is shown as a card`).toBe(true);
+        expect(seen.options, `${where}: the card holds every option`).toBe(6);
+        expect(
+          Math.abs(seen.card.left - seen.column.left),
+          `${where}: the decision card starts on the reply's column`,
+        ).toBeLessThan(1);
+        expect(
+          Math.abs(seen.card.right - seen.column.right),
+          `${where}: the decision card ends on the reply's column`,
+        ).toBeLessThan(1);
+        expect(
+          seen.buttons.map((button) => button.label),
+          `${where}: the card offers its choices`,
+        ).toEqual(["Submit answers", "Cancel"]);
+        for (const button of seen.buttons) {
+          expect(button.left, `${where}: ${button.label} starts inside the card`).toBeGreaterThanOrEqual(
+            seen.inner.left - 0.5,
+          );
+          expect(button.right, `${where}: ${button.label} ends inside the card`).toBeLessThanOrEqual(
+            seen.inner.right + 0.5,
+          );
+          expect(button.overflow, `${where}: ${button.label} fits its own button`).toBeLessThanOrEqual(0);
+        }
+        expect(seen.overflow, `${where}: nothing in the card runs past it sideways`).toEqual(
+          seen.overflow.map(() => 0),
+        );
+        expect(seen.apart, `${where}: every option's control sits on the first line of its words`).toEqual([]);
+        expectClean(audits[step] as Audit, `${where}: the chat with a decision card`, 40);
       }
     },
     TEST_TIMEOUT_MS,

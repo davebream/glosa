@@ -526,6 +526,7 @@ input,
 .glosa-attention-tray,
 .glosa-agent-feedback-popover,
 .glosa-chat-history,
+.glosa-chat-decisions,
 :is(.glosa-content, .glosa-chat-markdown) pre,
 .glosa-rich-surface,
 .glosa-edit-area,
@@ -8322,10 +8323,13 @@ nav.glosa-chat-actions[hidden] {
   bottom: 290px;
   background: var(--bg) !important;
 }
+/* A long question scrolls here; its scrollbar takes the same room on both edges, as the history's
+   does, so the card stays on the reply's column. */
 .glosa-chat-decisions {
   max-height: 36%;
   overflow: auto;
   flex: none;
+  scrollbar-gutter: stable both-edges;
 }
 /* A decision waiting on the person sits in the reply's column, edge to edge with the composer. */
 .glosa-chat-decision {
@@ -8383,6 +8387,19 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-decision fieldset small {
   color: var(--muted);
   flex-basis: 100%;
+}
+/* An option's words wrap beside its radio or checkbox, never under it: on the reply's column a long
+   option no longer fits one line, and a wrapping row left the control alone on the line above. Its
+   description sits under the words. */
+.glosa-chat-decision fieldset label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 2px;
+}
+.glosa-chat-decision fieldset label > small {
+  grid-column: 2;
 }
 .glosa-external-chat {
   height: 100%;
