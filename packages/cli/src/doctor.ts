@@ -215,7 +215,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     );
   }
 
-  // 5. browser — v1 has no generic way to enumerate/verify an actual Chromium≥111/Safari≥16.4
+  // 5. browser — v1 has no generic way to enumerate/verify an actual Chromium≥111/Safari≥17.2
   // install; this is a best-effort proxy ("can macOS's own `open` launcher hand off to SOMETHING")
   // honestly labeled as such, not a fabricated pass of the real floor check.
   const openPath = deps.which("open");

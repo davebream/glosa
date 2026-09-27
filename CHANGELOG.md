@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   words are gone, a note on an HTML document and a note inside a `%%` comment get no address.
   Managed chats now receive notes the same way, resolved against the document, where before every
   note reached them unresolved. API contract 1.20 (#411).
+- A browser that cannot paint marks on a document's words now says so. Every mark (a note's
+  underline and wash, a session's question or pointer) is drawn with the CSS Custom Highlight API,
+  and without it the page showed no marks and no warning. Such a browser now shows one notice
+  across the top of the page, however many documents are open: "This browser can't show marks on
+  the page. Use Safari 17.2 or later, or Chrome." Notes, the composer and chat work as before
+  (#412).
 
 ### Changed
 
@@ -22,6 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   fades in, so moving down the page no longer blinks a label beside every paragraph the pointer
   crosses. It still leaves as soon as the pointer does, keyboard focus still shows it at once, and
   headings still always show theirs. Under reduced motion it appears without the fade (#411).
+- The lowest supported Safari rises from 16.4 to 17.2, the first Safari that paints marks through
+  the CSS Custom Highlight API. Every macOS glosa supports can run it: Apple ships Safari 17.2 for
+  Monterey, Ventura and Sonoma, and later releases come with a newer Safari. The lowest supported
+  Chromium stays at 111 (#412).
 
 ### Fixed
 

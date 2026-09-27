@@ -10,8 +10,14 @@
 //   §11 a deleted artifact's tab dims; glosa never closes a tab the reader opened
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mountApp } from "../src/viewer.js";
+import { mountApp as mountViewer } from "../src/viewer.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
+
+/** happy-dom has no CSS Custom Highlight registry, so every pane here would report that it cannot
+ * paint marks and raise the notice a real browser without the API gets (#412). Tests about other
+ * things mount the app as a browser that paints marks; the one about the notice says otherwise. */
+const mountApp: typeof mountViewer = (root, options = {}) =>
+  mountViewer(root, { highlightsAvailable: () => true, ...options });
 
 describe("the multi-artifact workbench", () => {
   let dom: DomEnv;
@@ -585,6 +591,26 @@ describe("the multi-artifact workbench", () => {
     expect(root.querySelectorAll(".glosa-banner")).toHaveLength(1);
     // It belongs to the workspace, above the dock — not to any pane.
     expect(banner.closest(".glosa-pane")).toBeNull();
+  });
+
+  test("§11: a browser that cannot paint marks is told once for the whole workbench, never once per pane", async () => {
+    // The trigger is real: happy-dom has no highlight registry, so each pane finds out for itself
+    // when it paints its marks. Only the workbench's own check is set to agree.
+    expect((globalThis as { CSS?: { highlights?: unknown } }).CSS?.highlights).toBeUndefined();
+    const { root } = await mountWithTwoTabs({ highlightsAvailable: () => false });
+    await paint();
+    expect(root.querySelectorAll(".glosa-pane")).toHaveLength(2);
+    const notices = root.querySelectorAll(".glosa-marks-notice") as any;
+    expect(notices).toHaveLength(1);
+    expect(notices[0].hidden).toBe(false);
+    expect(notices[0].textContent).toBe(
+      "This browser can't show marks on the page. Use Safari 17.2 or later, or Chrome.",
+    );
+    // Like the connection banner, it belongs to the workspace, above the dock.
+    expect(notices[0].closest(".glosa-pane")).toBeNull();
+    // Nothing else stopped: both documents are there to read.
+    const bodies = [...root.querySelectorAll(".glosa-pane .glosa-content")].map((content: any) => content.textContent);
+    expect(bodies).toEqual(["notes.mdBody.", "drafts/outline.mdBody."]);
   });
 
   test("the navigator marks every open artifact and reserves 'current' for the active pane", async () => {

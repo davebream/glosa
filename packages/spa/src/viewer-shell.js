@@ -7,7 +7,11 @@
 // inside the pane that holds their artifact — one bar cannot honestly speak for two documents.
 // What stays here is true of the whole workspace: the navigator and its toggle, the brand mark, the
 // workspace name, the attention tray, Agent feedback, Conversation, Appearance, Keyboard
-// shortcuts, and the connection banner.
+// shortcuts, the connection banner, and the notice for a browser that cannot paint marks.
+
+/** What a browser without the CSS Custom Highlight API is told. Every mark on a document's words
+ * paints through it; the notes themselves still list in the margin. */
+const MARKS_UNAVAILABLE = "This browser can't show marks on the page. Use Safari 17.2 or later, or Chrome.";
 
 export function createElement(tag, props = {}, children = []) {
   const node = document.createElement(tag);
@@ -181,6 +185,15 @@ export function createViewerShell(
   // One banner for the whole workspace, above the dock — never one per pane (§11). The connection
   // either holds or it does not; saying so six times would not make it truer.
   const bannerEl = el("div", { className: "glosa-banner", hidden: true, role: "status", textContent: "Reconnecting…" });
+  // The same rule for a browser that cannot paint marks (#412): true of every document on the
+  // page, so said once, in the same row, the first time a pane goes to paint its marks.
+  const marksNoticeEl = el("div", {
+    className: "glosa-marks-notice",
+    hidden: true,
+    role: "status",
+    textContent: MARKS_UNAVAILABLE,
+  });
+  const bannersEl = el("div", { className: "glosa-banners" }, [bannerEl, marksNoticeEl]);
   const dockHost = el("div", { className: "glosa-dock-host" });
   const mainEl = el("div", { className: "glosa-main" }, [dockHost]);
   const shortcutsEl = el("section", {
@@ -207,7 +220,7 @@ export function createViewerShell(
       el("div", { className: "glosa-topbar-actions" }, [agentFeedbackHost, tools]),
       topbarOverlays,
     ]),
-    bannerEl,
+    bannersEl,
     sidebarEl,
     // The navigator's toggle lives in the desk's bottom-left corner, not in the top bar: on a footer
     // strip at the foot of the navigator while it is shown, and in the same spot once it is hidden,
@@ -248,6 +261,7 @@ export function createViewerShell(
       artifactListEmpty,
       shortcutsEl,
       bannerEl,
+      marksNoticeEl,
       dockHost,
       mainEl,
       sidebarEl,
