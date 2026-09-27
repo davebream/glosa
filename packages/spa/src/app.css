@@ -108,7 +108,7 @@
      is a rem value times `--reading-scale`, its ratio to 18. So at the default step each size is
      exactly what it was, and a browser set to a larger default font carries the whole page with it.
      Below the default the smaller sizes stop at a floor instead of shrinking with the body: no
-     face's body under 15px, the ladder's own floor; no table under 13px; no code block or table
+     style's body under 15px, the ladder's own floor; no table under 13px; no code block or table
      head under 12px. Chrome (buttons, menus, tabs, the navigator, labels) never reads the scale: it
      follows zoom. */
   --reading-step: 18;
@@ -126,16 +126,50 @@
   --chat-size: calc(var(--chat-step) * 0.0625rem);
   --chat-code-size: max(0.75rem, calc(0.75rem * var(--chat-step) / 16));
 
-  /* The manuscript's face and size. A pane sets these from its artifact's chosen face
-     (`.glosa-pane[data-face]`, below); Default is the serif, at the step itself. */
+  /* The document's style (#407): face, body size and leading, the gap between blocks, the heading
+     ladder, tables, code and line length. These are Editorial's, the default. A pane stamps its
+     document's style (`.glosa-pane[data-style]`, below) and Spec and Mono replace what they set.
+     Every size is on the reading scale, so a text size step keeps each style's proportions; the
+     margins stay rem, as they were. `.glosa-content` and its elements only ever read these. */
   --font-manuscript: var(--font-serif);
   --manuscript-size: var(--reading-size);
   --manuscript-leading: 1.62;
+  --block-gap: 1.2em; /* in the body's own em, so it scales with it */
+  /* h1 and h2 step down with the pane (`cqi`), each whole clamp on the reading scale. */
+  --h1-size: clamp(
+    calc(1.875rem * var(--reading-scale)),
+    calc((1.25rem + 2.5cqi) * var(--reading-scale)),
+    calc(2.5rem * var(--reading-scale))
+  );
+  --h1-leading: 1.1;
+  --h1-tracking: -0.015em;
+  --h1-margin: 0 0 var(--space-8);
+  --h2-size: clamp(
+    calc(1.5rem * var(--reading-scale)),
+    calc((1.25rem + 0.9cqi) * var(--reading-scale)),
+    calc(1.625rem * var(--reading-scale))
+  );
+  --h2-weight: 620;
+  --h2-margin: var(--space-12) 0 var(--space-3);
+  --h3-weight: 620;
+  --h3-margin: var(--space-8) 0 var(--space-2);
   /* h4 to h6: the serif sets them at the body's size, so weight carries the step down from h3, and
-     600 is what bold body text already is; 650 keeps a heading a heading. `--heading-minor-floor`
-     is the least they may be, in em of the body. */
+     600 is what bold body text already is; 650 keeps a heading a heading. The `em` floor is the
+     least they may be against the body, where the body stops at its own floor. */
+  --h4-size: max(1em, calc(var(--text-md) * var(--reading-scale)));
+  --h5-size: max(1em, calc(var(--text-md) * var(--reading-scale))); /* h5 and h6 */
   --heading-minor-weight: 650;
-  --heading-minor-floor: 1em;
+  --heading-minor-leading: 1.4;
+  --heading-minor-margin: var(--space-6) 0 var(--space-2);
+  --code-size: 0.85em; /* code inside a line of prose */
+  --pre-size: max(var(--text-xs), calc(var(--text-sm) * var(--reading-scale)));
+  --pre-leading: 1.6;
+  --table-font: var(--font-sans);
+  --table-size: max(var(--text-sm), calc(var(--text-base) * var(--reading-scale)));
+  --th-size: max(var(--text-xs), calc(var(--text-sm) * var(--reading-scale)));
+  --th-weight: 600;
+  --th-color: var(--muted);
+  --cell-padding: var(--space-2) var(--space-3);
 
   /* Fixed rem scale, ratio ~1.125 (product register). */
   --text-2xs: 0.6875rem; /* 11 — counts, navigator section labels */
@@ -209,38 +243,85 @@
   --strip-height: 36px; /* the tab strip; the navigator's first row shares this band */
   --tray-strip-height: 35px; /* the collapsed annotations tray: its 34px toggle over a 1px rule */
   /* The line length, in the manuscript's own face: `ch` resolves where it is used, inside
-     .glosa-content. The sans face sets its own, below. */
+     .glosa-content. Spec sets its own, above. */
   --measure: 68ch;
   /* The painted width of the manuscript column: the measure plus its two 2rem gutters.
      `68ch` can only be resolved inside the manuscript's face, and the rail, the Edit column and
      the gutter dots reason about the column from outside it. So artifact-pane.js measures the
-     column as it paints (at every step, face and browser default font size) and sets this on the
+     column as it paints (at every step, style and browser default font size) and sets this on the
      pane. This value is only the fallback until it has: what the column measured when the serif
      was Iowan Old Style at 17px. */
   --manuscript-block: 707px;
 }
 
-/* The writer's face, per artifact. artifact-pane.js stamps the pane from face.js; the whole
-   manuscript surface — rendered, rich editor, quotes that echo it — reads the same variable.
-   Default (no attribute) is the serif. Each face keeps its own size in proportion to the step. */
-.glosa-pane[data-face="sans"] {
+/* The document's style (#407). artifact-pane.js stamps the pane from style.js; the whole
+   manuscript surface (rendered, rich editor, the quotes that echo it) reads the tokens above.
+   Editorial is the root's. Each style keeps its own sizes in proportion to the step, and stops at
+   the same floors: no body under 15px, no code block under 12px.
+
+   Spec is a deliberately denser page for documentation: Source Sans 3 at 16px / 1.5, a 1em gap
+   between blocks, and one heading weight, 650, on every level, so hierarchy comes from size and
+   space (32, 24, 20, 17, then 16). Tables are set in the body's face at the body's size with a 650
+   head, and tables and code blocks may widen past the line (below). */
+.glosa-pane[data-style="spec"] {
   --font-manuscript: var(--font-sans);
   --manuscript-size: max(0.9375rem, calc(1rem * var(--reading-scale)));
-  --manuscript-leading: 1.6;
-  /* At 600, the weight of bold text, h4 to h6 need size to stand above the body: a sixteenth more. */
-  --heading-minor-weight: 600;
-  --heading-minor-floor: 1.0625em;
+  --manuscript-leading: 1.5;
+  --block-gap: 1em;
   /* The sans sets more letters in a `ch` than the serif: at 68ch its lines averaged about 79
      characters. 64ch brings it back near the serif's line. */
   --measure: 64ch;
+  --h1-size: calc(2rem * var(--reading-scale));
+  --h1-leading: 1.2;
+  --h1-tracking: -0.01em;
+  --h1-margin: 0 0 1.5rem;
+  --h2-size: calc(1.5rem * var(--reading-scale));
+  --h2-weight: 650;
+  --h2-margin: 2.25rem 0 0.5rem;
+  --h3-weight: 650;
+  --h3-margin: 1.75rem 0 0.5rem;
+  /* h4 keeps its sixteenth over the body at every step, the floor included; h5 and h6 are the
+     body's size, and 650 keeps them above bold text. */
+  --h4-size: max(1.0625em, calc(1.0625rem * var(--reading-scale)));
+  --h5-size: max(1em, calc(1rem * var(--reading-scale)));
+  --heading-minor-leading: 1.35;
+  --heading-minor-margin: 1.5rem 0 0.375rem;
+  /* A touch larger than Editorial's, so the mono's x-height sits near the sans's. */
+  --code-size: 0.9em;
+  --pre-size: max(var(--text-xs), calc(0.875rem * var(--reading-scale)));
+  --pre-leading: 1.5;
+  --table-size: 1em;
+  --th-size: 1em;
+  --th-weight: 650;
+  --th-color: var(--ink);
+  --cell-padding: 0.5em 0.75em;
 }
 
-.glosa-pane[data-face="mono"] {
+/* Mono is the page as it was set in the mono face: its body and leading, and h4 to h6 at 17px of
+   the default step in 600, a sixteenth above the body where the body reaches its floor, since 600
+   alone is only bold text. Everything else is Editorial's. */
+.glosa-pane[data-style="mono"] {
   --font-manuscript: var(--font-mono);
   --manuscript-size: max(0.9375rem, calc(0.9375rem * var(--reading-scale)));
   --manuscript-leading: 1.65;
+  --h4-size: max(1.0625em, calc(var(--text-md) * var(--reading-scale)));
+  --h5-size: var(--h4-size);
   --heading-minor-weight: 600;
-  --heading-minor-floor: 1.0625em;
+}
+
+/* Spec's wide lane (#407), registered for the same reason as `--source-measure` below: `ch` and
+   `cqi` are computed where they are DECLARED, on `.glosa-content`, in the body's face and against
+   the pane, and inherited as lengths by the tables and code blocks that read them. */
+@property --prose-width {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --wide-extra {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
 }
 
 /* Registered so `100ch` is computed where it is DECLARED — inside the source face's mono context
@@ -2267,21 +2348,21 @@ input,
   text-decoration-thickness: 1px;
 }
 
-/* The manuscript face lives in the pane menu as three radio rows (face.js), the way Appearance
+/* The document's style lives in the pane menu as three radio rows (style.js), the way Appearance
    lives in the workspace menu: a reading preference is a setting, not primary chrome. The chosen
    row is told by weight and a check, never by colour alone; the sample glyph is set in the face
-   it names, so the row shows what it offers. */
-.glosa-face-option {
+   its style uses, so the row shows what it offers. */
+.glosa-style-option {
   position: relative;
   padding-right: calc(var(--space-2) + 18px);
 }
 
-.glosa-face-option[aria-checked="true"] {
+.glosa-style-option[aria-checked="true"] {
   color: var(--ink);
   font-weight: 600;
 }
 
-.glosa-face-option[aria-checked="true"]::after {
+.glosa-style-option[aria-checked="true"]::after {
   content: "";
   position: absolute;
   right: var(--space-2);
@@ -2294,7 +2375,7 @@ input,
   transform: rotate(-45deg);
 }
 
-.glosa-face-sample {
+.glosa-style-sample {
   width: 1.5rem;
   flex: 0 0 auto;
   color: var(--ink);
@@ -2302,20 +2383,36 @@ input,
   line-height: 1;
 }
 
-.glosa-face-option[data-face="default"] .glosa-face-sample {
+.glosa-style-option[data-style="editorial"] .glosa-style-sample {
   font-family: var(--font-serif);
 }
 
-.glosa-face-option[data-face="sans"] .glosa-face-sample {
+.glosa-style-option[data-style="spec"] .glosa-style-sample {
   font-family: var(--font-sans);
 }
 
-.glosa-face-option[data-face="mono"] .glosa-face-sample {
+.glosa-style-option[data-style="mono"] .glosa-style-sample {
   font-family: var(--font-mono);
 }
 
+/* The folder's default, under the three styles. What it is, when there is one, sits on the rows'
+   label line in 12px Muted, a statement rather than a row, so it takes no hover and no focus; the
+   one thing to do about it is the row after it, drawn like the menu's other actions. */
+.glosa-style-folder-note {
+  margin: 0;
+  padding: 2px var(--space-2) var(--space-1) calc(var(--space-2) + 1.5rem + var(--space-2));
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.glosa-style-folder:disabled,
+.glosa-style-folder:disabled:hover {
+  cursor: progress;
+}
+
 /* The text size stepper (#406, text-size.js): one control in two places, the pane's More menu
-   (a row under the face) and Settings > Appearance. A label, then one outline track holding
+   (a row under the style) and Settings > Appearance. A label, then one outline track holding
    − value +, in the secondary button's vocabulary: no fill, a Strong Border edge, ink. The value
    is the control, a spinbutton, so the whole track takes the focus ring when it has focus. − and
    + take the pointer; hover lays a Sunken bed, a press a Quiet Border one, and at an end of the
@@ -2443,7 +2540,7 @@ input,
   flex: 1 1 auto;
 }
 
-/* The row opens its own section of the menu, so it is never read as a fourth face. */
+/* The row opens its own section of the menu, so it is never read as a fourth style. */
 .glosa-text-size[data-variant="menu"] {
   margin-top: var(--space-1);
   padding-top: var(--space-2);
@@ -2563,7 +2660,7 @@ input,
 }
 
 .glosa-pane-menu-group,
-.glosa-face-group {
+.glosa-style-group {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -2573,7 +2670,7 @@ input,
 }
 
 .glosa-pane-menu-group:empty,
-.glosa-face-group:empty {
+.glosa-style-group:empty {
   display: none;
   border: none;
 }
@@ -2868,7 +2965,7 @@ input,
   line-height: var(--manuscript-leading);
   text-wrap: pretty;
   hanging-punctuation: first;
-  --prose-gap: 1.2em; /* the space between blocks, in the body's own em so it scales with it */
+  --prose-gap: var(--block-gap); /* the space between blocks: the style's, in the body's own em */
 }
 
 /* Rendered-markdown element vocabulary. Quiet, book-like; no line numbers in Preview/Annotate
@@ -2881,60 +2978,56 @@ input,
   font-weight: 600;
 }
 
-/* A document scale, set in the same serif as the body: the title is a title, a section opens with
-   air above it, and a subhead sits close to what it introduces. Weight stays near semibold so the
-   headings read as a well-set page rather than a magazine; the optical-size axis gives the title
-   its display cut on its own.
+/* A document scale, set in the body's own face: the title is a title, a section opens with air
+   above it, and a subhead sits close to what it introduces. Editorial keeps its weights near
+   semibold so the headings read as a well-set page rather than a magazine, and the optical-size
+   axis gives the title its display cut on its own; Spec sets every level at 650.
 
-   The title and the section heading step down with the PANE (`cqi` is the pane's inline size, the
-   nearest container), not the viewport, and fluidly, so dragging a sash never makes them jump. The
-   title is 40px from an 800px pane and bottoms out at 30px from 400px down; set at 40px in a 300px
-   column it broke a short title into three lines of display type. The section heading keeps 26px
-   to about 670px and bottoms out at 24px, so the step between the two holds at every width.
+   In Editorial the title and the section heading step down with the PANE (`cqi` is the pane's
+   inline size, the nearest container), not the viewport, and fluidly, so dragging a sash never
+   makes them jump. The title is 40px from an 800px pane and bottoms out at 30px from 400px down;
+   set at 40px in a 300px column it broke a short title into three lines of display type. The
+   section heading keeps 26px to about 670px and bottoms out at 24px, so the step between the two
+   holds at every width.
 
    Every size is on the reading scale: those pixel values hold at the default step, and each whole
    clamp, the pane's share included, scales with the step, so the widths at which a heading steps
-   down do not move with it. */
+   down do not move with it. The values are the style's tokens (`:root` and `.glosa-pane[data-style]`
+   at the top of this file); print sets its own scale over them. */
 .glosa-content h1 {
-  font-size: clamp(
-    calc(1.875rem * var(--reading-scale)),
-    calc((1.25rem + 2.5cqi) * var(--reading-scale)),
-    calc(2.5rem * var(--reading-scale))
-  );
-  line-height: 1.1;
+  font-size: var(--h1-size);
+  line-height: var(--h1-leading);
   font-weight: 650;
-  letter-spacing: -0.015em;
-  margin: 0 0 var(--space-8);
+  letter-spacing: var(--h1-tracking);
+  margin: var(--h1-margin);
 }
 
 .glosa-content h2 {
-  font-size: clamp(
-    calc(1.5rem * var(--reading-scale)),
-    calc((1.25rem + 0.9cqi) * var(--reading-scale)),
-    calc(1.625rem * var(--reading-scale))
-  );
-  font-weight: 620;
+  font-size: var(--h2-size);
+  font-weight: var(--h2-weight);
   letter-spacing: -0.01em;
-  margin: var(--space-12) 0 var(--space-3);
+  margin: var(--h2-margin);
 }
 
 .glosa-content h3 {
   font-size: calc(1.25rem * var(--reading-scale));
   line-height: 1.3;
-  font-weight: 620;
-  margin: var(--space-8) 0 var(--space-2);
+  font-weight: var(--h3-weight);
+  margin: var(--h3-margin);
 }
 
-/* Never smaller than the text under them: at the body's own size in the serif, and in the smaller
-   sans and mono faces at 17px of the default step, as before, and always a sixteenth above their
-   body where that floor meets it. */
+/* Never smaller than the text under them, whatever the style and the step. */
 .glosa-content h4,
 .glosa-content h5,
 .glosa-content h6 {
-  font-size: max(var(--heading-minor-floor), calc(var(--text-md) * var(--reading-scale)));
-  line-height: 1.4;
+  font-size: var(--h5-size);
+  line-height: var(--heading-minor-leading);
   font-weight: var(--heading-minor-weight);
-  margin: var(--space-6) 0 var(--space-2);
+  margin: var(--heading-minor-margin);
+}
+
+.glosa-content h4 {
+  font-size: var(--h4-size);
 }
 
 /* A subhead directly under its section heading closes up; the section's air is already above. */
@@ -3033,7 +3126,7 @@ input,
 
 .glosa-content code {
   font-family: var(--font-mono);
-  font-size: 0.85em;
+  font-size: var(--code-size);
   background: var(--surface);
   border-radius: var(--radius-micro);
   padding: 0.1em 0.35em;
@@ -3041,8 +3134,8 @@ input,
 
 .glosa-content pre {
   font-family: var(--font-mono);
-  font-size: max(var(--text-xs), calc(var(--text-sm) * var(--reading-scale)));
-  line-height: 1.6;
+  font-size: var(--pre-size);
+  line-height: var(--pre-leading);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
@@ -3055,16 +3148,18 @@ input,
   background: none;
   border: none;
   padding: 0;
-  /* The block already sets code's size; the 0.85em above is for code inside a line of prose. */
+  /* The block already sets code's size; `--code-size` is for code inside a line of prose. */
   font-size: inherit;
 }
 
 /* Tables are set editorially: horizontal rules only, a firmer rule under the head, no cell walls
-   and no filled header band. Figures align on tabular numerals. */
+   and no filled header band. Figures align on tabular numerals. Editorial and Mono set them in the
+   sans a step under the body with a small muted head; Spec in its own face and size, headed in
+   650 ink. */
 .glosa-content table {
   border-collapse: collapse;
-  font-family: var(--font-sans);
-  font-size: max(var(--text-sm), calc(var(--text-base) * var(--reading-scale)));
+  font-family: var(--table-font);
+  font-size: var(--table-size);
   font-variant-numeric: tabular-nums;
   margin: 0 0 var(--space-6);
 }
@@ -3072,16 +3167,50 @@ input,
 .glosa-content th,
 .glosa-content td {
   border-bottom: 1px solid var(--border);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--cell-padding);
   text-align: left;
   vertical-align: top;
 }
 
 .glosa-content th {
   border-bottom-color: var(--border-strong);
-  color: var(--muted);
-  font-size: max(var(--text-xs), calc(var(--text-sm) * var(--reading-scale)));
-  font-weight: 600;
+  color: var(--th-color);
+  font-size: var(--th-size);
+  font-weight: var(--th-weight);
+}
+
+/* Spec lets a wide table or code block widen past the prose line, up to about 96ch of the body,
+   centred on the column, into whitespace the note rail never claims: the room each side keeps
+   beyond a full 320px rail. The rail is 240 to 320px wide, so nothing wide ever reaches it, and the
+   room is the same whether the rail is showing or not, so entering Review moves nothing. A pane
+   too narrow to spare that room keeps them on the line, as Editorial does, scrolling a code
+   block's long lines inside it.
+
+   A table is shrink-to-fit: the negative end margin only raises how wide it may grow, so a narrow
+   table stays at its own width on the prose's left edge. A code block is at least the column and
+   grows to its longest line. Either one, once wider than the column, is shifted back by half the
+   difference (`translate` never moves anything around it), and never when narrower. Screen only:
+   print sets tables across the page on its own. */
+@media screen {
+  .glosa-pane[data-style="spec"] .glosa-content {
+    --prose-width: var(--measure);
+    --wide-extra: max(
+      0px,
+      min(96ch - var(--measure), 100cqi - var(--manuscript-block) - 2 * var(--space-2) - 2 * var(--margin-width))
+    );
+  }
+
+  .glosa-pane[data-style="spec"] .glosa-content > table {
+    margin-inline-end: calc(-1 * var(--wide-extra));
+    translate: min(0px, calc(var(--prose-width) / 2 - 50%));
+  }
+
+  .glosa-pane[data-style="spec"] .glosa-content > pre {
+    width: max-content;
+    min-width: 100%;
+    max-width: calc(100% + var(--wide-extra));
+    translate: min(0px, calc(var(--prose-width) / 2 - 50%));
+  }
 }
 
 .glosa-content th:first-child,
@@ -4034,7 +4163,7 @@ input,
    .glosa-margin-side and the tray's `data-beside` only while the pane holds 240px beside it
    (`marginRailFloor`). So there is no fixed pane width here. The serif at the default step paints
    a 688px column, so the rail opens from 1186px of pane and reaches 320px at about 1344px; a
-   larger text size, face or browser font widens the column and opens the rail later, never over
+   larger text size, style or browser font widens the column and opens the rail later, never over
    the text. */
 .glosa-margin-side,
 .glosa-annotations-tray[data-beside] {
@@ -4677,7 +4806,7 @@ input,
 }
 
 /* Human words in the human's colour. A session's entries (.glosa-agent-card) never take it.
-   A note is writing, not chrome, so it is set in the serif whatever face the page is in: the
+   A note is writing, not chrome, so it is set in the serif whatever style the page is in: the
    margin reads as a second hand on the same sheet. */
 .glosa-annotation-body,
 .glosa-composer-input,
@@ -6574,7 +6703,7 @@ input,
     background: #fff !important;
     color: var(--ink) !important;
     font-family: var(--font-manuscript);
-    /* Print uses physical points, independently of the selected face's screen size.
+    /* Print uses physical points, independently of the chosen style's screen size.
        GOV.UK Accessible communication formats (updated June 2026): minimum 12pt.
        Butterick's Practical Typography: 120–145% line spacing for printed body text. */
     --manuscript-size: 12pt;

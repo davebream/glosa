@@ -26,7 +26,7 @@ import { createDataAccess } from "./data-access.js";
 import { createDictationController } from "./dictation.js";
 import { createDiffPane } from "./diff-pane.js";
 import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH } from "./dock.js";
-import { createFaceStore } from "./face.js";
+import { createStyleStore } from "./style.js";
 import { createTextSizeStore } from "./text-size.js";
 import { createCommandPalette } from "./palette.js";
 import { artifactPanelId, chatPanelId, decodePanelId, externalPanelId, settingsPanelId } from "./panel-identity.js";
@@ -118,7 +118,7 @@ export { INTENTS, initialModeState, isParked, MODES, modeReducer, morphArtifactC
  *   appearance?: any,
  *   onFocusChange?: (focus: any) => void,
  *   layoutStorage?: any,
- *   faceStore?: any,
+ *   styleStore?: any,
  *   textSize?: any,
  *   dictationController?: any,
  *   shell?: { revealInFinder?: () => Promise<unknown>, notify?: (message: any) => Promise<unknown> } | null,
@@ -140,8 +140,13 @@ export function mountApp(
     appearance,
     onFocusChange,
     layoutStorage,
-    // The writer's per-artifact face (face.js). One store for every pane; a test passes its own.
-    faceStore = createFaceStore({ storage: layoutStorage ?? undefined }),
+    // Each document's style (style.js), with its folder's default read and written through
+    // dataAccess. One store for every pane; a test passes its own.
+    styleStore = createStyleStore({
+      storage: layoutStorage ?? undefined,
+      loadFolderStyle: dataAccess.getFolderStyle ? (slug) => dataAccess.getFolderStyle(slug) : undefined,
+      saveFolderStyle: dataAccess.setFolderStyle ? (slug, style) => dataAccess.setFolderStyle(slug, style) : undefined,
+    }),
     // The text size step (#406), one per page: every pane's More menu and Settings share it.
     textSize = createTextSizeStore({ storage: layoutStorage ?? undefined }),
     dictationController: injectedDictationController,
@@ -1133,7 +1138,7 @@ export function mountApp(
       // A presented single document has no tab strip, so its pane carries the whole identity.
       getTabLabel: () =>
         singlePane ? null : (tabLabels().get(decodePanelId(id)[1]) ?? decodePanelId(id)[1].split("/").pop()),
-      faceStore,
+      styleStore,
       textSizeStore: textSize,
       dictationController,
       onMarksUnavailable,
@@ -1402,6 +1407,8 @@ export function mountApp(
       },
       onReconnect: () => {
         scheduleChatsRefresh();
+        // A folder default set elsewhere while the stream was down sent its frame to nobody.
+        void styleStore.loadFolder(currentSlug);
         void hydrateClaims();
         void refreshArtifactList();
         for (const pane of panes.values()) void pane.refreshArtifact?.();
@@ -1424,6 +1431,9 @@ export function mountApp(
           void refreshArtifactList();
           for (const pane of panes.values()) void pane.refreshArtifact?.();
         }
+        // Another window set or cleared this folder's default style (A1 §5.23): read it again, and
+        // every document here that follows the folder takes it without a reload.
+        if (frame.event === "folder_style") void styleStore.loadFolder(currentSlug);
         // Any existing workspace-stream activity may coincide with a bind/heartbeat. No new SSE
         // event is needed: refresh the aggregate through the same bounded status read.
         void refreshAgentFeedback();
@@ -1489,7 +1499,9 @@ export function mountApp(
     renderStars();
     renderStarToggle();
     feedbackController.selectWorkspace();
-    await refreshArtifactList();
+    // The folder's default style is read before any pane mounts, so a document that follows it is
+    // set in it from its first paint rather than repainted once the answer arrives.
+    await Promise.all([refreshArtifactList(), styleStore.loadFolder(slug)]);
     await refreshChats().catch(chatFailed("Couldn't load chats"));
     mountDock();
     // The dock was just emptied, so the bar must stop naming the previous workspace's document.

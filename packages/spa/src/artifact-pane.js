@@ -35,7 +35,7 @@ import {
 import { buildAnnotationRecordFromSelection, foldQuote, locateFoldedQuote } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
 import { choiceDialog, confirmDialog } from "./dialog.js";
-import { faceKey, mountFaceControl } from "./face.js";
+import { mountStyleControl, STYLE_NAMES } from "./style.js";
 import {
   collectRenderedHeadings,
   currentHeadingIndex,
@@ -157,7 +157,7 @@ function contributeHighlight(name, token, ranges) {
 
 // The painted document column the rail is laid out around (§7): the measure plus its two 2rem
 // gutters, as `.glosa-content` resolves it in the manuscript's own face. It is MEASURED, from the
-// column's computed `max-width`, because it moves with the text size step, the face and the
+// column's computed `max-width`, because it moves with the text size step, the style and the
 // browser's default font size: at a 20px browser default the serif paints 843px, and a rail sized
 // around a fixed block crossed the column by ~58px in every pane from 1205px to 1363px (#406). This is
 // only the fallback for an engine that cannot resolve the column (a DOM shim): what it measured
@@ -370,9 +370,9 @@ export function createArtifactPane(host, deps) {
     // never printed twice in two adjacent rows. `null` means there is no tab strip at all (the
     // presented-document surface), and the bar carries the whole identity itself.
     getTabLabel = () => null,
-    // The writer's per-artifact face (face.js). Optional: a pane without a store reads in the
-    // default serif and offers no control.
-    faceStore = null,
+    // The document's style (style.js): its own choice, else its folder's default, else Editorial.
+    // Optional: a pane without a store reads in Editorial and offers no control.
+    styleStore = null,
     // The page's text size step (text-size.js), shared by every pane. Optional: a pane without a
     // store reads at the default step and offers no control.
     textSizeStore = null,
@@ -555,7 +555,7 @@ export function createArtifactPane(host, deps) {
   // floor is reckoned from. Written to the pane as `--manuscript-block` for the CSS that also needs
   // it: the rail's width, the Edit column and the gutter dots.
   let manuscriptBlock = MANUSCRIPT_BLOCK_FALLBACK;
-  // Set once the pane's first width and column have been measured, with the width observer. A face
+  // Set once the pane's first width and column have been measured, with the width observer. A style
   // applied before then (the first bind replays the stored one) is part of that first measurement.
   let measured = false;
   let historyVisible = false;
@@ -677,10 +677,11 @@ export function createArtifactPane(host, deps) {
     moveGroup.hidden = moveItems.length > 0 && available === 0;
   }
 
-  // The writer's face for this artifact lives here, among the artifact's other settings, not in
-  // the bar: a reading preference is chosen once and then left alone (face.js fills the group).
-  const faceGroup = el("div", { className: "glosa-face-group" });
-  // The text size step sits right under the face, with it: both say how this device reads.
+  // The document's style lives here, among the document's other settings, not in the bar: a
+  // reading preference is chosen once and then left alone (style.js fills the group, the folder's
+  // default with it, since that is a style too).
+  const styleGroup = el("div", { className: "glosa-style-group" });
+  // The text size step sits right under the style: both say how this device reads.
   const textSizeRow = el("div");
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Document tools" }, [
     historyMenuItem,
@@ -689,7 +690,7 @@ export function createArtifactPane(host, deps) {
     ...(revealButton ? [revealButton] : []),
     printArtifactButton,
     compareButton,
-    faceGroup,
+    styleGroup,
     textSizeRow,
     moveGroup,
     toolsStatus,
@@ -904,24 +905,31 @@ export function createArtifactPane(host, deps) {
   paneEl.setAttribute("data-editor-face", "rich");
   host.append(paneEl);
 
-  // The writer's face for this artifact, stamped on the pane so every manuscript surface in it —
-  // rendered, rich editor, the quotes that echo it — reads one variable (app.css §1).
-  const faceControl = faceStore
-    ? mountFaceControl(faceGroup, faceStore, {
-        getKey: () => {
-          const facePath = currentArtifact?.source_path ?? path;
-          return facePath ? faceKey(slug, facePath) : null;
+  // The document's style, stamped on the pane so every manuscript surface in it (rendered, rich
+  // editor, the quotes that echo it) reads one set of variables (app.css §1).
+  paneEl.setAttribute("data-style", "editorial");
+  const styleControl = styleStore
+    ? mountStyleControl(styleGroup, styleStore, {
+        getTarget: () => {
+          const stylePath = currentArtifact?.source_path ?? path;
+          return stylePath && slug ? { slug, path: stylePath } : null;
         },
-        onChange: (face) => {
-          if (face === "default") paneEl.removeAttribute("data-face");
-          else paneEl.setAttribute("data-face", face);
-          // A face sets its own size and line length, so the column paints at a new width.
+        onChange: (style) => {
+          if (paneEl.getAttribute("data-style") === style) return;
+          paneEl.setAttribute("data-style", style);
+          // A style sets its own size and line length, so the column paints at a new width.
           if (measured) applyPaneWidth(paneWidth);
         },
         onPick: () => setToolsOpen(false, { restoreFocus: true }),
+        // The folder row keeps the menu open, so what it did is said in the menu.
+        onFolderResult: ({ ok, style }) =>
+          setToolsStatus(
+            ok ? `${STYLE_NAMES[style]} is now this folder's default.` : "Couldn't set the folder default. Try again.",
+            { error: !ok },
+          ),
       })
     : null;
-  if (!faceStore) faceGroup.hidden = true;
+  if (!styleStore) styleGroup.hidden = true;
   // A step changes nothing about which artifact is shown, so unlike the face this control never
   // needs to follow the pane; it stays open while a reader steps through sizes.
   const textSizeControl = textSizeStore ? mountTextSizeControl(textSizeRow, textSizeStore) : null;
@@ -1111,6 +1119,9 @@ export function createArtifactPane(host, deps) {
       revealButton,
       printArtifactButton,
       compareButton,
+      // The style rows are menu rows like any other, so the arrow keys reach them. The text size
+      // row is not: its spinbutton takes the arrow keys itself (text-size.js).
+      ...(styleControl?.controls() ?? []),
       ...moveGroup.querySelectorAll("button"),
     ].filter((control) => control && !control.disabled && !control.hidden);
   }
@@ -4878,8 +4889,8 @@ export function createArtifactPane(host, deps) {
   }
   document.fonts?.addEventListener?.("loadingdone", onFontsLoaded);
 
-  /** A new pane width, or the same width around a column that may have changed its own (a face
-   * arrived or was chosen). Crossing the rail floor changes WHERE the cards live (the rail beside
+  /** A new pane width, or the same width around a column that may have changed its own (a font
+   * arrived or a style was chosen). Crossing the rail floor changes WHERE the cards live (the rail beside
    * their passages, or the collection tray), which only renderMargin decides; a width that stays on
    * the same side of the floor only needs the cards re-aligned. Re-laying out alone left a pane that
    * loaded its notes before its first real measurement with an empty rail and a full tray. */
@@ -4977,7 +4988,7 @@ export function createArtifactPane(host, deps) {
       // remove, moved rather than fixed. `loadMergeModule` warms itself on the same reasoning.
       if (runEditingAvailable()) void loadEditorKit();
       setBaseline(currentArtifact.source_sha256, currentArtifact.content ?? ""); // a newly loaded artifact fills the face
-      faceControl?.refresh();
+      styleControl?.refresh();
     } catch (err) {
       loading = false;
       currentArtifact = null;
@@ -5408,7 +5419,7 @@ export function createArtifactPane(host, deps) {
       editArea.removeEventListener("input", onSourceInputForOutline);
       if (outlineSourceTimer) clearTimeout(outlineSourceTimer);
       if (outlineFrame) cancelAnimationFrame(outlineFrame);
-      faceControl?.destroy();
+      styleControl?.destroy();
       stopTextSizeBefore?.();
       stopTextSize?.();
       textSizeControl?.destroy();

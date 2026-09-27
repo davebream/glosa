@@ -685,6 +685,22 @@ export function createDataAccess(deps = {}) {
     openStar(id) {
       return requestJson(`/api/stars/${encodeURIComponent(id)}/open`, { method: "POST" });
     },
+    /** `GET /w/:slug/folder-style` (A1 §5.23) — the folder's default style, `{ style }`, null when
+     * none is set. Refused (422) for a single-file workspace, which has no folder of its own.
+     * @param {string} slug */
+    getFolderStyle(slug) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/folder-style`);
+    },
+    /** `PUT /w/:slug/folder-style` — makes `style` the folder's default. The folder is named by the
+     * workspace's slug; no request names a path (A3 §4 "Folder default style").
+     * @param {string} slug @param {string} style */
+    setFolderStyle(slug, style) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/folder-style`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ style }),
+      });
+    },
     /** `GET /api/status` — machine-wide session/workspace data. The viewer derives explicit
      * connected/stale/unbound state from `workspace_binding` + `liveness`; it never infers a
      * binding from cwd fallback. */

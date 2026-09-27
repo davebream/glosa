@@ -71,6 +71,22 @@ describe("createDataAccess — request shape", () => {
     expect(calls[3]![1].body).toBeUndefined();
   });
 
+  test("a folder's default style is read and set by workspace slug, and the request carries only the style (#407)", async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchFn = async (path: string, init: RequestInit) => {
+      calls.push([path, init]);
+      return jsonResponse(200, { style: init.method === "PUT" ? "spec" : null });
+    };
+    const da = createDataAccess({ fetchFn, storage: fakeStorage({ glosa_token: "tok" }) });
+    expect(await da.getFolderStyle("my ws")).toEqual({ style: null });
+    expect(await da.setFolderStyle("my ws", "spec")).toEqual({ style: "spec" });
+    expect(calls.map(([path, init]) => [path, init.method ?? "GET"])).toEqual([
+      ["/w/my%20ws/folder-style", "GET"],
+      ["/w/my%20ws/folder-style", "PUT"],
+    ]);
+    expect(JSON.parse(String(calls[1]![1].body))).toEqual({ style: "spec" });
+  });
+
   test("getClaims reads the workspace's claims over the SPA's own authed read (issue #155)", async () => {
     const calls: Array<[string, RequestInit]> = [];
     const fetchFn = async (path: string, init: RequestInit) => {
