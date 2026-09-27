@@ -375,6 +375,25 @@ describe("palettes made by others, adapted to the floors (#410)", () => {
     expect(moves).toBe(24);
   });
 
+  test("every palette made by others is credited in THIRD_PARTY_NOTICES.md with its source, author and licence", () => {
+    const LIST = readFileSync(new URL("../src/appearance-list.js", import.meta.url), "utf8");
+    type Palette = { id: string; label: string; credit: string; source?: string };
+    const page = globalThis as { glosaAppearances?: { palettes: Palette[] } };
+    const before = page.glosaAppearances;
+    runInThisContext(LIST, { filename: "appearance-list.js" });
+    const palettes = page.glosaAppearances!.palettes.filter((palette) => palette.source);
+    page.glosaAppearances = before;
+    const notices = readFileSync(new URL("../../../THIRD_PARTY_NOTICES.md", import.meta.url), "utf8");
+    expect(palettes.map((palette) => palette.id)).toEqual(["catppuccin", "gruvbox", "rose-pine"]);
+    for (const palette of palettes) {
+      // "Gruvbox by Pavel Pertsev · MIT/X11": the author and the licence the row names.
+      const [, author, licence] = palette.credit.match(/ by (?:the )?(.+) · (.+)$/)!;
+      expect(notices, palette.id).toContain(`https://${palette.source}`);
+      expect(notices, palette.id).toContain(author!);
+      expect(notices, palette.id).toContain(licence!);
+    }
+  });
+
   test("a palette paints colours only: a face, a register or a font slot in its file is refused", () => {
     // The face and the register (#407) belong to the document; a theme file carries the sixteen
     // colour slots and nothing a page reads as type.
