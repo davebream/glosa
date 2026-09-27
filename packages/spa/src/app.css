@@ -120,6 +120,11 @@
   --note-step: 15;
   --note-scale: calc(var(--note-step) / 15);
   --note-size: calc(var(--note-step) * 0.0625rem);
+  /* The chat sits one step under the document and stops at 15: 16 beside the default 18. Its code
+     keeps 12px at the default step and grows with it, never under 12. */
+  --chat-step: 16;
+  --chat-size: calc(var(--chat-step) * 0.0625rem);
+  --chat-code-size: max(0.75rem, calc(0.75rem * var(--chat-step) / 16));
 
   /* The manuscript's face and size. A pane sets these from its artifact's chosen face
      (`.glosa-pane[data-face]`, below); Default is the serif, at the step itself. */
@@ -7666,7 +7671,7 @@ nav.glosa-chat-actions[hidden] {
   margin-right: max(0px, calc((100% - 46rem) / 2));
 }
 .glosa-chat-message[data-kind="human"] .glosa-chat-text {
-  font: var(--text-base) / 1.6 var(--font-sans);
+  font: var(--chat-size) / 1.6 var(--font-sans);
 }
 .glosa-chat-message[data-kind="detail"] {
   margin-bottom: 10px;
@@ -7688,7 +7693,7 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: var(--text-base) / 1.7 var(--font-serif);
+  font: var(--chat-size) / 1.7 var(--font-serif);
   user-select: text;
 }
 .glosa-chat-pane .glosa-chat-message > button {
@@ -7709,7 +7714,7 @@ nav.glosa-chat-actions[hidden] {
   padding: 12px;
   background: var(--surface-sunken);
   border-radius: 5px;
-  font: var(--text-xs) / 1.6 var(--font-mono);
+  font: var(--chat-code-size) / 1.6 var(--font-mono);
 }
 .glosa-chat-markdown :is(p, ul, ol, pre, blockquote) {
   margin-block: 0.6rem;
@@ -7745,7 +7750,7 @@ nav.glosa-chat-actions[hidden] {
   max-height: 25vh;
   padding: 12px 13px;
   border-radius: 6px;
-  font: var(--text-base) / 1.55 var(--font-sans);
+  font: var(--chat-size) / 1.55 var(--font-sans);
   background: transparent;
 }
 .glosa-chat-draft:focus-visible {

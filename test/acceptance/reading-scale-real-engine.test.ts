@@ -356,11 +356,17 @@ const TEXT_SPACING = `(()=>{const style=document.getElementById('wcag-text-spaci
   document.head.append(style);return true;})()`;
 
 /** A chat with a reply, a question from the person and a draft, mounted from the production module
- * with a scripted transport. It replaces the page's body, so the audit measures the chat alone. */
-const MOUNT_CHAT = `(async()=>{
+ * with a scripted transport. `alone` replaces the page's body, so an audit measures the chat alone;
+ * otherwise it is laid out out of the way, unseen, beside the document, for its sizes to be read. */
+const mountChat = (alone: boolean) => `(async()=>{
   const { createChatPane } = await import('/app/chat-pane.js');
-  const host=document.createElement('main');host.style.cssText='height:100vh;width:100%;padding:12px;box-sizing:border-box';
-  document.body.replaceChildren(host);
+  const host=document.createElement('main');
+  host.style.cssText=${
+    alone
+      ? `'height:100vh;width:100%;padding:12px;box-sizing:border-box'`
+      : `'position:fixed;left:0;bottom:0;height:420px;width:640px;visibility:hidden;pointer-events:none'`
+  };
+  if (${alone}) document.body.replaceChildren(host); else document.body.append(host);
   const reply='The outline holds, with one gap. **The second section** promises a comparison it never makes.\\n\\n### What to change\\n\\n- Name the two options before weighing them.\\n- Move the example with a long path, \`packages/spa/src/chat-pane.js\`, into its own paragraph.\\n\\n\`\`\`\\nconst unchanged = true; // a code line long enough to need its own sideways scroll inside the block\\n\`\`\`\\n\\nRead [the outline guide](https://example.com/guide) before revising.';
   const state={id:'fixture',profileId:'a',provider:'claude-code',title:'Review the outline',revision:1,configRevision:1,draftRevision:0,
     draft:'A draft that runs long enough to wrap across two lines of the composer before it is sent.',draftAttachments:[],archived:false,
@@ -615,7 +621,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       await openComposer(page);
       expectClean(await page.evaluate<Audit>(AUDIT), "the open composer", 40);
 
-      await page.evaluate(MOUNT_CHAT);
+      await page.evaluate(mountChat(true));
       await page.evaluate(SETTLE);
       expectClean(await page.evaluate<Audit>(AUDIT), "the chat", 15);
     },
@@ -642,7 +648,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       await openComposer(page);
       expectClean(await page.evaluate<Audit>(AUDIT), "the spaced composer", 40);
 
-      await page.evaluate(MOUNT_CHAT);
+      await page.evaluate(mountChat(true));
       expect(await page.evaluate<boolean>(TEXT_SPACING)).toBe(true);
       await page.evaluate(SETTLE);
       expectClean(await page.evaluate<Audit>(AUDIT), "the spaced chat", 15);
@@ -895,6 +901,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     quote: number;
     composer: number;
     composerOpen: boolean;
+    chat: { reply: number; person: number; draft: number; code: number };
     tab: { size: number; height: number };
   }
   /** Every size a step moves, and the one chrome label it must not, read in one evaluate. */
@@ -909,18 +916,24 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       note:size(pane.querySelector('.glosa-annotation-body')),quote:size(pane.querySelector('.glosa-annotation-quote')),
       composer:size(pane.querySelector('.glosa-composer-input')),
       composerOpen:Boolean(pane.querySelector('.glosa-composer-layer .glosa-composer')),
+      chat:{reply:size(document.querySelector('.glosa-chat-history .glosa-chat-markdown p')),
+        person:size(document.querySelector('.glosa-chat-message[data-kind="human"] .glosa-chat-text')),
+        draft:size(document.querySelector('.glosa-chat-draft')),code:size(document.querySelector('.glosa-chat-markdown pre'))},
       tab:{size:size(tab),height:tab.closest('.dv-tab')?.getBoundingClientRect().height??0}};
   })()`;
 
   /** Where the notes sit, two steps under the document, stopping at 15. */
   const NOTE_UNDER: Record<number, number> = { 15: 15, 16: 15, 18: 15, 20: 16, 22: 18, 24: 20 };
+  /** Where the chat sits, one step under the document, stopping at 15. */
+  const CHAT_UNDER: Record<number, number> = { 15: 15, 16: 15, 18: 16, 20: 18, 22: 20, 24: 22 };
 
   test(
-    "#406: at every step h3 stays above the body and h4 to h6 never under it, the notes and the composer follow, a tab title does not move, and Settings shows the same step",
+    "#406: at every step h3 stays above the body and h4 to h6 never under it, the notes and the composer follow, the chat sits one step under, a tab title does not move, and Settings shows the same step",
     async () => {
       const page = await launch();
       await pin(page, { width: 1440, height: 900 });
       await openInReview(page);
+      await page.evaluate(mountChat(false));
       await openComposer(page);
       await openMoreMenu(page);
       const first = await page.evaluate<Reading>(READING);
@@ -944,6 +957,14 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         expect(seen.quote, `${where}: a note's quote keeps its ratio to the note`).toBeCloseTo((13 * note) / 15, 2);
         expect(seen.composerOpen, `${where}: the draft is still open`).toBe(true);
         expect(seen.composer, `${where}: the composer's field is set as a note`).toBe(note);
+        const chat = CHAT_UNDER[step] ?? Number.NaN;
+        expect(
+          { reply: seen.chat.reply, person: seen.chat.person, draft: seen.chat.draft },
+          `${where}: the chat's reply, the person's message and the draft sit one step under, stopping at 15`,
+        ).toEqual({ reply: chat, person: chat, draft: chat });
+        expect(seen.chat.code, `${where}: a code block in a reply keeps 12px at the default and never goes under`).toBe(
+          Math.max(12, (12 * chat) / 16),
+        );
         expect(seen.tab, `${where}: a tab title follows zoom, not the step`).toEqual(first.tab);
       };
 
