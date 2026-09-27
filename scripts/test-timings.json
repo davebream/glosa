@@ -293,8 +293,8 @@
       "reason": "Initial local Bun 1.4.2 estimate for the two marks scenarios (each one daemon subprocess and one headless Chromium over raw CDP), 2.2 s locally where agent-question-real-engine measures 5.3 s locally against 5.1 s in CI; replace with measured CI medians."
     },
     "test/acceptance/reading-scale-real-engine.test.ts": {
-      "seconds": 20.4,
-      "reason": "Initial local Bun 1.4.2 estimate for the reading-scale scenarios (the two WCAG audits over four scroll positions of a long document, a composer and a chat, and the default step's sizes in three faces), each one daemon subprocess and one headless Chromium over raw CDP, 20.4 s locally; replace with measured CI medians."
+      "seconds": 36.3,
+      "reason": "Initial local Bun 1.4.2 estimate for the reading-scale scenarios (the two WCAG audits over four scroll positions of a long document, a composer and a chat; the default step's sizes in three faces; the note rail's floor bisected at two browser default font sizes), each one daemon subprocess and one headless Chromium over raw CDP, 36.3 s locally; the rail bisection dominates, one dock relayout per probed width. Replace with measured CI medians."
     }
   }
 }

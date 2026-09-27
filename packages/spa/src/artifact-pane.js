@@ -154,26 +154,44 @@ function contributeHighlight(name, token, ranges) {
   return true;
 }
 
-// The pane inline size at which the right-hand whitespace beside the manuscript stops holding a
-// 240px annotation rail (§7). Below it the compact bottom tray is the honest answer.
-//
-// The brief derives 1130px from a 642px manuscript block. The built manuscript measures 707px —
-// `68ch` at the shipped serif face is wider than the estimate — and the pane's scrollbar takes
-// another ~8px the arithmetic has to allow for, so the floor moves with both: 707 + 2 x (240 + 8)
-// = 1203, rounded to 1205. Keeping the brief's number instead would have let the rail cross the
-// manuscript through the whole 1130–1203 band. Paired with app.css's
-// `@container pane (min-width: 1205px)` ladder and `--manuscript-block` — change all three
-// together, and re-measure `.glosa-content`'s painted width if `--measure` ever moves.
-export const MARGIN_RAIL_FLOOR = 1205;
+// The painted document column the rail is laid out around (§7): the measure plus its two 2rem
+// gutters, as `.glosa-content` resolves it in the manuscript's own face. It is MEASURED, from the
+// column's computed `max-width`, because it moves with the text size step, the face and the
+// browser's default font size: at a 20px browser default the serif paints about 860px, and a rail
+// sized around a fixed block crossed the column by ~58px at every pane width (#406). This value is
+// only the fallback for an engine that cannot resolve the column (a DOM shim): what it measured
+// when the serif was Iowan Old Style at 17px, wider than anything the default step paints.
+export const MANUSCRIPT_BLOCK_FALLBACK = 707;
 
-// What Annotate asks a split for. Deliberately NOT the floor: a pane handed exactly 1205px lands
-// on 1204.5 after the grid's own rounding and the rail silently fails to engage — balancing on a
-// threshold is fragile by construction. This is clear of it, and buys a ~280px rail rather than
-// the bare 240px minimum. It is also deliberately short of the 1363px the rail saturates at,
-// which would take the companion pane all the way down to its 360px floor: the reader split the
-// workbench to keep two documents legible, and annotating one of them should not cost the other
-// its legibility.
-export const MARGIN_RAIL_COMFORT = 1290;
+/** The narrowest rail the margin opens as, and the pane's own scrollbar, which the rail's width
+ * rule in app.css allows for on each side (`100cqi` cannot see it). */
+const MARGIN_RAIL_MIN = 240;
+const PANE_SCROLLBAR = 8;
+
+/**
+ * The pane inline size at which the whitespace beside a document column `block` px wide stops
+ * holding a 240px rail. Below it the compact bottom tray is the honest answer. At the fallback
+ * block, 707 + 2 x (240 + 8) = 1203, with 2px for the grid's own rounding: 1205, the floor the rail
+ * had before it was measured.
+ * @param {number} block
+ */
+export function marginRailFloor(block) {
+  return Math.ceil(block + 2 * (MARGIN_RAIL_MIN + PANE_SCROLLBAR)) + 2;
+}
+
+/**
+ * What Review asks a split for. Deliberately NOT the floor: a pane handed exactly the floor lands a
+ * fraction under it after the grid's own rounding and the rail silently fails to engage, so
+ * balancing on a threshold is fragile by construction. This is clear of it, and buys a ~280px rail
+ * rather than the bare 240px minimum (1290 at the fallback block). It is also deliberately short
+ * of the width at which the rail saturates at 320px, which would take the companion pane all the
+ * way down to its 360px floor: the reader split the workbench to keep two documents legible, and
+ * annotating one of them should not cost the other its legibility.
+ * @param {number} block
+ */
+export function marginRailComfort(block) {
+  return marginRailFloor(block) + 85;
+}
 
 /** How far into the gutter a session's bracket stands from the text column. Its tab (20px) is
  * centred on the bracket's line, so tab and bracket stay inside the manuscript's 2rem gutter at
@@ -529,6 +547,13 @@ export function createArtifactPane(host, deps) {
   // Pane inline size, kept by the ResizeObserver below. `layoutMargin` and the composer's
   // scroll-into-view both need it, and a pane's width is not the window's.
   let paneWidth = 0;
+  // The document column's painted width, measured (`measureManuscriptBlock`), and what the rail's
+  // floor is reckoned from. Written to the pane as `--manuscript-block` for the CSS that also needs
+  // it: the rail's width, the Edit column and the gutter dots.
+  let manuscriptBlock = MANUSCRIPT_BLOCK_FALLBACK;
+  // Set once the pane's first width and column have been measured, with the width observer. A face
+  // applied before then (the first bind replays the stored one) is part of that first measurement.
+  let measured = false;
   let historyVisible = false;
   let refreshHistory = null;
 
@@ -883,6 +908,8 @@ export function createArtifactPane(host, deps) {
         onChange: (face) => {
           if (face === "default") paneEl.removeAttribute("data-face");
           else paneEl.setAttribute("data-face", face);
+          // A face sets its own size and line length, so the column paints at a new width.
+          if (measured) applyPaneWidth(paneWidth);
         },
         onPick: () => setToolsOpen(false, { restoreFocus: true }),
       })
@@ -2609,7 +2636,18 @@ export function createArtifactPane(host, deps) {
    * manuscript. Keyed on THIS PANE's inline size (§7), never the viewport: a pane changes width
    * when a sash moves and the window does not. */
   function isSideMargin() {
-    return modeState.mode === "review" && paneWidth >= MARGIN_RAIL_FLOOR;
+    return modeState.mode === "review" && paneWidth >= marginRailFloor(manuscriptBlock);
+  }
+
+  /** Reads the document column's painted width from the engine and hands it to the CSS that needs
+   * it. `max-width` is what the column paints at whenever the pane is wide enough for a rail, and
+   * it is resolved in the column's own face and size, which nothing outside the column can do. */
+  function measureManuscriptBlock() {
+    const resolved = Number.parseFloat(getComputedStyle(contentEl).maxWidth);
+    const block = Number.isFinite(resolved) && resolved > 0 ? Math.ceil(resolved) : MANUSCRIPT_BLOCK_FALLBACK;
+    if (block === manuscriptBlock && paneEl.style.getPropertyValue("--manuscript-block")) return;
+    manuscriptBlock = block;
+    paneEl.style.setProperty("--manuscript-block", `${block}px`);
   }
 
   /** Whether an entry's words are on the page as it stands, so it has a height in the rail. */
@@ -4216,7 +4254,7 @@ export function createArtifactPane(host, deps) {
     // owns. So Review takes the room it needs from its siblings rather than silently degrading
     // to the tray — the focus is expressed as WIDTH, not as depth: nothing floats, nothing covers
     // the other document, and the arrangement comes back when Review is left.
-    if (modeState.mode === "review" && previousMode !== "review") claimWidth(MARGIN_RAIL_COMFORT);
+    if (modeState.mode === "review" && previousMode !== "review") claimWidth(marginRailComfort(manuscriptBlock));
     else if (previousMode === "review" && modeState.mode !== "review") releaseWidth();
     // Before renderContent, not after (#182 R1): the first mount inside renderContent reads
     // `baselineContent`, which this call is what sets for a fresh Edit entry.
@@ -4761,23 +4799,28 @@ export function createArtifactPane(host, deps) {
         });
   observer?.observe(paneEl);
   paneWidth = paneEl.clientWidth;
+  measureManuscriptBlock();
+  measured = true;
 
   // Card heights depend on the faces. The rail is laid out from painted heights, and a pane that
   // rendered its notes before Source Serif and Source Sans arrived placed them with the fallback's
   // metrics: every card that grew when the real face landed then overlapped the one under it.
   // Nothing about the pane's width changes when a font loads, so the observer above never fires.
+  // The column's width changes with the face too, so it is measured again with the cards.
   function onFontsLoaded() {
-    if (!destroyed) layoutMargin();
+    if (!destroyed) applyPaneWidth(paneWidth);
   }
   document.fonts?.addEventListener?.("loadingdone", onFontsLoaded);
 
-  /** A new pane width. Crossing the rail floor changes WHERE the cards live (the rail beside their
-   * passages, or the collection tray), which only renderMargin decides; a width that stays on the
-   * same side of the floor only needs the cards re-aligned. Re-laying out alone left a pane that
+  /** A new pane width, or the same width around a column that may have changed its own (a face
+   * arrived or was chosen). Crossing the rail floor changes WHERE the cards live (the rail beside
+   * their passages, or the collection tray), which only renderMargin decides; a width that stays on
+   * the same side of the floor only needs the cards re-aligned. Re-laying out alone left a pane that
    * loaded its notes before its first real measurement with an empty rail and a full tray. */
   function applyPaneWidth(width) {
     const wasSide = isSideMargin();
     paneWidth = width;
+    measureManuscriptBlock();
     if (isSideMargin() !== wasSide) renderMargin();
     else layoutMargin();
   }

@@ -443,7 +443,11 @@ describe("the multi-artifact workbench", () => {
     const css = Bun.file(new URL("../src/app.css", import.meta.url)).text();
     return css.then((text) => {
       expect(text).toContain("container-type: inline-size");
-      expect(text).toContain("@container pane (min-width: 1205px)");
+      // The rail's width is the PANE's inline size (`100cqi`) less the column as it paints, never a
+      // viewport width, and no fixed pane width gates it: artifact-pane.js opens the rail from the
+      // measured column (#406), so a query pinned to one width would disagree with it.
+      expect(text).toContain("calc((100cqi - var(--manuscript-block)) / 2 - var(--space-2))");
+      expect(text).not.toMatch(/@container pane \(min-width: \d+px\)/);
       // The defect this brief removes: margin space reserved on mode, at a viewport width.
       expect(text).not.toContain('.glosa-app[data-mode="review"] .glosa-main');
     });

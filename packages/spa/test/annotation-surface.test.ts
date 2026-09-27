@@ -18,7 +18,12 @@
 //   * `applied` is where a note stops being a task and becomes history — and the `pre_apply`
 //     checkpoint the agent's lease left behind is what makes that history reversible.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createArtifactPane } from "../src/artifact-pane.js";
+import {
+  createArtifactPane,
+  MANUSCRIPT_BLOCK_FALLBACK,
+  marginRailComfort,
+  marginRailFloor,
+} from "../src/artifact-pane.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
 
 describe("the annotation surface", () => {
@@ -218,6 +223,47 @@ describe("the annotation surface", () => {
       expect(q(host, ".glosa-composer")).toBeNull();
       expect(margin.querySelectorAll(".glosa-annotation")).toHaveLength(1);
     } finally {
+      if (original) Object.defineProperty(proto, "clientWidth", original);
+      else delete (proto as any).clientWidth;
+    }
+  });
+
+  test("the rail's floor is reckoned from the column the page measures, so a wider column keeps a 1400px pane's notes in the tray", async () => {
+    // At the fallback column (707px) the floor is the rail's old fixed 1205px, and a Review split
+    // asks for 1290px. Those stay put; what moves is the column they are reckoned from.
+    expect([marginRailFloor(MANUSCRIPT_BLOCK_FALLBACK), marginRailComfort(MANUSCRIPT_BLOCK_FALLBACK)]).toEqual([
+      1205, 1290,
+    ]);
+    // The column's width is whatever the engine resolves `.glosa-content`'s max-width to. happy-dom
+    // resolves nothing, so the engine's answer is stood in for: a 1000px column (a large text size),
+    // then the 688px the serif paints at the default step.
+    let column = "1000px";
+    const realStyle = globalThis.getComputedStyle;
+    (globalThis as any).getComputedStyle = (el: any, pseudo?: any) => {
+      const style = realStyle(el, pseudo);
+      if (!el?.classList?.contains("glosa-content")) return style;
+      return new Proxy(style, { get: (target, key) => (key === "maxWidth" ? column : (target as any)[key]) });
+    };
+    const proto = dom.window.HTMLElement.prototype;
+    const original = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 1400 });
+    try {
+      const { host, pane } = await mountPane(fakeDataAccess());
+      await annotate(host, 0, 10, "tighten this");
+      const paneEl = q(host, ".glosa-pane");
+      expect(paneEl.style.getPropertyValue("--manuscript-block")).toBe("1000px");
+      // 1400 < 1000 + 2 x (240 + 8) + 2: no room for a rail beside this column.
+      expect(q(host, ".glosa-margin").classList.contains("glosa-margin-side")).toBe(false);
+      expect(qa(host, ".glosa-tray-list .glosa-annotation")).toHaveLength(1);
+
+      column = "687.829px";
+      pane.remeasure();
+      await paint();
+      expect(paneEl.style.getPropertyValue("--manuscript-block")).toBe("688px");
+      expect(q(host, ".glosa-margin").classList.contains("glosa-margin-side")).toBe(true);
+      expect(q(host, ".glosa-margin").querySelectorAll(".glosa-annotation")).toHaveLength(1);
+    } finally {
+      (globalThis as any).getComputedStyle = realStyle;
       if (original) Object.defineProperty(proto, "clientWidth", original);
       else delete (proto as any).clientWidth;
     }

@@ -729,4 +729,102 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     },
     TEST_TIMEOUT_MS,
   );
+  interface RailState {
+    pane: number;
+    /** The rail beside the column holds its notes: `.glosa-margin-side`, with cards laid out. */
+    rail: boolean;
+    body: number;
+    column: { left: number; right: number };
+    /** The rail's box and every card in it. */
+    boxes: Array<{ what: string; left: number; right: number }>;
+  }
+  const RAIL = `(()=>{
+    const pane=document.querySelector('.glosa-pane'),content=pane.querySelector('.glosa-content');
+    const margin=pane.querySelector('.glosa-margin'),column=content.getBoundingClientRect();
+    const rail=margin.classList.contains('glosa-margin-side');
+    const cards=rail?[...margin.querySelectorAll('.glosa-annotation')].filter(c=>c.getBoundingClientRect().width>0):[];
+    return {pane:pane.getBoundingClientRect().width,rail:rail&&cards.length>0,body:parseFloat(getComputedStyle(content).fontSize),
+      column:{left:column.left,right:column.right},
+      boxes:rail?[margin,...cards].map((el)=>{const r=el.getBoundingClientRect();
+        return {what:el===margin?'rail':'card '+el.textContent.trim().slice(0,24),left:r.left,right:r.right};}):[]};
+  })()`;
+
+  /** What the desk takes beside the pane (the navigator and its rule), measured once per layout. */
+  const deskAround = (page: CdpClient) =>
+    page.evaluate<number>("innerWidth-document.querySelector('.glosa-pane').getBoundingClientRect().width");
+
+  /** Lays the pane out at `width` CSS pixels by sizing the viewport around it, and waits for the
+   * dock to have laid the pane out and the pane's own width observer to have placed the notes. */
+  async function paneAt(page: CdpClient, width: number, around: number): Promise<RailState> {
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width: Math.round(width + around),
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await page.evaluate(`(async()=>{const deadline=Date.now()+5000;
+      while(Math.abs(document.querySelector('.glosa-pane').getBoundingClientRect().width-${width})>0.5){
+        if(Date.now()>deadline) return;
+        await new Promise(r=>requestAnimationFrame(r));}})()`);
+    await page.evaluate(SETTLE);
+    const state = await page.evaluate<RailState>(RAIL);
+    expect(Math.abs(state.pane - width), `the pane is laid out ${width}px wide`).toBeLessThanOrEqual(0.5);
+    return state;
+  }
+
+  /** The narrowest pane that shows the rail: below it the notes are in the tray. Bisected, then
+   * settled by widening one pixel at a time from just below, the way a sash opens a pane, since the
+   * pane skips a resize its observer rounds to the width it already had. */
+  async function railFloor(page: CdpClient, around: number): Promise<number> {
+    let lo = 900;
+    let hi = 2400;
+    expect((await paneAt(page, lo, around)).rail, `no rail in a ${lo}px pane`).toBe(false);
+    expect((await paneAt(page, hi, around)).rail, `a rail in a ${hi}px pane`).toBe(true);
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2);
+      if ((await paneAt(page, mid, around)).rail) hi = mid;
+      else lo = mid;
+    }
+    let width = hi - 4;
+    expect((await paneAt(page, width, around)).rail, `no rail in a ${width}px pane, just under the floor`).toBe(false);
+    while (!(await paneAt(page, width, around)).rail) {
+      width += 1;
+      expect(width, "the rail opens within a few pixels of the bisected floor").toBeLessThanOrEqual(hi + 4);
+    }
+    return width;
+  }
+
+  const expectBesideColumn = (state: RailState, where: string) => {
+    expect(state.rail, `${where}: the notes are in the rail`).toBe(true);
+    for (const box of state.boxes) {
+      expect(box.left, `${where}: ${box.what} starts at or after the column's right edge`).toBeGreaterThanOrEqual(
+        state.column.right,
+      );
+    }
+  };
+
+  test(
+    "#406: the note rail opens only where it fits beside the column as it paints, at a browser default of 20px as at 16px, and never crosses it",
+    async () => {
+      const page = await launch();
+      await pin(page, { width: 1440, height: 900 });
+      for (const browserDefault of [16, 20]) {
+        await page.send("Page.setFontSizes", { fontSizes: { standard: browserDefault, fixed: 13 } });
+        await openInReview(page);
+        const around = await deskAround(page);
+        const floor = await railFloor(page, around);
+        const at = await paneAt(page, floor, around);
+        expect(at.rail, `the rail at its floor, ${floor}px`).toBe(true);
+        // The browser's default font size carries the step: 18px of text at 16px, 22.5px at 20px.
+        expect(at.body, `the body at a ${browserDefault}px browser default`).toBe((18 * browserDefault) / 16);
+        for (const width of [floor, floor + 1, floor + 37, floor + 160]) {
+          expectBesideColumn(
+            await paneAt(page, width, around),
+            `a ${width}px pane at a ${browserDefault}px browser default`,
+          );
+        }
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
 });
