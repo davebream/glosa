@@ -27,6 +27,7 @@ import { createDictationController } from "./dictation.js";
 import { createDiffPane } from "./diff-pane.js";
 import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH } from "./dock.js";
 import { createFaceStore } from "./face.js";
+import { createTextSizeStore } from "./text-size.js";
 import { createCommandPalette } from "./palette.js";
 import { artifactPanelId, chatPanelId, decodePanelId, externalPanelId, settingsPanelId } from "./panel-identity.js";
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
@@ -118,6 +119,7 @@ export { INTENTS, initialModeState, isParked, MODES, modeReducer, morphArtifactC
  *   onFocusChange?: (focus: any) => void,
  *   layoutStorage?: any,
  *   faceStore?: any,
+ *   textSize?: any,
  *   dictationController?: any,
  *   shell?: { revealInFinder?: () => Promise<unknown>, notify?: (message: any) => Promise<unknown> } | null,
  *   highlightsAvailable?: () => boolean,
@@ -140,6 +142,8 @@ export function mountApp(
     layoutStorage,
     // The writer's per-artifact face (face.js). One store for every pane; a test passes its own.
     faceStore = createFaceStore({ storage: layoutStorage ?? undefined }),
+    // The text size step (#406), one per page: every pane's More menu and Settings share it.
+    textSize = createTextSizeStore({ storage: layoutStorage ?? undefined }),
     dictationController: injectedDictationController,
     // The desktop shell's bridge (`window.glosaShell`), or null in a browser. The SPA reaches the
     // daemon only through dataAccess (R6); this is the one other way out, and only in the shell.
@@ -1076,6 +1080,7 @@ export function mountApp(
       const pane = mountAgentSettings(host, {
         dataAccess,
         appearance,
+        textSize,
         onChange: () => void refreshChats().catch(() => {}),
       });
       panes.set(id, pane);
@@ -1129,6 +1134,7 @@ export function mountApp(
       getTabLabel: () =>
         singlePane ? null : (tabLabels().get(decodePanelId(id)[1]) ?? decodePanelId(id)[1].split("/").pop()),
       faceStore,
+      textSizeStore: textSize,
       dictationController,
       onMarksUnavailable,
       // The shell reveals the document the window's route names, and the route follows the active

@@ -804,25 +804,253 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
   };
 
   test(
-    "#406: the note rail opens only where it fits beside the column as it paints, at a browser default of 20px as at 16px, and never crosses it",
+    "#406: the note rail opens only where it fits beside the column as it paints, at the largest step and at a browser default of 20px, and never crosses it",
     async () => {
       const page = await launch();
       await pin(page, { width: 1440, height: 900 });
-      for (const browserDefault of [16, 20]) {
+      await openInReview(page);
+      const cases = [
+        { browserDefault: 16, step: 24 },
+        { browserDefault: 20, step: 18 },
+        { browserDefault: 20, step: 24 },
+      ];
+      for (const { browserDefault, step } of cases) {
+        // The step is stored the way the stepper stores it and read back by the page's own first
+        // paint, as a reader coming back to the document would find it.
         await page.send("Page.setFontSizes", { fontSizes: { standard: browserDefault, fixed: 13 } });
+        await page.evaluate(`localStorage.setItem('glosa_text_size','${step}')`);
         await openInReview(page);
         const around = await deskAround(page);
         const floor = await railFloor(page, around);
         const at = await paneAt(page, floor, around);
         expect(at.rail, `the rail at its floor, ${floor}px`).toBe(true);
-        // The browser's default font size carries the step: 18px of text at 16px, 22.5px at 20px.
-        expect(at.body, `the body at a ${browserDefault}px browser default`).toBe((18 * browserDefault) / 16);
+        // The browser's default font size carries the step: 24px of text at 16px, 30px at 20px.
+        expect(at.body, `the body at step ${step} and a ${browserDefault}px browser default`).toBe(
+          (step * browserDefault) / 16,
+        );
         for (const width of [floor, floor + 1, floor + 37, floor + 160]) {
           expectBesideColumn(
             await paneAt(page, width, around),
-            `a ${width}px pane at a ${browserDefault}px browser default`,
+            `a ${width}px pane at step ${step} and a ${browserDefault}px browser default`,
           );
         }
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+  /** A real pointer click at the middle of the first element `selector` matches, through the
+   * browser's own input pipeline. */
+  async function clickAt(page: CdpClient, selector: string): Promise<void> {
+    const at = await page.evaluate<{ x: number; y: number } | null>(`(()=>{
+      const el=document.querySelector(${JSON.stringify(selector)});if(!el) return null;
+      const r=el.getBoundingClientRect();if(!r.width||!r.height) return null;
+      return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+    if (!at) throw new Error(`nothing laid out to click at ${selector}`);
+    for (const [type, buttons] of [
+      ["mouseMoved", 0],
+      ["mousePressed", 1],
+      ["mouseReleased", 0],
+    ] as const) {
+      await page.send("Input.dispatchMouseEvent", {
+        type,
+        x: at.x,
+        y: at.y,
+        button: "left",
+        buttons,
+        clickCount: type === "mouseMoved" ? 0 : 1,
+      });
+    }
+  }
+
+  /** A real key press on whatever has focus. */
+  async function press(page: CdpClient, key: string, code: string, windowsVirtualKeyCode: number): Promise<void> {
+    for (const type of ["rawKeyDown", "keyUp"] as const) {
+      await page.send("Input.dispatchKeyEvent", { type, key, code, windowsVirtualKeyCode });
+    }
+  }
+
+  const PANE_STEPPER = ".glosa-pane .glosa-pane-tools .glosa-text-size";
+
+  /** Opens the document's More menu with a real click, unless it is open. */
+  async function openMoreMenu(page: CdpClient): Promise<void> {
+    const open = await page.evaluate<boolean>(
+      "document.querySelector('.glosa-pane .glosa-pane-tools')?.dataset.open==='true'",
+    );
+    if (!open) await clickAt(page, ".glosa-pane .glosa-tools-trigger");
+    await page.evaluate(`(async()=>{const deadline=Date.now()+3000;
+      while(!document.querySelector('${PANE_STEPPER}')?.getBoundingClientRect().width){
+        if(Date.now()>deadline) throw new Error('the More menu never showed the text size stepper');
+        await new Promise(r=>requestAnimationFrame(r));}})()`);
+  }
+
+  interface Reading {
+    step: number;
+    shown: string;
+    body: number;
+    h3: number;
+    h4: number;
+    h5: number;
+    h6: number;
+    note: number;
+    quote: number;
+    composer: number;
+    composerOpen: boolean;
+    tab: { size: number; height: number };
+  }
+  /** Every size a step moves, and the one chrome label it must not, read in one evaluate. */
+  const READING = `(()=>{
+    const pane=document.querySelector('.glosa-pane'),content=pane.querySelector('.glosa-content');
+    const size=(el)=>el?parseFloat(getComputedStyle(el).fontSize):NaN;
+    const tab=document.querySelector('.glosa-tab-label');
+    return {step:Number(document.documentElement.dataset.textSize),
+      shown:pane.querySelector('.glosa-text-size .glosa-stepper-value')?.textContent??'',
+      body:size(content.querySelector(':scope > p')),h3:size(content.querySelector('h3')),h4:size(content.querySelector('h4')),
+      h5:size(content.querySelector('h5')),h6:size(content.querySelector('h6')),
+      note:size(pane.querySelector('.glosa-annotation-body')),quote:size(pane.querySelector('.glosa-annotation-quote')),
+      composer:size(pane.querySelector('.glosa-composer-input')),
+      composerOpen:Boolean(pane.querySelector('.glosa-composer-layer .glosa-composer')),
+      tab:{size:size(tab),height:tab.closest('.dv-tab')?.getBoundingClientRect().height??0}};
+  })()`;
+
+  /** Where the notes sit, two steps under the document, stopping at 15. */
+  const NOTE_UNDER: Record<number, number> = { 15: 15, 16: 15, 18: 15, 20: 16, 22: 18, 24: 20 };
+
+  test(
+    "#406: at every step h3 stays above the body and h4 to h6 never under it, the notes and the composer follow, a tab title does not move, and Settings shows the same step",
+    async () => {
+      const page = await launch();
+      await pin(page, { width: 1440, height: 900 });
+      await openInReview(page);
+      await openComposer(page);
+      await openMoreMenu(page);
+      const first = await page.evaluate<Reading>(READING);
+      expect(first.step, "the default step").toBe(18);
+
+      const expectStep = async (step: number) => {
+        await page.evaluate(SETTLE);
+        const seen = await page.evaluate<Reading>(READING);
+        const where = `at ${step}`;
+        expect({ step: seen.step, shown: seen.shown, body: seen.body }, where).toEqual({
+          step,
+          shown: String(step),
+          body: step,
+        });
+        expect(seen.h3, `${where}: h3 is larger than the body`).toBeGreaterThan(seen.body);
+        for (const level of ["h4", "h5", "h6"] as const) {
+          expect(seen[level], `${where}: ${level} is not smaller than the body`).toBeGreaterThanOrEqual(seen.body);
+        }
+        const note = NOTE_UNDER[step] ?? Number.NaN;
+        expect(seen.note, `${where}: a note sits two steps under, stopping at 15`).toBe(note);
+        expect(seen.quote, `${where}: a note's quote keeps its ratio to the note`).toBeCloseTo((13 * note) / 15, 2);
+        expect(seen.composerOpen, `${where}: the draft is still open`).toBe(true);
+        expect(seen.composer, `${where}: the composer's field is set as a note`).toBe(note);
+        expect(seen.tab, `${where}: a tab title follows zoom, not the step`).toEqual(first.tab);
+      };
+
+      await expectStep(18);
+      // Down with the pointer to the foot of the ladder, where − stops.
+      for (const step of [16, 15]) {
+        await clickAt(page, `${PANE_STEPPER} [data-step="down"]`);
+        await expectStep(step);
+      }
+      expect(
+        await page.evaluate<boolean>(`document.querySelector('${PANE_STEPPER} [data-step="down"]').disabled`),
+        "− is disabled at 15",
+      ).toBe(true);
+      // Up with the keyboard, on the spinbutton, to the top, where it stops.
+      await page.evaluate(`document.querySelector('${PANE_STEPPER} [role="spinbutton"]').focus()`);
+      for (const step of [16, 18, 20, 22, 24]) {
+        await press(page, "ArrowUp", "ArrowUp", 38);
+        await expectStep(step);
+      }
+      await press(page, "ArrowUp", "ArrowUp", 38);
+      await expectStep(24);
+      expect(
+        await page.evaluate<boolean>(`document.querySelector('${PANE_STEPPER} [data-step="up"]').disabled`),
+        "+ is disabled at 24",
+      ).toBe(true);
+
+      // Settings > Appearance mirrors the same step, and a change there is the document's too.
+      await clickAt(page, ".glosa-sidebar-settings");
+      await page.evaluate(`(async()=>{const deadline=Date.now()+5000;let nav;
+        while(!(nav=[...document.querySelectorAll('.glosa-settings-nav button')].find(b=>b.textContent==='Appearance'))){
+          if(Date.now()>deadline) throw new Error('Settings never opened');await new Promise(r=>setTimeout(r,50));}
+        nav.click();})()`);
+      const SETTINGS_STEPPER = '.glosa-text-size[data-variant="settings"]';
+      await page.evaluate(SETTLE);
+      expect(
+        await page.evaluate<string>(`document.querySelector('${SETTINGS_STEPPER} [role="spinbutton"]').textContent`),
+      ).toBe("24");
+      await clickAt(page, `${SETTINGS_STEPPER} .glosa-text-size-reset`);
+      await page.evaluate(SETTLE);
+      expect(
+        await page.evaluate<{ step: string; settings: string; menu: string; reset: boolean }>(`({
+          step:document.documentElement.dataset.textSize,
+          settings:document.querySelector('${SETTINGS_STEPPER} [role="spinbutton"]').textContent,
+          menu:document.querySelector('${PANE_STEPPER} [role="spinbutton"]').textContent,
+          reset:!document.querySelector('${SETTINGS_STEPPER} .glosa-text-size-reset').hidden})`),
+        "Reset in Settings brings the page, and the More menu's stepper, back to 18",
+      ).toEqual({ step: "18", settings: "18", menu: "18", reset: false });
+    },
+    TEST_TIMEOUT_MS,
+  );
+  interface TopBlock {
+    index: number;
+    text: string;
+    /** How much of the block has scrolled past the pane's top edge. */
+    fraction: number;
+    scrollTop: number;
+  }
+  /** The first block of the document still showing at the top of the pane. */
+  const TOP_BLOCK = `(()=>{const main=document.querySelector('.glosa-pane-main'),top=main.getBoundingClientRect().top;
+    const blocks=[...document.querySelector('.glosa-pane .glosa-content').children];
+    for(const [index,block] of blocks.entries()){const r=block.getBoundingClientRect();
+      if(r.height<=0||r.bottom<=top+1) continue;
+      return {index,text:block.textContent.trim().slice(0,48),fraction:r.top<top?(top-r.top)/r.height:0,scrollTop:main.scrollTop};}
+    return null;})()`;
+
+  test(
+    "#406: a new text size keeps the block at the top of the pane where the reader left it, with and without the engine's own scroll anchoring",
+    async () => {
+      const page = await launch();
+      await pin(page, { width: 1440, height: 900 });
+      await openInReview(page);
+      await openMoreMenu(page);
+      for (const engineAnchors of [true, false]) {
+        if (!engineAnchors) {
+          // Safari has no CSS scroll anchoring. With Chromium's own switched off, only the pane's
+          // anchoring can hold the reader's place.
+          await page.evaluate(`(()=>{const style=document.createElement('style');
+            style.textContent='.glosa-pane-main{overflow-anchor:none!important}';document.head.append(style);})()`);
+        }
+        // Forty percent of a paragraph halfway down the document has scrolled past the top edge.
+        await page.evaluate(`(()=>{const main=document.querySelector('.glosa-pane-main');
+          const block=[...document.querySelectorAll('.glosa-pane .glosa-content > p')][12];
+          const r=block.getBoundingClientRect(),top=main.getBoundingClientRect().top;
+          main.scrollTop+=r.top-top+r.height*0.4;})()`);
+        await page.evaluate(SETTLE);
+        const before = await page.evaluate<TopBlock>(TOP_BLOCK);
+        expect(before.fraction, "the reader is part way into a paragraph").toBeGreaterThan(0.3);
+        await page.evaluate(`document.querySelector('${PANE_STEPPER} [role="spinbutton"]').focus()`);
+        for (const [key, code, keyCode] of [
+          ["ArrowUp", "ArrowUp", 38],
+          ["ArrowUp", "ArrowUp", 38],
+          ["ArrowDown", "ArrowDown", 40],
+          ["Home", "Home", 36],
+        ] as const) {
+          await press(page, key, code, keyCode);
+          await page.evaluate(SETTLE);
+          const after = await page.evaluate<TopBlock>(TOP_BLOCK);
+          const where = `after ${key} to ${await page.evaluate<string>("document.documentElement.dataset.textSize")}, ${
+            engineAnchors ? "with" : "without"
+          } the engine's anchoring`;
+          expect(after.text, `${where}: the same block is at the top`).toBe(before.text);
+          expect(after.fraction, `${where}: as far into it as before`).toBeCloseTo(before.fraction, 1);
+        }
+        // The next pass starts on a fresh page at the default step.
+        await page.evaluate(`localStorage.removeItem('glosa_text_size')`);
+        await openInReview(page);
+        await openMoreMenu(page);
       }
     },
     TEST_TIMEOUT_MS,

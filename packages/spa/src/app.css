@@ -114,6 +114,12 @@
   --reading-step: 18;
   --reading-scale: calc(var(--reading-step) / 18);
   --reading-size: calc(var(--reading-step) * 0.0625rem);
+  /* Margin notes, the composer and a session's message sit two steps under the document and stop
+     at 15, the ladder's foot and their size at the default step (text-size-preload.js writes the
+     step). Quotes in the margin keep their ratio to the note. */
+  --note-step: 15;
+  --note-scale: calc(var(--note-step) / 15);
+  --note-size: calc(var(--note-step) * 0.0625rem);
 
   /* The manuscript's face and size. A pane sets these from its artifact's chosen face
      (`.glosa-pane[data-face]`, below); Default is the serif, at the step itself. */
@@ -2298,6 +2304,180 @@ input,
   font-family: var(--font-mono);
 }
 
+/* The text size stepper (#406, text-size.js): one control in two places, the pane's More menu
+   (a row under the face) and Settings > Appearance. A label, then one outline track holding
+   − value +, in the secondary button's vocabulary: no fill, a Strong Border edge, ink. The value
+   is the control, a spinbutton, so the whole track takes the focus ring when it has focus. − and
+   + take the pointer; hover lays a Sunken bed, a press a Quiet Border one, and at an end of the
+   ladder the one that would do nothing turns Faint with no bed. Reset is a recessive verb, shown
+   only off the default, placed where its arrival moves nothing. */
+.glosa-text-size {
+  --stepper-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.glosa-stepper {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  height: var(--stepper-height);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+}
+
+.glosa-stepper:has(.glosa-stepper-value:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.glosa-text-size .glosa-stepper-step {
+  display: grid;
+  place-items: center;
+  width: calc(var(--stepper-height) - 2px);
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  /* 6px track less its 1px edge: concentric. */
+  border-radius: calc(var(--radius-control) - 1px);
+  background: none;
+  color: var(--muted);
+  opacity: 1;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-text-size .glosa-stepper-step:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-text-size .glosa-stepper-step:active:not(:disabled) {
+  background: var(--border);
+  color: var(--ink);
+}
+
+.glosa-text-size .glosa-stepper-step:disabled {
+  display: grid;
+  background: none;
+  color: var(--faint);
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.glosa-stepper-step svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.glosa-stepper-value {
+  display: grid;
+  place-items: center;
+  min-width: 2.5em;
+  padding: 0 var(--space-1);
+  border-inline: 1px solid var(--border);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: default;
+  user-select: none;
+}
+
+.glosa-stepper .glosa-stepper-value:focus-visible {
+  outline: none;
+}
+
+.glosa-text-size .glosa-text-size-reset {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-text-size .glosa-text-size-reset:hover:not(:disabled) {
+  background: none;
+  color: var(--ink);
+}
+
+.glosa-text-size .glosa-text-size-reset[hidden] {
+  display: none;
+}
+
+/* In the menu it is one row, laid out like the rows around it: the icon column, a Muted label,
+   and the track at the row's end. It is not itself a button, so it takes no hover bed. Its 4px of
+   air above and below is what the track's focus ring needs inside the menu's edge. */
+.glosa-text-size[data-variant="menu"] {
+  padding: var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.glosa-text-size[data-variant="menu"] .glosa-text-size-label {
+  flex: 1 1 auto;
+}
+
+/* With no face group above it, the row opens its own section of the menu. */
+.glosa-face-group[hidden] + .glosa-text-size[data-variant="menu"] {
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.glosa-text-size-icon {
+  display: grid;
+  flex: 0 0 auto;
+}
+
+.glosa-text-size-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* In Settings it is a field of the Appearance page: the label over the track, Settings' 36px
+   targets, and Reset beside the track. */
+.glosa-text-size[data-variant="settings"] {
+  --stepper-height: 36px;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-6);
+  font-size: var(--text-sm);
+}
+
+.glosa-text-size[data-variant="settings"] .glosa-text-size-label {
+  flex: 1 0 100%;
+  color: var(--ink);
+  font: 600 var(--text-base) / 1.4 var(--font-sans);
+}
+
+@media (pointer: coarse) {
+  .glosa-text-size,
+  .glosa-text-size[data-variant="settings"] {
+    --stepper-height: 44px;
+  }
+}
+
 .glosa-pane-tools {
   position: relative;
   flex: 0 0 auto;
@@ -4212,7 +4392,7 @@ input,
   font-family: var(--font-manuscript);
   font-style: italic;
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: calc(var(--text-sm) * var(--note-scale));
   margin: 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -4488,7 +4668,7 @@ input,
 .glosa-composer-input,
 .glosa-agent-message {
   font-family: var(--font-serif);
-  font-size: var(--text-base);
+  font-size: var(--note-size);
   line-height: 1.45;
 }
 
@@ -4500,7 +4680,7 @@ input,
   font-family: var(--font-manuscript);
   font-style: italic;
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: calc(var(--text-sm) * var(--note-scale));
   margin: 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -4746,7 +4926,7 @@ input,
 .glosa-composer-quote {
   font-family: var(--font-manuscript);
   font-style: italic;
-  font-size: var(--text-sm);
+  font-size: calc(var(--text-sm) * var(--note-scale));
   color: var(--muted);
   margin: 0;
   display: -webkit-box;
@@ -7195,6 +7375,12 @@ input,
 .glosa-settings-appearance [aria-pressed="true"] {
   border-color: var(--ink);
   background: var(--surface);
+}
+.glosa-settings-hint {
+  max-width: 43rem;
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 .glosa-agent-account-area {
   padding: 0;

@@ -44,6 +44,7 @@ import {
   scrollToOffset,
 } from "./outline.js";
 import { runAtLine, runsFrom, spliceRun, widenToNext, widenToPrevious } from "./run-spans.js";
+import { mountTextSizeControl } from "./text-size.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
 
@@ -372,6 +373,9 @@ export function createArtifactPane(host, deps) {
     // The writer's per-artifact face (face.js). Optional: a pane without a store reads in the
     // default serif and offers no control.
     faceStore = null,
+    // The page's text size step (text-size.js), shared by every pane. Optional: a pane without a
+    // store reads at the default step and offers no control.
+    textSizeStore = null,
     dictationController = null,
     // Reveal this document in Finder. Only the desktop shell can (#160); in a browser there is no
     // such capability and the pane offers no row for it. It takes no path: the shell works out the
@@ -676,6 +680,8 @@ export function createArtifactPane(host, deps) {
   // The writer's face for this artifact lives here, among the artifact's other settings, not in
   // the bar: a reading preference is chosen once and then left alone (face.js fills the group).
   const faceGroup = el("div", { className: "glosa-face-group" });
+  // The text size step sits right under the face, with it: both say how this device reads.
+  const textSizeRow = el("div");
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Document tools" }, [
     historyMenuItem,
     editSourceButton,
@@ -684,6 +690,7 @@ export function createArtifactPane(host, deps) {
     printArtifactButton,
     compareButton,
     faceGroup,
+    textSizeRow,
     moveGroup,
     toolsStatus,
   ]);
@@ -915,6 +922,10 @@ export function createArtifactPane(host, deps) {
       })
     : null;
   if (!faceStore) faceGroup.hidden = true;
+  // A step changes nothing about which artifact is shown, so unlike the face this control never
+  // needs to follow the pane; it stays open while a reader steps through sizes.
+  const textSizeControl = textSizeStore ? mountTextSizeControl(textSizeRow, textSizeStore) : null;
+  if (!textSizeStore) textSizeRow.hidden = true;
 
   // ---------- the outline, as data ----------
   //
@@ -4802,6 +4813,60 @@ export function createArtifactPane(host, deps) {
   measureManuscriptBlock();
   measured = true;
 
+  // ---------- the text size step (#406) ----------
+  //
+  // A new step re-sets every block of the page, and the reader's place would slide with it, so
+  // the page is held on the block at the top of the pane instead: recorded while the page is still
+  // at the old size, and put back once it is at the new one. Chromium and Firefox anchor scrolling
+  // on their own; Safari does not, and no heuristic knows the reader's block better than this.
+  let readingAnchor = null;
+  let sizeApplied = false;
+  const stopTextSizeBefore = textSizeStore?.beforeChange(() => {
+    readingAnchor = captureReadingAnchor();
+  });
+  const stopTextSize = textSizeStore?.subscribe(() => {
+    // The first call is the step the page loaded with, which the pane was just measured at.
+    if (!sizeApplied || destroyed) {
+      sizeApplied = true;
+      return;
+    }
+    // The column, the rail's floor, the cards, the marks and the outline all follow the text.
+    applyPaneWidth(paneWidth);
+    paintAnnotationMarks();
+    outlineSourceKey = "";
+    refreshOutline();
+    restoreReadingAnchor(readingAnchor);
+    readingAnchor = null;
+  });
+
+  /** The blocks of whichever surface is showing: the rendered page, or the rich editor's own. */
+  function readingBlocks() {
+    const surfaces = [...paneMain.querySelectorAll(".glosa-content")].filter((node) => node.getClientRects().length);
+    return surfaces.flatMap((surface) => [...(surface.querySelector(":scope > .ProseMirror") ?? surface).children]);
+  }
+
+  /** The first block still showing at the top of the pane, and how far into it the pane is
+   * scrolled: a fraction of the block when it runs past the top edge, else its distance below it.
+   * Null at the very top, where the page simply stays at its top. */
+  function captureReadingAnchor() {
+    if (paneMain.scrollTop <= 0) return null;
+    const top = paneMain.getBoundingClientRect().top;
+    for (const block of readingBlocks()) {
+      const box = block.getBoundingClientRect();
+      if (box.height <= 0 || box.bottom <= top + 1) continue;
+      return { block, fraction: box.top < top ? (top - box.top) / box.height : 0, offset: box.top - top };
+    }
+    return null;
+  }
+
+  function restoreReadingAnchor(anchor) {
+    if (!anchor?.block.isConnected) return;
+    const top = paneMain.getBoundingClientRect().top;
+    const box = anchor.block.getBoundingClientRect();
+    paneMain.scrollTop +=
+      anchor.fraction > 0 ? box.top + anchor.fraction * box.height - top : box.top - top - anchor.offset;
+  }
+
   // Card heights depend on the faces. The rail is laid out from painted heights, and a pane that
   // rendered its notes before Source Serif and Source Sans arrived placed them with the fallback's
   // metrics: every card that grew when the real face landed then overlapped the one under it.
@@ -5343,6 +5408,9 @@ export function createArtifactPane(host, deps) {
       if (outlineSourceTimer) clearTimeout(outlineSourceTimer);
       if (outlineFrame) cancelAnimationFrame(outlineFrame);
       faceControl?.destroy();
+      stopTextSizeBefore?.();
+      stopTextSize?.();
+      textSizeControl?.destroy();
       observer?.disconnect();
       teardownRichFace();
       stopClassFViewer?.();

@@ -106,6 +106,10 @@ const SPA_ASSETS: Record<string, string> = {
   "appearance.js": "text/javascript; charset=utf-8",
   // The manuscript face store and its per-artifact control (Default / Sans / Mono).
   "face.js": "text/javascript; charset=utf-8",
+  // The text size step (#406): a classic, blocking preload that holds the ladder and applies the
+  // stored step before CSS paints, and the store and stepper that text-size.js builds on it.
+  "text-size-preload.js": "text/javascript; charset=utf-8",
+  "text-size.js": "text/javascript; charset=utf-8",
   // Passage addresses ("§2.3"), derived from the rendered Markdown structure.
   "address.js": "text/javascript; charset=utf-8",
   "bootstrap.js": "text/javascript; charset=utf-8",
