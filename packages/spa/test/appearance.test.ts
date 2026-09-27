@@ -177,8 +177,8 @@ describe("createAppearanceController", () => {
     const controller = createAppearanceController({
       root: dom.document.documentElement,
       storage,
-      mediaQuery: fakeMediaQuery(false) as any,
-      contrastQuery: contrast as any,
+      mediaQuery: fakeMediaQuery(false) as unknown as MediaQueryList,
+      contrastQuery: contrast as unknown as MediaQueryList,
     });
     const html = dom.document.documentElement;
     expect(controller.getSnapshot()).toEqual({ ...GLOSA, preference: "light", resolved: "light", scheme: "light" });
@@ -224,8 +224,8 @@ describe("createAppearanceController", () => {
     const controller = createAppearanceController({
       root: dom.document.documentElement,
       storage,
-      mediaQuery: fakeMediaQuery(false) as any,
-      contrastQuery: contrast as any,
+      mediaQuery: fakeMediaQuery(false) as unknown as MediaQueryList,
+      contrastQuery: contrast as unknown as MediaQueryList,
     });
     const host = dom.document.createElement("div");
     dom.document.body.append(host);
@@ -242,8 +242,8 @@ describe("createAppearanceController", () => {
         row.getAttribute("aria-pressed"),
       ]),
     ).toEqual([
-      ["glosa", "glosa's own · warm paper, near-black ink, the vermilion hand", "true"],
-      ["High contrast", "glosa's own · deeper ink, marks and edges on the same paper", "false"],
+      ["glosa", "glosa's own · warm paper, near-black ink, your marks in vermilion", "true"],
+      ["High contrast", "glosa's own · stronger ink, marks and edges on the same paper", "false"],
     ]);
     const group = host.querySelector(".glosa-settings-palettes");
     expect(host.querySelector(`#${group?.getAttribute("aria-labelledby")}`)?.textContent).toBe("Palette");
@@ -252,7 +252,14 @@ describe("createAppearanceController", () => {
 
     contrast.setMatches(true);
     expect(hint().hidden).toBe(false);
-    expect(hint().textContent).toBe("Your system asks for more contrast, so glosa shows High contrast.");
+    expect(hint().textContent).toBe(
+      "Increase contrast is on for this Mac, so glosa shows High contrast. glosa's own palette returns when it is off.",
+    );
+    // Each row is named by its palette and described by its credit.
+    expect(rows[1]!.getAttribute("aria-labelledby")).toBe("glosa-settings-palette-high-contrast-name");
+    expect(host.querySelector(`#${rows[1]!.getAttribute("aria-describedby")}`)?.textContent).toBe(
+      "glosa's own · stronger ink, marks and edges on the same paper",
+    );
     expect(rows[0]!.getAttribute("aria-pressed")).toBe("true");
 
     rows[1]!.click();
@@ -329,7 +336,7 @@ describe("the one list of appearances (#405, #409)", () => {
   /** The operating system as the preload asks it: `(prefers-color-scheme: dark)` and
    * `(prefers-contrast: more)`, each answered from here rather than from happy-dom's defaults. */
   function system({ dark = false, moreContrast = false } = {}) {
-    (dom.window as any).matchMedia = (query: string) => ({
+    (dom.window as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
       matches:
         query === "(prefers-color-scheme: dark)" ? dark : query === "(prefers-contrast: more)" ? moreContrast : false,
       addEventListener() {},

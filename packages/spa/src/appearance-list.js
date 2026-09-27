@@ -31,14 +31,14 @@
     Object.freeze({
       id: "glosa",
       label: "glosa",
-      credit: "glosa's own · warm paper, near-black ink, the vermilion hand",
+      credit: "glosa's own · warm paper, near-black ink, your marks in vermilion",
       themes: Object.freeze({ light: "light", dark: "dark" }),
       moreContrast: "high-contrast",
     }),
     Object.freeze({
       id: "high-contrast",
       label: "High contrast",
-      credit: "glosa's own · deeper ink, marks and edges on the same paper",
+      credit: "glosa's own · stronger ink, marks and edges on the same paper",
       themes: Object.freeze({ light: "high-contrast-light", dark: "high-contrast-dark" }),
     }),
   ]);

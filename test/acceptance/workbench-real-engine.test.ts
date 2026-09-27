@@ -1674,6 +1674,19 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       const { browser, cdpPort } = await launchBrowser();
       const tab = await openTab(browser, cdpPort, pairedUrl(DOC));
       await waitForReady(tab, "before the theme files probe");
+      // The desk done laying out before anything is read, clicked or photographed: the document is
+      // its only pane, in Review, and that pane's width has held for five frames (as the #406
+      // reading-scale gate waits). A timeout names each pane's mode and width, the tabs and the window.
+      await tab.evaluate(`(async()=>{const deadline=Date.now()+10000;let last=-1,still=0;
+        const desk=()=>JSON.stringify({panes:[...document.querySelectorAll('.glosa-pane')].map(p=>({label:p.getAttribute('aria-label'),
+          mode:p.dataset.mode,width:Math.round(p.getBoundingClientRect().width)})),tabs:document.querySelectorAll('.dv-tab').length,window:innerWidth});
+        while(still<5){
+          if(Date.now()>deadline) throw new Error('the desk never settled on the document alone: '+desk());
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+          const panes=document.querySelectorAll('.glosa-pane');
+          const width=panes.length===1&&panes[0].getAttribute('aria-label')===${JSON.stringify(DOC)}&&panes[0].dataset.mode==='review'
+            ?panes[0].getBoundingClientRect().width:0;
+          still=width>0&&width===last?still+1:0;last=width;}})()`);
       // A screenshot waits for the page to be still: the pane redraws its margin when its data
       // refreshes, and the composer plays its arrival again when it does.
       const shots = async (name: string) => {
@@ -1836,7 +1849,9 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         await tab.evaluate<string>(
           "document.querySelector('.glosa-settings-palettes + .glosa-settings-hint:not([hidden])')?.textContent ?? ''",
         ),
-      ).toBe("Your system asks for more contrast, so glosa shows High contrast.");
+      ).toBe(
+        "Increase contrast is on for this Mac, so glosa shows High contrast. glosa's own palette returns when it is off.",
+      );
       await shots("settings-appearance-light-more-contrast");
       await emulate("dark", "no-preference", "dark");
       await tab.evaluate(`document.querySelector('[data-palette-choice="high-contrast"]').click()`);

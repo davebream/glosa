@@ -7639,9 +7639,6 @@ input,
   visibility: hidden;
   color: var(--ink);
 }
-.glosa-settings-palette[aria-pressed="true"] .glosa-settings-palette-check {
-  visibility: visible;
-}
 .glosa-settings-palette-check svg {
   width: 1rem;
   height: 1rem;
@@ -7651,11 +7648,18 @@ input,
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.glosa-settings-palette[aria-pressed="true"] .glosa-settings-palette-check {
+  visibility: visible;
+}
 .glosa-settings-hint {
   max-width: 43rem;
   margin: var(--space-2) 0 0;
   color: var(--muted);
   font-size: var(--text-sm);
+}
+/* The line that says the system's contrast is showing another palette keeps to the rows' column. */
+.glosa-settings-palettes + .glosa-settings-hint {
+  max-width: 30rem;
 }
 .glosa-agent-account-area {
   padding: 0;

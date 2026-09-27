@@ -125,6 +125,9 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
   for (const { id, label, credit } of paletteList()) {
     const check = el("span", { className: "glosa-settings-palette-check" });
     check.innerHTML = CHECK_SVG;
+    // Named by the palette alone and described by its credit, so a screen reader says the choice first.
+    const nameId = `glosa-settings-palette-${id}-name`;
+    const creditId = `glosa-settings-palette-${id}-credit`;
     paletteOptions.append(
       el(
         "button",
@@ -132,6 +135,8 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
           type: "button",
           className: "glosa-settings-palette",
           "data-palette-choice": id,
+          "aria-labelledby": nameId,
+          "aria-describedby": creditId,
           onClick: () => appearance.setPalette(id),
         },
         [
@@ -139,8 +144,8 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
             el("span", { className: "glosa-settings-palette-paper", textContent: "Aa" }),
           ]),
           el("span", { className: "glosa-settings-palette-text" }, [
-            el("span", { className: "glosa-settings-palette-name", textContent: label }),
-            el("span", { className: "glosa-settings-palette-credit", textContent: credit }),
+            el("span", { id: nameId, className: "glosa-settings-palette-name", textContent: label }),
+            el("span", { id: creditId, className: "glosa-settings-palette-credit", textContent: credit }),
           ]),
           check,
         ],
@@ -173,7 +178,9 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
     }
     const shown = paletteList().find((candidate) => candidate.id === painting);
     paletteHint.textContent =
-      painting === palette ? "" : `Your system asks for more contrast, so glosa shows ${shown.label}.`;
+      painting === palette
+        ? ""
+        : `Increase contrast is on for this Mac, so glosa shows ${shown.label}. glosa's own palette returns when it is off.`;
     paletteHint.hidden = painting === palette;
   });
   root.append(
