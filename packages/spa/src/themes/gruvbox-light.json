@@ -1,0 +1,82 @@
+{
+  "id": "gruvbox-light",
+  "name": "Gruvbox light, adapted to glosa's contrast floors",
+  "scheme": "light",
+  "upstream": {
+    "palette": "Gruvbox, light background, medium contrast",
+    "source": "morhetz/gruvbox (ef8864b), colors/gruvbox.vim, the light mode's colours",
+    "colours": {
+      "bg": "light0 (bg0) #fbf1c7",
+      "surface": "light0_soft #f2e5bc",
+      "surface-sunken": "light1 (bg1) #ebdbb2",
+      "ink": "dark1 (fg1) #3c3836",
+      "muted": "dark3 (fg3) #665c54",
+      "faint": "gray #928374",
+      "border": "light2 (bg2) #d5c4a1",
+      "border-strong": "dark4 (fg4) #7c6f64",
+      "hand": "faded_orange #af3a03",
+      "pencil": "dark4 (fg4) #7c6f64",
+      "session": "faded_blue #076678",
+      "danger": "faded_red #9d0006",
+      "warn": "faded_yellow #b57614",
+      "ok": "faded_green #79740e",
+      "scrim": "dark1 (fg1) #3c3836 at 30%"
+    },
+    "moved": {
+      "pencil": {
+        "from": "oklch(0.55 0.023 62.6)",
+        "to": "#786c61",
+        "as": "text",
+        "on": "elevated",
+        "floor": 4.5,
+        "was": 4.28,
+        "now": 4.5
+      },
+      "hand": {
+        "from": "oklch(0.513 0.162 39.3)",
+        "to": "#ae3903",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 4.5,
+        "was": 4.46,
+        "now": 4.51
+      },
+      "warn": {
+        "from": "oklch(0.618 0.128 70.7)",
+        "to": "#905c03",
+        "as": "text",
+        "on": "surface",
+        "floor": 4.5,
+        "was": 3,
+        "now": 4.5
+      },
+      "ok": {
+        "from": "oklch(0.546 0.112 106.5)",
+        "to": "#6e6900",
+        "as": "text",
+        "on": "surface",
+        "floor": 4.5,
+        "was": 3.87,
+        "now": 4.51
+      }
+    }
+  },
+  "slots": {
+    "bg": "#fbf1c7",
+    "surface": "#f2e5bc",
+    "surface-sunken": "#ebdbb2",
+    "ink": "#3c3836",
+    "muted": "#665c54",
+    "faint": "#928374",
+    "border": "#d5c4a1",
+    "border-strong": "#7c6f64",
+    "rule": "ink",
+    "hand": "oklch(0.51 0.161 39.3)",
+    "pencil": "oklch(0.539 0.023 62.6)",
+    "session": "#076678",
+    "danger": "#9d0006",
+    "warn": "oklch(0.519 0.111 70.7)",
+    "ok": "oklch(0.51 0.109 106.5)",
+    "scrim": "oklch(0.344 0.007 48.5 / 0.3)"
+  }
+}

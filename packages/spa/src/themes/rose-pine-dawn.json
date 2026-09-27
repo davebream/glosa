@@ -1,0 +1,101 @@
+{
+  "id": "rose-pine-dawn",
+  "name": "Rosé Pine Dawn, adapted to glosa's contrast floors",
+  "scheme": "light",
+  "upstream": {
+    "palette": "Rosé Pine Dawn",
+    "source": "rose-pine/palette (92af52b), palette.json, dawn; the highlights from source/index.ts",
+    "colours": {
+      "bg": "base #faf4ed",
+      "surface": "surface #fffaf3",
+      "surface-sunken": "overlay #f2e9e1",
+      "ink": "text #464261",
+      "muted": "subtle #797593",
+      "faint": "muted #9893a5",
+      "border": "highlightHigh #cecacd",
+      "border-strong": "subtle #797593",
+      "hand": "rose #d7827e",
+      "pencil": "muted #9893a5",
+      "session": "foam #56949f",
+      "danger": "love #b4637a",
+      "warn": "gold #ea9d34",
+      "ok": "pine #286983",
+      "scrim": "text #464261 at 30%"
+    },
+    "moved": {
+      "muted": {
+        "from": "oklch(0.577 0.046 291)",
+        "to": "#6b6783",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 4.5,
+        "was": 3.66,
+        "now": 4.51
+      },
+      "pencil": {
+        "from": "oklch(0.673 0.027 298.4)",
+        "to": "#736e7f",
+        "as": "text",
+        "on": "elevated",
+        "floor": 4.5,
+        "was": 2.72,
+        "now": 4.51
+      },
+      "hand": {
+        "from": "oklch(0.696 0.106 23)",
+        "to": "#a25351",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 4.5,
+        "was": 2.37,
+        "now": 4.5
+      },
+      "session": {
+        "from": "oklch(0.629 0.066 210.1)",
+        "to": "#3b7984",
+        "as": "text",
+        "on": "bg",
+        "floor": 4.5,
+        "was": 3.13,
+        "now": 4.5
+      },
+      "warn": {
+        "from": "oklch(0.755 0.146 69.7)",
+        "to": "#9e6400",
+        "as": "text",
+        "on": "bg",
+        "floor": 4.5,
+        "was": 2.05,
+        "now": 4.5
+      },
+      "danger": {
+        "from": "oklch(0.599 0.107 2.7)",
+        "to": "#994b62",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 4.5,
+        "was": 3.49,
+        "now": 4.93,
+        "lightness": "0.02 below the hand's"
+      }
+    }
+  },
+  "slots": {
+    "bg": "#faf4ed",
+    "surface": "#fffaf3",
+    "surface-sunken": "#f2e9e1",
+    "ink": "#464261",
+    "muted": "oklch(0.527 0.045 291)",
+    "faint": "#9893a5",
+    "border": "#cecacd",
+    "border-strong": "#797593",
+    "rule": "ink",
+    "hand": "oklch(0.537 0.105 23)",
+    "pencil": "oklch(0.548 0.026 298.4)",
+    "session": "oklch(0.54 0.066 210.1)",
+    "danger": "oklch(0.517 0.107 2.7)",
+    "warn": "oklch(0.553 0.12 69.7)",
+    "ok": "#286983",
+    "scrim": "oklch(0.396 0.052 289.7 / 0.3)"
+  }
+}

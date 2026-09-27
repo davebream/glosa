@@ -244,6 +244,25 @@ describe("createAppearanceController", () => {
     ).toEqual([
       ["glosa", "glosa's own · warm paper, near-black ink, your marks in vermilion", "true"],
       ["High contrast", "glosa's own · stronger ink, marks and edges on the same paper", "false"],
+      ["Catppuccin", "Catppuccin by the Catppuccin Org · MIT", "false"],
+      ["Gruvbox", "Gruvbox by Pavel Pertsev · MIT/X11", "false"],
+      ["Rosé Pine", "Rosé Pine by mvllow · MIT", "false"],
+    ]);
+    // Each swatch paints the theme its palette would show in the scheme on screen (light here).
+    expect(
+      rows.map((row) => row.querySelector(".glosa-settings-palette-paper")?.getAttribute("data-theme-swatch")),
+    ).toEqual(["light", "high-contrast-light", "catppuccin-latte", "gruvbox-light", "rose-pine-dawn"]);
+    // Under the rows, one closed disclosure credits the palettes made by others: that glosa adapts
+    // them, where each comes from, and where the licences are.
+    const credits = host.querySelector(".glosa-settings-credits") as unknown as HTMLDetailsElement;
+    expect(credits.open).toBe(false);
+    expect(credits.querySelector("summary")?.textContent).toBe("Palette credits");
+    expect([...credits.querySelectorAll("p, li")].map((line) => line.textContent)).toEqual([
+      "Catppuccin, Gruvbox and Rosé Pine keep their own colours wherever those meet glosa's contrast floors. A colour below its floor is made darker on light paper, or lighter on dark, in its own hue, so some marks differ from the originals.",
+      "Catppuccin · github.com/catppuccin/palette",
+      "Gruvbox · github.com/morhetz/gruvbox",
+      "Rosé Pine · github.com/rose-pine/palette",
+      "Their licences are in THIRD_PARTY_NOTICES.md, which comes with glosa.",
     ]);
     const group = host.querySelector(".glosa-settings-palettes");
     expect(host.querySelector(`#${group?.getAttribute("aria-labelledby")}`)?.textContent).toBe("Palette");
@@ -264,9 +283,21 @@ describe("createAppearanceController", () => {
 
     rows[1]!.click();
     expect(controller.getSnapshot().palette).toBe("high-contrast");
-    expect(rows.map((row) => row.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
+    expect(rows.map((row) => row.getAttribute("aria-pressed"))).toEqual(["false", "true", "false", "false", "false"]);
     expect(hint().hidden).toBe(true);
     expect(storage.getItem(PALETTE_STORAGE_KEY)).toBe("high-contrast");
+
+    // A palette made by others, chosen while the system still asks for more contrast, paints as
+    // chosen, and there is nothing for the line to explain.
+    rows[4]!.click();
+    expect(controller.getSnapshot()).toMatchObject({
+      palette: "rose-pine",
+      painting: "rose-pine",
+      resolved: "rose-pine-dawn",
+    });
+    expect(dom.document.documentElement.dataset.theme).toBe("rose-pine-dawn");
+    expect(hint().hidden).toBe(true);
+    expect(storage.getItem(PALETTE_STORAGE_KEY)).toBe("rose-pine");
     settings.destroy();
     controller.destroy();
   });
@@ -409,7 +440,14 @@ describe("the one list of appearances (#405, #409)", () => {
       dataAccess: { getAgentStatus: async () => ({ available: true, providers: [], profiles: [] }) },
     });
     const rows = [...settingsHost.querySelectorAll("[data-palette-choice]")];
-    expect(rows.map((row) => row.getAttribute("data-palette-choice"))).toEqual(["test-dusk", "glosa", "high-contrast"]);
+    expect(rows.map((row) => row.getAttribute("data-palette-choice"))).toEqual([
+      "test-dusk",
+      "glosa",
+      "high-contrast",
+      "catppuccin",
+      "gruvbox",
+      "rose-pine",
+    ]);
     const dusk = settingsHost.querySelector('[data-palette-choice="test-dusk"]');
     expect(dusk?.querySelector(".glosa-settings-palette-name")?.textContent).toBe("Dusk (test)");
     expect(dusk?.querySelector(".glosa-settings-palette-credit")?.textContent).toBe(
@@ -450,6 +488,29 @@ describe("the one list of appearances (#405, #409)", () => {
     dom.window.localStorage.setItem(PALETTE_STORAGE_KEY, "test-dusk");
     system({ dark: true, moreContrast: true });
     expect(firstPaint(DUSK)).toMatchObject({ palette: "test-dusk", theme: "test-dusk" });
+
+    // Catppuccin, Gruvbox and Rosé Pine, chosen by name, stay as chosen in either scheme (#410).
+    for (const [palette, light, dark] of [
+      ["catppuccin", "catppuccin-latte", "catppuccin-mocha"],
+      ["gruvbox", "gruvbox-light", "gruvbox-dark"],
+      ["rose-pine", "rose-pine-dawn", "rose-pine"],
+    ]) {
+      dom.window.localStorage.setItem(PALETTE_STORAGE_KEY, palette!);
+      for (const moreContrast of [false, true]) {
+        system({ dark: false, moreContrast });
+        expect(firstPaint(), `${palette}, light, more contrast ${moreContrast}`).toMatchObject({
+          palette,
+          theme: light,
+          scheme: "light",
+        });
+        system({ dark: true, moreContrast });
+        expect(firstPaint(), `${palette}, dark, more contrast ${moreContrast}`).toMatchObject({
+          palette,
+          theme: dark,
+          scheme: "dark",
+        });
+      }
+    }
   });
 
   test("an unlisted stored value paints the list's defaults through the operating system", () => {

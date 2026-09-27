@@ -74,10 +74,14 @@
   --anchor-wash: color-mix(in oklch, var(--hand) 14%, var(--bg)); /* opaque form, for surfaces */
 
   /* Actions are ink. The primary button is the page's own black; it never borrows the hand. Its
-     hover is one lightness per scheme, not yet computed from each theme's ink: glosa's two themes
-     and High contrast share an ink hue, so the value is exact for all four. */
+     hover is the theme's own ink moved toward its own paper (#410), so a palette's primary keeps
+     its hue under the pointer and always visibly changes: 18% of the paper in light, 12% in dark,
+     which puts glosa's own within 0.003 in lightness of the fixed hovers it replaces
+     (oklch(0.34 0.012 60) and oklch(0.84 0.01 80)).
+     Mixed in OKLab, like the diff's tints, so a near-neutral ink does not swing toward the
+     paper's hue. */
   --primary: var(--ink);
-  --primary-hover: oklch(0.34 0.012 60);
+  --primary-hover: color-mix(in oklab, var(--ink) 82%, var(--bg));
   --on-primary: var(--bg);
   --focus: var(--hand);
 
@@ -85,8 +89,11 @@
      and always arrives with a label or a shape; success green is also the diff's insert colour,
      and appears nowhere a human mark could be mistaken for it. Text on a filled danger action is
      near-white on the light crimson (~7.3:1); the dark scheme swaps it for the dark paper, because
-     near-white on the lamplit crimson is ~2.8:1. */
+     near-white on the lamplit crimson is ~2.8:1. A filled danger action's hover moves its fill away
+     from its label, never toward it, so hovering cannot lower the label's contrast: 12% toward
+     black in light, 12% toward white in dark (#410). */
   --on-danger: oklch(0.99 0 0);
+  --danger-hover: color-mix(in oklch, var(--danger) 88%, black);
 
   /* Typography. Source Serif 4 sets the manuscript, its headings and every quote of it; Source
      Sans 3, designed as its companion, sets the chrome; mono is for paths, identifiers and the
@@ -382,16 +389,17 @@
    `data-scheme` is set beside `data-theme` by the preload and the appearance controller, from the
    one list of appearances (appearance-list.js), so a dark theme reaches these without a rule
    naming it (#405). The washes deepen a step, the hovers lift instead of darkening, and text on a
-   filled danger action is the dark paper (~6.3:1 on the lifted crimson, ~4.6:1 under the hover's
-   darkening). On a dark ground what floats lifts one surface step off the paper, the dialog drops
+   filled danger action is the dark paper (~6.3:1 on the lifted crimson, more under the hover,
+   which lifts it further). On a dark ground what floats lifts one surface step off the paper, the dialog drops
    its shadow, and settled entries stay at full opacity. */
 :root[data-scheme="dark"] {
   color-scheme: dark;
   --hand-hover: oklch(0.78 0.12 45);
   --session-wash: color-mix(in oklch, var(--session) 14%, transparent);
   --session-wash-strong: color-mix(in oklch, var(--session) 22%, transparent);
-  --primary-hover: oklch(0.84 0.01 80);
+  --primary-hover: color-mix(in oklab, var(--ink) 88%, var(--bg));
   --on-danger: var(--bg);
+  --danger-hover: color-mix(in oklch, var(--danger) 88%, white);
 
   /* Under low light a shadow is a darker patch of the same desk, not haze: black-based and
      tighter, and nothing at rest casts one at all. */
@@ -5392,8 +5400,8 @@ input,
 }
 
 .glosa-btn-danger:hover {
-  background: color-mix(in oklch, var(--danger) 88%, black);
-  border-color: color-mix(in oklch, var(--danger) 88%, black);
+  background: var(--danger-hover);
+  border-color: var(--danger-hover);
 }
 
 /* ---------- 11. History pane ---------- */
@@ -7660,6 +7668,30 @@ input,
 /* The line that says the system's contrast is showing another palette keeps to the rows' column. */
 .glosa-settings-palettes + .glosa-settings-hint {
   max-width: 30rem;
+}
+/* Palette credits (#410): a quiet disclosure under the rows, in the rows' column, the same muted
+   summary Settings' other disclosures use; open, it says where each borrowed palette comes from,
+   that glosa adapts it, and where the licences are. */
+.glosa-settings-credits {
+  max-width: 30rem;
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.glosa-settings-credits > summary {
+  width: fit-content;
+  padding-block: 8px;
+  cursor: pointer;
+}
+.glosa-settings-credits[open] > summary {
+  color: var(--ink);
+}
+.glosa-settings-credits p,
+.glosa-settings-credits ul {
+  margin: var(--space-2) 0 0;
+}
+.glosa-settings-credits ul {
+  padding-left: 1.25rem;
 }
 .glosa-agent-account-area {
   padding: 0;
