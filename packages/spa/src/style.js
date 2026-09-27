@@ -133,6 +133,26 @@ export function createStyleStore({ storage, loadFolderStyle, saveFolderStyle } =
     return key;
   }
 
+  /**
+   * Reads a folder's default from the daemon. Never rejects: a failure keeps what this page last
+   * knew, and a folder the daemon has never answered for has no default here.
+   * @param {string} slug
+   */
+  async function loadFolder(slug) {
+    if (!slug || !loadFolderStyle) return folderOf(slug);
+    const ticket = (loads.get(slug) ?? 0) + 1;
+    loads.set(slug, ticket);
+    let next;
+    try {
+      const answer = await loadFolderStyle(slug);
+      next = { style: isStyle(answer?.style) ? answer.style : null, available: true };
+    } catch {
+      next = folders.get(slug) ?? { style: null, available: false };
+    }
+    if (loads.get(slug) === ticket) setFolder(slug, next);
+    return folderOf(slug);
+  }
+
   function setFolder(slug, next) {
     const current = folders.get(slug);
     if (current && current.style === next.style && current.available === next.available) return;
@@ -163,34 +183,24 @@ export function createStyleStore({ storage, loadFolderStyle, saveFolderStyle } =
      */
     async useAsFolderDefault(slug, path) {
       if (!saveFolderStyle) throw new Error("This folder has no default to set.");
-      const { style } = get(slug, path);
+      const { style, own: ownBefore } = get(slug, path);
+      const readsBefore = loads.get(slug) ?? 0;
       const saved = await saveFolderStyle(slug, style);
       const stored = isStyle(saved?.style) ? saved.style : style;
-      // A read that set out before this write would answer with the default it replaced.
+      // Another window may have set the folder while this write was out, and its change may have
+      // landed after this one. A read issued meanwhile is the sign: read again, after this write,
+      // and let the daemon say which landed last. Reads that set out before it are dropped, since
+      // they would answer with the default it replaced.
+      const raced = (loads.get(slug) ?? 0) !== readsBefore;
       loads.set(slug, (loads.get(slug) ?? 0) + 1);
       folders.set(slug, { style: stored, available: true });
-      keepOwn(slug, path, null);
+      // The document now follows its folder, unless the reader chose another style meanwhile.
+      if (own(slug, path) === ownBefore) keepOwn(slug, path, null);
       notify((s) => s.slug === slug);
+      if (raced) void loadFolder(slug);
       return stored;
     },
-    /**
-     * Reads a folder's default from the daemon. Never rejects: a failure keeps what this page
-     * last knew, and a folder the daemon has never answered for has no default here.
-     */
-    async loadFolder(slug) {
-      if (!slug || !loadFolderStyle) return folderOf(slug);
-      const ticket = (loads.get(slug) ?? 0) + 1;
-      loads.set(slug, ticket);
-      let next;
-      try {
-        const answer = await loadFolderStyle(slug);
-        next = { style: isStyle(answer?.style) ? answer.style : null, available: true };
-      } catch {
-        next = folders.get(slug) ?? { style: null, available: false };
-      }
-      if (loads.get(slug) === ticket) setFolder(slug, next);
-      return folderOf(slug);
-    },
+    loadFolder,
     /**
      * Calls `listener` with the document's state now and after every change to it.
      * @param {string} slug @param {string} path @param {(state: StyleState) => void} listener
@@ -273,21 +283,27 @@ export function mountStyleControl(
     const target = getTarget?.();
     if (!target || saving) return;
     saving = true;
-    useAsDefault.disabled = true;
+    // Nothing else in the group changes while the folder's default is being written.
+    for (const control of [...rows.values(), useAsDefault]) control.disabled = true;
     const { style } = store.get(target.slug, target.path);
+    /** @type {{ ok: boolean, style: string }} */
+    let result;
     try {
-      const stored = await store.useAsFolderDefault(target.slug, target.path);
-      // The row has done its job and hides; the chosen style is where the reader's focus belongs.
-      if (container.contains(document.activeElement) || document.activeElement === document.body) {
-        rows.get(stored)?.focus({ preventScroll: true });
-      }
-      onFolderResult?.({ ok: true, style: stored });
+      result = { ok: true, style: await store.useAsFolderDefault(target.slug, target.path) };
     } catch {
-      onFolderResult?.({ ok: false, style });
-    } finally {
-      saving = false;
-      useAsDefault.disabled = false;
+      result = { ok: false, style };
     }
+    saving = false;
+    const bound = Boolean(getTarget?.());
+    for (const row of rows.values()) row.disabled = !bound;
+    useAsDefault.disabled = false;
+    // Focus stays in the menu: on the chosen style once the row has done its job and hidden, or
+    // back on the row when it failed and is still there to try again.
+    const focus = document.activeElement;
+    if (focus === document.body || focus === useAsDefault || container.contains(focus)) {
+      (result.ok ? rows.get(result.style) : useAsDefault)?.focus({ preventScroll: true });
+    }
+    onFolderResult?.(result);
   });
   container.append(note, useAsDefault);
 

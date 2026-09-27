@@ -3181,16 +3181,18 @@ input,
 
 /* Spec lets a wide table or code block widen past the prose line, up to about 96ch of the body,
    centred on the column, into whitespace the note rail never claims: the room each side keeps
-   beyond a full 320px rail. The rail is 240 to 320px wide, so nothing wide ever reaches it, and the
-   room is the same whether the rail is showing or not, so entering Review moves nothing. A pane
-   too narrow to spare that room keeps them on the line, as Editorial does, scrolling a code
+   beyond a full 320px rail. The rail is 240 to 320px wide, so widening never takes a block to it,
+   and the room is the same whether the rail is showing or not, so entering Review moves nothing. A
+   pane too narrow to spare that room keeps them on the line, as Editorial does, scrolling a code
    block's long lines inside it.
 
    A table is shrink-to-fit: the negative end margin only raises how wide it may grow, so a narrow
    table stays at its own width on the prose's left edge. A code block is at least the column and
    grows to its longest line. Either one, once wider than the column, is shifted back by half the
-   difference (`translate` never moves anything around it), and never when narrower. Screen only:
-   print sets tables across the page on its own. */
+   difference (`translate` never moves anything around it), and never when narrower. The shift
+   stops at half the room: a table whose words cannot wrap to fit the lane (a long path in a cell)
+   overruns it to the right, as it overruns the line in Editorial, and never loses its first column
+   past the lane's left edge. Screen only: print sets tables across the page on its own. */
 @media screen {
   .glosa-pane[data-style="spec"] .glosa-content {
     --prose-width: var(--measure);
@@ -3200,12 +3202,14 @@ input,
     );
   }
 
-  .glosa-pane[data-style="spec"] .glosa-content > table {
+  /* The editor's own document is named too, so a wide block being edited in place stays where it
+     was: the run editor swaps the block for a `.ProseMirror` holding the same table or code block. */
+  .glosa-pane[data-style="spec"] :is(.glosa-content, .glosa-rich-surface .ProseMirror) > table {
     margin-inline-end: calc(-1 * var(--wide-extra));
-    translate: min(0px, calc(var(--prose-width) / 2 - 50%));
+    translate: max(-0.5 * var(--wide-extra), min(0px, calc(var(--prose-width) / 2 - 50%)));
   }
 
-  .glosa-pane[data-style="spec"] .glosa-content > pre {
+  .glosa-pane[data-style="spec"] :is(.glosa-content, .glosa-rich-surface .ProseMirror) > pre {
     width: max-content;
     min-width: 100%;
     max-width: calc(100% + var(--wide-extra));

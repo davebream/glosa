@@ -73,7 +73,7 @@ function stylesDocument(): string {
     "",
     "###### A sixth-level heading",
     "",
-    "Text under the sixth-level heading, then two tables and a code block.",
+    "Text under the sixth-level heading, then three tables and a code block.",
     "",
     "| Term | Meaning |",
     "| --- | --- |",
@@ -84,6 +84,10 @@ function stylesDocument(): string {
     "| --- | --- | --- | --- |",
     "| R-1: the folder default is kept beside the folder | daemon | done | A route that names the workspace by slug and never by path, written atomically at mode 0600 |",
     "| R-2: every window on the folder follows a change | spa | open | A stream invalidation, read again through the one data-access module, with no reload |",
+    "",
+    "| Digest | Note |",
+    "| --- | --- |",
+    `| ${"0123456789abcdef".repeat(8)} | one word too long to wrap, wider than any lane |`,
     "",
     "```",
     'const style = resolveStyle(document.own, folder.default) ?? "editorial"; // a line long enough to widen the block past the prose line',
@@ -1203,14 +1207,18 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
 
   /** Opens `doc` in Review and waits, as openInReview does, for its words and notes and then for the
    * desk to settle: the pane showing it holds the same width for five frames. */
-  async function openDocument(page: CdpClient, doc: string, text: string, notes: number): Promise<void> {
-    await page.navigate(
-      `http://127.0.0.1:${port}/#${new URLSearchParams({ t: TOKEN, w: slug, a: doc, mode: "review" })}`,
-    );
+  async function openDocument(
+    page: CdpClient,
+    doc: string,
+    text: string,
+    notes: number,
+    mode: "review" | "edit" = "review",
+  ): Promise<void> {
+    await page.navigate(`http://127.0.0.1:${port}/#${new URLSearchParams({ t: TOKEN, w: slug, a: doc, mode })}`);
     await page.evaluate(`(async()=>{const deadline=Date.now()+15000;
       const pane=()=>${paneOf(text)};
-      const ready=()=>{const p=pane();return p&&p.dataset.mode==='review'&&p.querySelectorAll('.glosa-annotation').length>=${notes};};
-      while(!ready()){if(Date.now()>deadline) throw new Error('${doc} and its notes never rendered in Review: '+${DESK});
+      const ready=()=>{const p=pane();return p&&p.dataset.mode==='${mode}'&&p.querySelectorAll('.glosa-annotation').length>=${notes};};
+      while(!ready()){if(Date.now()>deadline) throw new Error('${doc} and its notes never rendered in ${mode}: '+${DESK});
         await new Promise(r=>setTimeout(r,50));}
       let last=-1,still=0;
       while(still<5){
@@ -1294,6 +1302,10 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     column: { left: number; right: number };
     narrow: { left: number; right: number; width: number };
     wide: { left: number; right: number; width: number };
+    /** A table whose one word cannot wrap to fit any lane. */
+    oversize: { left: number; right: number; width: number };
+    /** The pane's inline size (what `cqi` measures) and the column's painted width it lays out around. */
+    pane: { inline: number; block: number };
     block: { left: number; right: number; width: number };
     /** The left edge of every note card in the rail beside the column, when there is a rail. */
     rail: number[];
@@ -1315,7 +1327,8 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     const cs=getComputedStyle(content),col=content.getBoundingClientRect();
     const column={left:col.left+parseFloat(cs.paddingLeft),right:col.right-parseFloat(cs.paddingRight)};
     const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
-    const [narrow,wide]=[...content.querySelectorAll(':scope > table')];
+    const [narrow,wide,oversize]=[...content.querySelectorAll(':scope > table')];
+    const ps=getComputedStyle(pane),pr=pane.getBoundingClientRect();
     const cell=getComputedStyle(wide.querySelector('td:nth-child(2)'));
     return {style:pane.dataset.style,step:Number(document.documentElement.dataset.textSize),ch,
       loaded:document.fonts.check('16px "Source Serif 4"')&&document.fonts.check('16px "Source Sans 3"'),
@@ -1323,7 +1336,9 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       table:box(wide),th:box(wide.querySelector('th')),cell:{top:parseFloat(cell.paddingTop),left:parseFloat(cell.paddingLeft)},
       code:box(first.querySelector('code')),pre:box(q(':scope > pre')),
       line:{column:column.right-column.left,paragraph:first.clientWidth,widest:Math.max(...[...rights.values()].map(r=>r-left))},
-      column,narrow:rect(narrow),wide:rect(wide),block:rect(q(':scope > pre')),
+      column,narrow:rect(narrow),wide:rect(wide),oversize:rect(oversize),block:rect(q(':scope > pre')),
+      pane:{inline:pr.width-parseFloat(ps.paddingLeft)-parseFloat(ps.paddingRight)-parseFloat(ps.borderLeftWidth)-parseFloat(ps.borderRightWidth),
+        block:parseFloat(pane.style.getPropertyValue('--manuscript-block'))},
       rail:[...pane.querySelectorAll('.glosa-margin.glosa-margin-side .glosa-annotation')].map(c=>c.getBoundingClientRect().left),
       sideways:document.scrollingElement.scrollWidth-document.scrollingElement.clientWidth};
   })()`;
@@ -1433,7 +1448,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
   }
 
   test(
-    "#407: each style sets every element of one document to its table at the default step and at 22, Spec's wide table and code block widen past its line to about 96ch and never under the note rail, and the others stay on the line",
+    "#407: each style sets every element of one document to its table at the default step and at 22, Spec's wide table and code block widen past its line to about 96ch and never under the note rail, keep that place when edited in place, and the others stay on the line",
     async () => {
       const page = await launch();
       await pin(page, { width: 1920, height: 1200 });
@@ -1496,6 +1511,14 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
                 Math.max(seen.wide.right, seen.block.right),
               );
             }
+            // A table too wide for the lane overruns it to the right, as it overruns the line in
+            // Editorial, and never loses its first column past the lane's left edge.
+            expect(seen.oversize.width, `${where}: the digest table is wider than the lane`).toBeGreaterThan(
+              seen.wide.width + 1,
+            );
+            expect(seen.oversize.left, `${where}: the digest table starts at the lane's left edge`).toBeGreaterThan(
+              seen.wide.left - 0.5,
+            );
           } else {
             expect(seen.wide.width, `${where}: the wide table stays on the line`).toBeLessThanOrEqual(
               seen.line.column + 0.5,
@@ -1532,6 +1555,33 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
               await shot(page, "spec-wide-table-light", paneOf(STYLES_NOTED), 0);
             }
           }
+          if (style === "spec" && step === 18) {
+            // Editing a wide block in place keeps it where it was: the run editor that takes its place
+            // holds the same table, at the same width and on the same line.
+            await openDocument(page, STYLES_DOC, STYLES_NOTED, 0, "edit");
+            const editing = await page.evaluate<{
+              before: StyleReading["wide"];
+              after: StyleReading["wide"];
+            }>(`(async()=>{
+              const pane=${paneOf(STYLES_NOTED)},content=pane.querySelector('.glosa-content');
+              const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
+              const table=content.querySelectorAll(':scope > table')[1];table.scrollIntoView({block:'center'});
+              await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+              const before=rect(table),cell=table.querySelector('td').getBoundingClientRect();
+              table.querySelector('td').dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:cell.left+4,clientY:cell.top+4}));
+              const deadline=Date.now()+5000;let host;
+              while(!(host=content.querySelector('.glosa-run-editor'))?.querySelector('table')){
+                if(Date.now()>deadline) throw new Error('the run editor never opened on the wide table');
+                await new Promise(r=>setTimeout(r,25));}
+              await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+              return {before,after:rect(host.querySelector('table'))};})()`);
+            expect(
+              Math.abs(editing.after.left - editing.before.left),
+              "the table being edited stays on its line",
+            ).toBeLessThan(1);
+            expect(Math.abs(editing.after.width - editing.before.width), "and keeps its width").toBeLessThan(1);
+            await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
+          }
         }
       }
 
@@ -1548,7 +1598,37 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         desk.line.column + 0.5,
       );
       expect(Math.abs(desk.block.width - desk.line.column), "and so does its code block").toBeLessThan(0.5);
+      expect(
+        Math.abs(desk.oversize.left - desk.column.left),
+        "a table too wide to fit starts on the line",
+      ).toBeLessThan(0.5);
       for (const left of desk.rail) expect(left).toBeGreaterThanOrEqual(desk.column.right);
+
+      // Between those two desks the room beyond a full rail decides the width: none below a pane of
+      // about 1230px at the default size, all of it in between, and the 96ch cap from about 1485px.
+      const around = await deskAround(page);
+      for (const width of [1225, 1360, 1490]) {
+        await paneAt(page, width, around);
+        const at = await page.evaluate<StyleReading>(STYLE_READING);
+        const room = at.pane.inline - at.pane.block - 2 * 8 - 2 * 320;
+        const extra = Math.max(0, Math.min(32 * at.ch, room));
+        const where = `a ${width}px pane (room ${Math.round(room)}px)`;
+        expect(Math.abs(at.wide.width - (at.line.column + extra)), `${where}: the wide table's width`).toBeLessThan(
+          1.5,
+        );
+        expect(Math.abs(at.block.width - (at.line.column + extra)), `${where}: the code block's width`).toBeLessThan(
+          1.5,
+        );
+        if (width === 1225) expect(room, `${where}: no room below about 1230px`).toBeLessThan(0);
+        if (width === 1360) expect(extra, `${where}: the room decides`).toBeGreaterThan(0);
+        if (width === 1360) expect(extra, `${where}: under the cap`).toBeLessThan(32 * at.ch);
+        if (width === 1490) expect(extra, `${where}: the 96ch cap from about 1485px`).toBe(32 * at.ch);
+        for (const left of at.rail) {
+          expect(left, `${where}: a rail card starts right of the wide blocks`).toBeGreaterThanOrEqual(
+            Math.max(at.wide.right, at.block.right),
+          );
+        }
+      }
     },
     TEST_TIMEOUT_MS,
   );
@@ -1612,6 +1692,38 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       await shot(a, "menu-style-dark", menu, 16);
       await scheme(a, "light");
 
+      // A save that never reaches the daemon says so in the menu, changes nothing, and leaves the row
+      // (and the reader's focus) where they were, to try again. The engine itself fails the request.
+      await a.send("Fetch.enable", { patterns: [{ urlPattern: "*/folder-style", requestStage: "Request" }] });
+      const stopFailing = a.on((msg) => {
+        if (msg.method !== "Fetch.requestPaused") return;
+        const { requestId, request } = msg.params;
+        void a.send(
+          request.method === "PUT" ? "Fetch.failRequest" : "Fetch.continueRequest",
+          request.method === "PUT" ? { requestId, errorReason: "ConnectionRefused" } : { requestId },
+        );
+      });
+      await clickAt(a, ".glosa-pane .glosa-style-folder");
+      await a.evaluate(`(async()=>{const deadline=Date.now()+5000;
+        while(!(${MENU(STYLES_NOTED)}).status){if(Date.now()>deadline) throw new Error('the failed save never said so');
+          await new Promise(r=>requestAnimationFrame(r));}})()`);
+      await a.evaluate(SETTLE);
+      expect(await a.evaluate<StyleMenu>(MENU(STYLES_NOTED)), "a failed save changes nothing and says so").toEqual({
+        heading: "Style",
+        rows,
+        checked: "spec",
+        note: null,
+        useAsDefault: "Use as folder default",
+        status: "Couldn't set the folder default, so nothing changed. Try again.",
+      });
+      expect(
+        await a.evaluate<boolean>("document.activeElement?.classList.contains('glosa-style-folder') ?? false"),
+        "focus is back on the row, to try again",
+      ).toBe(true);
+      await shot(a, "menu-style-folder-default-failed-light", menu, 16);
+      stopFailing();
+      await a.send("Fetch.disable");
+
       await clickAt(a, ".glosa-pane .glosa-style-folder");
       await a.evaluate(`(async()=>{const deadline=Date.now()+5000;
         while(!(${MENU(STYLES_NOTED)}).note){if(Date.now()>deadline) throw new Error('the folder default never showed');
@@ -1655,6 +1767,8 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         note: "Folder default: Spec",
         useAsDefault: "Use as folder default",
       });
+      const menuB = `(${paneOf(NOTED[1])}).querySelector('.glosa-pane-menu')`;
+      await shot(b, "menu-style-overridden-light", menuB, 16);
 
       // Both hold across a reload: the other window's Editorial, and this window's following Spec.
       await openDocument(b, DOC, NOTED[1], NOTED.length);

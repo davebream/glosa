@@ -924,7 +924,9 @@ export function createArtifactPane(host, deps) {
         // The folder row keeps the menu open, so what it did is said in the menu.
         onFolderResult: ({ ok, style }) =>
           setToolsStatus(
-            ok ? `${STYLE_NAMES[style]} is now this folder's default.` : "Couldn't set the folder default. Try again.",
+            ok
+              ? `${STYLE_NAMES[style]} is now this folder's default.`
+              : "Couldn't set the folder default, so nothing changed. Try again.",
             { error: !ok },
           ),
       })

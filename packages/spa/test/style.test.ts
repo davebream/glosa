@@ -139,6 +139,50 @@ describe("which style a document is set in", () => {
     expect(store.get("ws", "b.md")).toMatchObject({ style: "mono", source: "folder" });
   });
 
+  test("a style chosen while the folder default is being saved is kept", async () => {
+    let finish: (value: { style: string }) => void = () => {};
+    const storage = fakeStorage();
+    const store = createStyleStore({
+      storage,
+      loadFolderStyle: async () => ({ style: null }),
+      saveFolderStyle: () => new Promise((resolve) => (finish = resolve)),
+    });
+    await store.loadFolder("ws");
+    store.choose("ws", "a.md", "spec");
+    const saving = store.useAsFolderDefault("ws", "a.md");
+    store.choose("ws", "a.md", "mono");
+    finish({ style: "spec" });
+    await saving;
+    expect(storage.map.get(styleKey("ws", "a.md"))).toBe("mono");
+    expect(store.get("ws", "a.md")).toMatchObject({ style: "mono", source: "document", folder: "spec" });
+  });
+
+  test("another window's default that lands after this one's save is the one the page keeps", async () => {
+    let daemonStyle: string | null = null;
+    let finish: () => void = () => {};
+    const store = createStyleStore({
+      storage: fakeStorage(),
+      loadFolderStyle: async () => ({ style: daemonStyle }),
+      saveFolderStyle: (_slug: string, style: string) =>
+        new Promise((resolve) => {
+          finish = () => {
+            daemonStyle = style;
+            resolve({ style });
+          };
+        }),
+    });
+    await store.loadFolder("ws");
+    store.choose("ws", "a.md", "spec");
+    const saving = store.useAsFolderDefault("ws", "a.md");
+    finish(); // this window's Spec lands...
+    daemonStyle = "mono"; // ...then another window's Mono, whose frame asks for a read
+    const read = store.loadFolder("ws");
+    await saving;
+    await read;
+    await Bun.sleep(0);
+    expect(store.folder("ws")).toEqual({ style: "mono", available: true });
+  });
+
   test("a folder default read again reaches every document of that folder, and a failed read keeps the last one", async () => {
     const daemon = fakeFolders({ ws: "spec" });
     const store = createStyleStore({ storage: fakeStorage(), ...daemon });
@@ -288,8 +332,11 @@ describe("mountStyleControl", () => {
 
     daemon.failNextSave();
     ui.useAsDefault().click();
+    // While the default is being written nothing in the group can be chosen.
+    expect([...ui.rows(), ui.useAsDefault()].every((control) => control.disabled)).toBe(true);
     await Bun.sleep(0);
     expect(ui.results).toEqual([{ ok: false, style: "editorial" }]);
+    expect(ui.rows().some((row) => row.disabled)).toBe(false);
     expect(ui.note().textContent).toBe("Folder default: Spec");
     expect(ui.useAsDefault().hidden).toBe(false);
     expect(ui.useAsDefault().disabled).toBe(false);
