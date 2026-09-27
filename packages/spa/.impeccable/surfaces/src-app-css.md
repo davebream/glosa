@@ -28,6 +28,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 
 ## Decided after the contract was written
 - The face chooser stays in the pane's More menu: Default (Source Serif 4), Sans (Source Sans 3), Mono. A stored "serif" choice resolves to Default, which is now the serif.
+- #407 (2026-09-27): the face chooser became the "Style" group: Editorial (Serif), Spec (Sans), Mono, each a whole typographic dress (DESIGN.md, Styles), with a folder default set from the same menu ("Use as folder default") and kept by the daemon. Stored `sans` reads as Spec, `mono` as Mono, `serif` as Editorial.
 - Addresses stay on margin entries, the composer and gutter pseudo-elements, never inserted into the rendered content.
 - Manuscript body is 18px Source Serif 4, which paints 688px at 68ch: inside the existing 707px `--manuscript-block`, so the margin-rail floor (1205px) and layout constants did not move.
 - Margin notes, the composer field and a session's message are set in the serif whatever the page face: notes are writing, not chrome.

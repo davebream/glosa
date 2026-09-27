@@ -55,9 +55,10 @@ agent drafts -> glosa renders -> you mark or edit -> the note reaches the bound 
 | **Go to** | The document's path in the top bar, or ⌘K, jumps to a section or a file, or runs a command such as hiding notes. |
 | **History** | Compare versions and restore an earlier one without touching your repository's Git history. |
 
-Each document can be set in the default serif, a sans or a mono face from its own menu. The sidebar
-keeps your directory structure across mixed files, several workspaces can be open at once, and notes
-wait safely when no matching agent session is running.
+Each document can be set in a style from its own menu: Editorial (serif), Spec (a denser sans for
+specifications) or Mono, and a folder can have a default style. The sidebar keeps your directory
+structure across mixed files, several workspaces can be open at once, and notes wait safely when no
+matching agent session is running.
 
 ### Notes stay attached to the words they are about
 

@@ -403,15 +403,39 @@
       },
       "manuscript-body": {
         "displayName": "Manuscript Body",
-        "purpose": "Default face: Source Serif 4 at 18px on a 68ch measure."
+        "purpose": "Editorial, the default style: Source Serif 4 at 18px on a 68ch measure."
       },
-      "manuscript-body-sans": {
-        "displayName": "Manuscript Body, Sans",
-        "purpose": "The Sans page face, chosen per artifact."
+      "manuscript-body-spec": {
+        "displayName": "Manuscript Body, Spec",
+        "purpose": "The Spec style's body: Source Sans 3 at 16px / 1.5 on a 64ch measure, chosen per document or as a folder's default."
+      },
+      "spec-title": {
+        "displayName": "Spec Title",
+        "purpose": "Spec's h1, 32px at 650, 1.5rem below."
+      },
+      "spec-section": {
+        "displayName": "Spec Section",
+        "purpose": "Spec's h2, 24px at 650, 2.25rem above and 0.5rem below."
+      },
+      "spec-subhead": {
+        "displayName": "Spec Subhead",
+        "purpose": "Spec's h3, 20px at 650, 1.75rem above and 0.5rem below."
+      },
+      "spec-minor-head": {
+        "displayName": "Spec Minor Head",
+        "purpose": "Spec's h4, 17px at 650, a sixteenth over the body at every step."
+      },
+      "spec-small-head": {
+        "displayName": "Spec Small Head",
+        "purpose": "Spec's h5 and h6, the body's 16px at 650."
+      },
+      "spec-code": {
+        "displayName": "Spec Code",
+        "purpose": "Code blocks in Spec, 14px / 1.5, free to widen past the line into the wide lane."
       },
       "manuscript-body-mono": {
         "displayName": "Manuscript Body, Mono",
-        "purpose": "The Mono page face, chosen per artifact."
+        "purpose": "The Mono style's body, chosen per document or as a folder's default."
       },
       "note": {
         "displayName": "Note",
