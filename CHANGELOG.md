@@ -20,6 +20,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and without it the page showed no marks and no warning. Such a browser now shows one notice
   across the top of the page, however many documents are open: "This browser can't show marks on
   the page. Use Safari 17.2 or later, or Chrome." Notes still list in the margin (#412).
+- A text size for reading, chosen per device: 15, 16, 18, 20, 22 or 24, with 18 the default. It
+  sets the document, its margin notes, the composer and the chat together; buttons, menus, tabs
+  and the navigator keep following zoom, and ⌘+ and ⌘− stay zoom. It is in each document's More
+  menu under the face, as "Text size" with a − value + stepper and "Reset" whenever it is not 18,
+  and in Settings > Appearance, where it changes the same setting. It applies at once, before the
+  page first paints on the next visit, and keeps the paragraph you were reading at the top of the
+  pane. Headings, code blocks and tables grow with the text, and h3 stays larger than the text at
+  every size. Notes sit two steps under the document and the chat one step under, neither below
+  15px (#406).
 
 ### Changed
 
@@ -55,6 +64,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `#fefbf7`; before any window has shown glosa, a new window starts on the paper of macOS's own
   scheme. Native dialogs, menus and the title bar follow glosa's Light or Dark instead of macOS's;
   Use system setting still follows macOS. The Dock icon keeps following macOS (#405).
+- h4, h5 and h6 in the default serif go from 17px at weight 600, smaller than the 18px text under
+  them and no heavier than bold text, to the text's own 18px at weight 650, in print as well. In
+  the Sans and Mono faces they stay 17px at 600 (#406).
+- A page set in Sans has a shorter line, 64ch instead of 68ch. The sans fits more letters into a
+  `ch`, so at 68ch its lines ran longer than the serif's on the same text (79 characters at most
+  against 75, 65 on average against 61); at 64ch they match. Serif and Mono keep 68ch (#406).
+- A chat reply goes from 15px to 16px, one step under the document's 18px, and so do the person's
+  own messages and the draft (both sans, 15px before). A `###` inside a reply grows with it, from
+  17.55px to 18.72px; code blocks in a reply stay 12px (#406).
+- The note rail is laid out around the document column as it paints, not a 707px estimate. At the
+  default size in the serif the column is 688px, so the rail opens from a 1186px pane instead of
+  1205px, reaches its full 320px at 1344px instead of 1363px, and Review asks a split for 1271px
+  instead of 1290px. The Edit column's toolbar and Save row are 688px wide instead of 707px, and
+  the note dots beside the text sit 9.5px closer to it (#406).
 
 ### Fixed
 
@@ -71,6 +94,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Links in a chat reply used the browser's default blue, rgb(0, 0, 238) in light and
   rgb(158, 158, 255) in dark. They now take the page's ink with the same muted underline as links in
   a document.
+- With the browser's default font size at 20px, the note rail covered the right edge of the
+  document by about 58px in every pane from 1205px to 1363px wide, and by less up to about 1480px,
+  and the note dots sat inside the text: the column paints 843px there, and the rail was placed
+  around 707px. The rail now opens only once the pane holds it beside the column, from 1341px at
+  that font size, and the dots ride the column's real edge (#406).
 
 ## [0.1.0-alpha.36] · 2026-09-27
 

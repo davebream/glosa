@@ -19,6 +19,14 @@ errors, appearance persistence, and reduced-motion CSS. In a Chromium browser, a
 Lighthouse accessibility snapshot with Preview, History, Conversation, Edit, and the annotation
 composer each exposed; scanning only the initial Preview state misses conditional controls.
 
+Two real-engine checks cover the reading surfaces (the document in Review, its margin notes, an
+open composer and the chat) on every run of the suite, in
+`test/acceptance/reading-scale-real-engine.test.ts`: WCAG 1.4.4 at an effective 200% zoom (a
+1440 × 900 desk as 720 × 450 CSS pixels), and WCAG 1.4.12 with the W3C bookmarklet's text-spacing
+overrides forced on every element. Each audits the engine's own text rectangles for text a box
+cuts off, text painted over text and a sideways page scroll. They do not replace the manual zoom
+and text-only enlargement pass below, which covers Safari, the chrome and long names.
+
 The 2026-07-22 browser pass covered light, dark, and system-resolved appearances; a 1440 × 900
 desktop viewport; the browser's 500 × 844 minimum emulated narrow viewport; keyboard traversal;
 and horizontal-overflow checks. The light and dark text/status tokens used for active content met
@@ -38,6 +46,7 @@ exempt from contrast requirements and is not used for active information.
 | History and conversation | Disclosure buttons expose `aria-expanded` and `aria-controls`; comparison checkboxes have complete names; async results and errors are textual live status. |
 | Unsaved-edit dialog | Focus starts on Cancel for a destructive choice, stays trapped by the native modal, and returns to the invoking mode control. |
 | Appearance menu | Arrow keys move through System/Light/Dark; Enter chooses; focus returns to the trigger. |
+| Text size (a document's More menu, Settings > Appearance) | Tab reaches the value, a spinbutton named "Text size" whose value is the step; the arrow keys and Page Up/Page Down step it and Home/End go to 15 and 24, without moving the menu's focus. − and + are for the pointer and outside the tab order. Reset, shown only off 18, returns to 18 and puts focus on the value. No shortcut is added: ⌘+ and ⌘− stay browser and desktop zoom. |
 
 ## Remaining manual assistive-technology checks
 
@@ -61,6 +70,10 @@ establish practical screen-reader usability:
 - [ ] macOS keyboard-only: run every workflow above with Full Keyboard Access both off and on and
   confirm no trap, invisible focus, or focus loss remains.
 - [ ] Browser zoom at 200% and text-only enlargement: repeat desktop and narrow workflows with a
-  long artifact, long workspace/path names, history rows, a diff, and open composers.
+  long artifact, long workspace/path names, history rows, a diff, and open composers. The
+  automated 200% zoom and text-spacing checks above cover the reading surfaces in Chromium only.
+- [ ] Text size at 15 and at 24, in Safari and in the desktop app: the note rail opens only beside
+  the column, the reader's place holds across a change, and VoiceOver reads the stepper's name and
+  value.
 - [ ] macOS Reduce Motion and Increase Contrast: confirm state remains understandable when motion
   is removed and system contrast preferences are enabled.

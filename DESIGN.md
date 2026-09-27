@@ -59,6 +59,11 @@ typography:
     fontSize: "1.25rem"
     fontWeight: 620
     lineHeight: 1.3
+  manuscript-minor-head:
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "1.125rem"
+    fontWeight: 650
+    lineHeight: 1.4
   manuscript-body:
     fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
     fontSize: "1.125rem"
@@ -177,6 +182,19 @@ components:
     backgroundColor: "{colors.paper}"
     rounded: "{rounded.composer}"
     padding: "0.75rem 1rem 1rem"
+  stepper:
+    textColor: "{colors.ink}"
+    typography: "{typography.label}"
+    rounded: "{rounded.control}"
+    height: "24px"
+  stepper-step-hover:
+    backgroundColor: "{colors.surface-sunken}"
+    textColor: "{colors.ink}"
+  stepper-step-pressed:
+    backgroundColor: "{colors.border}"
+    textColor: "{colors.ink}"
+  stepper-step-disabled:
+    textColor: "{colors.faint}"
   chip-human:
     backgroundColor: "{colors.hand}"
     textColor: "{colors.paper}"
@@ -207,7 +225,7 @@ glosa reads like a well-set page, not an app. The whole desk is one warm paper: 
 
 Two hands write on the sheet. The human's marks are one burnt vermilion everywhere they appear: the wash and underline on the words, the § address, the note's words, the caret, the selection, the focus ring, the unsaved dot, the drag target, and the comma logo. A mark not yet sent is the same mark in warm graphite, the pencil. A session never borrows either: its entries, chips and answers are printed in ink. Actions are ink too; the chosen mode is struck forward as filled ink inside an ink outline.
 
-Density is calm and bookish in the manuscript (18px serif on a 68ch measure) and compact in the chrome (13px sans). The surface is flat at rest; only things genuinely above the work cast a shadow. Dark is the same desk under a reading lamp: warm near-black ground, ink lifted to warm off-white, the hand lifted only as far as it stays legible without glowing.
+Density is calm and bookish in the manuscript (18px serif on a 68ch measure at the default text size, which each reader can move) and compact in the chrome (13px sans, which follows zoom instead). The surface is flat at rest; only things genuinely above the work cast a shadow. Dark is the same desk under a reading lamp: warm near-black ground, ink lifted to warm off-white, the hand lifted only as far as it stays legible without glowing.
 
 **Key Characteristics:**
 - Warm paper for the entire desk; no grey sidebar, top bar or tab strip.
@@ -275,16 +293,18 @@ Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand
 
 **Character:** A book serif and its designed sans, used at restrained weights (600–650 headings, 600 emphasis) so the page reads as typeset rather than as a magazine.
 
-The writer can switch a page's face in the pane's More menu (Default = serif, Sans, Mono) through one variable, `--font-manuscript`, with its own size and leading. The chooser rows lead with an "Aa" sample in the face they name; the chosen row is told by weight and a drawn check.
+The writer can switch a page's face in the pane's More menu (Default = serif, Sans, Mono) through one variable, `--font-manuscript`, with its own size, leading and line length. The chooser rows lead with an "Aa" sample in the face they name; the chosen row is told by weight and a drawn check. Under them the reader chooses the text size for this device (see The Reading Scale).
 
 ### Hierarchy
 - **Manuscript Title** (650, 2.5rem, 1.1, −0.015em): the artifact's `h1`, 2rem below. It scales with the pane, not the viewport: full size from an 800px pane, down to **Manuscript Title Narrow** (1.875rem) at 400px and below.
 - **Manuscript Section** (620, 1.625rem, 1.25, −0.01em): `h2`, 3rem above, 0.75rem below. It scales with the pane too, down to **Manuscript Section Narrow** (1.5rem), so the title keeps its lead at every width.
-- **Manuscript Subhead** (620, 1.25rem, 1.3): `h3`, 2rem above, 0.5rem below; closes to 0.75rem above when it follows its section directly. `h4`–`h6` at 600, 17px, 1.4.
-- **Manuscript Body** (400, 18px / 1.62 serif; 16px / 1.6 sans; 15px / 1.65 mono): prose on a 68ch measure, pretty wrapping, hanging punctuation. Emphasis is 600, not the full bold.
-- **Note** (400, 15px / 1.45, serif): the words of a margin entry, the composer field and a session's message, in the serif whatever the page face. Notes are writing, not chrome.
+- **Manuscript Subhead** (620, 1.25rem, 1.3): `h3`, 2rem above, 0.5rem below; closes to 0.75rem above when it follows its section directly.
+- **Manuscript Minor Head** (650, the body's own 18px, 1.4): `h4`–`h6` in the serif. Weight carries the step down from `h3`, and 650 keeps a heading above bold text, which is 600. The Sans and Mono faces keep 17px at 600, already above their bodies.
+- **Manuscript Body** (400, 18px / 1.62 serif; 16px / 1.6 sans; 15px / 1.65 mono): prose on a 68ch measure (64ch in the sans), pretty wrapping, hanging punctuation. Emphasis is 600, not the full bold.
+- **Note** (400, 15px / 1.45, serif): the words of a margin entry, the composer field and a session's message, in the serif whatever the page face. Notes are writing, not chrome, and sit two text-size steps under the document.
 - **Headline** (600, 22px, sans): boot screens. **Title** (600, 19px): dialogs and panels. **Bar Title** (600, 14px): the active artifact's path, centred in the top bar.
-- **Body** (400, 15px / 1.6, sans): panel prose, the conversation, dialog copy.
+- **Body** (400, 15px / 1.6, sans): panel prose, dialog copy.
+- **Chat** (400, 16px, serif for a reply at 1.7, sans for the person's message and the draft): one text-size step under the document.
 - **Label** (500, 13px): buttons, tabs, menu rows, navigator rows; the chrome default.
 - **Section Label** (600, 12px, 0.06em, uppercase, Muted): the heading of a real list: navigator sections, the margin's title and open/settled divider. The Go to palette's group headings use 11px at 0.04em.
 - **Metadata** (400, 12px): timestamps, state rows, chips, the provenance line.
@@ -292,11 +312,22 @@ The writer can switch a page's face in the pane's More menu (Default = serif, Sa
 - **Source** (400, 13px / 1.7, mono): the source editor; code blocks in prose at 13px / 1.6.
 
 ### Named Rules
-**The Reading Measure Rule.** Manuscript prose stays at a 68ch measure. Blocks are separated by 1.2em of the body size; the page opens with 4rem above the title and closes with 6rem below. Headings carry more space above than below.
+**The Reading Measure Rule.** Manuscript prose stays at a 68ch measure in the serif and mono and 64ch in the sans, which fits more letters into a `ch` (at 68ch its lines ran about four characters longer than the serif's). Blocks are separated by 1.2em of the body size; the page opens with 4rem above the title and closes with 6rem below. Headings carry more space above than below.
 
 **The Serif Is Writing Rule.** Anything a person or a session wrote (the manuscript, its quotes, margin notes, the composer field, a session's message) is set in serif; anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.
 
 **The Section Label Rule.** Uppercase tracked labels name a list that follows them. They never sit above a headline as a decorative lead-in.
+
+### The Reading Scale
+One text size per device sets every reading surface together: the document, its margin notes, the composer and the chat. The reader chooses it from a ladder of 15, 16, 18, 20, 22 and 24 (default 18) in the document's More menu or in Settings > Appearance; it is stored in the browser like the appearance and written on `<html>` before first paint (`--reading-step`, `--chat-step`, `--note-step`), so a page never reflows after it has painted. Sizes are rem values, so a browser's larger default font carries the whole page too.
+
+- **Document:** every size is its value at the default step times `--reading-scale` (the step over 18): the body, `h1` to `h3`, code blocks and tables, with `h4`–`h6` never under the body. At the default step each is exactly the value in the hierarchy above. `h1` and `h2` keep their response to the pane, the whole clamp scaled, so the widths at which they step down do not move.
+- **Notes and the composer:** two steps under the document, never under 15 (15px at the default). Quotes in the margin keep their ratio to the note.
+- **The chat:** a reply, the person's message and the draft sit one step under the document, never under 15 (16px at the default). Code in a reply keeps 12px at the default and never goes under it.
+- **Floors:** below the default the smaller sizes stop instead of shrinking with the body: no face's body under 15px, no table under 13px, no code block or table head under 12px.
+- **What does not follow:** chrome (buttons, menus, tabs, the navigator, labels, addresses) follows browser and desktop zoom, never the step. Print keeps its own 12pt scale. No keyboard shortcut sets the step: ⌘+ and ⌘− are zoom.
+
+**The Reading Scale Rule.** A size read in the document, the margin or the chat is written on the reading scale, never as a fixed px or rem of its own; a size in the chrome never reads it. At every step `h3` is larger than the body and `h4`–`h6` are not smaller.
 
 ## Layout
 
@@ -304,9 +335,11 @@ A grid of top bar (3rem), an optional banner row and a main area. The banner row
 
 Each pane is a container (`pane`), so width rules are written against the pane, not the viewport. The artifact bar (40px, its own `bar` container) holds the directory at left in mono, the mode control on the pane's centre line, and History and More at right; the right column never shrinks, so the path gives way first. It collapses on its own width: at 520px History drops its word, at 440px the directory drops, at 400px the mode control goes icon-only, at 270px History folds into More.
 
-The manuscript column is 68ch plus two 2rem gutters, centred; its painted block is fixed at 707px (`--manuscript-block`) so the margin ladder can reason about it from outside the manuscript's font. The serif at 18px paints 688px, inside that block, so the rail floor did not move.
+The manuscript column is the measure plus two 2rem gutters, centred. Its painted width, `--manuscript-block`, is measured by the pane from the column's computed width in its own face and size, at every text size, face and browser font, and set on the pane for everything outside the column that reasons about it: the rail, the Edit column and the note dots. The serif at the default step paints 688px.
 
-**The margin** is painted, never reserved: the manuscript never moves when Review is entered or the first entry arrives. From a pane width of 1205px the margin is a right rail (240–320px) of what has a place on the page: open entries whose words are still there, and a session's cards, each positioned beside its passage over whitespace. The rail carries no headings, because page order is its grouping. What has no place (settled entries, and open entries that lost their place) is in the rail's drawer: the collection tray, the rail's width, at the pane's foot, shown only when it holds something, its strip counting "N lost its place · N resolved" with a Warning dot for the first. Below 1205px the tray spans the pane and holds every entry and card, under their headings. At every width the composer opens at its passage: directly under the selection (flipping above it when there is no room), aligned to its first word and held inside the manuscript column, 26rem wide. A draft never opens in the rail, where it sat far from the words just selected. The outline is reached through Go to (⌘K), never through the gutter.
+**The margin** is painted, never reserved: the manuscript never moves when Review is entered or the first entry arrives. From the first pane width that holds 240px beside the painted column (1186px for the serif at the default step; later at larger sizes, other faces and larger browser fonts) the margin is a right rail (240–320px) of what has a place on the page: open entries whose words are still there, and a session's cards, each positioned beside its passage over whitespace. The rail carries no headings, because page order is its grouping. What has no place (settled entries, and open entries that lost their place) is in the rail's drawer: the collection tray, the rail's width, at the pane's foot, shown only when it holds something, its strip counting "N lost its place · N resolved" with a Warning dot for the first. Narrower than that, the tray spans the pane and holds every entry and card, under their headings.
+
+**The Rail Rule.** The rail opens only where it fits beside the column as it paints, and it never overlaps the column. Its floor is the painted column plus 2 × (240 + 8)px (the rail's minimum and the pane's scrollbar), and Review asks a split for 85px more, a rail of about 280px. At every width the composer opens at its passage: directly under the selection (flipping above it when there is no room), aligned to its first word and held inside the manuscript column, 26rem wide. A draft never opens in the rail, where it sat far from the words just selected. The outline is reached through Go to (⌘K), never through the gutter.
 
 Compact (≤ 1023px) hides the logo, tightens the top bar and lets the tray span the width. Phone (≤ 640px) stacks the approval strip. The manuscript keeps both 2rem gutters at every width, because its marks live there: the § addresses and a session's brackets and tabs on the left, the note dots on the right. The title and section heading shrink with the pane instead. Coarse pointers grow hit targets to 44px without changing the visible vocabulary. The dock floor is one 360px pane; below that, the app scrolls.
 
@@ -366,6 +399,14 @@ Quiet and ink-led.
 - **Scrolling:** the page scrolls in Edit, never an inner editor box. The formatting toolbar (with the Rich/Source toggle on its row) sticks to the top of the pane, and the Save row sticks to the bottom on paper above a Quiet Border rule. The source face grows with its text.
 - **Place:** entering and leaving Edit keeps the page's scroll position.
 
+### Text Size Stepper
+The one control for the reading scale, in two places: a row of the document's More menu, directly under the face rows, and a field of Settings > Appearance, on the same store, so a change in either is the other's too.
+- **Row:** in the menu, the icon column (a drawn large-and-small A), "Text size" in 13px Muted, and at the row's end the track; 4px above and below, which the focus ring needs inside the menu. In Settings, "Text size" in 15px 600 ink over the track, with a line under it saying what it sets.
+- **Track:** − value + in one outline: no fill, a 1px Strong Border edge, 6px radius, 24px tall in the menu and 36px in Settings (44px for coarse pointers). The value sits between Quiet Border hairlines, 13px 600 ink, tabular.
+- **States:** − and + are 10px drawn strokes in Muted; hover lays a Sunken bed and turns them ink, a press a Quiet Border bed. At an end of the ladder the one that would do nothing is disabled: Faint, no bed, and its title says it is the smallest or largest size. Focus is the one ring, around the whole track.
+- **Keyboard:** the value is a spinbutton named "Text size" with the step as its value ("18, the default"). The arrow keys and Page Up and Page Down step it, Home and End go to the ends; − and + are for the pointer and outside the tab order. Changes apply at once and the menu stays open.
+- **Reset:** a recessive verb, 12px underlined Muted, shown only off the default, named "Reset text size to 18". It sits where its arrival moves nothing (before the track in the menu, after it in Settings), and hands focus to the value.
+
 ### Navigator
 - **Style:** paper, ink hairline at its right, 232px. Section labels in the Section Label style. Rows are 28px, 13px ink, 5px radius, hover to a Sunken bed; the current row is Sunken, ink, 600. Every section (Artifacts, Chats, Starred) opens with the same 15px drawn chevron the tree's folders use, on the same line (x 16) with a 6px gap to its label; a file row is a row without a chevron, no file or folder glyph, and children indent 12px per depth. Header tools (star, menu, new chat) are 28px drawn icons in one box. Chat rows are tree rows. Settings sits on the 44px foot strip beside the navigator's toggle.
 
@@ -423,7 +464,7 @@ Managed chat uses right-aligned human bubbles (sans, Surface, up to 80% of the c
 The composer has a borderless text area and compact, borderless model and effort controls sized to their selected labels, with accessible names. The model button opens a versioned model list plus the current Subscription row. Selecting that row replaces the model list with a compact subscription view and Back action; do not stack both lists. Same-agent subscriptions stay with the chat, while another agent opens a new chat after submission. Attachments, Stop, Send and native tool approvals remain operable; no Plan mode selector is shown. Model and effort share the same quiet control treatment and explanatory hover/focus tooltips. Effort adds a compact monochrome four-bar indicator, consistently mapped across providers. Model labels always include the provider-reported version; retain resolved alias metadata and never hardcode a family’s latest version. Older entries without version metadata say “version not reported” until models are refreshed. The picker shows one row per resolved model; default status belongs in its tooltip, not a duplicate row. A context suffix appears in the label only when the discovered catalog contains a distinct context variant. Existing chats retain their selected wire alias. Tooltips expose the concrete model ID, context and alias relationship. At narrow pane widths controls wrap. The sidebar shows at most 20 title-only conversation rows, pinned first, without a count or separate search field. A hover/focus menu supplies Pin/Unpin; older chats remain searchable. Row hover text contains only the title, never account metadata, and hover is quieter than the selected state.
 
 ### Settings
-The sidebar footer and shared palette open Settings. Agents & accounts and Appearance are separate destinations within the page. Appearance lists the same choices as the workspace popover, from the one list of appearances (Use system setting, Light, Dark), under each entry's Settings label. Small monochrome Claude asterisk and OpenAI knot marks follow the selected reference; local Lobe Icons geometry carries its MIT attribution. Show installation first when a runtime is missing. Installation reports its native phase, elapsed time, completed package count and approximate completed archive bytes beside an indeterminate indicator. A quiet installer and an interrupted status connection have distinct notices; polling continues until the outcome is known. No percentage or transfer rate is inferred from incomplete counters. Installation disables dependent controls; account setup remains visibly disabled until the runtime and the build are ready. Account navigation displays a compact list and one selected detail pane, preserving identity, default, enable/disable, authentication, model discovery, MCP and cleanup actions.
+The sidebar footer and shared palette open Settings. Agents & accounts and Appearance are separate destinations within the page. Appearance lists the same choices as the workspace popover, from the one list of appearances (Use system setting, Light, Dark), under each entry's Settings label, and the Text size field: the same stepper as the document's More menu. Small monochrome Claude asterisk and OpenAI knot marks follow the selected reference; local Lobe Icons geometry carries its MIT attribution. Show installation first when a runtime is missing. Installation reports its native phase, elapsed time, completed package count and approximate completed archive bytes beside an indeterminate indicator. A quiet installer and an interrupted status connection have distinct notices; polling continues until the outcome is known. No percentage or transfer rate is inferred from incomplete counters. Installation disables dependent controls; account setup remains visibly disabled until the runtime and the build are ready. Account navigation displays a compact list and one selected detail pane, preserving identity, default, enable/disable, authentication, model discovery, MCP and cleanup actions.
 
 Healthy runtime maintenance is a collapsed disclosure above Accounts; missing, failed and active installations retain the prominent setup treatment. Account labels wrap and show the signed-in identity, with connection health separate from the Default marker. At narrow widths a compact account chooser reveals the list and closes after selection, keeping the selected account's controls in view. Disabled accounts lead with Enable account and explain its scope; Disable account lives with sign-out and removal in a separate account-access menu group. Eligible accounts expose Make default beside their routine action. Menus fit their contents, keep compact rows, and return keyboard focus on dismissal. Rename account focuses the editable name; Escape restores its saved value. Failed actions retain their message and offer Refresh settings; refresh preserves unfinished account labels and stays available during uncertain installation status. Settings controls have 36px targets, expanded to 44px for coarse pointers.
 
@@ -450,7 +491,8 @@ One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms 
 - **Do** lead entries, the composer, the gutter and Go to with the derived § address, and treat it as a label the document can renumber.
 - **Do** state provenance in words: "You", the provider's name, "Outside glosa", "Approval", "not sent yet", "Lost its place".
 - **Do** pair every colour state with a shape: hollow or filled dot, filled, outlined or dashed chip.
-- **Do** keep the reading measure at 68ch and paint the margin over whitespace rather than moving the manuscript.
+- **Do** keep the reading measure at 68ch (64ch in the sans) and paint the margin over whitespace rather than moving the manuscript.
+- **Do** write every size read in the document, the margin or the chat on the reading scale, and let chrome follow zoom.
 - **Do** serve every face from the vendored OFL woff2 files; the runtime never reaches a font service.
 
 ### Don't:
@@ -458,7 +500,8 @@ One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms 
 - **Don't** use Session Ink for a button, a link, a panel fill or a session's words; it marks a passage and names that mark, nothing more.
 - **Don't** scroll, switch mode or move focus because a session's request arrived. Offer the way there.
 - **Don't** give chrome regions a grey fill of their own; the desk is one paper.
-- **Don't** put the face chooser or any reading preference in primary chrome; it lives in the pane's More menu.
+- **Don't** put the face chooser, the text size or any reading preference in primary chrome; they live in the pane's More menu.
+- **Don't** give the text size a keyboard shortcut; ⌘+ and ⌘− belong to zoom.
 - **Don't** wash annotated words in Read; the underline is the only mark there.
 - **Don't** insert nodes into the rendered manuscript for addresses or marks.
 - **Don't** draw cards in the margin (the open composer excepted), rounded tabs, resting shadows or coloured side-stripe panels.
