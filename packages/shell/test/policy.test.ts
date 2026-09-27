@@ -4,16 +4,19 @@
 import { describe, expect, test } from "bun:test";
 import { buildAppUrl } from "../../cli/src/open-presentation.ts";
 import {
+  appearanceDecision,
   cliCandidates,
   compareVersions,
   compatibility,
   egressDecision,
+  firstFrameColor,
   linkFromArgv,
   loopbackApiOrigin,
   navigationDecision,
   needsConfirmation,
   notifyDecision,
   openArgsFor,
+  PAPER,
   parseGlosaUrl,
   parseOpenEnvelope,
   plainPath,
@@ -447,5 +450,68 @@ describe("notify: the Dock badge and notifications from the SPA (#391)", () => {
     expect(seen.add("3")).toBe(true);
     expect(seen.add("1")).toBe(true);
     expect(seen.add("3")).toBe(false);
+  });
+});
+
+describe("appearance: the window follows what the page resolved (#405, A3 §4b)", () => {
+  test("the three enumerated sources and a #rrggbb paper are accepted, and set themeSource", () => {
+    expect(appearanceDecision({ source: "dark", scheme: "dark", background: "#1a1614" })).toEqual({
+      themeSource: "dark",
+      scheme: "dark",
+      background: "#1a1614",
+    });
+    expect(appearanceDecision({ source: "light", scheme: "light", background: "#FEFBF7" })).toEqual({
+      themeSource: "light",
+      scheme: "light",
+      background: "#fefbf7",
+    });
+    expect(appearanceDecision({ source: "system", scheme: "dark", background: "#1a1614" })?.themeSource).toBe("system");
+  });
+
+  test("an unknown scheme or source is refused, as is a fixed source that disagrees with its scheme", () => {
+    for (const scheme of ["sepia", "Dark", "", null, 1, undefined])
+      expect(appearanceDecision({ source: "system", scheme, background: "#1a1614" })).toBeNull();
+    for (const source of ["os", "catppuccin-mocha", "", null, true])
+      expect(appearanceDecision({ source, scheme: "dark", background: "#1a1614" })).toBeNull();
+    expect(appearanceDecision({ source: "light", scheme: "dark", background: "#1a1614" })).toBeNull();
+  });
+
+  test("a path is refused wherever it rides: as an extra key or in place of a value", () => {
+    const valid = { source: "dark", scheme: "dark", background: "#1a1614" };
+    expect(appearanceDecision({ ...valid, path: "/Users/someone/secret.md" })).toBeNull();
+    expect(appearanceDecision({ ...valid, url: "file:///etc/passwd" })).toBeNull();
+    expect(appearanceDecision({ ...valid, background: "/Users/someone/secret.md" })).toBeNull();
+    expect(appearanceDecision({ ...valid, source: "/Users/someone" })).toBeNull();
+    expect(appearanceDecision({ source: "dark", scheme: "dark" })).toBeNull();
+  });
+
+  test("a malformed colour is refused: only six hex digits after #", () => {
+    for (const background of [
+      "#1a161",
+      "#1a16140",
+      "#1a1614ff",
+      "1a1614",
+      "#1g1614",
+      "rgb(26, 22, 20)",
+      "oklch(0.205 0.008 60)",
+      "#1a1614;",
+      " #1a1614",
+      "",
+      null,
+      0x1a1614,
+    ])
+      expect(appearanceDecision({ source: "dark", scheme: "dark", background })).toBeNull();
+  });
+
+  test("junk payloads are refused", () => {
+    for (const payload of [null, undefined, "dark", 3, [], ["dark", "dark", "#1a1614"]])
+      expect(appearanceDecision(payload)).toBeNull();
+  });
+
+  test("a new window's first frame is the last reported paper, else the paper of the OS scheme", () => {
+    expect(firstFrameColor(null, false)).toBe(PAPER.light);
+    expect(firstFrameColor(null, true)).toBe(PAPER.dark);
+    expect(firstFrameColor("#2b2a33", false)).toBe("#2b2a33");
+    expect(firstFrameColor("#fefbf7", true)).toBe("#fefbf7");
   });
 });

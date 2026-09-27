@@ -472,3 +472,46 @@ export function notifyDecision(payload: unknown, seen: RecentIds): NotifyDecisio
   };
   return decision;
 }
+
+// ---------- the window follows glosa's appearance (#405) ----------
+
+/**
+ * glosa's own paper, light and dark (`--bg` in packages/spa/src/app.css, `oklch(0.99 0.007 85)`
+ * and `oklch(0.205 0.008 60)`, as sRGB). A window's first frame before any page has reported:
+ * the shell cannot read a theme, so it paints the paper of the operating system's scheme.
+ */
+export const PAPER = Object.freeze({ light: "#fefbf7", dark: "#1a1614" });
+
+/** What one `reportAppearance` from the SPA sets: the process's `nativeTheme.themeSource`, and the
+ * reporting window's background (and every later window's first frame). */
+export interface AppearanceDecision {
+  themeSource: "system" | "light" | "dark";
+  scheme: "light" | "dark";
+  background: string;
+}
+
+const APPEARANCE_KEYS = new Set(["source", "scheme", "background"]);
+
+/**
+ * Validates `reportAppearance({ source, scheme, background })` from the SPA (#405, A3 §4b). Exactly
+ * those three keys, nothing else, so no path or other field can ride along: `source` is whether
+ * the page follows the operating system or fixed a scheme ("system", "light" or "dark"), `scheme`
+ * the one it paints with ("light" or "dark", and equal to `source` unless that is "system"), and
+ * `background` its paper as `#rrggbb`. Anything else answers null and changes nothing.
+ */
+export function appearanceDecision(payload: unknown): AppearanceDecision | null {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
+  const keys = Object.keys(payload);
+  if (keys.length !== APPEARANCE_KEYS.size || !keys.every((key) => APPEARANCE_KEYS.has(key))) return null;
+  const { source, scheme, background } = payload as Record<string, unknown>;
+  if (scheme !== "light" && scheme !== "dark") return null;
+  const themeSource = source === "system" ? "system" : source === scheme ? scheme : null;
+  if (themeSource === null) return null;
+  if (typeof background !== "string" || !/^#[0-9a-f]{6}$/i.test(background)) return null;
+  return { themeSource, scheme, background: background.toLowerCase() };
+}
+
+/** A new window's first frame: the paper the last report named, else the operating system's. */
+export function firstFrameColor(lastReported: string | null, osIsDark: boolean): string {
+  return lastReported ?? (osIsDark ? PAPER.dark : PAPER.light);
+}

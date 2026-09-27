@@ -119,7 +119,7 @@ export function createDock(host, deps) {
   const theme = {
     name: "glosa-workbench",
     className: "glosa-dock-theme",
-    colorScheme: appearance?.getSnapshot?.().resolved ?? "light",
+    colorScheme: appearance?.getSnapshot?.().scheme ?? "light",
     // One pixel of gap so a sash reads as the same quiet rule as every other border in the
     // workbench, rather than as a raised divider.
     gap: 1,
@@ -268,11 +268,11 @@ export function createDock(host, deps) {
     },
   });
 
-  const stopAppearance = appearance?.subscribe?.(({ resolved }) => {
-    // §9: the dock's appearance comes from the app's resolved value, never from
+  const stopAppearance = appearance?.subscribe?.(({ scheme }) => {
+    // §9: the dock's appearance comes from the app's resolved scheme, never from
     // `prefers-color-scheme` — otherwise the dock disagrees with the workbench whenever the
     // reader has chosen an explicit Light or Dark override.
-    api.updateOptions({ theme: { ...theme, colorScheme: resolved } });
+    api.updateOptions({ theme: { ...theme, colorScheme: scheme } });
   });
 
   function refreshTabs() {

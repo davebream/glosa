@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { mountMcpSettings } from "./agent-mcp-settings.js";
+import { appearanceList } from "./appearance.js";
 import { actionMenu, agentIcon, agentName } from "./agent-ui.js";
 import { confirmDialog } from "./dialog.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -91,13 +92,14 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance }) {
     role: "group",
     "aria-label": "Color theme",
   });
-  for (const value of ["system", "light", "dark"]) {
+  // The one list of appearances (#405): adding an entry there adds its button here.
+  for (const { id, settingsLabel } of appearanceList()) {
     appearanceOptions.append(
       el("button", {
         type: "button",
-        "data-theme-choice": value,
-        textContent: value === "system" ? "Use system setting" : value === "light" ? "Light" : "Dark",
-        onClick: () => appearance.setPreference(value),
+        "data-theme-choice": id,
+        textContent: settingsLabel,
+        onClick: () => appearance.setPreference(id),
       }),
     );
   }

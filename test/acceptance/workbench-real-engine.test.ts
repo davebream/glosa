@@ -1385,4 +1385,203 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
     },
     TEST_TIMEOUT_MS,
   );
+  test(
+    "#405: the five raised components paint the same colours from tokens in light and dark, and a light History diff sits on glosa's paper",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "before the theme probe");
+      const shots = (name: string) =>
+        tab.send("Page.captureScreenshot", { format: "png" }).then((shot) => {
+          mkdirSync(".context/test-results", { recursive: true });
+          writeFileSync(
+            `.context/test-results/theme-405-${name}-${Date.now()}.png`,
+            Buffer.from(shot.result.data, "base64"),
+          );
+        });
+      // Every media preference this test's paint depends on is pinned, never read from the host:
+      // CI's macOS runner reports reduced motion and a local run does not. `motion` is a parameter
+      // only so the same assertions can be run under `reduce` to show they do not depend on it.
+      const motion = "no-preference";
+      const setScheme = async (value: "light" | "dark") => {
+        await tab.send("Emulation.setEmulatedMedia", {
+          features: [
+            { name: "prefers-color-scheme", value },
+            { name: "prefers-reduced-motion", value: motion },
+            { name: "prefers-contrast", value: "no-preference" },
+          ],
+        });
+        await tab.evaluate(`(async()=>{const deadline=Date.now()+3000;
+          while(document.documentElement.dataset.scheme!==${JSON.stringify(value)}) {
+            if(Date.now()>deadline) throw new Error('the app never resolved the ${value} system scheme');
+            await new Promise(resolve=>requestAnimationFrame(resolve));
+          }
+          for (let frame=0; frame<2; frame++) await new Promise(resolve=>requestAnimationFrame(resolve));
+        })()`);
+      };
+      await setScheme("light");
+
+      // The composer is the real one: a word selected in Review opens it through the pane's own
+      // mouseup handler. A session's question card and three settled entries are the production
+      // classes placed in the pane's own layers, since only their CSS is under test here.
+      await tab.evaluate(`(async()=>{
+        const pane=[...document.querySelectorAll('.glosa-pane')].find(p=>p.getAttribute('aria-label')===${JSON.stringify(ALPHA)});
+        const deadline=Date.now()+5000;
+        while(!pane.querySelector('.glosa-content p')?.textContent.includes(${JSON.stringify(ALPHA_TEXT)})) {
+          if(Date.now()>deadline) throw new Error('alpha.md never rendered');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        const content=pane.querySelector('.glosa-content'), paragraph=content.querySelector('p');
+        const range=document.createRange(); range.setStart(paragraph.firstChild,0); range.setEnd(paragraph.firstChild,5);
+        const selection=getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        content.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+        while(!pane.querySelector('.glosa-composer-layer .glosa-composer')) {
+          if(Date.now()>deadline) throw new Error('selecting a word in Review did not open the composer');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        await Promise.all(document.getAnimations().map(a=>a.finished.catch(()=>{})));
+      })()`);
+
+      /** Every component's computed paint beside what the palette tokens compute to in the same
+       * cascade, read in one evaluate. The expected side is the palette, which #405 leaves alone:
+       * the same values the dark-only selectors painted before they became tokens. */
+      const paints = (keep: boolean) =>
+        tab.evaluate<Record<string, { actual: string[]; expected: string[] }>>(`(async()=>{
+        const keep=${keep};
+        const pane=[...document.querySelectorAll('.glosa-pane')].find(p=>p.getAttribute('aria-label')===${JSON.stringify(ALPHA)});
+        const token=(property,value)=>{const probe=document.createElement('span');probe.style[property]=value;
+          pane.append(probe);const computed=getComputedStyle(probe)[property];probe.remove();return computed;};
+        const dark=document.documentElement.dataset.scheme==='dark';
+        const bg=token('backgroundColor','var(--bg)'), surface=token('backgroundColor','var(--surface)');
+        const strong=token('borderRightColor','var(--border-strong)'), quiet=token('borderRightColor','var(--border)');
+        const menuLift=token('boxShadow','var(--shadow-menu)'), dialogFloat=token('boxShadow','var(--shadow-dialog)');
+        const paint=(el,edge)=>{const s=getComputedStyle(el);return [s.backgroundColor,s[edge],s.boxShadow,s.opacity];};
+        const composer=pane.querySelector('.glosa-composer-layer .glosa-composer');
+        if(!composer) throw new Error('the composer closed before it was measured');
+        // Placed now, measured at once: the pane redraws its own layers, and these are not its own.
+        const card=document.createElement('div'); card.className='glosa-agent-card'; card.textContent='Should this stay?';
+        card.style.top='22rem';
+        pane.querySelector('.glosa-ask-layer').append(card);
+        for (const [index, state] of ['rejected','stale','dismissed'].entries()) {
+          const entry=document.createElement('div'); entry.className='glosa-annotation'; entry.dataset.state=state;
+          entry.dataset.probe='settled'; entry.textContent='A '+state+' note'; entry.style.top=(index*3)+'rem';
+          pane.querySelector('.glosa-margin').append(entry);
+        }
+        await Promise.all(card.getAnimations().map(a=>a.finished.catch(()=>{})));
+        const out={
+          composer:{actual:paint(composer,'borderRightColor'),expected:[dark?surface:bg,strong,menuLift,'1']},
+          question:{actual:paint(pane.querySelector('.glosa-ask-layer .glosa-agent-card'),'borderRightColor'),
+            expected:[dark?surface:bg,strong,menuLift,'1']},
+        };
+        for (const entry of pane.querySelectorAll('[data-probe=settled]'))
+          out['settled '+entry.dataset.state]={actual:paint(entry,'borderTopColor'),
+            expected:['rgba(0, 0, 0, 0)',strong,'none',dark?'1':'0.75']};
+        // The pane's More menu, opened the way a person opens it.
+        pane.querySelector('.glosa-tools-trigger').click();
+        const menu=pane.querySelector('.glosa-pane-tools[data-open="true"] .glosa-pane-menu');
+        if(!menu) throw new Error('the More menu did not open');
+        out.menu={actual:paint(menu,'borderRightColor'),expected:[dark?surface:bg,strong,menuLift,'1']};
+        pane.querySelector('.glosa-tools-trigger').click();
+        if (!keep) { card.remove(); for (const entry of pane.querySelectorAll('[data-probe=settled]')) entry.remove(); }
+        const { noticeDialog } = await import('/app/dialog.js');
+        const closed=noticeDialog({title:'A dialog above the work',body:'Its paper and its lift.'});
+        const dialog=document.querySelector('dialog.glosa-dialog[open]');
+        await Promise.all(dialog.getAnimations().map(a=>a.finished.catch(()=>{})));
+        out.dialog={actual:paint(dialog,'borderRightColor'),expected:[dark?surface:bg,quiet,dark?'none':dialogFloat,'1']};
+        window.closeProbeDialog=()=>{dialog.close();return closed;};
+        return out;
+      })()`);
+
+      for (const scheme of ["light", "dark"] as const) {
+        await setScheme(scheme);
+        // The dark pass leaves its fixtures on the page for the screenshot.
+        const seen = await paints(scheme === "dark");
+        if (scheme === "dark") {
+          await shots("dark-dialog");
+          await tab.evaluate("closeProbeDialog()");
+          await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
+          await shots("dark-components");
+          await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
+        } else {
+          await tab.evaluate("closeProbeDialog()");
+        }
+        expect(Object.keys(seen).sort()).toEqual([
+          "composer",
+          "dialog",
+          "menu",
+          "question",
+          "settled dismissed",
+          "settled rejected",
+          "settled stale",
+        ]);
+        for (const [component, { actual, expected }] of Object.entries(seen)) {
+          expect(actual, `${component} in ${scheme}: background, edge, shadow, opacity`).toEqual(expected);
+        }
+      }
+
+      // The History diff, through the product: an edit outside glosa, the pane's Version history,
+      // the oldest version compared with the current document, in the diff tab that opens.
+      await setScheme("light");
+      await tab.evaluate(
+        "getSelection().removeAllRanges(); document.querySelector('.glosa-composer-cancel, .glosa-composer [data-action=cancel]')?.click()",
+      );
+      writeFileSync(
+        join(workspaceRoot, ALPHA),
+        `# Alpha\n\n${ALPHA_TEXT} Revised outside glosa.\n\nA new closing line.\n`,
+      );
+      await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
+      await clickInPane(tab, ALPHA, ".glosa-pane-menu-history");
+      const diff = await tab.evaluate<{
+        gutter: string;
+        paper: string;
+        inserted: string;
+        insertBed: string;
+        bedSeparation: number;
+      }>(`(async()=>{
+        const deadline=Date.now()+15000;
+        let versions=[];
+        while((versions=[...document.querySelectorAll('.glosa-history-row input[type=checkbox]')]).length<1) {
+          if(Date.now()>deadline) throw new Error('Version history listed no version');
+          await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        const oldest=versions.at(-1); oldest.click();
+        document.querySelector('.glosa-history-compare-current').click();
+        let gutter=null;
+        // An unchanged line's number: the hunk header's row is an info row, and changed lines
+        // take their insert or delete bed, so only a context line shows the gutter's own ground.
+        while(!(gutter=document.querySelector('.glosa-diff-surface .d2h-code-linenumber.d2h-cntx'))) {
+          if(Date.now()>deadline) throw new Error('the comparison never rendered a diff');
+          await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        const surface=gutter.closest('.glosa-diff-surface');
+        const token=(value)=>{const probe=document.createElement('span');probe.style.backgroundColor=value;
+          surface.append(probe);const computed=getComputedStyle(probe).backgroundColor;probe.remove();return computed;};
+        // A line only added (a replaced line is a "change" with its own, stronger bed).
+        const inserted=surface.querySelector('td.d2h-ins:not(.d2h-change)');
+        // How far apart an added and a deleted line's beds are, in OKLab. Read through a canvas so
+        // the engine's own colour-mix and gamut mapping decide the sRGB the reader sees.
+        const oklab=(value)=>{const x=document.createElement('canvas').getContext('2d');x.fillStyle='#000';
+          x.fillStyle=token(value);x.fillRect(0,0,1,1);const [r,g,b]=[...x.getImageData(0,0,1,1).data].slice(0,3)
+            .map(v=>{v/=255;return v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4;});
+          const l=Math.cbrt(0.4122214708*r+0.5363325363*g+0.0514459929*b),m=Math.cbrt(0.2119034982*r+0.6806995451*g+0.1073969566*b),
+            s=Math.cbrt(0.0883024619*r+0.2817188376*g+0.6299787005*b);
+          return [0.2104542553*l+0.793617785*m-0.0040720468*s,1.9779984951*l-2.428592205*m+0.4505937099*s,0.0259040371*l+0.7827717662*m-0.808675766*s];};
+        const ins=oklab('var(--d2h-ins-bg-color)'),del=oklab('var(--d2h-del-bg-color)');
+        return {gutter:getComputedStyle(gutter).backgroundColor,paper:token('var(--bg)'),
+          inserted:inserted?getComputedStyle(inserted).backgroundColor:'none',
+          insertBed:token('color-mix(in oklab, var(--ok) 22%, var(--bg))'),
+          bedSeparation:Math.hypot(ins[0]-del[0],ins[1]-del[1],ins[2]-del[2])};
+      })()`);
+      await shots("light-history-diff");
+      expect(diff.gutter, "a light diff's line-number gutter is glosa's paper").toBe(diff.paper);
+      expect(diff.gutter).not.toBe("rgb(255, 255, 255)");
+      expect(diff.inserted, "an inserted line sits on the sage bed, mixed in OKLab").toBe(diff.insertBed);
+      // Mixed in OKLCH over near-neutral paper, both beds drift to the paper's beige and sit 0.012
+      // apart: the + and − alone told an added line from a deleted one.
+      expect(diff.bedSeparation, "an added and a deleted line's beds are told apart by colour").toBeGreaterThanOrEqual(
+        0.04,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

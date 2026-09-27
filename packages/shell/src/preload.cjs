@@ -21,5 +21,9 @@ if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin
     /** Shows the document this window's route names, or its folder, in Finder. Takes no argument:
      * the main process works out the path from the window's own URL and folder (A3, #160). */
     revealInFinder: () => ipcRenderer.invoke("glosa:reveal"),
+    /** What the page resolved (#405): `{ source, scheme, background }`, "system", "light" or
+     * "dark", "light" or "dark", and its paper as `#rrggbb`. The window's background and the
+     * native UI follow it. No path; the main process refuses anything else (policy.ts). */
+    reportAppearance: (appearance) => ipcRenderer.invoke("glosa:appearance", appearance),
   });
 }

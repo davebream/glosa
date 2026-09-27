@@ -3,8 +3,17 @@
 // localStorage preference under its own key; bootstrap owns the pairing token separately, under
 // `glosa_token` in the same origin-scoped store.
 
+// The one list of appearances (#405), a classic script the first-paint preload reads too. Imported
+// for its side effect; it publishes `globalThis.glosaAppearances`. Every function below reads the
+// list when it is called, never a copy taken at import.
+import "./appearance-list.js";
+
 export const APPEARANCE_STORAGE_KEY = "glosa_appearance";
-export const APPEARANCES = Object.freeze(["system", "light", "dark"]);
+
+/** The listed appearances, in chooser order: `{ id, scheme, label, settingsLabel }`. */
+export function appearanceList() {
+  return globalThis.glosaAppearances.list;
+}
 
 const ICONS = {
   system:
@@ -16,21 +25,28 @@ const ICONS = {
 };
 
 export function isAppearance(value) {
-  return APPEARANCES.includes(value);
+  return globalThis.glosaAppearances.find(value) !== null;
 }
 
+/** The theme id a preference paints with: itself, or for "Use system setting" the entry the
+ * operating system's scheme resolves to. */
 export function resolveAppearance(preference, systemIsDark) {
-  if (preference === "dark") return "dark";
-  if (preference === "light") return "light";
-  return systemIsDark ? "dark" : "light";
+  return globalThis.glosaAppearances.resolve(preference, systemIsDark).theme;
+}
+
+/** True for an entry that resolves through the operating system ("Use system setting"). */
+function followsSystem(id) {
+  const entry = globalThis.glosaAppearances.find(id);
+  return entry !== null && !entry.scheme;
 }
 
 export function readAppearance(storage) {
+  const fallback = appearanceList()[0].id;
   try {
     const stored = storage?.getItem(APPEARANCE_STORAGE_KEY);
-    return isAppearance(stored) ? stored : "system";
+    return isAppearance(stored) ? stored : fallback;
   } catch {
-    return "system";
+    return fallback;
   }
 }
 
@@ -65,24 +81,24 @@ export function createAppearanceController({ root, storage, mediaQuery } = {}) {
   const listeners = new Set();
   let preference = readAppearance(targetStorage);
 
+  /** `resolved` is the theme id that paints; `scheme` its "light" or "dark". */
   function getSnapshot() {
-    return {
-      preference,
-      resolved: resolveAppearance(preference, Boolean(targetMedia.matches)),
-    };
+    const { theme, scheme } = globalThis.glosaAppearances.resolve(preference, Boolean(targetMedia.matches));
+    return { preference, resolved: theme, scheme };
   }
 
   function apply(notify) {
     const snapshot = getSnapshot();
     targetRoot.dataset.appearance = snapshot.preference;
     targetRoot.dataset.theme = snapshot.resolved;
-    targetRoot.style.colorScheme = snapshot.resolved;
+    targetRoot.dataset.scheme = snapshot.scheme;
+    targetRoot.style.colorScheme = snapshot.scheme;
     if (notify) for (const listener of listeners) listener(snapshot);
     return snapshot;
   }
 
   function onSystemChange() {
-    if (preference === "system") apply(true);
+    if (followsSystem(preference)) apply(true);
   }
 
   targetMedia.addEventListener?.("change", onSystemChange);
@@ -110,6 +126,40 @@ export function createAppearanceController({ root, storage, mediaQuery } = {}) {
       listeners.clear();
     },
   };
+}
+
+/**
+ * The page's paper, the body's background (`--bg`), as `#rrggbb`. A 1x1 canvas converts whatever
+ * CSS colour the theme uses (OKLCH today) to the sRGB bytes a native window takes. Null when there
+ * is no body or no 2D context.
+ */
+export function readPaperColor(doc = document) {
+  const context = doc.body ? doc.createElement("canvas").getContext("2d") : null;
+  if (!context) return null;
+  context.fillStyle = getComputedStyle(doc.body).backgroundColor;
+  context.fillRect(0, 0, 1, 1);
+  const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+  return `#${[red, green, blue].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * Tells the desktop shell what the page resolved (#405), so the window's first frame and the
+ * native UI (dialogs, menus, the title bar) follow glosa rather than the operating system. Only
+ * inside the shell: a browser tab has no `reportAppearance`. The message is `{ source, scheme,
+ * background }`: whether the page follows the operating system or fixed a scheme ("system",
+ * "light" or "dark"), the scheme it paints with, and its paper as `#rrggbb`. Never a path or a
+ * theme name (A3 §4b). Returns an unsubscribe.
+ */
+export function reportAppearanceToShell(controller, shell, { readPaper = () => readPaperColor() } = {}) {
+  if (typeof shell?.reportAppearance !== "function") return () => {};
+  return controller.subscribe(({ preference, scheme }) => {
+    const background = readPaper();
+    if (!background) return;
+    const source = followsSystem(preference) ? "system" : scheme;
+    Promise.resolve(shell.reportAppearance({ source, scheme, background })).catch(() => {
+      // A refused or failed report leaves the window as it was; the page itself is unaffected.
+    });
+  });
 }
 
 function icon(name, className) {
@@ -148,17 +198,18 @@ export function mountAppearanceControl(container, controller, { overlayHost = co
   menu.setAttribute("aria-label", "Appearance");
 
   const rows = new Map();
-  for (const preference of APPEARANCES) {
+  for (const { id: preference, scheme, label } of appearanceList()) {
     const row = document.createElement("button");
     row.className = "glosa-appearance-option";
     row.type = "button";
     row.setAttribute("role", "menuitemradio");
     row.dataset.appearance = preference;
     row.append(
-      icon(preference, "glosa-appearance-option-icon"),
+      // The icon names the scheme (a sun, a moon), and the system entry its screen.
+      icon(scheme ?? "system", "glosa-appearance-option-icon"),
       Object.assign(document.createElement("span"), {
         className: "glosa-appearance-option-label",
-        textContent: preference[0].toUpperCase() + preference.slice(1),
+        textContent: label,
       }),
       icon("check", "glosa-appearance-check"),
     );
@@ -191,10 +242,11 @@ export function mountAppearanceControl(container, controller, { overlayHost = co
   container.append(trigger);
   overlayHost.append(menu);
 
-  const unsubscribe = controller.subscribe(({ preference, resolved }) => {
-    triggerIcon.innerHTML = ICONS[resolved];
-    trigger.setAttribute("aria-label", `Appearance: ${preference === "system" ? `System (${resolved})` : preference}`);
-    trigger.title = `Appearance: ${preference === "system" ? `System (${resolved})` : preference}`;
+  const unsubscribe = controller.subscribe(({ preference, scheme }) => {
+    triggerIcon.innerHTML = ICONS[scheme];
+    const name = followsSystem(preference) ? `System (${scheme})` : preference;
+    trigger.setAttribute("aria-label", `Appearance: ${name}`);
+    trigger.title = `Appearance: ${name}`;
     for (const [value, row] of rows) {
       const selected = value === preference;
       row.setAttribute("aria-checked", String(selected));
