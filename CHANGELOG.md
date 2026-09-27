@@ -31,6 +31,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the CSS Custom Highlight API. Every macOS glosa supports can run it: Apple ships Safari 17.2 for
   Monterey, Ventura and Sonoma, and later releases come with a newer Safari. The lowest supported
   Chromium stays at 111 (#412).
+- In the light appearance, the diff and Version history panes sit on glosa's paper with its rules and
+  state colours instead of diff2html's own palette, as the dark appearance already did. Line-number
+  gutters and tags go from `#ffffff` to the paper, `#fefbf7` (`--bg`); rules from `#dddddd` and
+  `#eeeeee` to `#dbd7d0` (`--border`); line numbers from black at 30% to `#625952` (`--muted`); the
+  file header and hunk rows from `#f7f7f7` and `#f8fafd` to `#f7f5f1` (`--surface`), the header's
+  rule from `#d8d8d8` to `#867f78` and the hunk rows' from `#d5e4f2` to `#dbd7d0`. An added line's
+  bed goes from `#ddffdd` to `#e9e5d7` (`--ok` 14% into paper), its changed words from `#97f295`
+  to `#c5c6ab`, its rule from `#b4e2b4` to `#b3b898`, its label from `#399839` to `#397247`. A
+  deleted line's bed goes from `#fee8e9` to `#f1e5d4` (`--danger` 12%), its changed words from
+  `#ffb6ba` to `#e1be9e`, its rule from `#e9aeae` to `#daa985`, its label from `#cc3333` to
+  `#a51d2b`. A replaced pair goes
+  from `#fdf2d0` and `#ddeedd` to `#e8dfce` and `#dfdccb`, its label from `#d0b44c` to `#8d6300`;
+  a selected line from `#c8e1ff` to `#d0cdc7`; the moved label from `#3572b0` to the ink,
+  `#1a1511` (#405).
+- The desktop app's window follows glosa's appearance. A window opened while glosa is in Dark
+  starts on the dark paper, `#1a1614`, instead of white, `#ffffff`, and in Light on the paper,
+  `#fefbf7`; before any window has shown glosa, a new window starts on the paper of macOS's own
+  scheme. Native dialogs, menus and the title bar follow glosa's Light or Dark instead of macOS's;
+  Use system setting still follows macOS. The Dock icon keeps following macOS (#405).
 
 ### Fixed
 
