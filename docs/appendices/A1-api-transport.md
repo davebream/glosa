@@ -118,7 +118,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.19", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.20", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
@@ -801,6 +801,23 @@ cursor accepted by the retrieval GET and `glosa_inbox_get` MCP tool. A contract 
 adds the canonical absolute `workspace` path to each structured presentation and prepends
 `workspace: <path>` to its agent-visible text; both the label and separator count inside those
 existing byte caps. Same-major N/N-1 client schemas continue to accept its absence from a 1.5 daemon.
+
+An annotation's presentation (contract 1.20, issue #411) also names its passage: the address the page
+shows for the block the note resolves to (`§2.3`, the third block under the second section; `¶4` on a
+page with no headings). The text carries it as an `address: §2.3 (…)` line directly after the
+`quote:` line, with a short note that the quote is the anchor and the address a label for the
+document as it stands now; `detail` carries the same label as `address`. The daemon derives it at
+presentation time from the document as it is on disk, with the numbering the page uses
+(`packages/spa/src/address.js`), and stores it nowhere: not in the inbox entry, not in the journal,
+not in a `delivery_attempt`. A presentation after an edit that renumbers the page carries the new
+address, and a continuation page (`cursor`) derives it again. There is no address, and neither the
+line nor the field is present, when the note has no source range (orphaned, or pipeline feedback),
+when the document is class F, or when the block it resolves to has no top-level address (text inside
+a `%%` comment, say). The line counts inside the 16 KiB entry cap and is reserved before the comment
+is sized, so a long comment truncates and the address does not. Every path that presents a note
+carries it: the drain, the push stream, the retrieval GET, and a managed chat's inbox tools. Additive:
+same-major N/N-1 clients accept its absence from a 1.19 daemon, and never need it to locate the
+words, which the quote does.
 
 A drain response (contract 1.17, issue #155) also carries `signals[]`: the session's unacknowledged
 signals (§5.11g), oldest first, at most eight and 8 KiB. That budget is separate from the entry

@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
-import { getArtifact } from "../services/artifact.ts";
+import { type ArtifactAccessDependencies, getArtifact } from "../services/artifact.ts";
 import { createManagedTools } from "../agents/managed-tools.ts";
 import { connect } from "node:net";
 import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSync, unlinkSync } from "node:fs";
@@ -27,7 +27,7 @@ import {
 } from "../agents/interface.ts";
 import { RuntimeSupervisor } from "../agents/supervisor.ts";
 import { RuntimeCatalog, type RuntimeCandidate } from "../agents/runtimes.ts";
-import { AgentStore } from "../chats/store.ts";
+import { AgentStore, type ChatState } from "../chats/store.ts";
 import { ManagedChatService } from "../chats/service.ts";
 import { type DictationProvider, DictationProviderRegistry } from "../dictation/interface.ts";
 import { ArtifactWatcherAllocation } from "../artifact-watcher-allocation.ts";
@@ -231,6 +231,17 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const supervisor = new RuntimeSupervisor(join(home, "agents"));
   const runtimes = new RuntimeCatalog(join(home, "agents"), opts.managedRuntime?.candidates ?? []);
   let managedChats: ManagedChatService | undefined;
+  /** A managed chat's workspace, refused once it is no longer the registration the chat began in. */
+  const managedWorkspace = (chat: ChatState) => {
+    const entry = workspaceIndex.getWorkspaceByRegistration(chat.workspaceId);
+    if (!entry || entry.first_seen !== chat.workspaceEpoch) throw new Error("Workspace changed");
+    return entry;
+  };
+  const managedArtifacts: ArtifactAccessDependencies = {
+    workspaceIndex,
+    getWorkspaceBus: (workspace) => busRegistry.get(workspace),
+    adapterRegistry,
+  };
   try {
     managedChats = new ManagedChatService({
       store: new AgentStore(join(home, "agents")),
@@ -238,23 +249,23 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
       launcher: supervisor,
       tools: createManagedTools(
         async (chat) => {
-          const entry = workspaceIndex.getWorkspaceByRegistration(chat.workspaceId);
-          if (!entry || entry.first_seen !== chat.workspaceEpoch) throw new Error("Workspace changed");
-          const bus = busRegistry.get(entry);
+          const bus = busRegistry.get(managedWorkspace(chat));
           await bus.reconcileOnce();
           return bus;
         },
         (chat, path) => {
-          const entry = workspaceIndex.getWorkspaceByRegistration(chat.workspaceId);
-          if (!entry || entry.first_seen !== chat.workspaceEpoch) throw new Error("Workspace changed");
+          const entry = managedWorkspace(chat);
           const artifact = getArtifact(
-            { workspaceIndex, getWorkspaceBus: (workspace) => busRegistry.get(workspace), adapterRegistry },
+            managedArtifacts,
             entry.slug,
             isAbsolute(path) ? relative(entry.worktree_path, path) : path,
             false,
           );
           return { slug: entry.slug, path: artifact.source_path, class: artifact.class };
         },
+        // A managed chat's notes go through the same resolving path as every HTTP delivery, so they
+        // arrive resolved, with their passage address and workspace line (issue #411).
+        { deps: managedArtifacts, workspaceFor: managedWorkspace },
       ),
       bindSession: async (chat) => {
         await sessionRegistry.register({

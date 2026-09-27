@@ -692,6 +692,71 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   );
 
   test(
+    "#411: a body block's passage address waits for a resting pointer, shows at once on keyboard focus, and never fades under reduced motion",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "initial open");
+      // Alpha is `# Alpha` over one paragraph: the title shows §0 in the gutter, the paragraph §0.1.
+      const BODY = '.glosa-pane[data-mode="review"] .glosa-content > p[data-address]';
+      await tab.evaluate(`(async()=>{const deadline=Date.now()+5000;
+        while(!document.querySelector(${JSON.stringify(BODY)})) {
+          if(Date.now()>deadline) throw new Error('no addressed body block in Review');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }})()`);
+      // States are forced through the engine's own style resolution rather than by moving a pointer
+      // and timing it, so what is asserted is the computed transition, never an elapsed interval.
+      await tab.send("DOM.enable");
+      await tab.send("CSS.enable");
+      const root = (await tab.send("DOM.getDocument", { depth: 0 })).result.root.nodeId;
+      const nodeId = (await tab.send("DOM.querySelector", { nodeId: root, selector: BODY })).result.nodeId;
+      expect(nodeId, "the body block has a DOM node id").toBeGreaterThan(0);
+      const force = (forcedPseudoClasses: string[]) =>
+        tab.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses });
+      const label = () =>
+        tab.evaluate<{ address: string; content: string; delay: string; duration: string }>(`(()=>{
+          const block=document.querySelector(${JSON.stringify(BODY)}),style=getComputedStyle(block,'::before');
+          return {address:block.dataset.address,content:style.content,delay:style.transitionDelay,duration:style.transitionDuration};
+        })()`);
+      const seconds = (time: string) =>
+        time.endsWith("ms") ? Number.parseFloat(time) / 1000 : Number.parseFloat(time);
+      // Pin the motion preference instead of inheriting the host's: a machine that asks for reduced
+      // motion (CI runners can) zeroes the fade under the reduced-motion rule, and the first half of
+      // this test is about the ordinary fade. The preference reaches style on the next frame.
+      const prefer = async (value: "no-preference" | "reduce") => {
+        await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value }] });
+        await tab.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      };
+      await prefer("no-preference");
+
+      const rest = await label();
+      expect(rest.address).toBe("§0.1");
+      expect(rest.content).toBe('"§0.1"');
+      expect(rest.delay, "at rest the label leaves at once").toBe("0s");
+
+      await force(["hover"]);
+      const hovered = await label();
+      expect(seconds(hovered.delay), `hover-in delay ${hovered.delay}`).toBeGreaterThanOrEqual(0.15);
+      expect(seconds(hovered.delay), `hover-in delay ${hovered.delay}`).toBeLessThanOrEqual(0.3);
+      expect(seconds(hovered.duration), "the fade itself is unchanged").toBeGreaterThan(0);
+
+      await force(["focus-visible"]);
+      expect((await label()).delay, "keyboard focus shows the label at once").toBe("0s");
+      await force(["hover", "focus-visible"]);
+      expect((await label()).delay, "a focused block under a resting pointer still shows it at once").toBe("0s");
+
+      await force([]);
+      // A hover forced before the new preference reaches style would start under the old rules.
+      await prefer("reduce");
+      await force(["hover"]);
+      const reduced = await label();
+      expect(reduced.duration, "no fade under reduced motion").toBe("0s");
+      expect(seconds(reduced.delay), "the rest delay is not motion, so it stays").toBeGreaterThanOrEqual(0.15);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
     "§11: a class-F pane's iframe survives a tab switch and a tab move — same frame, no reload, no re-mint",
     async () => {
       const { browser, cdpPort } = await launchBrowser();

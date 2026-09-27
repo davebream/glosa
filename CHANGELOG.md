@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A note delivered to a session now names its passage the way the page does: an `address: §2.3`
+  line beside the quote and an `address` field in the entry's detail. glosa works the label out
+  from the document at the moment of delivery and stores it nowhere, so after an edit that
+  renumbers the page the next delivery says the new one. The quote stays the anchor. A note whose
+  words are gone, a note on an HTML document and a note inside a `%%` comment get no address.
+  Managed chats now receive notes the same way, resolved against the document, where before every
+  note reached them unresolved. API contract 1.20 (#411).
+
+### Changed
+
+- In Review, a paragraph's § address waits until the pointer has rested on it for 200ms before it
+  fades in, so moving down the page no longer blinks a label beside every paragraph the pointer
+  crosses. It still leaves as soon as the pointer does, keyboard focus still shows it at once, and
+  headings still always show theirs. Under reduced motion it appears without the fade (#411).
+
 ### Fixed
 
 - In the dark appearance, the button that confirms a destructive action (Delete chat, Discard

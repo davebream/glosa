@@ -21,7 +21,13 @@ import {
   type ResolveCtx,
   resolve as resolveAnchor,
 } from "../anchoring.ts";
-import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "../artifact-render.ts";
+import {
+  classifyArtifactPath,
+  passageAddressOf,
+  renderMarkdown,
+  sourceSha256,
+  writeArtifactAtomic,
+} from "../artifact-render.ts";
 import { readInboxEntry } from "../bus/inbox.ts";
 import { type EntryKind, isTerminal } from "../bus/lifecycle.ts";
 import { peekJournal } from "../bus/peek.ts";
@@ -280,6 +286,20 @@ function anchoringContext(deps: ArtifactAccessDependencies, workspace: Workspace
   return { artifact, resolveCtx };
 }
 
+/** The passage address of the block a resolved note sits in (issue #411), read from the document as
+ * it stands at this delivery. Derived every time and stored nowhere, so a delivery after an edit
+ * that renumbers the page says the new label. Null when the note has no source range or its block
+ * has no address. The passage's last line is the one holding the quote's last character: an
+ * `end_col` of 0 on a later line means the match ended on the newline before it. */
+function deliveredAddress(source: string, resolution: Resolution): string | null {
+  if (resolution.kind !== "source_range") return null;
+  const last =
+    resolution.end_col === 0 && resolution.end_line > resolution.start_line
+      ? resolution.end_line - 1
+      : resolution.end_line;
+  return passageAddressOf(source, resolution.start_line, last);
+}
+
 export function actionablePresentation(
   deps: ArtifactAccessDependencies,
   workspace: WorkspaceEntry,
@@ -294,6 +314,7 @@ export function actionablePresentation(
       ? (payload as Record<string, unknown>)
       : null;
   let resolution: Resolution | undefined;
+  let address: string | null = null;
   if (record?.kind === "annotation" && typeof record.artifact_path === "string") {
     const built = anchoringContext(deps, workspace, record.artifact_path);
     if (built) {
@@ -303,12 +324,17 @@ export function actionablePresentation(
           ? { capturedRenderedSha256: record.captured_rendered_sha256 }
           : {}),
       });
+      // Markdown only. A class-F document is HTML in glosa's sandboxed viewer: the page numbers no
+      // blocks there, so there is no label to repeat, even when its manifest maps the note into a
+      // Markdown source.
+      if (built.artifact.class === "R") address = deliveredAddress(built.artifact.source, resolution);
     }
   }
   const workspaceLine = `workspace: ${workspace.canonical_path}`;
   const presentation = buildDeliveryPresentation(entryId, payload, {
     status,
     ...(resolution ? { resolution } : {}),
+    ...(address ? { address } : {}),
     ...(cursor ? { cursor } : {}),
     ...(opts.watched ? { watched: true } : {}),
     ...(opts.claims && opts.claims.length > 0 ? { claims: opts.claims } : {}),

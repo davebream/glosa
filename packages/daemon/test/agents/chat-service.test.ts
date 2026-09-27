@@ -23,7 +23,10 @@ import {
   waitForManagedTools,
 } from "../../src/agents/managed-bootstrap.ts";
 import { createManagedTools } from "../../src/agents/managed-tools.ts";
+import type { DeliverableEntry } from "../../src/agent-provider/interface.ts";
+import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
 import { AgentStore } from "../../src/chats/store.ts";
+import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -896,6 +899,43 @@ test("managed tools reject another target and recheck authority after the worksp
   await expect(ack).rejects.toThrow("revoked");
   expect(bus.state.entries.mine?.status).toBe("pending");
   expect(bus.state.entries.mine?.deliveryAttempts).toHaveLength(0);
+});
+
+test("a managed chat's notes are resolved against the document and carry their passage address", async () => {
+  // Built from the stored entry alone, a managed chat's note said `orphaned, no_source_map` whether
+  // or not its words were on the page, and had no address and no workspace line. Through the
+  // resolving path the HTTP deliveries use, it reads the document as it stands, as they do.
+  const h = setup(),
+    chat = h.chat(),
+    home = mkdtempSync(join(tmpdir(), "glosa-managed-address-home-")),
+    buses = new WorkspaceBusRegistry();
+  cleanup.unshift(async () => {
+    await buses.close(h.root);
+    rmSync(home, { recursive: true, force: true });
+  });
+  writeFileSync(join(h.root, "draft.md"), "# Title\n\n## One\n\nFirst.\n\n## Two\n\nA.\n\nB.\n\nThe named words.\n");
+  const workspaceIndex = new WorkspaceIndex({ home });
+  const workspace = await workspaceIndex.upsertWorkspace(h.root, "glosa-open");
+  const bus = buses.get(workspace);
+  await bus.createEntry("note-411", {
+    kind: "annotation",
+    artifact_path: "draft.md",
+    body: "Tighten this.",
+    intent: "content",
+    target: { quote: { exact: "The named words.", prefix: "", suffix: "" } },
+  });
+  const tools = createManagedTools(async () => bus, undefined, {
+    deps: { workspaceIndex, getWorkspaceBus: (target) => buses.get(target) },
+    workspaceFor: () => workspace,
+  });
+  const context = { chat, assertActive() {}, reservations: new Set<string>() };
+  const pulled = (await tools.call(context, "glosa_inbox_pull", {})) as { drained: DeliverableEntry[] };
+  const got = (await tools.call(context, "glosa_inbox_get", { id: "note-411" })) as DeliverableEntry;
+  for (const delivered of [pulled.drained[0]!, got]) {
+    expect(delivered.text).toContain("\naddress: §2.3 (");
+    expect(delivered.text).toStartWith(`workspace: ${workspace.canonical_path}\n`);
+    expect(delivered.detail).toMatchObject({ address: "§2.3", resolution: { kind: "source_range" } });
+  }
 });
 
 test("pending feedback stays idle until Send feedback freezes its references without consuming the draft", async () => {

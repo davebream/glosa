@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Restricted tool implementation: the caller's session/workspace come from an in-memory run grant.
 import { z } from "zod";
+import type { PresentationClaim } from "../agent-provider/interface.ts";
 import type { WorkspaceBus } from "../bus/bus.ts";
 import { buildDeliveryPresentation } from "../delivery/presentation.ts";
 import type { ChatState } from "../chats/store.ts";
+import type { WorkspaceEntry } from "../registry/workspace-index.ts";
+import { type ArtifactAccessDependencies, actionablePresentation } from "../services/artifact.ts";
 import { ManagedAgentError } from "./interface.ts";
 
 export interface ManagedToolContext {
@@ -55,17 +58,41 @@ const descriptions: Record<keyof typeof schemas, string> = {
   glosa_resolve:
     "Resolve a feedback entry after applying, rejecting or finding it stale. Applied requires the claim's fence; human edits win.",
 };
+/** What a managed chat needs to deliver a note the way every HTTP delivery does: through
+ * `actionablePresentation`, which reads the document as it stands, resolves the note's quote to a
+ * source range and names its passage address (issue #411). Built without it, an entry carries no
+ * address, no workspace line for its apply instructions to point at, and the default
+ * `orphaned, no_source_map` resolution whether or not its words are still on the page. */
+export interface ManagedDeliveryResolution {
+  deps: ArtifactAccessDependencies;
+  /** The chat's own workspace; throws, like `busFor`, when it has changed under the chat. */
+  workspaceFor(chat: ChatState): WorkspaceEntry;
+}
+
 export function createManagedTools(
   busFor: (chat: ChatState) => Promise<WorkspaceBus>,
   present?: (chat: ChatState, path: string) => { slug: string; path: string; class: "R" | "F" },
+  resolution?: ManagedDeliveryResolution,
 ): ManagedTools {
+  const presentation = (
+    chat: ChatState,
+    id: string,
+    payload: unknown,
+    status: string,
+    extra: { claims?: PresentationClaim[]; cursor?: string } = {},
+  ) =>
+    resolution
+      ? actionablePresentation(resolution.deps, resolution.workspaceFor(chat), id, payload, status, extra.cursor, {
+          ...(extra.claims ? { claims: extra.claims } : {}),
+        })
+      : buildDeliveryPresentation(id, payload, { status, ...extra });
   return {
     async pending(context) {
       context.assertActive();
       const bus = await busFor(context.chat);
       context.assertActive();
       const planned = await bus.previewDelivery(8, { session: context.chat.sessionId }, (id, value, status, extra) =>
-        buildDeliveryPresentation(id, value, { status, ...extra }),
+        presentation(context.chat, id, value, status, extra),
       );
       context.assertActive();
       return { entryIds: planned.entries.map((entry) => entry.id), hasMore: planned.has_more };
@@ -127,7 +154,7 @@ export function createManagedTools(
             includeEntryIds: context.feedbackIds ? new Set(context.feedbackIds) : undefined,
             assertActive: context.assertActive,
           },
-          (id, payload, status, extra) => buildDeliveryPresentation(id, payload, { status, ...extra }),
+          (id, payload, status, extra) => presentation(chat, id, payload, status, extra),
         );
         context.assertActive();
         if (batch.delivery_id) context.reservations.add(batch.delivery_id);
@@ -135,7 +162,7 @@ export function createManagedTools(
       }
       if (name === "glosa_inbox_get") {
         const entry = ownedEntry(args.id);
-        return buildDeliveryPresentation(args.id, entry.payload, { status: entry.status, cursor: args.cursor });
+        return presentation(chat, args.id, entry.payload, entry.status, { cursor: args.cursor });
       }
       if (name === "glosa_delivery_ack") {
         if (!context.reservations.has(args.delivery_id))

@@ -3,6 +3,7 @@
 // packages/spa/.impeccable/surfaces/src-app-css.md): no markup in the document, renumbered on
 // every render, never an identity. These pin the numbering rules a reader would rely on.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { passageAddresses, renderMarkdown } from "../../daemon/src/artifact-render.ts";
 import { addressBlocks, addressForRange, topLevelBlockOf } from "../src/address.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
 
@@ -88,4 +89,63 @@ describe("passage addresses", () => {
     expect(before).toBe("§1.2");
     expect(after).toBe("§1.3");
   });
+});
+
+/** One corpus for both sides. The daemon names a delivered note's passage from markdown-it tokens
+ * (artifact-render.ts `passageAddresses`); the page names it from the rendered elements. Both go
+ * through `addressLabels`, but each decides for itself which blocks exist, and that is where they
+ * can drift: a hidden metadata header counted by one side and not the other moves the title rule,
+ * and every label after it. `labels` pins what a reader sees, so the two cannot agree on a wrong
+ * answer. */
+const CORPUS: Array<{ name: string; source: string; labels: string[] }> = [
+  {
+    name: "a lone title h1",
+    source: "# Title\n\nLead.\n\n## A\n\na\n\n## B\n\nb\n",
+    labels: ["§0", "§0.1", "§1", "§1.1", "§2", "§2.1"],
+  },
+  {
+    name: "a document that starts at ##",
+    source: "## A\n\na\n\n### A.1\n\nb\n\n## B\n\n- one\n- two\n",
+    labels: ["§1", "§1.1", "§1.1", "§1.1.1", "§2", "§2.1"],
+  },
+  {
+    name: "a document with no headings",
+    source: "One.\n\nTwo.\n\n> quoted\n\n```\ncode\n```\n\n---\n\n| a | b |\n|---|---|\n| 1 | 2 |\n",
+    labels: ["¶1", "¶2", "¶3", "¶4", "¶5", "¶6"],
+  },
+  {
+    name: "a metadata header and %% comments, which the page hides",
+    source:
+      "---\ntitle: A study\n---\n\n# Title\n\n%%\nA hidden note.\n%%\n\nA paragraph with %%an inline aside%% in it.\n\n%%only an inline aside%%\n\n## Section\n\nText.\n",
+    labels: ["§0", "§0.1", "§0.2", "§1", "§1.1"],
+  },
+  {
+    name: "two h1s, one of them setext: neither is a title",
+    source: "Title\n=====\n\nx\n\n# Second\n\ny\n",
+    labels: ["§1", "§1.1", "§2", "§2.1"],
+  },
+];
+
+describe("the daemon names every passage the way the page does", () => {
+  let dom: DomEnv;
+  beforeEach(() => {
+    dom = installDom();
+  });
+  afterEach(() => dom.teardown());
+
+  for (const { name, source, labels } of CORPUS) {
+    test(`${name}: identical labels from the rendered page and the daemon's delivery derivation`, () => {
+      const root = dom.document.createElement("div");
+      root.innerHTML = renderMarkdown(source);
+      const page = Array.from(addressBlocks(root), ([block, address]) => [
+        Number(block.getAttribute("data-line")),
+        address,
+      ]);
+      const daemon = passageAddresses(source)
+        .filter((block) => block.address !== null)
+        .map((block) => [block.startLine, block.address]);
+      expect(daemon).toEqual(page);
+      expect(page.map(([, address]) => address)).toEqual(labels);
+    });
+  }
 });
