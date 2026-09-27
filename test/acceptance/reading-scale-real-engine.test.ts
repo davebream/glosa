@@ -1302,8 +1302,18 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     column: { left: number; right: number };
     narrow: { left: number; right: number; width: number };
     wide: { left: number; right: number; width: number };
-    /** A table whose one word cannot wrap to fit any lane. */
+    /** A table with a word too long for any lane, which its cell breaks. */
     oversize: { left: number; right: number; width: number };
+    /** The right edge of the rightmost table cell on the page, and of what the pane shows. */
+    cells: number;
+    visible: number;
+    /** Spec's wide lane beyond the line, as the page resolved `--wide-extra`: 0 in other styles. */
+    extra: number;
+    /** Each table's `data-fit` mark, in document order. */
+    fit: Array<string | null>;
+    /** Words split across two lines in the cells of every table that is not marked to break words. A
+     * hyphen is a place a line may break, so the parts either side of one count as words. */
+    split: string[];
     /** The pane's inline size (what `cqi` measures) and the column's painted width it lays out around. */
     pane: { inline: number; block: number };
     block: { left: number; right: number; width: number };
@@ -1328,7 +1338,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     const column={left:col.left+parseFloat(cs.paddingLeft),right:col.right-parseFloat(cs.paddingRight)};
     const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
     const [narrow,wide,oversize]=[...content.querySelectorAll(':scope > table')];
-    const ps=getComputedStyle(pane),pr=pane.getBoundingClientRect();
+    const ps=getComputedStyle(pane),pr=pane.getBoundingClientRect(),main=pane.querySelector('.glosa-pane-main');
     const cell=getComputedStyle(wide.querySelector('td:nth-child(2)'));
     return {style:pane.dataset.style,step:Number(document.documentElement.dataset.textSize),ch,
       loaded:document.fonts.check('16px "Source Serif 4"')&&document.fonts.check('16px "Source Sans 3"'),
@@ -1337,6 +1347,16 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       code:box(first.querySelector('code')),pre:box(q(':scope > pre')),
       line:{column:column.right-column.left,paragraph:first.clientWidth,widest:Math.max(...[...rights.values()].map(r=>r-left))},
       column,narrow:rect(narrow),wide:rect(wide),oversize:rect(oversize),block:rect(q(':scope > pre')),
+      cells:Math.max(...[...content.querySelectorAll('th,td')].map(c=>c.getBoundingClientRect().right)),
+      visible:main.getBoundingClientRect().left+main.clientWidth,
+      extra:parseFloat(getComputedStyle(content).getPropertyValue('--wide-extra'))||0,
+      fit:[...content.querySelectorAll(':scope > table')].map(t=>t.getAttribute('data-fit')),
+      split:[...content.querySelectorAll(':scope > table:not([data-fit]) :is(th,td)')].flatMap(cell=>{
+        const out=[],walk=document.createTreeWalker(cell,NodeFilter.SHOW_TEXT);
+        for(let node=walk.nextNode();node;node=walk.nextNode()) for(const m of node.data.matchAll(/[^\\s-]+/g)){
+          const r=document.createRange();r.setStart(node,m.index);r.setEnd(node,m.index+m[0].length);
+          if(new Set([...r.getClientRects()].filter(x=>x.width>0).map(x=>Math.round(x.top))).size>1) out.push(m[0]);}
+        return out;}),
       pane:{inline:pr.width-parseFloat(ps.paddingLeft)-parseFloat(ps.paddingRight)-parseFloat(ps.borderLeftWidth)-parseFloat(ps.borderRightWidth),
         block:parseFloat(pane.style.getPropertyValue('--manuscript-block'))},
       rail:[...pane.querySelectorAll('.glosa-margin.glosa-margin-side .glosa-annotation')].map(c=>c.getBoundingClientRect().left),
@@ -1487,6 +1507,12 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
             seen.line.column * 0.85,
           );
           expect(seen.sideways, `${where}: the page does not scroll sideways`).toBe(0);
+          expect(seen.cells, `${where}: every table cell ends inside what the pane shows`).toBeLessThanOrEqual(
+            seen.visible + 0.5,
+          );
+          // Only the table with a word too long for any column breaks words; the others keep theirs.
+          expect(seen.fit, `${where}: only the digest table is marked to break words`).toEqual([null, null, "break"]);
+          expect(seen.split, `${where}: no word breaks in the other tables`).toEqual([]);
           // A narrow table stays at its own width on the prose's left edge in every style.
           expect(seen.narrow.width, `${where}: the narrow table keeps its own width`).toBeLessThan(seen.line.column);
           expect(
@@ -1511,13 +1537,15 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
                 Math.max(seen.wide.right, seen.block.right),
               );
             }
-            // A table too wide for the lane overruns it to the right, as it overruns the line in
-            // Editorial, and never loses its first column past the lane's left edge.
-            expect(seen.oversize.width, `${where}: the digest table is wider than the lane`).toBeGreaterThan(
-              seen.wide.width + 1,
-            );
+            // A word too long for the lane breaks inside its cell, so the table fits the lane: it
+            // starts at the lane's left edge and ends at or inside its right edge.
+            const lane = { left: seen.column.left - seen.extra / 2, right: seen.column.right + seen.extra / 2 };
+            expect(Math.abs(seen.extra - 32 * seen.ch), `${where}: the lane is 32ch past the line`).toBeLessThan(1);
             expect(seen.oversize.left, `${where}: the digest table starts at the lane's left edge`).toBeGreaterThan(
-              seen.wide.left - 0.5,
+              lane.left - 0.5,
+            );
+            expect(seen.oversize.right, `${where}: the digest table fits the lane`).toBeLessThanOrEqual(
+              lane.right + 0.5,
             );
           } else {
             expect(seen.wide.width, `${where}: the wide table stays on the line`).toBeLessThanOrEqual(
@@ -1531,6 +1559,14 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
               Math.abs(seen.block.width - seen.line.column),
               `${where}: the code block is the column`,
             ).toBeLessThan(0.5);
+            // A word too long for the line breaks inside its cell, so the table fits the line.
+            expect(
+              Math.abs(seen.oversize.left - seen.column.left),
+              `${where}: the digest table starts on the line`,
+            ).toBeLessThan(0.5);
+            expect(seen.oversize.right, `${where}: the digest table fits the line`).toBeLessThanOrEqual(
+              seen.column.right + 0.5,
+            );
           }
           if (step === 18 && SHOTS_DIR) {
             await page.send("Emulation.setDeviceMetricsOverride", {
@@ -1557,29 +1593,42 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
           }
           if (style === "spec" && step === 18) {
             // Editing a wide block in place keeps it where it was: the run editor that takes its place
-            // holds the same table, at the same width and on the same line.
+            // holds the same table, at the same width and on the same line. The digest table too: in
+            // the editor its long word still breaks, so it fits the lane there as on the page.
             await openDocument(page, STYLES_DOC, STYLES_NOTED, 0, "edit");
-            const editing = await page.evaluate<{
-              before: StyleReading["wide"];
-              after: StyleReading["wide"];
-            }>(`(async()=>{
-              const pane=${paneOf(STYLES_NOTED)},content=pane.querySelector('.glosa-content');
-              const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
-              const table=content.querySelectorAll(':scope > table')[1];table.scrollIntoView({block:'center'});
-              await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
-              const before=rect(table),cell=table.querySelector('td').getBoundingClientRect();
-              table.querySelector('td').dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:cell.left+4,clientY:cell.top+4}));
-              const deadline=Date.now()+5000;let host;
-              while(!(host=content.querySelector('.glosa-run-editor'))?.querySelector('table')){
-                if(Date.now()>deadline) throw new Error('the run editor never opened on the wide table');
-                await new Promise(r=>setTimeout(r,25));}
-              await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
-              return {before,after:rect(host.querySelector('table'))};})()`);
-            expect(
-              Math.abs(editing.after.left - editing.before.left),
-              "the table being edited stays on its line",
-            ).toBeLessThan(1);
-            expect(Math.abs(editing.after.width - editing.before.width), "and keeps its width").toBeLessThan(1);
+            for (const [index, what] of [
+              [1, "the wide table"],
+              [2, "the digest table"],
+            ] as const) {
+              const editing = await page.evaluate<{
+                before: StyleReading["wide"];
+                after: StyleReading["wide"];
+              }>(`(async()=>{
+                const pane=${paneOf(STYLES_NOTED)},content=pane.querySelector('.glosa-content');
+                const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
+                const frame=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+                const table=content.querySelectorAll(':scope > table')[${index}];table.scrollIntoView({block:'center'});
+                await frame();
+                const before=rect(table),cell=table.querySelector('td').getBoundingClientRect();
+                table.querySelector('td').dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:cell.left+4,clientY:cell.top+4}));
+                const deadline=Date.now()+5000;let host;
+                while(!(host=content.querySelector('.glosa-run-editor'))?.querySelector('table')){
+                  if(Date.now()>deadline) throw new Error('the run editor never opened on ${what}');
+                  await new Promise(r=>setTimeout(r,25));}
+                await frame();
+                const after=rect(host.querySelector('table'));
+                document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+                while(content.querySelector('.glosa-run-editor')){
+                  if(Date.now()>deadline) throw new Error('the run editor on ${what} never closed');
+                  await new Promise(r=>setTimeout(r,25));}
+                await frame();
+                return {before,after};})()`);
+              expect(
+                Math.abs(editing.after.left - editing.before.left),
+                `${what} being edited stays on its line`,
+              ).toBeLessThan(1);
+              expect(Math.abs(editing.after.width - editing.before.width), `${what} keeps its width`).toBeLessThan(1);
+            }
             await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
           }
         }
@@ -1600,8 +1649,11 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       expect(Math.abs(desk.block.width - desk.line.column), "and so does its code block").toBeLessThan(0.5);
       expect(
         Math.abs(desk.oversize.left - desk.column.left),
-        "a table too wide to fit starts on the line",
+        "a table with a word too long to fit starts on the line",
       ).toBeLessThan(0.5);
+      expect(desk.oversize.right, "and fits it").toBeLessThanOrEqual(desk.column.right + 0.5);
+      expect(desk.cells, "every table cell ends inside what the pane shows").toBeLessThanOrEqual(desk.visible + 0.5);
+      expect(desk.split, "no word breaks in the other tables, squeezed onto the line").toEqual([]);
       for (const left of desk.rail) expect(left).toBeGreaterThanOrEqual(desk.column.right);
 
       // Between those two desks the room beyond a full rail decides the width: none below a pane of
@@ -1619,6 +1671,11 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         expect(Math.abs(at.block.width - (at.line.column + extra)), `${where}: the code block's width`).toBeLessThan(
           1.5,
         );
+        expect(
+          Math.abs(at.oversize.width - (at.line.column + extra)),
+          `${where}: the digest table fills the lane and no more`,
+        ).toBeLessThan(1.5);
+        expect(at.split, `${where}: no word breaks in the other tables`).toEqual([]);
         if (width === 1225) expect(room, `${where}: no room below about 1230px`).toBeLessThan(0);
         if (width === 1360) expect(extra, `${where}: the room decides`).toBeGreaterThan(0);
         if (width === 1360) expect(extra, `${where}: under the cap`).toBeLessThan(32 * at.ch);
@@ -1640,17 +1697,25 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     note: string | null;
     useAsDefault: string | null;
     status: string | null;
+    /** Where the status line is: inside the Style group, above the Text size row, and which shown
+     * element it sits directly under. Null while it says nothing. */
+    place: { inGroup: boolean; aboveTextSize: boolean; under: string | null } | null;
   }
   /** The Style group of a pane's open More menu, as a reader finds it. */
   const MENU = (text: string) => `(()=>{const pane=${paneOf(text)},group=pane.querySelector('.glosa-style-group');
     const shown=(el)=>Boolean(el)&&!el.hidden&&el.getBoundingClientRect().width>0;
-    const status=pane.querySelector('.glosa-tools-status'),note=group.querySelector('.glosa-style-folder-note'),
-      use=group.querySelector('.glosa-style-folder');
+    const menu=pane.querySelector('.glosa-pane-menu'),size=menu.querySelector('.glosa-text-size');
+    const status=[...menu.querySelectorAll('[role="status"]')].find(shown)??null,
+      note=group.querySelector('.glosa-style-folder-note'),use=group.querySelector('.glosa-style-folder');
+    let above=status?.previousElementSibling??null;while(above&&!shown(above)) above=above.previousElementSibling;
     return {heading:group.querySelector('.glosa-pane-menu-heading')?.textContent??null,
       rows:[...group.querySelectorAll('.glosa-style-option')].filter(shown).map(r=>r.querySelector('span:last-child').textContent),
       checked:group.querySelector('.glosa-style-option[aria-checked="true"]')?.dataset.style??null,
       note:shown(note)?note.textContent:null,useAsDefault:shown(use)?use.textContent:null,
-      status:shown(status)?status.textContent:null};})()`;
+      status:status?status.textContent:null,
+      place:status?{inGroup:group.contains(status),
+        aboveTextSize:status.getBoundingClientRect().bottom<=size.getBoundingClientRect().top+0.5,
+        under:above?above.className:null}:null};})()`;
 
   async function openMenuOf(page: CdpClient, text: string): Promise<void> {
     await page.evaluate(`(async()=>{const pane=${paneOf(text)};
@@ -1685,6 +1750,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         note: null,
         useAsDefault: "Use as folder default",
         status: null,
+        place: null,
       });
       const menu = `(${paneOf(STYLES_NOTED)}).querySelector('.glosa-pane-menu')`;
       await shot(a, "menu-style-light", menu, 16);
@@ -1715,6 +1781,8 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         note: null,
         useAsDefault: "Use as folder default",
         status: "Couldn't set the folder default, so nothing changed. Try again.",
+        // Said in the Style group, right under the row that failed, above Text size.
+        place: { inGroup: true, aboveTextSize: true, under: "glosa-pane-menu-item glosa-style-folder" },
       });
       expect(
         await a.evaluate<boolean>("document.activeElement?.classList.contains('glosa-style-folder') ?? false"),
@@ -1739,6 +1807,8 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         note: "Folder default: Spec",
         useAsDefault: null,
         status: "Spec is now this folder's default.",
+        // The row has hidden, so it is said right under "Folder default: Spec", above Text size.
+        place: { inGroup: true, aboveTextSize: true, under: "glosa-style-folder-note" },
       });
       expect(
         await a.evaluate<string>("document.activeElement?.dataset?.style ?? ''"),

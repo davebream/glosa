@@ -35,7 +35,7 @@ import {
 import { buildAnnotationRecordFromSelection, foldQuote, locateFoldedQuote } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
 import { choiceDialog, confirmDialog } from "./dialog.js";
-import { mountStyleControl, STYLE_NAMES } from "./style.js";
+import { mountStyleControl } from "./style.js";
 import {
   collectRenderedHeadings,
   currentHeadingIndex,
@@ -920,15 +920,8 @@ export function createArtifactPane(host, deps) {
           // A style sets its own size and line length, so the column paints at a new width.
           if (measured) applyPaneWidth(paneWidth);
         },
+        // The folder row keeps the menu open and says what it did in the Style group itself.
         onPick: () => setToolsOpen(false, { restoreFocus: true }),
-        // The folder row keeps the menu open, so what it did is said in the menu.
-        onFolderResult: ({ ok, style }) =>
-          setToolsStatus(
-            ok
-              ? `${STYLE_NAMES[style]} is now this folder's default.`
-              : "Couldn't set the folder default, so nothing changed. Try again.",
-            { error: !ok },
-          ),
       })
     : null;
   if (!styleStore) styleGroup.hidden = true;
@@ -1572,6 +1565,9 @@ export function createArtifactPane(host, deps) {
     try {
       const mountRichEditor = await loadRichEditor();
       if (request !== richMountRequest || sourceFace || modeState.mode !== "edit" || !currentArtifact) return;
+      // The full-page editor's tables break a long word if any table on the page had to (fitTables).
+      if (contentEl.querySelector('table[data-fit="break"]')) richEl.setAttribute("data-fit", "break");
+      else richEl.removeAttribute("data-fit");
       richEditor = mountRichEditor(richEl, {
         markdown: pendingRichMarkdown ?? markdown,
         onDirty: () => {
@@ -1839,6 +1835,9 @@ export function createArtifactPane(host, deps) {
     const address = blockEl.getAttribute("data-address");
     const host = el("div", { className: "glosa-run-editor" });
     if (address) host.setAttribute("data-address", address);
+    // A table that had to break a long word on the page breaks it in the editor too, so it keeps
+    // the width it had (fitTables). The mark sits on the host: the editor owns its table's DOM.
+    if (blockEl.getAttribute("data-fit")) host.setAttribute("data-fit", blockEl.getAttribute("data-fit"));
     // Geometry cancellation, measured rather than guessed. `.glosa-content` spaces its blocks
     // asymmetrically on purpose — 3rem above an h2 against 0.75rem below it — so a host with one
     // fixed margin would be right for prose and wrong for everything else, and a tag -> spacing
@@ -4234,8 +4233,35 @@ export function createArtifactPane(host, deps) {
     }
   }
 
+  /** Marks a table that cannot fit its line, or Spec's wide lane, however its columns share the width,
+   * because a word in it is too long for any column: `data-fit="break"`, which lets its cells break
+   * words anywhere (app.css) so it fits. Only such tables, since breaking anywhere in every table
+   * would split short words wherever columns squeeze. An attribute, never a node, like the address:
+   * re-marked on every render, because a morph drops what the new HTML does not carry, and on every
+   * width, style, text size or font change. All marks come off before any width is read, so one
+   * layout serves every table; tables do not change each other's room. Tables inside an open editor
+   * are the editor's own, marked on its host. */
+  function fitTables() {
+    if (!currentArtifact || currentArtifact.class === "F" || !contentEl.getClientRects().length) return;
+    const tables = [...contentEl.querySelectorAll("table")].filter((table) => !table.closest(".ProseMirror"));
+    for (const table of tables) table.removeAttribute("data-fit");
+    const extra = Number.parseFloat(getComputedStyle(contentEl).getPropertyValue("--wide-extra")) || 0;
+    const overflowing = tables.filter((table) => {
+      const parent = /** @type {HTMLElement} */ (table.parentElement);
+      const style = getComputedStyle(parent);
+      const room =
+        parent.clientWidth -
+        Number.parseFloat(style.paddingLeft) -
+        Number.parseFloat(style.paddingRight) +
+        (parent === contentEl ? extra : 0);
+      return table.offsetWidth > room + 0.5;
+    });
+    for (const table of overflowing) table.setAttribute("data-fit", "break");
+  }
+
   function paintAnnotationMarks() {
     stampAddresses();
+    fitTables();
     const moved = repaintAnchorVerdicts();
     paintAnchorUnderlines();
     renderMarkers();
@@ -4900,6 +4926,7 @@ export function createArtifactPane(host, deps) {
     const wasSide = isSideMargin();
     paneWidth = width;
     measureManuscriptBlock();
+    fitTables();
     if (isSideMargin() !== wasSide) renderMargin();
     else layoutMargin();
   }

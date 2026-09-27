@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-16T13:32:30+00:00",
+  "generatedAt": "2026-09-27T22:30:00+00:00",
   "title": "Design System: glosa",
   "extensions": {
     "colorMeta": {
@@ -637,7 +637,7 @@
     "rules": [
       {
         "name": "The Two Hands Rule",
-        "body": "Everything the human marks takes the hand; everything not yet sent takes the pencil; everything a session writes is printed in ink. No third colour for marks.",
+        "body": "Everything the human marks takes the hand; everything not yet sent takes the pencil; everything a session writes is printed in ink. A session's *mark on the page* (the bracket beside the block it asks about or points at, and the wash or dotted rule on its words) takes Session Ink, and that is the only thing that does (#308). Session Ink is never a button, a link, a panel fill or the colour of a session's words.",
         "section": "colors"
       },
       {
@@ -661,19 +661,44 @@
         "section": "colors"
       },
       {
+        "name": "The Scheme Rule",
+        "body": "A theme is a palette; a scheme is light or dark. `<html>` carries both, `data-theme` (which palette) and `data-scheme` (which scheme), set before first paint from the one list of appearances (`packages/spa/src/appearance-list.js`: each entry's id, scheme and labels, read by the preload, the workspace popover and Settings). What every dark theme shares lives on `:root[data-scheme=\"dark\"]`, never on a theme's name. Outside the token blocks and the print block, no selector depends on the theme.",
+        "section": "colors"
+      },
+      {
         "name": "The Reading Measure Rule",
-        "body": "Manuscript prose stays at a 68ch measure. Blocks are separated by 1.2em of the body size; the page opens with 4rem above the title and closes with 6rem below. Headings carry more space above than below.",
+        "body": "Manuscript prose stays at a 68ch measure in Editorial and Mono and 64ch in Spec, whose sans fits more letters into a `ch` (at 68ch its lines ran about four characters longer than the serif's). Blocks are separated by 1.2em of the body size (1em in Spec); the page opens with 4rem above the title and closes with 6rem below. Headings carry more space above than below.",
         "section": "typography"
       },
       {
         "name": "The Serif Is Writing Rule",
-        "body": "Anything a person or a session wrote (the manuscript, its quotes, margin notes, the composer field, a session's message) is set in serif; anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.",
+        "body": "Anything a person or a session wrote in the margin or the conversation (margin notes, the composer field, a session's message) is set in serif in every style, and the manuscript and its quotes in the document's own style (serif in Editorial); anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.",
         "section": "typography"
       },
       {
         "name": "The Section Label Rule",
         "body": "Uppercase tracked labels name a list that follows them. They never sit above a headline as a decorative lead-in.",
         "section": "typography"
+      },
+      {
+        "name": "The Wide Lane Rule",
+        "body": "In Spec a table or code block wider than the line may widen past it, to about 96ch of the body, centred on the column, and only into whitespace the note rail never claims: the room each side keeps beyond a full 320px rail. The room is worked out from the pane's width alone, never from whether the rail is showing, so entering Review moves nothing and widening never takes a block to the rail. A narrow table stays at its own width on the prose's left edge; a code block is at least the column. No table is wider than its lane: a word too long for its cell breaks inside it (the Cell Break Rule). A wide block opened for editing in place keeps its width and place.",
+        "section": "typography"
+      },
+      {
+        "name": "The Cell Break Rule",
+        "body": "In every style a table with a word too long for any column (a digest, a path, a URL) breaks words inside its cells (`overflow-wrap: anywhere`, which is also what lets the table itself shrink), so every table fits its line or lane, on the page, in the editor and in print. The pane never scrolls sideways, so a cell that ran past its edge would be cut off where nothing could reach it. Only such a table breaks words: the pane marks it from the layout (`data-fit=\"break\"`), and every other table keeps its words whole, since breaking anywhere in every table would split short words (\"Own-er\") wherever columns squeeze. Code blocks keep their lines whole and scroll inside themselves instead. A pane with no room to spare keeps them on the line.",
+        "section": "typography"
+      },
+      {
+        "name": "The Reading Scale Rule",
+        "body": "A size read in the document, the margin or the chat is written on the reading scale, never as a fixed px or rem of its own; a size in the chrome never reads it. At every step `h3` is larger than the body and `h4`–`h6` are not smaller.",
+        "section": "typography"
+      },
+      {
+        "name": "The Rail Rule",
+        "body": "The rail opens only where it fits beside the column as it paints, and it never overlaps the column. Its floor is the painted column plus 2 × (240 + 8)px (the rail's minimum and the pane's scrollbar) plus 2px for the grid's rounding, and Review asks a split for 85px more, a rail of about 280px. At every width the composer opens at its passage: directly under the selection (flipping above it when there is no room), aligned to its first word and held inside the manuscript column, 26rem wide. A draft never opens in the rail, where it sat far from the words just selected. The outline is reached through Go to (⌘K), never through the gutter.",
+        "section": "layout"
       },
       {
         "name": "The Flat-Until-Floating Rule",
@@ -687,21 +712,28 @@
       }
     ],
     "dos": [
-      "**Do** give every human mark the hand, every unsent mark the pencil, and print everything a session writes in ink.",
+      "**Do** give every human mark the hand, every unsent mark the pencil, and print everything a session writes in ink. Draw a session's mark on the page, and only that, in Session Ink.",
       "**Do** keep the whole desk on paper and divide the desk's regions with the Region Rule (ink in light, `oklch(0.74 0.01 80)` in dark).",
-      "**Do** set anything written (manuscript, quotes, notes, the composer field, a session's message) in Source Serif 4, and everything the application says in Source Sans 3.",
+      "**Do** set everything written in the margin or the conversation (notes, the composer field, a session's message) in Source Serif 4 in every style, the manuscript in its style's face, and everything the application says in Source Sans 3.",
       "**Do** strike the chosen mode forward as filled ink inside the ink outline.",
       "**Do** open a margin entry on a hairline aligned to its passage, with no fill, no radius and no shadow.",
       "**Do** lead entries, the composer, the gutter and Go to with the derived § address, and treat it as a label the document can renumber.",
       "**Do** state provenance in words: \"You\", the provider's name, \"Outside glosa\", \"Approval\", \"not sent yet\", \"Lost its place\".",
       "**Do** pair every colour state with a shape: hollow or filled dot, filled, outlined or dashed chip.",
-      "**Do** keep the reading measure at 68ch and paint the margin over whitespace rather than moving the manuscript.",
+      "**Do** keep the reading measure at 68ch (64ch in Spec) and paint the margin over whitespace rather than moving the manuscript.",
+      "**Do** let a Spec table or code block widen only into whitespace the note rail never claims, worked out from the pane's width, never from whether the rail is showing.",
+      "**Do** break a word too long for any column inside its cell, and only then, so no table runs past what the pane shows and no other table splits a word.",
+      "**Do** write every size read in the document, the margin or the chat on the reading scale, and let chrome follow zoom.",
       "**Do** serve every face from the vendored OFL woff2 files; the runtime never reaches a font service."
     ],
     "donts": [
       "**Don't** use the hand for a button, a link, a panel fill or a session's output.",
+      "**Don't** use Session Ink for a button, a link, a panel fill or a session's words; it marks a passage and names that mark, nothing more.",
+      "**Don't** scroll, switch mode or move focus because a session's request arrived. Offer the way there.",
       "**Don't** give chrome regions a grey fill of their own; the desk is one paper.",
-      "**Don't** put the face chooser or any reading preference in primary chrome; it lives in the pane's More menu.",
+      "**Don't** put the style chooser, the text size or any reading preference in primary chrome; they live in the pane's More menu.",
+      "**Don't** let a style set light or dark, or a palette set a face.",
+      "**Don't** give the text size a keyboard shortcut; ⌘+ and ⌘− belong to zoom.",
       "**Don't** wash annotated words in Read; the underline is the only mark there.",
       "**Don't** insert nodes into the rendered manuscript for addresses or marks.",
       "**Don't** draw cards in the margin (the open composer excepted), rounded tabs, resting shadows or coloured side-stripe panels.",

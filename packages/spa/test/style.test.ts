@@ -262,7 +262,8 @@ describe("mountStyleControl", () => {
     const rows = () => Array.from(host.querySelectorAll('[role="menuitemradio"]')) as unknown as HTMLButtonElement[];
     const note = () => host.querySelector(".glosa-style-folder-note") as unknown as HTMLElement;
     const useAsDefault = () => host.querySelector(".glosa-style-folder") as unknown as HTMLButtonElement;
-    return { host, control, rows, note, useAsDefault, applied, results, picks: () => picks };
+    const status = () => host.querySelector(".glosa-style-status") as unknown as HTMLElement;
+    return { host, control, rows, note, useAsDefault, status, applied, results, picks: () => picks };
   }
 
   test("offers Style: Editorial (Serif), Spec (Sans) and Mono as radio rows, follows the pane's document, and reports picks", () => {
@@ -314,6 +315,25 @@ describe("mountStyleControl", () => {
     // The document is set in its folder's default, so there is nothing left to use.
     expect(ui.useAsDefault().hidden).toBe(true);
     expect(ui.rows()[1]!.getAttribute("aria-checked")).toBe("true");
+    // What happened is said in the group, after the note and the row that did it, as a live region.
+    const children = Array.from(ui.host.children);
+    expect(ui.status().getAttribute("role")).toBe("status");
+    expect(ui.status().getAttribute("aria-live")).toBe("polite");
+    expect({
+      hidden: ui.status().hidden,
+      text: ui.status().textContent,
+      error: ui.status().hasAttribute("data-error"),
+    }).toEqual({
+      hidden: false,
+      text: "Spec is now this folder's default.",
+      error: false,
+    });
+    const at = (element: HTMLElement) => children.indexOf(element as unknown as Element);
+    expect(at(ui.status())).toBeGreaterThan(at(ui.useAsDefault()));
+    expect(at(ui.useAsDefault())).toBeGreaterThan(at(ui.note()));
+    // Choosing a style again starts a new moment: the old result is gone.
+    ui.rows()[2]!.click();
+    expect(ui.status().hidden).toBe(true);
   });
 
   test("a document that chose otherwise in a Spec folder says so, and can set its own style as the default", async () => {
@@ -336,6 +356,10 @@ describe("mountStyleControl", () => {
     expect([...ui.rows(), ui.useAsDefault()].every((control) => control.disabled)).toBe(true);
     await Bun.sleep(0);
     expect(ui.results).toEqual([{ ok: false, style: "editorial" }]);
+    expect({ text: ui.status().textContent, error: ui.status().hasAttribute("data-error") }).toEqual({
+      text: "Couldn't set the folder default, so nothing changed. Try again.",
+      error: true,
+    });
     expect(ui.rows().some((row) => row.disabled)).toBe(false);
     expect(ui.note().textContent).toBe("Folder default: Spec");
     expect(ui.useAsDefault().hidden).toBe(false);

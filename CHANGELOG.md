@@ -85,10 +85,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   1205px, reaches its full 320px at 1344px instead of 1363px, and Review asks a split for 1271px
   instead of 1290px. The Edit column's toolbar and Save row are 688px wide instead of 707px, and
   the note dots beside the text sit 9.5px closer to it (#406).
+- In every style, a table with a word too long for any of its columns (a digest, a long path or URL)
+  now breaks that word inside its cell, so the table fits the page, on screen and in the editor as it
+  already did in print. Before, such a word ran past the line, and past the pane's edge it was cut
+  off where nothing could scroll to it. Tables whose words fit keep them whole, as before (#407).
 - The "Manuscript face" group in each document's More menu is now "Style", and its rows Default,
   Sans and Mono are now Editorial (Serif), Spec (Sans) and Mono. A style sets the whole page, not
   only its face: size, leading, headings, the gap between blocks, tables, code and line length.
-  Editorial and Mono pages look as they did, and each document keeps the choice it had: Sans is
+  Editorial and Mono pages otherwise look as they did, and each document keeps the choice it had: Sans is
   Spec, Mono is Mono. Choosing Editorial is now kept as a choice of its own, where choosing Default
   used to leave nothing behind (#407).
 - A page set in Sans is now set in Spec, a denser page for specifications, with one heading weight
@@ -97,7 +101,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   centred on the column, but only into room the pane has beyond a full note rail: at the default
   size it starts to widen in a pane about 1230px wide and reaches 96ch at about 1485px. So widening
   never takes it to the rail, and entering Review moves nothing. In a narrower pane it stays on the
-  line as before, and a table whose words cannot wrap to fit still runs past it to the right (#407).
+  line as before (#407).
 
 | Value | Before (Sans) | After (Spec) |
 |---|---|---|

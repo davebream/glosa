@@ -225,7 +225,8 @@ const FOLDER_ICON =
  *
  * `getTarget` answers which document the rows are for right now; the pane calls `refresh` whenever
  * that changes. `onPick` runs after a style row is chosen so the menu can close; the folder row
- * leaves the menu open and reports through `onFolderResult`, so a failure is said where it happened.
+ * leaves the menu open and says what it did in the group's own status line, under the row, so a
+ * failure is said where it happened. `onFolderResult` hears the same result.
  * @param {any} container
  * @param {ReturnType<typeof createStyleStore>} store
  * @param {{ getTarget: () => { slug: string, path: string } | null, onChange?: (style: string) => void,
@@ -261,6 +262,7 @@ export function mountStyleControl(
     row.addEventListener("click", () => {
       const target = getTarget?.();
       if (!target) return;
+      say("");
       store.choose(target.slug, target.path, style);
       onPick?.();
     });
@@ -278,11 +280,28 @@ export function mountStyleControl(
   useAsDefault.setAttribute("role", "menuitem");
   useAsDefault.innerHTML = `${FOLDER_ICON}<span>Use as folder default</span>`;
   useAsDefault.hidden = true;
+
+  // What the folder row did, said where it was done: right under the row, or under "Folder default:
+  // Spec" once the row has hidden, on the style labels' line. A polite live region, so the result is
+  // read out without moving focus for it.
+  const status = document.createElement("p");
+  status.className = "glosa-style-status";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.hidden = true;
+  /** @param {string} message @param {{ error?: boolean }} [options] */
+  function say(message, { error = false } = {}) {
+    status.hidden = !message;
+    status.textContent = message;
+    status.toggleAttribute("data-error", error && Boolean(message));
+  }
+
   let saving = false;
   useAsDefault.addEventListener("click", async () => {
     const target = getTarget?.();
     if (!target || saving) return;
     saving = true;
+    say("");
     // Nothing else in the group changes while the folder's default is being written.
     for (const control of [...rows.values(), useAsDefault]) control.disabled = true;
     const { style } = store.get(target.slug, target.path);
@@ -303,9 +322,15 @@ export function mountStyleControl(
     if (focus === document.body || focus === useAsDefault || container.contains(focus)) {
       (result.ok ? rows.get(result.style) : useAsDefault)?.focus({ preventScroll: true });
     }
+    say(
+      result.ok
+        ? `${STYLE_NAMES[result.style]} is now this folder's default.`
+        : "Couldn't set the folder default, so nothing changed. Try again.",
+      { error: !result.ok },
+    );
     onFolderResult?.(result);
   });
-  container.append(note, useAsDefault);
+  container.append(note, useAsDefault, status);
 
   /** @param {StyleState} state @param {boolean} bound */
   function paint(state, bound) {
@@ -320,10 +345,15 @@ export function mountStyleControl(
   }
 
   let unsubscribe = null;
+  /** The document the rows were last bound to: a result belongs to it, not to the next one. */
+  let boundKey = null;
   function bind() {
     unsubscribe?.();
     unsubscribe = null;
     const target = getTarget?.();
+    const key = target ? styleKey(target.slug, target.path) : null;
+    if (key !== boundKey) say("");
+    boundKey = key;
     for (const row of rows.values()) row.disabled = !target;
     if (!target) {
       const state = { ...resolveStyle(null, null), own: null, folder: null, folderAvailable: false };

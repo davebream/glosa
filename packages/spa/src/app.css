@@ -2161,7 +2161,9 @@ input,
   grid-area: body;
   min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden; /* pre/tables scroll internally; a pane itself never pans sideways */
+  /* A pane never pans sideways, so nothing may need it to: a code block scrolls its long lines inside
+     itself, and a table with a word too long for any column breaks it (`[data-fit="break"]`). */
+  overflow-x: hidden;
   /* Reserve the scrollbar's track in every mode. Edit sets `overflow: hidden` below, and without
      a stable gutter the centred manuscript slid sideways by a scrollbar width on entering and
      leaving Edit — the horizontal half of the "jumpy" mode switch. Harmless where the platform
@@ -2398,12 +2400,26 @@ input,
 /* The folder's default, under the three styles. What it is, when there is one, sits on the rows'
    label line in 12px Muted, a statement rather than a row, so it takes no hover and no focus; the
    one thing to do about it is the row after it, drawn like the menu's other actions. */
-.glosa-style-folder-note {
+.glosa-style-folder-note,
+.glosa-style-status {
   margin: 0;
   padding: 2px var(--space-2) var(--space-1) calc(var(--space-2) + 1.5rem + var(--space-2));
   color: var(--muted);
   font-size: var(--text-xs);
   line-height: 1.4;
+}
+
+/* What "Use as folder default" did, said under it (or under the note, once it has hidden), on the
+   same line and in the same voice as the note; a failure in Danger at 600, with words to go on. */
+.glosa-style-status {
+  /* It wraps to the menu's width and never widens the menu to fit itself. */
+  contain: inline-size;
+  text-wrap: pretty;
+}
+
+.glosa-style-status[data-error] {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .glosa-style-folder:disabled,
@@ -3172,6 +3188,19 @@ input,
   vertical-align: top;
 }
 
+/* A table with a word too long for any column (a digest, a path, a URL) is wider than its line, or
+   Spec's wide lane, however its columns share the width; the pane never scrolls sideways, so what
+   ran past its edge would be cut off where nothing could reach it. artifact-pane.js marks such a
+   table from the layout (`fitTables`) and its cells then break words anywhere, so it fits.
+   `anywhere`, not `break-word`: only `anywhere` lowers a cell's minimum width, which is what lets
+   the table itself shrink. Only the tables that need it: in every table it would also split short
+   words ("Own-er", "Sta-te") wherever columns have to squeeze, since every column's minimum would
+   drop to a letter. The run editor and the full-page editor carry the mark on their own host.
+   Print breaks words in every table on its own. */
+[data-fit="break"] :is(th, td) {
+  overflow-wrap: anywhere;
+}
+
 .glosa-content th {
   border-bottom-color: var(--border-strong);
   color: var(--th-color);
@@ -3189,10 +3218,10 @@ input,
    A table is shrink-to-fit: the negative end margin only raises how wide it may grow, so a narrow
    table stays at its own width on the prose's left edge. A code block is at least the column and
    grows to its longest line. Either one, once wider than the column, is shifted back by half the
-   difference (`translate` never moves anything around it), and never when narrower. The shift
-   stops at half the room: a table whose words cannot wrap to fit the lane (a long path in a cell)
-   overruns it to the right, as it overruns the line in Editorial, and never loses its first column
-   past the lane's left edge. Screen only: print sets tables across the page on its own. */
+   difference (`translate` never moves anything around it), and never when narrower. No table is
+   wider than the lane, since a table with a word too long to fit breaks it (below); the shift still
+   stops at half the room, so nothing could ever lose its first column past the lane's left edge.
+   Screen only: print sets tables across the page on its own. */
 @media screen {
   .glosa-pane[data-style="spec"] .glosa-content {
     --prose-width: var(--measure);
