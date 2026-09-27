@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-27T22:30:00+00:00",
+  "generatedAt": "2026-09-27T22:53:05+00:00",
   "title": "Design System: glosa",
   "extensions": {
     "colorMeta": {
@@ -455,7 +455,7 @@
       },
       "body": {
         "displayName": "Body",
-        "purpose": "Panel prose, the conversation, dialog copy."
+        "purpose": "Panel prose, dialog copy."
       },
       "label": {
         "displayName": "Label",
@@ -476,6 +476,10 @@
       "source": {
         "displayName": "Source",
         "purpose": "The source editor."
+      },
+      "conversation": {
+        "displayName": "Conversation",
+        "purpose": "The chat's own style beside every document style: a reply, the person's message and the draft in Source Serif 4 at 16px / 1.62, one text-size step under the document, on a column of 34em of the reply; a reply's headings, lists, quotes, code, tables and links take the page's prose rules."
       }
     },
     "shadows": [
@@ -621,6 +625,14 @@
       "description": "Paper column with an ink hairline, a section label heading its rows.",
       "html": "<nav class=\"ds-nav\"><h2>Artifacts</h2><button>drafts</button><button aria-current=\"true\">the-slow-page.md</button><button>notes</button></nav>",
       "css": ".ds-nav{width:232px;padding:0 0.75rem;background:oklch(0.99 0.007 85);border-right:1px solid oklch(0.2 0.012 60);display:grid;font-family:\"Source Sans 3\",system-ui,sans-serif}.ds-nav h2{min-height:36px;display:flex;align-items:center;margin:0 0 0 0.5rem;font-size:12px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:oklch(0.47 0.016 60)}.ds-nav button{height:28px;text-align:left;padding:0 0.5rem;border:0;border-radius:5px;background:none;color:oklch(0.2 0.012 60);font:13px \"Source Sans 3\",system-ui,sans-serif;cursor:pointer}.ds-nav button:hover{background:oklch(0.94 0.009 78)}.ds-nav button[aria-current]{background:oklch(0.94 0.009 78);font-weight:600}.ds-nav button:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
+    },
+    {
+      "name": "Conversation",
+      "kind": "custom",
+      "refersTo": "conversation",
+      "description": "The chat in the Conversation style: the person's message in a right-aligned bubble and a session's reply as unboxed prose, both in the serif, on one 34em column.",
+      "html": "<section class=\"ds-chat\"><article class=\"ds-turn-you\"><p>Review my outline, and say where the argument is weakest.</p></article><article class=\"ds-reply\"><h3>What to change</h3><p>The outline holds, with one gap. <strong>The second section</strong> promises a comparison it never makes; move <code>chat-pane.js</code> out of it.</p><ul><li>Name the two options before weighing them.</li></ul></article></section>",
+      "css": ".ds-chat{max-width:34em;margin:0 auto;font:16px/1.62 \"Source Serif 4\",Georgia,serif;color:oklch(0.2 0.012 60);background:oklch(0.99 0.007 85);text-wrap:pretty}.ds-chat p{margin:0.9em 0}.ds-turn-you{width:fit-content;max-width:min(80%,28em);margin:0 0 24px auto;padding:12px 16px;border-radius:14px;background:oklch(0.97 0.006 80)}.ds-turn-you p{margin:0}.ds-reply>:first-child{margin-top:0}.ds-reply h3{font-size:1.125em;font-weight:620;line-height:1.3;margin:0 0 0.5rem}.ds-reply strong{font-weight:600}.ds-reply code{font:0.85em ui-monospace,\"SF Mono\",Menlo,monospace;background:oklch(0.97 0.006 80);border-radius:4px;padding:0.1em 0.35em}.ds-reply ul{padding-left:1.5rem;margin:0.9em 0}.ds-reply li::marker{color:oklch(0.47 0.016 60)}"
     }
   ],
   "narrative": {
@@ -672,7 +684,7 @@
       },
       {
         "name": "The Serif Is Writing Rule",
-        "body": "Anything a person or a session wrote in the margin or the conversation (margin notes, the composer field, a session's message) is set in serif in every style, and the manuscript and its quotes in the document's own style (serif in Editorial); anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.",
+        "body": "Anything a person or a session wrote in the margin or the chat (margin notes, the composer field, a session's message, a reply, the person's own message and the draft) is set in serif in every style, and the manuscript and its quotes in the document's own style (serif in Editorial); anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.",
         "section": "typography"
       },
       {
@@ -687,7 +699,7 @@
       },
       {
         "name": "The Cell Break Rule",
-        "body": "In every style a table with a word too long for any column (a digest, a path, a URL) breaks words inside its cells (`overflow-wrap: anywhere`, which is also what lets the table itself shrink), so every table fits its line or lane, on the page, in the editor and in print. The pane never scrolls sideways, so a cell that ran past its edge would be cut off where nothing could reach it. Only such a table breaks words: the pane marks it from the layout (`data-fit=\"break\"`), and every other table keeps its words whole, since breaking anywhere in every table would split short words (\"Own-er\") wherever columns squeeze. Code blocks keep their lines whole and scroll inside themselves instead. A pane with no room to spare keeps them on the line.",
+        "body": "In every style a table with a word too long for any column (a digest, a path, a URL) breaks words inside its cells (`overflow-wrap: anywhere`, which is also what lets the table itself shrink), so every table fits its line or lane, on the page, in the editor, in print and in a chat reply. The pane never scrolls sideways, so a cell that ran past its edge would be cut off where nothing could reach it. Only such a table breaks words: the pane marks it from the layout (`data-fit=\"break\"`), and every other table keeps its words whole, since breaking anywhere in every table would split short words (\"Own-er\") wherever columns squeeze. Code blocks keep their lines whole and scroll inside themselves instead. A pane with no room to spare keeps them on the line.",
         "section": "typography"
       },
       {
@@ -714,13 +726,13 @@
     "dos": [
       "**Do** give every human mark the hand, every unsent mark the pencil, and print everything a session writes in ink. Draw a session's mark on the page, and only that, in Session Ink.",
       "**Do** keep the whole desk on paper and divide the desk's regions with the Region Rule (ink in light, `oklch(0.74 0.01 80)` in dark).",
-      "**Do** set everything written in the margin or the conversation (notes, the composer field, a session's message) in Source Serif 4 in every style, the manuscript in its style's face, and everything the application says in Source Sans 3.",
+      "**Do** set everything written in the margin or the chat (notes, the composer field, a session's message, a reply, the person's message and the draft) in Source Serif 4 in every style, the manuscript in its style's face, and everything the application says in Source Sans 3.",
       "**Do** strike the chosen mode forward as filled ink inside the ink outline.",
       "**Do** open a margin entry on a hairline aligned to its passage, with no fill, no radius and no shadow.",
       "**Do** lead entries, the composer, the gutter and Go to with the derived § address, and treat it as a label the document can renumber.",
       "**Do** state provenance in words: \"You\", the provider's name, \"Outside glosa\", \"Approval\", \"not sent yet\", \"Lost its place\".",
       "**Do** pair every colour state with a shape: hollow or filled dot, filled, outlined or dashed chip.",
-      "**Do** keep the reading measure at 68ch (64ch in Spec) and paint the margin over whitespace rather than moving the manuscript.",
+      "**Do** keep the reading measure at 68ch (64ch in Spec), and the chat's column at 34em of a reply, and paint the margin over whitespace rather than moving the manuscript.",
       "**Do** let a Spec table or code block widen only into whitespace the note rail never claims, worked out from the pane's width, never from whether the rail is showing.",
       "**Do** break a word too long for any column inside its cell, and only then, so no table runs past what the pane shows and no other table splits a word.",
       "**Do** write every size read in the document, the margin or the chat on the reading scale, and let chrome follow zoom.",

@@ -79,6 +79,16 @@ export function createChatPane(
     uploading = false,
     stopping = false;
   const lifetime = new AbortController();
+  // A reply's table keeps its words whole unless one is too long for any column; then its cells
+  // break words so it fits the reply's column, as a document's tables do (`fitTables` in
+  // artifact-pane.js, DESIGN.md's Cell Break Rule). A reply is marked again whenever it renders or
+  // changes size: the pane resized, a text size step, the faces arriving.
+  const tableFit =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver((entries) => {
+          for (const entry of entries) fitTables(entry.target);
+        })
+      : null;
   const rows = new Map(),
     decisionRows = new Map(),
     decisionIntents = new Map(),
@@ -637,6 +647,7 @@ export function createChatPane(
       disposed = true;
       accountGeneration++;
       lifetime.abort();
+      tableFit?.disconnect();
       picker.destroy();
       clearTimeout(timer);
       stopStream?.();
@@ -801,6 +812,10 @@ export function createChatPane(
       row.text = text;
       row.markdown = true;
       row.content.classList.add("glosa-chat-markdown");
+      if (row.content.querySelector("table")) {
+        tableFit?.observe(row.content);
+        fitTables(row.content);
+      }
       return;
     }
     if (row.text !== text) {
@@ -810,6 +825,21 @@ export function createChatPane(
       else row.content.textContent = text;
       row.text = text;
     }
+  }
+  /** Marks each table in a reply that is wider than its room however its columns share it, and
+   * only those: `data-fit="break"` lets its cells break words anywhere (app.css). Every mark comes
+   * off before any width is read, so one layout serves every table.
+   * @param {Element} reply */
+  function fitTables(reply) {
+    const tables = [...reply.querySelectorAll("table")];
+    for (const table of tables) table.removeAttribute("data-fit");
+    const overflowing = tables.filter((table) => {
+      const parent = /** @type {HTMLElement} */ (table.parentElement);
+      const style = getComputedStyle(parent);
+      const room = parent.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
+      return table.offsetWidth > room + 0.5;
+    });
+    for (const table of overflowing) table.setAttribute("data-fit", "break");
   }
   function selectionChanged() {
     if (window.getSelection?.()?.isCollapsed) render();
@@ -1147,6 +1177,7 @@ export function createChatPane(
           (row.node.contains(selection.anchorNode) || row.node.contains(selection.focusNode))
         )
       ) {
+        tableFit?.unobserve(row.content);
         row.node.remove();
         rows.delete(key);
       }
