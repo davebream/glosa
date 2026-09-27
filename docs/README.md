@@ -20,4 +20,5 @@ the root [`ROADMAP.md`](../ROADMAP.md); live execution status belongs in the pub
 | `research/codex-review.md` | The adversarial review that turned v1 → v2 (32 findings). |
 | `research/jsonl-ui-components.md` | Landscape of Claude Code JSONL/stream-json UI components. |
 | `research/electron-vs-tauri.md` | Shell research (v1 ships no shell; relevant to a future decision). |
+| `research/2026-09-27-theming-and-typography.md` | Theming and typography study: editor themes, the font pair and its proportions, reader controls, the chat pane, passage addresses, and spec versus editorial registers. Visual comps: `research/spikes/theming-comps.html`. |
 **Precedence**: where `requirements.md` and an appendix disagree, `requirements.md` governs.

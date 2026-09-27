@@ -1,0 +1,399 @@
+<!doctype html>
+<!--
+  glosa theming and typography comps (2026-09-27). Companion to docs/research/2026-09-27-theming-and-typography.md.
+  A decision aid, not product code: it renders one essay, one product spec and one chat exchange as
+  a miniature glosa desk under candidate font pairs, heading proportions, palette ports, chat
+  treatments and registers, so a choice can be made by looking. Open it in any browser (file://).
+  It loads candidate faces from Google Fonts for the comparison only; the product itself vendors
+  OFL woff2 files and never reaches a font service.
+-->
+<html lang="en" data-mode="light">
+<head>
+<meta charset="utf-8">
+<title>glosa theming comps</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,200..900;1,200..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,200..900;1,7..72,200..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,200..900;1,200..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Merriweather:ital,opsz,wght@0,18..144,300..900;1,18..144,300..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,200..800;1,200..800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..800;1,400..800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400..700;1,400..700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&display=swap">
+<style>
+  :root {
+    --page-bg: #e9e6df; --page-ink: #222; --page-muted: #666; --page-line: #cfcabf;
+  }
+  :root[data-mode="dark"] { --page-bg: #141311; --page-ink: #e8e4dc; --page-muted: #a8a39a; --page-line: #3a3733; }
+  * { box-sizing: border-box; }
+  html { background: var(--page-bg); color: var(--page-ink); }
+  body { margin: 0; font-family: "Source Sans 3", system-ui, sans-serif; font-size: 14px; }
+  header.bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: var(--page-bg); border-bottom: 1px solid var(--page-line); }
+  header.bar h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
+  header.bar button, header.bar a.tab { font: inherit; padding: 5px 10px; border: 1px solid var(--page-line); background: transparent; color: var(--page-ink); border-radius: 6px; cursor: pointer; text-decoration: none; }
+  header.bar button[aria-pressed="true"], header.bar a.tab[aria-current="true"] { background: var(--page-ink); color: var(--page-bg); }
+  header.bar .spacer { flex: 1; }
+  main { padding: 12px; }
+  section.group { margin: 0 0 40px; }
+  section.group > h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  section.group > p.lede { margin: 0 0 12px; color: var(--page-muted); max-width: 90ch; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+
+  /* One card = one miniature glosa desk. Every card owns its tokens. */
+  .card { border: 1px solid var(--page-line); border-radius: 8px; overflow: hidden; background: var(--bg); color: var(--ink); flex: 0 0 auto; }
+  .card.wide { width: calc(68ch + 4rem); max-width: 100%; }
+  .card.narrow { width: 440px; max-width: 100%; }
+  .card .caption { font-family: "Source Sans 3", system-ui, sans-serif; font-size: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  .card .caption b { color: var(--ink); font-weight: 600; font-size: 13px; }
+  .card .caption .stat { font-variant-numeric: tabular-nums; }
+  .card .caption .bad { color: var(--danger); font-weight: 600; }
+  .card .caption .ok { color: var(--ok); }
+  /* The artifact bar: path centred in Source Sans 600 14px, hairline beneath. */
+  .bar-mini { display: flex; align-items: center; justify-content: space-between; height: 40px; padding: 0 12px; border-bottom: 1px solid var(--rule); font-family: var(--font-chrome); font-size: 13px; }
+  .bar-mini .path { font-weight: 600; font-size: 14px; }
+  .bar-mini .modes { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--ink); border-radius: 8px; }
+  .bar-mini .modes span { padding: 4px 10px; border-radius: 6px; color: var(--muted); font-weight: 500; }
+  .bar-mini .modes span.on { background: var(--surface-sunken, var(--surface)); color: var(--ink); }
+  .bar-mini .more { color: var(--muted); }
+
+  .content { font-optical-sizing: auto; padding: 2.5rem 2rem 3rem 3rem; font-family: var(--font-manuscript); font-size: var(--body); line-height: var(--lh); text-wrap: pretty; hanging-punctuation: first; --prose-gap: var(--gap); }
+  .card.narrow .content { padding: 1.5rem 1.5rem 2rem 3rem; }
+  .content h1, .content h2, .content h3 { line-height: 1.25; text-wrap: balance; font-family: var(--font-headings, var(--font-manuscript)); }
+  .content h1 { font-size: var(--h1); line-height: 1.1; font-weight: var(--w1); letter-spacing: -0.015em; margin: 0 0 2rem; }
+  .content h2 { font-size: var(--h2); font-weight: var(--w2); letter-spacing: -0.01em; margin: 3rem 0 0.75rem; }
+  .content h3 { font-size: var(--h3); line-height: 1.3; font-weight: var(--w3); margin: 2rem 0 0.5rem; }
+  .content h4 { font-size: var(--h4); line-height: 1.4; font-weight: var(--w4); margin: 1.5rem 0 0.5rem; font-family: var(--font-headings, var(--font-manuscript)); }
+  .content :is(h1,h2,h3,h4) + :is(p,ul,ol,pre) { margin-top: 0; }
+  .content p { margin: var(--prose-gap) 0; }
+  .content strong { font-weight: 600; }
+  .content blockquote { margin: 1.5rem 0; padding: 0 0 0 1rem; border-left: 1px solid var(--border-strong); color: var(--muted); font-style: italic; }
+  .content blockquote > :first-child { margin-top: 0; } .content blockquote > :last-child { margin-bottom: 0; }
+  .content ul { padding-left: 1.5rem; margin: var(--prose-gap) 0; }
+  .content li { margin-bottom: 0.3em; } .content li::marker { color: var(--muted); }
+  .content code { font-family: var(--font-mono); font-size: 0.85em; background: var(--surface); border-radius: 4px; padding: 0.1em 0.35em; }
+  .content pre { font-family: var(--font-mono); font-size: 13px; line-height: 1.6; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: var(--prose-gap) 0; }
+  .content pre code { background: none; padding: 0; font-size: inherit; }
+  .content table { border-collapse: collapse; font-family: var(--font-chrome); font-size: var(--table-size, 15px); font-variant-numeric: tabular-nums; margin: 0 0 1.5rem; }
+  .content th, .content td { border-bottom: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; vertical-align: top; }
+  .content th { border-bottom-color: var(--border-strong); color: var(--muted); font-size: 13px; font-weight: 600; }
+  .content th:first-child, .content td:first-child { padding-left: 0; }
+  .content a { color: var(--ink); text-decoration-color: color-mix(in oklch, var(--ink) 40%, transparent); text-underline-offset: 2px; }
+  /* The human's mark on the words, and a session's bracket beside a block. */
+  .content mark { background: color-mix(in oklch, var(--hand) 14%, transparent); color: inherit; box-decoration-break: clone; }
+  .content .sess { position: relative; }
+  .content .sess::before { content: ""; position: absolute; left: -1.1rem; top: 0.2em; bottom: 0.2em; width: 2px; background: var(--session); }
+  .content .sess::after { content: "§2.1"; position: absolute; left: -2.6rem; top: 0.45em; font-family: var(--font-chrome); font-size: 11px; font-weight: 700; color: var(--session); }
+  .content .addr { position: relative; }
+  .content .addr::before { content: "§1.2"; position: absolute; right: 100%; margin-right: 0.5rem; top: 0.45em; font-family: var(--font-chrome); font-size: 11px; font-weight: 700; line-height: 1; color: var(--hand); }
+  /* A margin entry, as glosa sets it: label in sans, the quote in italic serif, the note in the hand. */
+  .margin { border-top: 1px solid var(--rule); margin: 0 2rem; padding: 1rem 0 1.5rem; font-family: var(--font-serif-notes, var(--font-manuscript)); font-size: 15px; line-height: 1.45; }
+  .card.narrow .margin { margin: 0 1.5rem; }
+  .margin .label { font-family: var(--font-chrome); font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+  .margin .label b { color: var(--hand); }
+  .margin .quote { font-style: italic; color: var(--muted); margin: 0 0 0.35rem; }
+  .margin .note { color: var(--hand); margin: 0 0 0.5rem; }
+  .margin .pencil { color: var(--pencil); margin: 0 0 0.5rem; }
+  .margin .answer { color: var(--ink); margin: 0 0 0.5rem; padding-left: 0.75rem; border-left: 2px solid var(--session); }
+  .margin .state { font-family: var(--font-chrome); font-size: 12px; color: var(--muted); display: flex; gap: 10px; }
+  .margin .state .send { color: var(--bg); background: var(--ink); padding: 2px 9px; border-radius: 5px; font-weight: 500; }
+  /* Chat cards: transcript column, composer at the foot. */
+  .chat { padding: 1.25rem 1.5rem 1rem; font-family: var(--chat-serif); }
+  .chat .human { background: var(--surface); border-radius: 14px; padding: 12px 16px; width: fit-content; max-width: min(80%, 36rem); margin: 0 0 24px auto; font: var(--chat-human-size) / 1.6 var(--chat-human-face); }
+  .chat .human.plain { background: none; padding: 0; border-left: 2px solid var(--border-strong); padding-left: 12px; border-radius: 0; margin-left: 0; max-width: 100%; }
+  .chat .reply { font: var(--chat-size) / var(--chat-lh) var(--chat-serif); margin: 0 0 28px; }
+  .chat .reply.boxed { background: var(--surface); border-radius: 10px; padding: 14px 16px; }
+  .chat .reply p, .chat .reply ul, .chat .reply pre { margin: 0.6rem 0; }
+  .chat .reply h3 { font: 600 var(--chat-h-size) / 1.3 var(--chat-h-face); margin: 18px 0 8px; letter-spacing: var(--chat-h-ls, 0); }
+  .chat .reply ul { padding-left: 1.4rem; }
+  .chat .reply pre { font: 12px / 1.6 var(--font-mono); background: var(--surface-sunken, var(--surface)); border-radius: 5px; padding: 12px; overflow: auto; }
+  .chat .reply code { font-family: var(--font-mono); font-size: 0.85em; background: var(--surface); border-radius: 4px; padding: 0.1em 0.35em; }
+  .chat .reply strong { font-weight: 600; }
+  .chat .label { font: 600 12px / 1.5 var(--font-chrome); color: var(--muted); margin: 0 0 6px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .chat .composer { border: 1px solid var(--border-strong); border-radius: 10px; padding: 10px 12px; font: 15px / 1.5 var(--chat-human-face); color: var(--muted); display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+  .chat .composer .send { color: var(--bg); background: var(--ink); padding: 3px 10px; border-radius: 6px; font: 500 13px var(--font-chrome); }
+  /* The proposed Spec register: closer lists, quieter h4, requirement ids in tabular figures. */
+  .card.spec .content li { margin-bottom: 0.15em; }
+  .card.spec .content h1 { letter-spacing: -0.01em; margin-bottom: 1.25rem; }
+  .card.spec .content h2 { margin-top: 2.25rem; }
+  .card.spec .content td:first-child { font-family: var(--font-mono); font-size: 0.9em; }
+  .card.spec .content pre { font-size: 13px; }
+  .swatches { display: flex; gap: 0; margin: 0; height: 10px; }
+  .swatches i { flex: 1; display: block; }
+  footer { padding: 24px 16px 48px; color: var(--page-muted); font-size: 12px; max-width: 100ch; }
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1>glosa theming comps · 2026-09-27</h1>
+  <a class="tab" href="#pairs">1 Font pairs</a>
+  <a class="tab" href="#scales">2 Proportions</a>
+  <a class="tab" href="#themes">3 Palettes and themes</a>
+  <a class="tab" href="#chat">4 Chat</a>
+  <a class="tab" href="#registers">5 Registers</a>
+  <span class="spacer"></span>
+  <button type="button" id="modeLight" aria-pressed="true">Light</button>
+  <button type="button" id="modeDark" aria-pressed="false">Dark</button>
+</header>
+<main>
+  <section class="group" id="pairs">
+    <h2>1 · Font pairs. Same document, same proportions (glosa's shipped 18px / 1.62 / 68ch), only the faces change.</h2>
+    <p class="lede">Each card is 68ch of its own body face, so widths differ a little: that is what a real measure does. Serifs all set at 18px, so x-height differences show as size differences; the sans body option sets at 16px as glosa's own Sans face does. Faces come from Google Fonts for this comparison only; the product vendors OFL woff2 files.</p>
+    <div class="row" id="pairsRow"></div>
+  </section>
+  <section class="group" id="scales">
+    <h2>2 · Proportions. Same pair (Source Serif 4 + Source Sans 3), only sizes, weights and measure change.</h2>
+    <p class="lede">Watch the h4 under the body text, the step between h2 and h3, and how much the title dominates a screen. The h1 is shown at its widest-pane size; glosa scales it down with the pane.</p>
+    <div class="row" id="scalesRow"></div>
+  </section>
+  <section class="group" id="chat">
+    <h2>4 · Chat. The same exchange under candidate treatments; the manuscript beside it is 18px serif.</h2>
+    <p class="lede">What ships: replies unboxed in Source Serif 4 at 15px / 1.7 on a 46rem column, the human turn in a right-aligned sans bubble, Markdown headings inside replies in sans. Variants change size, faces, boxing and heading treatment only. The Claude-like card approximates claude.ai's serif-reply register with Source Serif 4; it is not Anthropic's face.</p>
+    <div class="row" id="chatRow"></div>
+  </section>
+  <section class="group" id="registers">
+    <h2>5 · Registers. A product spec under the editorial register (serif), the shipped Sans face, and a proposed Spec register.</h2>
+    <p class="lede">A register is the face plus its scale: body size, leading, heading sizes and weights, table and code treatment. Today the Sans face changes only the body (16px / 1.6) and keeps the serif's heading sizes and weights. The proposed Spec cards tighten the scale (h1 30, h2 22, h3 18, h4 16, semibold), set tables at 14px and lists closer, so a requirements page reads like documentation rather than an essay set in the wrong clothes. Section 1 shows the essay in the editorial register.</p>
+    <div class="row" id="registersRow"></div>
+  </section>
+  <section class="group" id="themes">
+    <h2>3 · Palettes and themes, ported onto glosa's semantic tokens. Toggle Light / Dark above.</h2>
+    <p class="lede">Every card keeps glosa's rule: the human's mark is one colour (the hand), an unsent mark is pencil, a session's mark is a second colour (session ink). For editor palettes the hand takes the palette's orange and the session its blue, the closest honest mapping. The caption reports WCAG contrast of ink, muted, hand and session on the ground, and the hue gap between hand and session (below about 60 degrees the two hands start to read as one).</p>
+    <div class="row" id="themesRow"></div>
+  </section>
+</main>
+<footer>
+  Palette sources: glosa app.css tokens (2026-09-27); Catppuccin palette.json and Nord nord.css (fetched from the canonical repositories); Rosé Pine palette page; Dracula contribute spec; Monokai from VS Code's built-in theme file; Solarized, Gruvbox, One Dark and GitHub from their published palettes (not re-fetched for this page). Sepia and High contrast are derived from glosa's own tokens and are proposals, not shipped values.
+</footer>
+<script>
+const SAMPLE = `
+<h1>Review flow for annotated drafts</h1>
+<p>An agent drafts the document; the person reads it rendered, marks the passages that need work, and sends the marks back to the session that wrote them. The page has to read like a well-set page for hours, not like an editor buffer. <strong>Provenance is the product:</strong> which words are mine, which are the session's, and what stands approved.</p>
+<h2>Why the margin, not the chat</h2>
+<p class="addr">A mark on the words is a claim about <mark>this sentence, here</mark>, with an address the session can find again. A chat message about "the third paragraph" is not. The margin keeps the note beside its passage, in the same serif, in the one colour that means "you".</p>
+<blockquote><p>The best writing tools disappear. You notice the page, then the words, then nothing but the argument.</p></blockquote>
+<ul><li>Read: clean paper, no addresses, no controls on the page.</li><li>Review: addresses in the gutter, marks on the words, notes beside them.</li><li>Edit: the focused block becomes the editing scope; nothing else moves.</li></ul>
+<h3>Kazanie: fragment po polsku</h3>
+<p class="sess">Pasterz, który zna swoje owce po imieniu, nie liczy ich z daleka. Idzie między nie, źdźbło po źdźble, aż każda usłyszy głos, który ją woła. Zażółć gęślą jaźń: każdy znak diakrytyczny musi być w kroju, nie dosztukowany z innej czcionki.</p>
+<h4>Notatka redakcyjna</h4>
+<p>Skróć drugi akapit o połowę i zostaw jeden obraz, nie trzy. Czytelnik zapamięta jeden.</p>
+<pre><code>glosa present docs/sermon.md --session codex
+# marks: 3 open · 1 sent · 0 stale</code></pre>
+<table><thead><tr><th>Mark</th><th>By</th><th>State</th></tr></thead><tbody><tr><td>§1.2 "this sentence, here"</td><td>You</td><td>sent</td></tr><tr><td>§2.1 question</td><td>Session</td><td>open</td></tr></tbody></table>
+<p>Tables sit in the chrome face at 15px; code in the mono face at 13px. The hairline rules do the structure, not filled bands.</p>`;
+
+const MARGIN = `
+<div class="label">§1.2 · <b>You</b></div>
+<p class="quote">"this sentence, here"</p>
+<p class="note">Say what the address is before you say why chat cannot carry it.</p>
+<p class="pencil">Unsent: maybe cut the whole aside about chat.</p>
+<p class="answer">Session: I moved the address definition up and cut the aside. Approve?</p>
+<div class="state"><span>sent 2 min ago</span><span class="send">Send</span></div>`;
+
+const CHAT_SAMPLE = (labels) => `
+${labels ? '<div class="label">You</div>' : ''}
+<div class="human">Skróć drugi akapit o połowę i zostaw jeden obraz. Which of the three images would you keep, and why?</div>
+${labels ? '<div class="label">Session</div>' : ''}
+<div class="reply">
+<p>I would keep the shepherd counting from a distance, because it is the one the paragraph argues <strong>against</strong>. The other two images (the gate and the lamp) illustrate the point; this one creates it.</p>
+<h3>What I changed</h3>
+<ul><li>Cut the paragraph from 96 to 51 words: source lines 14 to 19.</li><li>Kept "źdźbło po źdźble" because it carries the rhythm of the sentence.</li><li>Moved the address definition above the aside, as your note on §1.2 asked.</li></ul>
+<pre><code>glosa release --entry 7c2e --resolve "second paragraph shortened"</code></pre>
+<p>Want me to apply the same cut to the closing paragraph, or leave it for the second draft?</p>
+</div>
+<div class="composer"><span>Reply to the session…</span><span class="send">Send</span></div>`;
+
+const CHATS = [
+  { id:'current', name:'Current (shipped)', note:'reply 15/1.7 serif, unboxed · human 15 sans bubble · headings sans', size:15, lh:1.7, serif:'"Source Serif 4", serif', hface:'"Source Sans 3", sans-serif', hsize:15, hh:'"Source Sans 3", sans-serif', hhs:15, labels:false, boxed:false, plain:false },
+  { id:'claudelike', name:'Claude-like register (approximation)', note:'reply 16/1.65 serif, unboxed · serif headings 17/600 · human 15 sans bubble', size:16, lh:1.65, serif:'"Source Serif 4", serif', hface:'"Source Sans 3", sans-serif', hsize:15, hh:'"Source Serif 4", serif', hhs:17, hls:'-0.005em', labels:false, boxed:false, plain:false },
+  { id:'allserif', name:'All serif, one step under the manuscript', note:'reply 16/1.62 serif · human 16 serif, no bubble, a hairline instead · serif headings', size:16, lh:1.62, serif:'"Source Serif 4", serif', hface:'"Source Serif 4", serif', hsize:16, hh:'"Source Serif 4", serif', hhs:18, labels:true, boxed:false, plain:true },
+  { id:'boxed', name:'Boxed replies (card style)', note:'reply 15/1.7 serif in a surface card · human 15 sans bubble', size:15, lh:1.7, serif:'"Source Serif 4", serif', hface:'"Source Sans 3", sans-serif', hsize:15, hh:'"Source Sans 3", sans-serif', hhs:15, labels:false, boxed:true, plain:false },
+  { id:'allsans', name:'All sans (ChatGPT-style baseline)', note:'reply 15/1.6 sans · human 15 sans bubble · sans headings', size:15, lh:1.6, serif:'"Source Sans 3", sans-serif', hface:'"Source Sans 3", sans-serif', hsize:15, hh:'"Source Sans 3", sans-serif', hhs:15, labels:false, boxed:false, plain:false },
+  { id:'manuscript', name:'Manuscript-matched', note:'reply 17/1.62 serif · human 16 serif bubble · serif headings 19 · reads as the same page', size:17, lh:1.62, serif:'"Source Serif 4", serif', hface:'"Source Serif 4", serif', hsize:16, hh:'"Source Serif 4", serif', hhs:19, labels:false, boxed:false, plain:false },
+];
+
+const SPEC_SAMPLE = `
+<h1>Passage addresses: requirements</h1>
+<p>This specification defines the derived passage address shown in the gutter and named by every margin note. It replaces the draft in <code>docs/design/2026-09-05-review-mode-brief.md</code>. Status: <strong>proposed</strong>.</p>
+<h2>1. Requirements</h2>
+<table><thead><tr><th>Id</th><th>Requirement</th><th>Priority</th></tr></thead><tbody>
+<tr><td>R1</td><td>An address is derived from rendered structure on every render and stored nowhere.</td><td>must</td></tr>
+<tr><td>R2</td><td>A heading always shows its address while notes are shown; other blocks on hover or focus.</td><td>must</td></tr>
+<tr><td>R3</td><td>A margin note names the address of its passage, and the Go to palette finds it.</td><td>must</td></tr>
+<tr><td>R4</td><td>A screen reader user reaches the address from the block's accessible description.</td><td>should</td></tr>
+</tbody></table>
+<h3>1.1 Numbering</h3>
+<ul><li>Sections are headings, numbered by document order within their level: 1, 1.1, 1.2, 2.</li><li>A block takes its section's number plus its position since that heading: §2.3.</li><li>A headless page counts paragraphs: ¶1, ¶2. Inserting a block renumbers everything after it.</li></ul>
+<h4>Open question</h4>
+<p class="sess">Should a table row be addressable on its own? Today the table is one block, so a note on row R3 quotes the row text and the address stays §1.1.</p>
+<pre><code>GET /api/workspaces/:slug/artifacts/:path/addresses
+200 { "blocks": [{ "line": 12, "address": "§1.1" }, ...] }</code></pre>
+<h2>2. Non-goals</h2>
+<p>Stable identifiers across edits are a non-goal: the anchor is the quoted text and its source range, never the label. Zażółć gęślą jaźń.</p>`;
+
+const REGISTERS = [
+  { id:'editorial', name:'Editorial register (shipped default)', note:'serif 18/1.62 · headings 40/26/20/17 · tables sans 15', serif:'"Source Serif 4", serif', sans:'"Source Sans 3", sans-serif', type:{ body:18, lh:1.62, h1:40, h2:26, h3:20, h4:17, w1:650, w2:620, w3:620, w4:600, gap:1.2 }, table:15 },
+  { id:'sansface', name:'Shipped Sans face (body only changes)', note:'sans 16/1.6 · headings keep the serif scale 40/26/20/17 · tables 15', serif:'"Source Sans 3", sans-serif', sans:'"Source Sans 3", sans-serif', type:{ body:16, lh:1.6, h1:40, h2:26, h3:20, h4:17, w1:650, w2:620, w3:620, w4:600, gap:1.2 }, table:15 },
+  { id:'spec', name:'Proposed Spec register · Source Sans 3', note:'sans 16/1.55 · headings 30/22/18/16 at 600 · tables 14 · lists closer', serif:'"Source Sans 3", sans-serif', sans:'"Source Sans 3", sans-serif', type:{ body:16, lh:1.55, h1:30, h2:22, h3:18, h4:16, w1:650, w2:600, w3:600, w4:600, gap:1.0 }, table:14, spec:true },
+  { id:'spec-plex', name:'Proposed Spec register · IBM Plex Sans', note:'same scale, a documentation sans with a matching mono family', serif:'"IBM Plex Sans", sans-serif', sans:'"IBM Plex Sans", sans-serif', type:{ body:16, lh:1.55, h1:30, h2:22, h3:18, h4:16, w1:650, w2:600, w3:600, w4:600, gap:1.0 }, table:14, spec:true },
+  { id:'spec-inter', name:'Proposed Spec register · Inter', note:'same scale, the product-UI sans most specs are read in', serif:'Inter, sans-serif', sans:'Inter, sans-serif', type:{ body:15.5, lh:1.55, h1:30, h2:22, h3:18, h4:16, w1:650, w2:600, w3:600, w4:600, gap:1.0 }, table:14, spec:true },
+  { id:'mono', name:'Mono face (shipped)', note:'system mono 15/1.65 · what a source-minded reader picks', serif:'ui-monospace, "SF Mono", Menlo, monospace', sans:'"Source Sans 3", sans-serif', type:{ body:15, lh:1.65, h1:40, h2:26, h3:20, h4:17, w1:650, w2:620, w3:620, w4:600, gap:1.2 }, table:15 },
+];
+
+const GLOSA_LIGHT = { bg:'oklch(0.99 0.007 85)', surface:'oklch(0.97 0.006 80)', ink:'oklch(0.2 0.012 60)', muted:'oklch(0.47 0.016 60)', border:'oklch(0.88 0.01 75)', borderStrong:'oklch(0.6 0.014 65)', rule:'oklch(0.2 0.012 60)', hand:'oklch(0.52 0.16 42)', pencil:'oklch(0.56 0.01 65)', session:'oklch(0.42 0.11 255)', danger:'oklch(0.47 0.17 22)', ok:'oklch(0.5 0.09 150)' };
+const GLOSA_DARK  = { bg:'oklch(0.205 0.008 60)', surface:'oklch(0.235 0.009 60)', ink:'oklch(0.93 0.01 80)', muted:'oklch(0.72 0.014 70)', border:'oklch(0.32 0.01 60)', borderStrong:'oklch(0.58 0.012 65)', rule:'oklch(0.74 0.01 80)', hand:'oklch(0.72 0.13 45)', pencil:'oklch(0.64 0.01 70)', session:'oklch(0.76 0.1 250)', danger:'oklch(0.7 0.15 22)', ok:'oklch(0.72 0.09 150)' };
+
+const PAIRS = [
+  { id:'current', name:'Current · Source Serif 4 + Source Sans 3', serif:'"Source Serif 4", serif', sans:'"Source Sans 3", sans-serif', note:'shipped 2026-09-16 · OFL · designed companions (Adobe)' },
+  { id:'literata', name:'Literata + Source Sans 3', serif:'Literata, serif', sans:'"Source Sans 3", sans-serif', note:'Google Play Books face · OFL · optical size axis' },
+  { id:'newsreader', name:'Newsreader + Inter', serif:'Newsreader, serif', sans:'Inter, sans-serif', note:'Production Type · OFL · optical size axis' },
+  { id:'crimson', name:'Crimson Pro + IBM Plex Sans', serif:'"Crimson Pro", serif', sans:'"IBM Plex Sans", sans-serif', note:'OFL · book register, small x-height' },
+  { id:'merriweather', name:'Merriweather + Figtree', serif:'Merriweather, serif', sans:'Figtree, sans-serif', note:'OFL · large x-height, screen-first, wide' },
+  { id:'charter', name:'Charter + system sans', serif:'Charter, serif', sans:'system-ui, sans-serif', note:'Apple Books and Medium lineage · macOS system font · Bitstream licence permits bundling' },
+  { id:'iowan', name:'Iowan Old Style + Source Sans 3 (previous glosa)', serif:'"Iowan Old Style", serif', sans:'"Source Sans 3", sans-serif', note:'macOS system font · not redistributable · what glosa used before 2026-09-16' },
+  { id:'garamond', name:'EB Garamond + Source Sans 3', serif:'"EB Garamond", serif', sans:'"Source Sans 3", sans-serif', note:'OFL · classic book face; shows why old-style faces need a larger size on screen' },
+  { id:'atkinson', name:'Sans body · Atkinson Hyperlegible Next, headings in Source Serif 4', serif:'"Atkinson Hyperlegible Next", sans-serif', headings:'"Source Serif 4", serif', sans:'"Source Sans 3", sans-serif', body:16, lh:1.6, note:'Braille Institute · OFL · legibility-first; set at 16px like glosa\'s Sans face' },
+];
+
+const SCALES = [
+  { id:'current', name:'Current (shipped)', body:18, lh:1.62, h1:40, h2:26, h3:20, h4:17, w1:650, w2:620, w3:620, w4:600, gap:1.2, measure:68, note:'h4 (17) sits under the body (18)' },
+  { id:'h4fix', name:'Smallest change · h4 = body, semibold', body:18, lh:1.62, h1:40, h2:26, h3:20, h4:18, w1:650, w2:620, w3:620, w4:620, gap:1.2, measure:68, note:'one number changes' },
+  { id:'ms120', name:'Modular 1.2 · book', body:18, lh:1.62, h1:31, h2:26, h3:22, h4:18, w1:650, w2:620, w3:620, w4:620, gap:1.2, measure:68, note:'title 1.72x body; quieter page' },
+  { id:'ms125', name:'Modular 1.25 · editorial', body:18, lh:1.62, h1:35, h2:28, h3:22.5, h4:18, w1:650, w2:620, w3:620, w4:620, gap:1.2, measure:68, note:'title 1.95x body' },
+  { id:'compact', name:'Compact · 17px / 1.6 / 66ch', body:17, lh:1.6, h1:36, h2:25, h3:20, h4:17, w1:650, w2:620, w3:620, w4:620, gap:1.2, measure:66, note:'what a reader who finds 18 large would set' },
+  { id:'generous', name:'Generous · 19px / 1.65 / 66ch', body:19, lh:1.65, h1:40, h2:27, h3:21, h4:19, w1:650, w2:620, w3:620, w4:620, gap:1.2, measure:66, note:'what a reader who finds 18 small would set' },
+];
+
+const THEMES = [
+  { id:'glosa', name:'glosa paper / lamp (shipped)', src:'app.css', light:GLOSA_LIGHT, dark:GLOSA_DARK },
+  { id:'sepia', name:'Sepia (proposal, derived)', src:'derived from glosa tokens', light:{ ...GLOSA_LIGHT, bg:'oklch(0.955 0.03 80)', surface:'oklch(0.925 0.032 78)', border:'oklch(0.84 0.03 75)', ink:'oklch(0.24 0.02 60)', muted:'oklch(0.46 0.03 60)' }, dark:{ ...GLOSA_DARK, bg:'oklch(0.23 0.02 65)', surface:'oklch(0.265 0.02 65)', ink:'oklch(0.91 0.03 85)', muted:'oklch(0.7 0.03 80)' } },
+  { id:'hc', name:'High contrast (proposal, derived)', src:'derived from glosa tokens', light:{ ...GLOSA_LIGHT, bg:'#ffffff', surface:'#f2f2f2', ink:'#000000', muted:'#2b2b2b', border:'#8a8a8a', borderStrong:'#000000', hand:'oklch(0.42 0.16 42)', session:'oklch(0.34 0.12 255)', pencil:'oklch(0.4 0.01 65)' }, dark:{ ...GLOSA_DARK, bg:'#000000', surface:'#161616', ink:'#ffffff', muted:'#d6d6d6', border:'#5a5a5a', borderStrong:'#ffffff', hand:'oklch(0.8 0.13 50)', session:'oklch(0.84 0.09 250)', pencil:'oklch(0.75 0.01 70)' } },
+  { id:'solarized', name:'Solarized port', src:'ethanschoonover.com/solarized', light:{ bg:'#fdf6e3', surface:'#eee8d5', ink:'#657b83', muted:'#93a1a1', border:'#eee8d5', borderStrong:'#93a1a1', rule:'#586e75', hand:'#cb4b16', pencil:'#93a1a1', session:'#268bd2', danger:'#dc322f', ok:'#859900' }, dark:{ bg:'#002b36', surface:'#073642', ink:'#839496', muted:'#586e75', border:'#073642', borderStrong:'#586e75', rule:'#93a1a1', hand:'#cb4b16', pencil:'#586e75', session:'#268bd2', danger:'#dc322f', ok:'#859900' } },
+  { id:'catppuccin', name:'Catppuccin Latte / Mocha port', src:'catppuccin/palette (fetched)', light:{ bg:'#eff1f5', surface:'#e6e9ef', ink:'#4c4f69', muted:'#6c6f85', border:'#ccd0da', borderStrong:'#9ca0b0', rule:'#4c4f69', hand:'#fe640b', pencil:'#9ca0b0', session:'#1e66f5', danger:'#d20f39', ok:'#40a02b' }, dark:{ bg:'#1e1e2e', surface:'#181825', ink:'#cdd6f4', muted:'#a6adc8', border:'#313244', borderStrong:'#6c7086', rule:'#a6adc8', hand:'#fab387', pencil:'#6c7086', session:'#89b4fa', danger:'#f38ba8', ok:'#a6e3a1' } },
+  { id:'nord', name:'Nord port (light is unofficial)', src:'nordtheme/nord (fetched)', light:{ bg:'#eceff4', surface:'#e5e9f0', ink:'#2e3440', muted:'#4c566a', border:'#d8dee9', borderStrong:'#4c566a', rule:'#2e3440', hand:'#d08770', pencil:'#4c566a', session:'#5e81ac', danger:'#bf616a', ok:'#a3be8c' }, dark:{ bg:'#2e3440', surface:'#3b4252', ink:'#d8dee9', muted:'#d8dee9', border:'#434c5e', borderStrong:'#4c566a', rule:'#d8dee9', hand:'#d08770', pencil:'#4c566a', session:'#81a1c1', danger:'#bf616a', ok:'#a3be8c' } },
+  { id:'rosepine', name:'Rosé Pine Dawn / Rosé Pine port', src:'rosepinetheme.com (fetched)', light:{ bg:'#faf4ed', surface:'#fffaf3', ink:'#575279', muted:'#797593', border:'#f2e9e1', borderStrong:'#9893a5', rule:'#575279', hand:'#d7827e', pencil:'#9893a5', session:'#286983', danger:'#b4637a', ok:'#56949f' }, dark:{ bg:'#191724', surface:'#1f1d2e', ink:'#e0def4', muted:'#908caa', border:'#26233a', borderStrong:'#6e6a86', rule:'#908caa', hand:'#ebbcba', pencil:'#6e6a86', session:'#9ccfd8', danger:'#eb6f92', ok:'#31748f' } },
+  { id:'gruvbox', name:'Gruvbox port', src:'morhetz/gruvbox palette', light:{ bg:'#fbf1c7', surface:'#ebdbb2', ink:'#3c3836', muted:'#7c6f64', border:'#d5c4a1', borderStrong:'#7c6f64', rule:'#3c3836', hand:'#d65d0e', pencil:'#928374', session:'#076678', danger:'#9d0006', ok:'#79740e' }, dark:{ bg:'#282828', surface:'#3c3836', ink:'#ebdbb2', muted:'#a89984', border:'#504945', borderStrong:'#928374', rule:'#a89984', hand:'#fe8019', pencil:'#928374', session:'#83a598', danger:'#fb4934', ok:'#b8bb26' } },
+  { id:'onedark', name:'One Dark Pro / One Light port', src:'Binaryify/vscode-theme-onedark-pro palette', light:{ bg:'#fafafa', surface:'#f0f0f1', ink:'#383a42', muted:'#696c77', border:'#e5e5e6', borderStrong:'#a0a1a7', rule:'#383a42', hand:'#986801', pencil:'#a0a1a7', session:'#4078f2', danger:'#e45649', ok:'#50a14f' }, dark:{ bg:'#282c34', surface:'#21252b', ink:'#abb2bf', muted:'#7f848e', border:'#3e4451', borderStrong:'#5c6370', rule:'#abb2bf', hand:'#d19a66', pencil:'#5c6370', session:'#61afef', danger:'#e06c75', ok:'#98c379' } },
+  { id:'monokai', name:'Monokai port (dark only; Light shows the dark set)', src:'VS Code theme-monokai (fetched)', dark:{ bg:'#272822', surface:'#3e3d32', ink:'#f8f8f2', muted:'#90908a', border:'#3e3d32', borderStrong:'#75715e', rule:'#90908a', hand:'#fd971f', pencil:'#75715e', session:'#66d9ef', danger:'#f92672', ok:'#a6e22e' } },
+  { id:'dracula', name:'Dracula port (dark only; Light shows the dark set)', src:'draculatheme.com/contribute (fetched)', dark:{ bg:'#282a36', surface:'#44475a', ink:'#f8f8f2', muted:'#6272a4', border:'#44475a', borderStrong:'#6272a4', rule:'#6272a4', hand:'#ffb86c', pencil:'#6272a4', session:'#8be9fd', danger:'#ff5555', ok:'#50fa7b' } },
+  { id:'github', name:'GitHub light / dark port', src:'Primer primitives', light:{ bg:'#ffffff', surface:'#f6f8fa', ink:'#1f2328', muted:'#59636e', border:'#d1d9e0', borderStrong:'#818b98', rule:'#1f2328', hand:'#bc4c00', pencil:'#818b98', session:'#0969da', danger:'#d1242f', ok:'#1a7f37' }, dark:{ bg:'#0d1117', surface:'#161b22', ink:'#e6edf3', muted:'#8d96a0', border:'#30363d', borderStrong:'#6e7681', rule:'#8d96a0', hand:'#f0883e', pencil:'#6e7681', session:'#2f81f7', danger:'#f85149', ok:'#3fb950' } },
+];
+
+// ---- colour maths (sRGB, WCAG 2.x relative luminance) ----
+function oklchToRgb(L, C, h) {
+  const a = C * Math.cos(h * Math.PI / 180), b = C * Math.sin(h * Math.PI / 180);
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b, m_ = L - 0.1055613458 * a - 0.0638541728 * b, s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+  const l = l_ ** 3, m = m_ ** 3, s = s_ ** 3;
+  const r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+  const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+  const bb = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+  return [r, g, bb].map(v => Math.min(1, Math.max(0, v)));
+}
+function parse(c) {
+  c = c.trim();
+  if (c[0] === '#') { const n = parseInt(c.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); }
+  const m = c.match(/oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/);
+  if (m) return oklchToRgb(+m[1], +m[2], +m[3]);
+  return [0.5, 0.5, 0.5];
+}
+function lum([r, g, b]) { return 0.2126 * r + 0.7152 * g + 0.0722 * b; }
+function contrast(a, b) { const la = lum(parse(a)), lb = lum(parse(b)); const [hi, lo] = la > lb ? [la, lb] : [lb, la]; return (hi + 0.05) / (lo + 0.05); }
+function hue(c) {
+  const [r, g, b] = parse(c);
+  const l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b, m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b, s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+  const l_ = Math.cbrt(l), m_ = Math.cbrt(m), s_ = Math.cbrt(s);
+  const A = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_, B = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+  return (Math.atan2(B, A) * 180 / Math.PI + 360) % 360;
+}
+function hueGap(a, b) { const d = Math.abs(hue(a) - hue(b)); return Math.round(Math.min(d, 360 - d)); }
+const f1 = n => (Math.round(n * 10) / 10).toFixed(1);
+
+// ---- rendering ----
+function tokenStyle(t) {
+  return `--bg:${t.bg};--surface:${t.surface};--ink:${t.ink};--muted:${t.muted};--border:${t.border};--border-strong:${t.borderStrong};--rule:${t.rule || t.ink};--hand:${t.hand};--pencil:${t.pencil};--session:${t.session};--danger:${t.danger || '#c00'};--ok:${t.ok || '#080'};`;
+}
+function typeStyle(s, fonts) {
+  return `--body:${s.body}px;--lh:${s.lh};--h1:${s.h1}px;--h2:${s.h2}px;--h3:${s.h3}px;--h4:${s.h4}px;--w1:${s.w1};--w2:${s.w2};--w3:${s.w3};--w4:${s.w4};--gap:${s.gap}em;--font-manuscript:${fonts.serif};--font-chrome:${fonts.sans};--font-mono:ui-monospace, "SF Mono", Menlo, monospace;` + (fonts.headings ? `--font-headings:${fonts.headings};` : '') + (fonts.notes ? `--font-serif-notes:${fonts.notes};` : '');
+}
+function card({ wide, caption, tokens, type, fonts, measure, sample }) {
+  const el = document.createElement('article');
+  el.className = 'card ' + (wide ? 'wide' : 'narrow');
+  el.setAttribute('style', tokenStyle(tokens) + typeStyle(type, fonts));
+  if (wide && measure) el.style.width = `calc(${measure}ch + 5rem)`;
+  el.innerHTML = `<div class="caption">${caption}</div>
+    <div class="bar-mini"><span class="path">docs/review-flow.md</span><span class="modes"><span class="on">Note</span><span>Edit</span></span><span class="more">History · ⋯</span></div>
+    <div class="content">${sample || SAMPLE}</div>
+    <div class="margin">${MARGIN}</div>`;
+  // The measure must be computed in the manuscript face, so set it on the content element itself.
+  if (wide && measure) { const c = el.querySelector('.content'); c.style.maxWidth = `calc(${measure}ch + 5rem)`; el.style.width = ''; el.style.maxWidth = '100%'; el.style.width = 'fit-content'; }
+  return el;
+}
+function statsCaption(t) {
+  const rows = [['ink', t.ink], ['muted', t.muted], ['hand', t.hand], ['session', t.session], ['pencil', t.pencil]].map(([n, c]) => { const r = contrast(c, t.bg); return `<span class="stat ${r >= 4.5 ? 'ok' : 'bad'}">${n} ${f1(r)}:1</span>`; });
+  const gap = hueGap(t.hand, t.session);
+  rows.push(`<span class="stat ${gap >= 60 ? 'ok' : 'bad'}">hand↔session ${gap}°</span>`);
+  return rows.join(' ');
+}
+const currentScale = SCALES[0];
+const currentFonts = { serif: PAIRS[0].serif, sans: PAIRS[0].sans };
+function mode() { return document.documentElement.dataset.mode; }
+function themeTokens(th) { const m = mode(); return th[m] || th.dark || th.light; }
+
+function render() {
+  const g = mode() === 'dark' ? GLOSA_DARK : GLOSA_LIGHT;
+  const pairsRow = document.getElementById('pairsRow'); pairsRow.innerHTML = '';
+  for (const p of PAIRS) {
+    const type = { ...currentScale, body: p.body || currentScale.body, lh: p.lh || currentScale.lh };
+    pairsRow.append(card({ wide: true, measure: 68, tokens: g, type, fonts: { serif: p.serif, sans: p.sans, headings: p.headings, notes: p.headings || p.serif }, caption: `<b>${p.name}</b><span>${p.note}</span>` }));
+  }
+  const scalesRow = document.getElementById('scalesRow'); scalesRow.innerHTML = '';
+  for (const s of SCALES) {
+    scalesRow.append(card({ wide: true, measure: s.measure, tokens: g, type: s, fonts: currentFonts, caption: `<b>${s.name}</b><span>body ${s.body}/${s.lh} · h1 ${s.h1} · h2 ${s.h2} · h3 ${s.h3} · h4 ${s.h4} · ${s.measure}ch</span><span>${s.note}</span>` }));
+  }
+  const registersRow = document.getElementById('registersRow'); registersRow.innerHTML = '';
+  for (const r of REGISTERS) {
+    const c = card({ wide: true, measure: 68, tokens: g, type: { ...r.type, measure: 68 }, fonts: { serif: r.serif, sans: r.sans, notes: '"Source Serif 4", serif' }, sample: SPEC_SAMPLE, caption: `<b>${r.name}</b><span>${r.note}</span>` });
+    c.style.setProperty('--table-size', r.table + 'px');
+    if (r.spec) c.classList.add('spec');
+    registersRow.append(c);
+  }
+  const chatRow = document.getElementById('chatRow'); chatRow.innerHTML = '';
+  for (const ch of CHATS) {
+    const el = document.createElement('article');
+    el.className = 'card narrow';
+    el.style.width = '520px';
+    el.setAttribute('style', tokenStyle(g) + `--font-chrome:"Source Sans 3", sans-serif;--font-mono:ui-monospace, "SF Mono", Menlo, monospace;--chat-size:${ch.size}px;--chat-lh:${ch.lh};--chat-serif:${ch.serif};--chat-human-face:${ch.hface};--chat-human-size:${ch.hsize}px;--chat-h-face:${ch.hh};--chat-h-size:${ch.hhs}px;--chat-h-ls:${ch.hls || '0'};width:520px;`);
+    el.innerHTML = `<div class="caption"><b>${ch.name}</b><span>${ch.note}</span></div>
+      <div class="bar-mini"><span class="path">Session · Codex</span><span class="more">History · ⋯</span></div>
+      <div class="chat">${CHAT_SAMPLE(ch.labels)}</div>`;
+    if (ch.boxed) el.querySelector('.reply').classList.add('boxed');
+    if (ch.plain) el.querySelector('.human').classList.add('plain');
+    chatRow.append(el);
+  }
+  const themesRow = document.getElementById('themesRow'); themesRow.innerHTML = '';
+  for (const th of THEMES) {
+    const t = themeTokens(th);
+    const sw = `<div class="swatches">${['bg', 'surface', 'border', 'muted', 'ink', 'pencil', 'hand', 'session'].map(k => `<i style="background:${t[k]}" title="${k}"></i>`).join('')}</div>`;
+    const c = card({ wide: false, tokens: t, type: { ...currentScale, body: 16, lh: 1.6, h1: 30, h2: 22, h3: 18, h4: 16 }, fonts: currentFonts, caption: `<b>${th.name}</b><span>${th.src}</span><br>${statsCaption(t)}` });
+    c.insertAdjacentHTML('afterbegin', sw);
+    themesRow.append(c);
+  }
+}
+function setMode(m) {
+  document.documentElement.dataset.mode = m;
+  document.getElementById('modeLight').setAttribute('aria-pressed', String(m === 'light'));
+  document.getElementById('modeDark').setAttribute('aria-pressed', String(m === 'dark'));
+  render();
+}
+document.getElementById('modeLight').onclick = () => setMode('light');
+document.getElementById('modeDark').onclick = () => setMode('dark');
+render();
+</script>
+</body>
+</html>
