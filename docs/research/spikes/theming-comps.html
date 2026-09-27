@@ -137,6 +137,7 @@
   .hc-table td.off { color: var(--page-muted); opacity: 0.55; }
   .hc-table td.pass::after { content: " ✓"; }
   .hc-table td.fail { color: oklch(0.47 0.17 22); font-weight: 700; }
+  :root[data-mode="dark"] .hc-table td.fail { color: oklch(0.7 0.15 22); }
   .hc-table td.fail::after { content: " ✗"; }
   .hc-table .chip { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 6px; border: 1px solid var(--page-line); }
   .hc-block { background: var(--page-bg); color: var(--page-ink); border: 1px solid var(--page-line); border-radius: 8px; padding: 10px 12px; }
@@ -158,6 +159,7 @@
   <a class="tab" href="#registers">5 Registers</a>
   <a class="tab" href="#desk">6 Spec page + chat</a>
   <a class="tab" href="#contrast">7 High contrast</a>
+  <a class="tab" href="#palettes">8 Palettes</a>
   <span class="spacer"></span>
   <button type="button" id="adapt" aria-pressed="false" title="Darken or lighten failing roles within their own hue until each passes glosa's floors">Adapted for glosa</button>
   <button type="button" id="modeLight" aria-pressed="true">Light</button>
@@ -199,9 +201,14 @@
     <p class="lede">The values are the theme files in <code>packages/spa/src/themes/</code>, copied here. Each role is measured on the grounds it is actually drawn on (<code>validate.js</code>'s table, copied below): a greyed ratio is a ground the role never sits on, shown for comparison only. Floors are WCAG 2 ratios: ink 7:1; muted 4.5:1 (7:1 in High contrast); the hand, session ink, danger, warn and ok 4.5:1 as text and 3:1 as a line (4.5:1 as a line in High contrast); pencil 4.5:1; the strong border 3:1. High contrast keeps glosa's paper and surfaces, so a desktop window opened under Increase Contrast starts on the right paper, and deepens (light) or lifts (dark) the ink, the marks and the edges within their own hues. The colour-vision rows simulate protanopia, deuteranopia and tritanopia with the Machado, Oliveira and Fernandes (2009) matrices at full severity, applied in linear sRGB; ΔE is the OKLab distance between two colours as a person with that vision would see them (about 0.02 is just noticeable). Section 3's High contrast card is the study's earlier proposal, not these values.</p>
     <div id="contrastRows"></div>
   </section>
+  <section class="group" id="palettes">
+    <h2>8 · Catppuccin, Gruvbox and Rosé Pine, as #410 ships them. Toggle Light / Dark above.</h2>
+    <p class="lede">The values are the theme files in <code>packages/spa/src/themes/</code>, copied here, and each palette's upstream colours were checked against catppuccin/palette v1.8.0, morhetz/gruvbox at ef8864b and rose-pine/palette at 92af52b. Each slot takes the palette's own colour for that role; a role below its floor moved in OKLCH lightness only, away from the paper, until every ground it is drawn on passes, with chroma lowered only where sRGB holds no more and the hue unchanged, and danger kept going until it sat 0.02 from the hand. The first table lists every move: the upstream colour, the adapted one, and the ratio on the ground where it fell furthest short, before and after. The rest is section 7's arithmetic on the shipped values: every role on the grounds it is drawn on, the hue rules and the same colour-vision simulation. The hue distances are the palette's own, since no hue moved. A filled danger button's hover now lifts its fill in dark rather than darkening it (#410), which is what the hovered ratio shows here and in section 7. Nothing in this section is fetched.</p>
+    <div id="palettesRows"></div>
+  </section>
 </main>
 <footer>
-  Palette sources: glosa app.css tokens (2026-09-27); Catppuccin palette.json and Nord nord.css (fetched from the canonical repositories); Rosé Pine palette page; Dracula contribute spec; Monokai from VS Code's built-in theme file; Solarized, Gruvbox, One Dark and GitHub from their published palettes (not re-fetched for this page). Sepia and High contrast are derived from glosa's own tokens and are proposals, not shipped values.
+  Palette sources: glosa app.css tokens (2026-09-27); Catppuccin palette.json and Nord nord.css (fetched from the canonical repositories); Rosé Pine palette page; Dracula contribute spec; Monokai from VS Code's built-in theme file; Solarized, Gruvbox, One Dark and GitHub from their published palettes (not re-fetched for this page). Sepia and High contrast are derived from glosa's own tokens and are proposals, not shipped values. Sections 7 and 8 copy the shipped theme files; section 8's upstream colours were checked on 2026-09-28 against catppuccin/palette v1.8.0, morhetz/gruvbox at ef8864b and rose-pine/palette at 92af52b, whose Dawn text is now #464261 where section 3's port used v4.0.1's #575279.
 </footer>
 <script>
 const SAMPLE = `
@@ -464,6 +471,7 @@ function render() {
     themesRow.append(c);
   }
   renderContrast();
+  renderPalettes();
 }
 function setMode(m) {
   document.documentElement.dataset.mode = m;
@@ -471,6 +479,64 @@ function setMode(m) {
   document.getElementById('modeDark').setAttribute('aria-pressed', String(m === 'dark'));
   render();
 }
+// ---- section 8: the palettes #410 ships (copied from packages/spa/src/themes/*.json) ----
+const PALETTES_410 = [
+  { id: "catppuccin", label: "Catppuccin",
+    light: { name: "Catppuccin Latte", source: "catppuccin/palette v1.8.0 (07d02aa), palette.json, latte",
+      bg: "#eff1f5", surface: "#e6e9ef", sunken: "#dce0e8", ink: "oklch(0.4 0.043 279.3)", muted: "#5c5f77", faint: "#8c8fa1", border: "#ccd0da", borderStrong: "oklch(0.599 0.03 278.7)", rule: "oklch(0.4 0.043 279.3)", hand: "oklch(0.517 0.154 42.4)", pencil: "oklch(0.54 0.034 279.1)", session: "oklch(0.533 0.225 262.1)", danger: "oklch(0.497 0.199 19.8)", warn: "oklch(0.528 0.116 67.8)", ok: "oklch(0.506 0.164 140.4)", onDanger: "oklch(0.99 0 0)",
+      moved: [
+        { role: "ink", upstream: "text #4c4f69", to: "#43455f", as: "text", on: "surface-sunken", floor: 7, was: 6.03, now: 7.01 },
+        { role: "border-strong", upstream: "overlay2 #7c7f93", to: "#7c7e92", as: "line", on: "surface-sunken", floor: 3, was: 2.98, now: 3 },
+        { role: "pencil", upstream: "subtext0 #6c6f85", to: "#6a6d83", as: "text", on: "elevated", floor: 4.5, was: 4.36, now: 4.5 },
+        { role: "hand", upstream: "peach #fe640b", to: "#ad4102", as: "text", on: "surface-sunken", floor: 4.5, was: 2.25, now: 4.51 },
+        { role: "session", upstream: "blue #1e66f5", to: "#155eec", as: "text", on: "surface", floor: 4.5, was: 4.03, now: 4.51 },
+        { role: "warn", upstream: "yellow #df8e1d", to: "#965c00", as: "text", on: "surface", floor: 4.5, was: 2.15, now: 4.5 },
+        { role: "ok", upstream: "green #40a02b", to: "#1f7a01", as: "text", on: "surface", floor: 4.5, was: 2.74, now: 4.51 },
+        { role: "danger", upstream: "red #d20f39", to: "#b9012f", as: "text", on: "surface-sunken", floor: 4.5, was: 4.1, now: 5.11, lightness: "0.02 below the hand's" },
+      ] },
+    dark: { name: "Catppuccin Mocha", source: "catppuccin/palette v1.8.0 (07d02aa), palette.json, mocha", dark: true,
+      bg: "#1e1e2e", surface: "#313244", sunken: "#45475a", ink: "oklch(0.912 0.042 272.3)", muted: "#bac2de", faint: "#6c7086", border: "#45475a", borderStrong: "#9399b2", rule: "#a6adc8", hand: "#fab387", pencil: "#a6adc8", session: "#89b4fa", danger: "oklch(0.793 0.127 2.8)", warn: "#f9e2af", ok: "#a6e3a1", onDanger: "#1e1e2e",
+      moved: [
+        { role: "ink", upstream: "text #cdd6f4", to: "#d8e1ff", as: "text", on: "surface-sunken", floor: 7, was: 6.3, now: 7 },
+        { role: "danger", upstream: "red #f38ba8", to: "#ff98b4", as: "text", on: "surface-sunken", floor: 4.5, was: 3.93, now: 4.5 },
+      ] },
+  },
+  { id: "gruvbox", label: "Gruvbox",
+    light: { name: "Gruvbox, light background, medium contrast", source: "morhetz/gruvbox (ef8864b), colors/gruvbox.vim, the light mode's colours",
+      bg: "#fbf1c7", surface: "#f2e5bc", sunken: "#ebdbb2", ink: "#3c3836", muted: "#665c54", faint: "#928374", border: "#d5c4a1", borderStrong: "#7c6f64", rule: "#3c3836", hand: "oklch(0.51 0.161 39.3)", pencil: "oklch(0.539 0.023 62.6)", session: "#076678", danger: "#9d0006", warn: "oklch(0.519 0.111 70.7)", ok: "oklch(0.51 0.109 106.5)", onDanger: "oklch(0.99 0 0)",
+      moved: [
+        { role: "pencil", upstream: "dark4 (fg4) #7c6f64", to: "#786c61", as: "text", on: "elevated", floor: 4.5, was: 4.28, now: 4.5 },
+        { role: "hand", upstream: "faded_orange #af3a03", to: "#ae3903", as: "text", on: "surface-sunken", floor: 4.5, was: 4.46, now: 4.51 },
+        { role: "warn", upstream: "faded_yellow #b57614", to: "#905c03", as: "text", on: "surface", floor: 4.5, was: 3, now: 4.5 },
+        { role: "ok", upstream: "faded_green #79740e", to: "#6e6900", as: "text", on: "surface", floor: 4.5, was: 3.87, now: 4.51 },
+      ] },
+    dark: { name: "Gruvbox, dark background, medium contrast", source: "morhetz/gruvbox (ef8864b), colors/gruvbox.vim, the dark mode's colours", dark: true,
+      bg: "#282828", surface: "#32302f", sunken: "#3c3836", ink: "#ebdbb2", muted: "#bdae93", faint: "#7c6f64", border: "#504945", borderStrong: "#928374", rule: "#d5c4a1", hand: "#fe8019", pencil: "#a89984", session: "#83a598", danger: "oklch(0.752 0.149 30.4)", warn: "#fabd2f", ok: "#b8bb26", onDanger: "#282828",
+      moved: [
+        { role: "danger", upstream: "bright_red #fb4934", to: "#ff8774", as: "text", on: "surface-sunken", floor: 4.5, was: 3.37, now: 4.94, lightness: "0.02 above the hand's" },
+      ] },
+  },
+  { id: "rose-pine", label: "Rosé Pine",
+    light: { name: "Rosé Pine Dawn", source: "rose-pine/palette (92af52b), palette.json, dawn; the highlights from source/index.ts",
+      bg: "#faf4ed", surface: "#fffaf3", sunken: "#f2e9e1", ink: "#464261", muted: "oklch(0.527 0.045 291)", faint: "#9893a5", border: "#cecacd", borderStrong: "#797593", rule: "#464261", hand: "oklch(0.537 0.105 23)", pencil: "oklch(0.548 0.026 298.4)", session: "oklch(0.54 0.066 210.1)", danger: "oklch(0.517 0.107 2.7)", warn: "oklch(0.553 0.12 69.7)", ok: "#286983", onDanger: "oklch(0.99 0 0)",
+      moved: [
+        { role: "muted", upstream: "subtle #797593", to: "#6b6783", as: "text", on: "surface-sunken", floor: 4.5, was: 3.66, now: 4.51 },
+        { role: "pencil", upstream: "muted #9893a5", to: "#736e7f", as: "text", on: "elevated", floor: 4.5, was: 2.72, now: 4.51 },
+        { role: "hand", upstream: "rose #d7827e", to: "#a25351", as: "text", on: "surface-sunken", floor: 4.5, was: 2.37, now: 4.5 },
+        { role: "session", upstream: "foam #56949f", to: "#3b7984", as: "text", on: "bg", floor: 4.5, was: 3.13, now: 4.5 },
+        { role: "warn", upstream: "gold #ea9d34", to: "#9e6400", as: "text", on: "bg", floor: 4.5, was: 2.05, now: 4.5 },
+        { role: "danger", upstream: "love #b4637a", to: "#994b62", as: "text", on: "surface-sunken", floor: 4.5, was: 3.49, now: 4.93, lightness: "0.02 below the hand's" },
+      ] },
+    dark: { name: "Rosé Pine", source: "rose-pine/palette (92af52b), palette.json, main; the highlights from source/index.ts", dark: true,
+      bg: "#191724", surface: "#1f1d2e", sunken: "#26233a", ink: "#e0def4", muted: "#908caa", faint: "#6e6a86", border: "#524f67", borderStrong: "oklch(0.544 0.043 291.4)", rule: "#908caa", hand: "#ebbcba", pencil: "oklch(0.622 0.043 291.4)", session: "#9ccfd8", danger: "#eb6f92", warn: "#f6c177", ok: "oklch(0.614 0.079 227.7)", onDanger: "#191724",
+      moved: [
+        { role: "border-strong", upstream: "muted #6e6a86", to: "#706c87", as: "line", on: "surface-sunken", floor: 3, was: 2.94, now: 3.01 },
+        { role: "pencil", upstream: "muted #6e6a86", to: "#87839f", as: "text", on: "elevated", floor: 4.5, was: 3.19, now: 4.51 },
+        { role: "ok", upstream: "pine #31748f", to: "#4c8eaa", as: "text", on: "surface", floor: 4.5, was: 3.16, now: 4.51 },
+      ] },
+  },
+];
+
 // ---- section 7: High contrast as #409 ships it (copied from packages/spa/src/themes/*.json) ----
 const SHIPPED = {
   light: {
@@ -526,7 +592,8 @@ function ratioTable(t) {
   }).join('');
   const onDanger = contrast(t.onDanger, t.danger);
   const [dl, dc, dh] = rgbToOklch(t.danger);
-  const hovered = `oklch(${(dl * 0.88).toFixed(4)} ${(dc * 0.88).toFixed(4)} ${dh.toFixed(1)})`;
+  // The hover moves the fill away from its label (#410): 12% toward black in light, toward white in dark.
+  const hovered = `oklch(${(dl * 0.88 + (t.dark ? 0.12 : 0)).toFixed(4)} ${(dc * 0.88).toFixed(4)} ${dh.toFixed(1)})`;
   return `<table class="hc-table"><thead><tr><th>role</th><th>paper</th><th>surface</th><th>sunken</th><th>floor</th></tr></thead><tbody>${rows}
     <tr><td>text on a danger button</td><td colspan="3">${f2(onDanger)} (hovered ${f2(contrast(t.onDanger, hovered))})</td><td>4.5:1</td></tr></tbody></table>`;
 }
@@ -568,6 +635,28 @@ function renderContrast() {
     details.append(block);
   }
   host.append(details);
+}
+
+function movedTable(t) {
+  const rows = t.moved.map(m => {
+    const hex = m.upstream.match(/#[0-9a-f]{6}/)[0];
+    return `<tr><td>${m.role}</td><td><span class="chip" style="background:${hex}"></span>${m.upstream}</td><td><span class="chip" style="background:${m.to}"></span>${m.to}</td><td>${m.as} on ${m.on}</td><td class="fail">${f2(m.was)}</td><td class="pass">${f2(m.now)}</td><td>${m.floor}:1${m.lightness ? ` · ${m.lightness}` : ''}</td></tr>`;
+  }).join('');
+  return `<table class="hc-table"><thead><tr><th>role</th><th>upstream</th><th>adapted</th><th>worst ground</th><th>before</th><th>after</th><th>floor</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function renderPalettes() {
+  const host = document.getElementById('palettesRows'); host.innerHTML = '';
+  const m = mode();
+  for (const p of PALETTES_410) {
+    const t = p[m];
+    const wrap = document.createElement('div'); wrap.className = 'hc-pair';
+    const c = card({ wide: false, tokens: t, type: { ...currentScale, body: 16, lh: 1.6, h1: 30, h2: 22, h3: 18, h4: 16 }, fonts: currentFonts, caption: `<b>${t.name}</b><span>${t.source}</span><span>${t.moved.length} moved</span>` });
+    c.style.width = '100%';
+    const block = document.createElement('div'); block.className = 'hc-block';
+    block.innerHTML = `<h3 class="hc-heading">${t.name}: what moved to meet the floors</h3>${movedTable(t)}<h3 class="hc-heading next">Every role on the grounds it is drawn on</h3>${ratioTable(t)}<h3 class="hc-heading next">Hue rules</h3>${hueTable(t)}<h3 class="hc-heading next">Colour-vision simulation, on the paper</h3>${cvdStrip(t)}`;
+    wrap.append(c, block);
+    host.append(wrap);
+  }
 }
 
 document.getElementById('adapt').onclick = () => { ADAPT = !ADAPT; document.getElementById('adapt').setAttribute('aria-pressed', String(ADAPT)); render(); };
