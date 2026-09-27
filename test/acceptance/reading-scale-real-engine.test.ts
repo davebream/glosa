@@ -649,4 +649,84 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     },
     TEST_TIMEOUT_MS,
   );
+  /** Every size the document sets, and its line length in its own face, read in one evaluate. */
+  const TYPE = `(()=>{
+    const pane=document.querySelector('.glosa-pane'),content=pane.querySelector('.glosa-content');
+    const read=(selector)=>{const el=content.querySelector(selector),s=getComputedStyle(el);
+      return {size:parseFloat(s.fontSize),weight:Number(s.fontWeight)};};
+    const zero=document.createElement('span');zero.textContent='0';content.append(zero);
+    const ch=zero.getBoundingClientRect().width;zero.remove();
+    const root=parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return {face:pane.dataset.face??'default',body:read(':scope > p'),h1:read('h1'),h2:read('h2'),h3:read('h3'),
+      h4:read('h4'),h5:read('h5'),h6:read('h6'),pre:read('pre'),table:read('table'),th:read('th'),
+      leading:parseFloat(getComputedStyle(content).lineHeight)/parseFloat(getComputedStyle(content).fontSize),
+      measure:(parseFloat(getComputedStyle(content).maxWidth)-4*root)/ch};
+  })()`;
+
+  /** Chooses a face the way a reader does, from the pane's More menu. */
+  async function chooseFace(page: CdpClient, face: "default" | "sans" | "mono"): Promise<void> {
+    await page.evaluate(`(async()=>{const pane=document.querySelector('.glosa-pane');
+      pane.querySelector('.glosa-tools-trigger').click();
+      const row=pane.querySelector('.glosa-face-option[data-face="${face}"]');
+      if(!row) throw new Error('the More menu has no ${face} row');
+      row.click();
+      const deadline=Date.now()+3000;
+      while((pane.dataset.face??'default')!=='${face}'){if(Date.now()>deadline) throw new Error('the ${face} face never applied');
+        await new Promise(r=>requestAnimationFrame(r));}})()`);
+    await page.evaluate(SETTLE);
+  }
+
+  test(
+    "#406: at the default step the document keeps its sizes, sets h4 to h6 at the body's size in 650, and each face keeps its own line length",
+    async () => {
+      const page = await launch();
+      await pin(page, { width: 1440, height: 900 });
+      await openInReview(page);
+      type Type = Record<
+        "body" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "pre" | "table" | "th",
+        { size: number; weight: number }
+      > & {
+        face: string;
+        leading: number;
+        measure: number;
+      };
+      const serif = await page.evaluate<Type>(TYPE);
+      // h1 to h3, code and tables keep today's sizes at the default step (the pane is over 800px, so
+      // the title and section heading are at their widest).
+      expect({
+        body: serif.body,
+        h1: serif.h1.size,
+        h2: serif.h2.size,
+        h3: serif.h3.size,
+        pre: serif.pre.size,
+        table: serif.table.size,
+        th: serif.th.size,
+      }).toEqual({ body: { size: 18, weight: 400 }, h1: 40, h2: 26, h3: 20, pre: 13, table: 15, th: 13 });
+      // h4 to h6 were 17px at 600, smaller than the 18px body they head; now they are the body's size,
+      // and 650 keeps them above bold body text, which is 600.
+      for (const level of ["h4", "h5", "h6"] as const) expect(serif[level], level).toEqual({ size: 18, weight: 650 });
+      expect(serif.leading).toBeCloseTo(1.62, 2);
+      expect(serif.measure, "the serif keeps its 68ch line").toBeCloseTo(68, 0);
+
+      await chooseFace(page, "sans");
+      const sans = await page.evaluate<Type>(TYPE);
+      expect(sans.face).toBe("sans");
+      expect(sans.body.size).toBe(16);
+      expect(sans.leading).toBeCloseTo(1.6, 2);
+      expect(sans.measure, "the sans sets more letters in a ch, so its line is shorter").toBeCloseTo(64, 0);
+      expect({ h4: sans.h4, h5: sans.h5, h6: sans.h6 }).toEqual({
+        h4: { size: 17, weight: 600 },
+        h5: { size: 17, weight: 600 },
+        h6: { size: 17, weight: 600 },
+      });
+
+      await chooseFace(page, "mono");
+      const mono = await page.evaluate<Type>(TYPE);
+      expect(mono.face).toBe("mono");
+      expect(mono.body.size).toBe(15);
+      expect(mono.measure, "mono keeps its 68ch line").toBeCloseTo(68, 0);
+      expect(mono.h4).toEqual({ size: 17, weight: 600 });
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

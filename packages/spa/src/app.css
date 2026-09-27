@@ -102,19 +102,34 @@
   --font-serif: "Source Serif 4", "Iowan Old Style", Charter, Georgia, serif;
   --font-sans: "Source Sans 3", system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  /* The reading scale (#406). One step sets the size of every reading surface: the document now,
+     and the notes and the chat with it once a reader can choose the step. The step is a number of
+     pixels at the browser's default font size, 18 by default, and everything read in the document
+     is a rem value times `--reading-scale`, its ratio to 18. So at the default step each size is
+     exactly what it was, and a browser set to a larger default font carries the whole page with it.
+     Below the default the smaller sizes stop at a floor instead of shrinking with the body: no
+     face's body under 15px, the ladder's own floor; no table under 13px; no code block or table
+     head under 12px. Chrome (buttons, menus, tabs, the navigator, labels) never reads the scale: it
+     follows zoom. */
+  --reading-step: 18;
+  --reading-scale: calc(var(--reading-step) / 18);
+  --reading-size: calc(var(--reading-step) * 0.0625rem);
+
   /* The manuscript's face and size. A pane sets these from its artifact's chosen face
-     (`.glosa-pane[data-face]`, below); Default is the serif. */
+     (`.glosa-pane[data-face]`, below); Default is the serif, at the step itself. */
   --font-manuscript: var(--font-serif);
-  --manuscript-size: var(--text-body-serif);
+  --manuscript-size: var(--reading-size);
   --manuscript-leading: 1.62;
+  /* h4 to h6: the serif sets them at the body's size, so weight carries the step down from h3, and
+     600 is what bold body text already is; 650 keeps a heading a heading. */
+  --heading-minor-weight: 650;
 
   /* Fixed rem scale, ratio ~1.125 (product register). */
   --text-2xs: 0.6875rem; /* 11 — counts, navigator section labels */
   --text-xs: 0.75rem; /* 12 — state labels, timestamps */
   --text-sm: 0.8125rem; /* 13 — chrome default, annotations */
   --text-base: 0.9375rem; /* 15 — panel body */
-  --text-md: 1.0625rem; /* 17 — h4–h6 */
-  --text-body-serif: 1.125rem; /* 18 — the manuscript body in Source Serif 4 */
+  --text-md: 1.0625rem; /* 17: settings section headings; h4 to h6 in the sans and mono faces */
   --text-lg: 1.1875rem; /* 19 — panel titles */
   --text-xl: 1.375rem; /* 22 — screen headlines */
 
@@ -180,30 +195,36 @@
   --nav-foot-height: 44px;
   --strip-height: 36px; /* the tab strip; the navigator's first row shares this band */
   --tray-strip-height: 35px; /* the collapsed annotations tray: its 34px toggle over a 1px rule */
+  /* The line length, in the manuscript's own face: `ch` resolves where it is used, inside
+     .glosa-content. The sans face sets its own, below. */
   --measure: 68ch;
-  /* The painted width of the manuscript column: a 68ch serif measure plus its two 2rem gutters.
-     Fixed in px because the annotation ladder below has to reason about it from OUTSIDE the
-     manuscript context, where `68ch` would measure the chrome face and lie by ~110px. MEASURED
-     from the built page when the serif was Iowan Old Style (643px plus two 2rem gutters). Source
-     Serif 4 at 18px sets narrower (68ch = 624px, 688px painted), as do the sans and mono faces, so
-     the ladder stays conservative for all three and the rail floor did not move with the face. Keep in step with
-     --measure, .glosa-content's padding, and artifact-pane.js's MARGIN_RAIL_FLOOR. */
+  /* The painted width of the manuscript column: the measure plus its two 2rem gutters.
+     `68ch` can only be resolved inside the manuscript's face, and the rail, the Edit column and
+     the gutter dots reason about the column from outside it. So artifact-pane.js measures the
+     column as it paints (at every step, face and browser default font size) and sets this on the
+     pane. This value is only the fallback until it has: what the column measured when the serif
+     was Iowan Old Style at 17px. */
   --manuscript-block: 707px;
 }
 
 /* The writer's face, per artifact. artifact-pane.js stamps the pane from face.js; the whole
    manuscript surface — rendered, rich editor, quotes that echo it — reads the same variable.
-   Default (no attribute) is the serif. */
+   Default (no attribute) is the serif. Each face keeps its own size in proportion to the step. */
 .glosa-pane[data-face="sans"] {
   --font-manuscript: var(--font-sans);
-  --manuscript-size: 1rem;
+  --manuscript-size: max(0.9375rem, calc(1rem * var(--reading-scale)));
   --manuscript-leading: 1.6;
+  --heading-minor-weight: 600;
+  /* The sans sets more letters in a `ch` than the serif: at 68ch its lines averaged about 79
+     characters. 64ch brings it back near the serif's line. */
+  --measure: 64ch;
 }
 
 .glosa-pane[data-face="mono"] {
   --font-manuscript: var(--font-mono);
-  --manuscript-size: 0.9375rem;
+  --manuscript-size: max(0.9375rem, calc(0.9375rem * var(--reading-scale)));
   --manuscript-leading: 1.65;
+  --heading-minor-weight: 600;
 }
 
 /* Registered so `100ch` is computed where it is DECLARED — inside the source face's mono context
@@ -2675,9 +2696,17 @@ input,
    nearest container), not the viewport, and fluidly, so dragging a sash never makes them jump. The
    title is 40px from an 800px pane and bottoms out at 30px from 400px down; set at 40px in a 300px
    column it broke a short title into three lines of display type. The section heading keeps 26px
-   to about 670px and bottoms out at 24px, so the step between the two holds at every width. */
+   to about 670px and bottoms out at 24px, so the step between the two holds at every width.
+
+   Every size is on the reading scale: those pixel values hold at the default step, and each whole
+   clamp, the pane's share included, scales with the step, so the widths at which a heading steps
+   down do not move with it. */
 .glosa-content h1 {
-  font-size: clamp(1.875rem, 1.25rem + 2.5cqi, 2.5rem);
+  font-size: clamp(
+    calc(1.875rem * var(--reading-scale)),
+    calc((1.25rem + 2.5cqi) * var(--reading-scale)),
+    calc(2.5rem * var(--reading-scale))
+  );
   line-height: 1.1;
   font-weight: 650;
   letter-spacing: -0.015em;
@@ -2685,25 +2714,31 @@ input,
 }
 
 .glosa-content h2 {
-  font-size: clamp(1.5rem, 1.25rem + 0.9cqi, 1.625rem);
+  font-size: clamp(
+    calc(1.5rem * var(--reading-scale)),
+    calc((1.25rem + 0.9cqi) * var(--reading-scale)),
+    calc(1.625rem * var(--reading-scale))
+  );
   font-weight: 620;
   letter-spacing: -0.01em;
   margin: var(--space-12) 0 var(--space-3);
 }
 
 .glosa-content h3 {
-  font-size: 1.25rem;
+  font-size: calc(1.25rem * var(--reading-scale));
   line-height: 1.3;
   font-weight: 620;
   margin: var(--space-8) 0 var(--space-2);
 }
 
+/* Never smaller than the text under them: at the body's own size in the serif, and at 17px of the
+   default step in the smaller sans and mono faces, as before. */
 .glosa-content h4,
 .glosa-content h5,
 .glosa-content h6 {
-  font-size: var(--text-md);
+  font-size: max(1em, calc(var(--text-md) * var(--reading-scale)));
   line-height: 1.4;
-  font-weight: 600;
+  font-weight: var(--heading-minor-weight);
   margin: var(--space-6) 0 var(--space-2);
 }
 
@@ -2744,7 +2779,7 @@ input,
   margin: var(--prose-gap) 0;
 }
 
-/* The serif's true bold is a shout at 17px; semibold is the copy editor's emphasis. */
+/* The serif's true bold is a shout at 18px; semibold is the copy editor's emphasis. */
 .glosa-content strong,
 .glosa-content b {
   font-weight: 600;
@@ -2811,7 +2846,7 @@ input,
 
 .glosa-content pre {
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-size: max(var(--text-xs), calc(var(--text-sm) * var(--reading-scale)));
   line-height: 1.6;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2834,7 +2869,7 @@ input,
 .glosa-content table {
   border-collapse: collapse;
   font-family: var(--font-sans);
-  font-size: var(--text-base);
+  font-size: max(var(--text-sm), calc(var(--text-base) * var(--reading-scale)));
   font-variant-numeric: tabular-nums;
   margin: 0 0 var(--space-6);
 }
@@ -2850,7 +2885,7 @@ input,
 .glosa-content th {
   border-bottom-color: var(--border-strong);
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: max(var(--text-xs), calc(var(--text-sm) * var(--reading-scale)));
   font-weight: 600;
 }
 
