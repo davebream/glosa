@@ -36,7 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   style, Editorial included. glosa keeps the default for the folder in `~/.glosa/folder-styles.json`, so it
   survives restarting glosa and reopening the folder. A single file opened on its own has no folder
   default. API contract 1.21 (#407).
-- High contrast, light and dark: glosa's own palette with deeper ink, marks and edges on the same
+- High contrast, light and dark: glosa's own palette with stronger ink, marks and edges on the same
   paper, for `prefers-contrast: more`. When the system asks for more contrast (macOS Increase
   Contrast does in Safari and Chrome), glosa's own palette turns into High contrast at once and
   before the page first paints; it is also a palette of its own in Settings > Appearance, which
