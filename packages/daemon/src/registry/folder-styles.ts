@@ -40,6 +40,16 @@ interface FolderStylesFile {
   folders: FolderStyleRow[];
 }
 
+/** A `folder-styles.json` this daemon cannot read without losing what a newer glosa wrote into it
+ * (a version it does not know). Writing is refused rather than overwriting it; reading answers no
+ * defaults. */
+export class FolderStylesNewerError extends Error {
+  constructor(path: string, version: unknown) {
+    super(`${path} was written by a newer glosa (version ${String(version)}); update glosa to change folder defaults`);
+    this.name = "FolderStylesNewerError";
+  }
+}
+
 export function folderStylesPath(home: string): string {
   return join(home, "folder-styles.json");
 }
@@ -58,6 +68,8 @@ export class FolderStyles {
   readonly path: string;
   private readonly mutex = new AsyncMutex();
   private cache: FolderStylesFile | null = null;
+  /** Set when the file's version is newer than this daemon's: it is served as empty and kept. */
+  private newer: FolderStylesNewerError | null = null;
   private readonly listeners = new Map<string, Set<() => void>>();
 
   constructor({ home = glosaHome() }: { home?: string } = {}) {
@@ -73,6 +85,7 @@ export class FolderStyles {
   set(canonicalPath: string, style: FolderStyle, now: Date = new Date()): Promise<FolderStyle> {
     return this.mutex.runExclusive(() => {
       const file = this.load();
+      if (this.newer) throw this.newer;
       if (file.folders.some((row) => row.path === canonicalPath && row.style === style)) return style;
       const folders = file.folders.filter((row) => row.path !== canonicalPath);
       folders.push({ path: canonicalPath, style, set_at: now.toISOString() });
@@ -86,6 +99,7 @@ export class FolderStyles {
   clear(canonicalPath: string): Promise<boolean> {
     return this.mutex.runExclusive(() => {
       const file = this.load();
+      if (this.newer) throw this.newer;
       const folders = file.folders.filter((row) => row.path !== canonicalPath);
       if (folders.length === file.folders.length) return false;
       this.persist({ version: 1, folders });
@@ -128,6 +142,14 @@ export class FolderStyles {
     }
     try {
       const parsed = JSON.parse(raw) as Partial<FolderStylesFile> | null;
+      // A version this daemon does not know came from a newer glosa, after a rollback. It is not
+      // damage: keep the file as it is for that glosa to find again, serve no defaults and refuse
+      // to write, rather than move it aside or overwrite it.
+      if (typeof parsed?.version === "number" && parsed.version > 1) {
+        this.newer = new FolderStylesNewerError(this.path, parsed.version);
+        this.cache = { version: 1, folders: [] };
+        return this.cache;
+      }
       if (parsed?.version !== 1 || !Array.isArray(parsed.folders)) throw new Error("unexpected shape");
       // One malformed row costs that row, not every folder's default.
       this.cache = { version: 1, folders: parsed.folders.filter(isRow) };

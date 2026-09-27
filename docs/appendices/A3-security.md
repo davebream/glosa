@@ -208,7 +208,8 @@ follow the star routes' rule.
 - **Directories only** (`folder-style-not-directory`): a loose-file registration has no folder of its
   own, and keying one by its file would give a later directory registration nothing to find.
 - `folder-styles.json` is written 0600 in `GLOSA_HOME`, like the token and `stars.json`. A corrupt file
-  is moved aside, not overwritten; a malformed row is dropped on read.
+  is moved aside, not overwritten; a malformed row is dropped on read; a file from a newer glosa is
+  left as it is and never written.
 - `PUT` and `DELETE` use the strict Origin rule in the table above; `GET` is an authed read. The
   `folder_style` stream frame carries only `{ "changed": true }`, never the path or the style.
 

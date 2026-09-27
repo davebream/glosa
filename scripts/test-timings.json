@@ -301,7 +301,7 @@
     },
     "packages/daemon/test/folder-styles.test.ts": {
       "seconds": 0.9,
-      "reason": "Initial local Bun 1.4.2 estimate for #407's folder default: the store, the three routes over a real loopback server with SSE streams, and one real glosa __daemon restart (10 tests, 0.83 s locally); replace with measured CI medians."
+      "reason": "Initial local Bun 1.4.2 estimate for #407's folder default: the store, the three routes over a real loopback server with SSE streams, a file from a newer glosa, and one real glosa __daemon restart (12 tests, 0.85 s locally); replace with measured CI medians."
     },
     "packages/spa/test/text-size.test.ts": {
       "seconds": 0.1,

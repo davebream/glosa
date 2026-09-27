@@ -43,7 +43,7 @@ import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-sc
 import { SessionProviderConflict, type SessionRecord, type SessionRegistry } from "../registry/session-registry.ts";
 import { canonicalize } from "../registry/slug.ts";
 import { starName, type WorkspaceStar, WorkspaceStars } from "../registry/workspace-stars.ts";
-import { FolderStyles, isFolderStyle } from "../registry/folder-styles.ts";
+import { FolderStyles, FolderStylesNewerError, isFolderStyle } from "../registry/folder-styles.ts";
 import {
   AdoptionError,
   type WorkspaceEntry,
@@ -747,14 +747,31 @@ async function handleSetFolderStyle(ctx: ApiContext, slug: string, req: Request)
   if (!isFolderStyle(style)) {
     return problem(400, "validation-failed", "style must be editorial, spec or mono", undefined, url.pathname);
   }
-  return Response.json({ style: await folderStyles(ctx).set(resolved.entry.canonical_path, style) });
+  try {
+    return Response.json({ style: await folderStyles(ctx).set(resolved.entry.canonical_path, style) });
+  } catch (error) {
+    return folderStyleWriteRefused(error, url.pathname);
+  }
+}
+
+/** A `folder-styles.json` from a newer glosa is kept, not overwritten: say so, as a conflict with
+ * the file on disk. Anything else is the daemon's own failure. */
+function folderStyleWriteRefused(error: unknown, pathname: string): Response {
+  if (error instanceof FolderStylesNewerError) {
+    return problem(409, "conflict", "folder defaults were written by a newer glosa", error.message, pathname);
+  }
+  throw error;
 }
 
 /** `DELETE /w/:slug/folder-style` — clears the folder's default. Idempotent. */
 async function handleClearFolderStyle(ctx: ApiContext, slug: string, pathname: string): Promise<Response> {
   const resolved = folderStyleWorkspace(ctx, slug, pathname);
   if (!resolved.ok) return resolved.response;
-  await folderStyles(ctx).clear(resolved.entry.canonical_path);
+  try {
+    await folderStyles(ctx).clear(resolved.entry.canonical_path);
+  } catch (error) {
+    return folderStyleWriteRefused(error, pathname);
+  }
   return Response.json({ style: null });
 }
 

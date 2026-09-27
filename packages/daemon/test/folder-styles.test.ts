@@ -64,6 +64,18 @@ describe("FolderStyles store", () => {
     expect(heard).toEqual(["a", "b", "a"]);
   });
 
+  test("a file from a newer glosa is kept as it is: no defaults are read from it and none are written over it", async () => {
+    const home = tempDir("glosa-folder-styles-home-");
+    const newer = JSON.stringify({ version: 2, folders: [{ path: "/ok", style: "spec", set_at: "x" }], extra: true });
+    writeFileSync(folderStylesPath(home), newer);
+    const styles = new FolderStyles({ home });
+    expect(styles.get("/ok")).toBeNull();
+    await expect(styles.set("/ok", "mono")).rejects.toThrow("newer glosa");
+    await expect(styles.clear("/ok")).rejects.toThrow("newer glosa");
+    expect(readFileSync(folderStylesPath(home), "utf8")).toBe(newer);
+    expect(readdirSync(home).filter((name) => name.startsWith("folder-styles.json."))).toEqual([]);
+  });
+
   test("a malformed row costs that row, and a corrupt file is moved aside instead of overwritten", async () => {
     const home = tempDir("glosa-folder-styles-home-");
     writeFileSync(
@@ -236,6 +248,23 @@ describe("folder-style routes (A1 §5.23)", () => {
       expect((await res.json()).type).toBe("https://glosa.local/errors/folder-style-not-directory");
     }
     expect(recorded(h.home)).toEqual([]);
+  });
+
+  test("against a file from a newer glosa, reading answers no default and changing one is a 409", async () => {
+    const h = await serve(tempDir("glosa-fs-home-"), tempDir("glosa-fs-ws-"));
+    const newer = JSON.stringify({ version: 2, folders: [] });
+    writeFileSync(folderStylesPath(h.home), newer);
+    const fresh = await serve(h.home, h.root);
+    expect(await read(fresh, fresh.slug)).toEqual({ style: null });
+    for (const [method, body] of [
+      ["PUT", { style: "spec" }],
+      ["DELETE", undefined],
+    ] as const) {
+      const res = await call(fresh, method, `/w/${fresh.slug}/folder-style`, { body });
+      expect(res.status, method).toBe(409);
+      expect((await res.json()).detail, method).toContain("newer glosa");
+    }
+    expect(readFileSync(folderStylesPath(h.home), "utf8")).toBe(newer);
   });
 
   test("the default outlives the index forgetting the folder and applies again when it is opened", async () => {

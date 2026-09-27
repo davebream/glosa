@@ -1139,6 +1139,9 @@ default under that registration's own canonical path. See A3 §4 "Folder default
   `workspace-forgetting` while the workspace is being adopted or forgotten, as on every `/w/:slug`
   route, and **422** `folder-style-not-directory` for a loose-file registration, whose document has
   no folder of its own.
+- A `folder-styles.json` that a newer glosa wrote (a `version` above 1, after a rollback) is kept as it
+  is: `GET` answers `{ "style": null }`, and `PUT` and `DELETE` are **409** `conflict` without touching
+  it. A file that is not valid JSON is moved aside, as `stars.json` is.
 
 Setting or clearing a default sends a best-effort `event: folder_style` with `{ "changed": true }` and
 no cursor on every `GET /w/:slug/stream` open on that folder (§8.1), like the `metadata` invalidation
