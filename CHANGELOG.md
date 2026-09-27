@@ -117,6 +117,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 | Code blocks | 13px, leading 1.6 | 14px, leading 1.5 |
 | Line length | 64ch | 64ch for prose; a wide table or code block up to about 96ch |
 
+- The chat has one style of its own, Conversation, whatever style the document beside it is in, so a
+  Spec page sits beside a serif chat. A reply, your own messages and the draft are all set in the
+  serif, and a reply's headings, lists, quotes, code, tables and links take the document's rules.
+  The reply's column narrows to 34em of its text, 544px at the default text size, about 72
+  characters a line, and the composer, which was wider, now matches it, as does a decision waiting
+  on you. Your messages keep to the column's right edge in their bubble, which is how they are told
+  apart from a reply now that both are serif. The table below gives each value at the default text size; every value moves with the
+  text size, and no heading in a reply is ever larger than the document's h3 (#408).
+
+| Value | Before | After |
+|---|---|---|
+| Reply text, and a turn's error | Serif 16px / 1.7 | Serif 16px / 1.62 |
+| Gap between a reply's blocks | 0.6rem (9.6px) | 0.9em (14.4px) |
+| Reply column | 46rem (736px) | 34em of the reply (544px) |
+| Composer, and the lines under it | Up to 48rem (768px) | The reply's column |
+| A decision waiting on you | Up to 48rem (768px), edge to edge in a narrow chat | The reply's column |
+| Your message | Sans 16px / 1.6, bubble up to 36rem (576px) | Serif 16px / 1.62, bubble up to 28em (448px) |
+| Draft | Sans 16px / 1.55 | Serif 16px / 1.62 |
+| Reply headings | Sans at the browser's sizes, h1 32px, h2 24px, h3 18.72px, h4 16px, h5 and h6 serif 13.28px and 10.72px, all at 700 | Serif, h1 and h2 20px and h3 18px at 620, h4 to h6 16px at 650 |
+| Bold in a reply | 700 | 600 |
+| Inline code | The browser's monospace at 16px, no background | Mono at 0.85em (13.6px) on `--surface` |
+| Code blocks | 12px on `--surface-sunken`, 5px corners | 13px on the document's code bed: `--surface`, a hairline edge, 8px corners |
+| Tables | Unruled: serif 16px, a bold head, any word broken where a column squeezed | Ruled, sans 14px, a 13px muted head at 600; a word breaks only when it is too long for any column |
+| Lists and quotes | The browser's 40px indents; quotes upright in ink | Lists indented 1.5rem with muted markers; quotes on a rule, in muted italic |
+| A `---` rule | The browser's full-width line | The document's short centred rule |
+| The chat's scrollbar | The browser's, on the right only | Thin, in the desk's colours, with the same room kept on both sides so the column stays centred over the composer |
+
 ### Fixed
 
 - In the dark appearance, the button that confirms a destructive action (Delete chat, Discard

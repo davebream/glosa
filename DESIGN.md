@@ -116,6 +116,11 @@ typography:
     fontSize: "0.9375rem"
     fontWeight: 400
     lineHeight: 1.45
+  conversation:
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "1rem"
+    fontWeight: 400
+    lineHeight: 1.62
   headline:
     fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
     fontSize: "1.375rem"
@@ -172,6 +177,7 @@ rounded:
   panel: "8px"
   composer: "10px"
   overlay: "12px"
+  bubble: "14px"
   pill: "999px"
 spacing:
   1: "0.25rem"
@@ -337,7 +343,7 @@ Each document is set in a **style**, its typographic dress, chosen under "Style"
 - **Note** (400, 15px / 1.45, serif): the words of a margin entry, the composer field and a session's message, in the serif whatever the page's style. Notes are writing, not chrome, and sit two text-size steps under the document.
 - **Headline** (600, 22px, sans): boot screens. **Title** (600, 19px): dialogs and panels. **Bar Title** (600, 14px): the active artifact's path, centred in the top bar.
 - **Body** (400, 15px / 1.6, sans): panel prose, dialog copy.
-- **Chat** (400, 16px, serif for a reply at 1.7, sans for the person's message and the draft): one text-size step under the document.
+- **Conversation** (400, 16px / 1.62, serif): the chat's reply, the person's message and the draft, one text-size step under the document, in its own style beside every document style (see The Conversation Style).
 - **Label** (500, 13px): buttons, tabs, menu rows, navigator rows; the chrome default.
 - **Section Label** (600, 12px, 0.06em, uppercase, Muted): the heading of a real list: navigator sections, the margin's title and open/settled divider. The Go to palette's group headings use 11px at 0.04em.
 - **Metadata** (400, 12px): timestamps, state rows, chips, the provenance line.
@@ -347,7 +353,7 @@ Each document is set in a **style**, its typographic dress, chosen under "Style"
 ### Named Rules
 **The Reading Measure Rule.** Manuscript prose stays at a 68ch measure in Editorial and Mono and 64ch in Spec, whose sans fits more letters into a `ch` (at 68ch its lines ran about four characters longer than the serif's). Blocks are separated by 1.2em of the body size (1em in Spec); the page opens with 4rem above the title and closes with 6rem below. Headings carry more space above than below.
 
-**The Serif Is Writing Rule.** Anything a person or a session wrote in the margin or the conversation (margin notes, the composer field, a session's message) is set in serif in every style, and the manuscript and its quotes in the document's own style (serif in Editorial); anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.
+**The Serif Is Writing Rule.** Anything a person or a session wrote in the margin or the chat (margin notes, the composer field, a session's message, a reply, the person's own message and the draft) is set in serif in every style, and the manuscript and its quotes in the document's own style (serif in Editorial); anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.
 
 **The Section Label Rule.** Uppercase tracked labels name a list that follows them. They never sit above a headline as a decorative lead-in.
 
@@ -371,14 +377,32 @@ Every value is at the default text size and moves with it on the reading scale, 
 
 **The Wide Lane Rule.** In Spec a table or code block wider than the line may widen past it, to about 96ch of the body, centred on the column, and only into whitespace the note rail never claims: the room each side keeps beyond a full 320px rail. The room is worked out from the pane's width alone, never from whether the rail is showing, so entering Review moves nothing and widening never takes a block to the rail. A narrow table stays at its own width on the prose's left edge; a code block is at least the column. No table is wider than its lane: a word too long for its cell breaks inside it (the Cell Break Rule). A wide block opened for editing in place keeps its width and place.
 
-**The Cell Break Rule.** In every style a table with a word too long for any column (a digest, a path, a URL) breaks words inside its cells (`overflow-wrap: anywhere`, which is also what lets the table itself shrink), so every table fits its line or lane, on the page, in the editor and in print. The pane never scrolls sideways, so a cell that ran past its edge would be cut off where nothing could reach it. Only such a table breaks words: the pane marks it from the layout (`data-fit="break"`), and every other table keeps its words whole, since breaking anywhere in every table would split short words ("Own-er") wherever columns squeeze. Code blocks keep their lines whole and scroll inside themselves instead. A pane with no room to spare keeps them on the line.
+**The Cell Break Rule.** In every style a table with a word too long for any column (a digest, a path, a URL) breaks words inside its cells (`overflow-wrap: anywhere`, which is also what lets the table itself shrink), so every table fits its line or lane, on the page, in the editor, in print and in a chat reply. The pane never scrolls sideways, so a cell that ran past its edge would be cut off where nothing could reach it. Only such a table breaks words: the pane marks it from the layout (`data-fit="break"`), and every other table keeps its words whole, since breaking anywhere in every table would split short words ("Own-er") wherever columns squeeze. Code blocks keep their lines whole and scroll inside themselves instead. A pane with no room to spare keeps them on the line.
+
+### The Conversation Style
+The chat has one style of its own, Conversation, whatever style the document beside it is in: a Spec page sits beside a serif chat. A reply is set with the page's own prose rules (one rule set for `.glosa-content` and `.glosa-chat-markdown`, whose sizes, weights, gaps and colours are variables), with the Conversation style's values of them on `.glosa-chat-markdown`. The person's message and the draft are set as a reply's text.
+
+| Sets | Conversation |
+|---|---|
+| Face | Source Serif 4, for the reply, its headings, the person's message and the draft |
+| Body | 16px / 1.62, one text-size step under the document |
+| Gap between blocks | 0.9em |
+| Column | 34em of the reply (544px at the default step), centred; the composer's frame and a decision waiting on the person share it |
+| Headings | `h1` and `h2` 1.25em, `h3` 1.125em, all 620; `h4`–`h6` the body's size at 650; never larger than the document's `h3` (at the smallest steps that cap sets `h1` to `h3` alike) |
+| Tables | The page's ruled table in Source Sans 3 at 14px, 13px Muted head at 600 |
+| Code | 0.85em inline on Surface; blocks 13px / 1.6 on the page's code bed |
+
+- **The column:** in em of the reply, so a text size step keeps its line: about 72 characters of prose at the default step and 76 at the largest, a little shorter than the page's. Every turn sits in it; the person's bubble stops at 28em, well short of it, so even a long message keeps to the column's right edge.
+- **Headings:** a reply's `h1` and `h2` are one size, since a reply is a turn in a conversation, not a document with a title; weight and the space above them carry the rest.
+- **Colour:** a reply is ink, its quotes and table heads Muted as on the page, its links the page's. Session Ink never colours a session's words.
+- **Tables:** the Cell Break Rule holds in the chat too: a reply's table breaks words only when one is too long for any column, and then fits the column.
 
 ### The Reading Scale
 One text size per device sets every reading surface together: the document, its margin notes, the composer and the chat. The reader chooses it from a ladder of 15, 16, 18, 20, 22 and 24 (default 18) in the document's More menu or in Settings > Appearance; it is stored in the browser like the appearance and written on `<html>` before first paint (`--reading-step`, `--chat-step`, `--note-step`), so a page never reflows after it has painted. Sizes are rem values, so a browser's larger default font carries the whole page too.
 
 - **Document:** every size is its value at the default step times `--reading-scale` (the step over 18): the body, `h1` to `h3`, code blocks and tables, with `h4`–`h6` never under the body. At the default step each is exactly the value in the hierarchy above. `h1` and `h2` keep their response to the pane, the whole clamp scaled, so the widths at which they step down do not move.
 - **Notes and the composer:** two steps under the document, never under 15 (15px at the default). Quotes in the margin keep their ratio to the note.
-- **The chat:** a reply, the person's message and the draft sit one step under the document, never under 15 (16px at the default). Code in a reply keeps 12px at the default and never goes under it.
+- **The chat:** a reply, the person's message and the draft sit one step under the document, never under 15 (16px at the default). Every size in a reply is in its own em: a code block is 13px at the default and never under 12px, a table 14px and never under 13px, and no heading is ever larger than the document's `h3`.
 - **Floors:** below the default the smaller sizes stop instead of shrinking with the body: no style's body under 15px, the ladder's foot, no table under 13px, no code block or table head under 12px. So the Mono body is 15px at 15, 16 and 18, and the Spec body 15px at 15 and 16; there those steps move only the headings, code and tables.
 - **What does not follow:** chrome (buttons, menus, tabs, the navigator, labels, addresses) follows browser and desktop zoom, never the step. Print keeps its own 12pt scale. No keyboard shortcut sets the step: ⌘+ and ⌘− are zoom.
 
@@ -423,7 +447,7 @@ What floats reads four tokens, so a theme reaches it without a rule of its own (
 
 ## Shapes
 
-One radius per role: focus 2px, micro 4px, tool 5px, control 6px, panel 8px, composer 10px, overlay 12px, pill 999px. A nested corner is its container's radius minus the padding between them (mode track 8px − 2px = 6px segments; menu 8px − 4px = 4px rows).
+One radius per role: focus 2px, micro 4px, tool 5px, control 6px, panel 8px, composer 10px, overlay 12px, bubble 14px (the person's turn in the chat and the chat's composer it is sent from), pill 999px. A nested corner is its container's radius minus the padding between them (mode track 8px − 2px = 6px segments; menu 8px − 4px = 4px rows).
 
 Marks on the page are square or hairline. Margin entries open on a full-width 1px rule with no radius and no fill; tabs are square. State dots and drawn radios are circles; chips are pills. Borders are 1px; the 2px edges are the active tab's ink top, the composer's pencil top, the annotation underline, the focus ring and the drag target.
 
@@ -523,7 +547,7 @@ Under the manuscript, on its measure, above a Quiet Border rule: a wrapping row 
 A 36rem sheet 12vh from the top over the Scrim: a 44px transparent query line at 15px sans on a Quiet Border rule (hand on focus), groups under 11px uppercase Muted headings, the document's sections first (28px rows indented 12px per depth, each leading with its address in the hand), then workspace files with their folder trailing in Muted. The selected row sits on a Sunken bed.
 
 ### Conversation Pane
-Managed chat uses right-aligned human bubbles (sans, Surface, up to 80% of the column) and unboxed assistant prose on the left (serif). Author names remain available to assistive technology but are not printed above every message. Tool calls and reported settings remain disclosures. Copy actions appear on hover or keyboard focus.
+Managed chat is set in the Conversation style (see The Conversation Style): unboxed assistant prose on the left and the person's messages in right-aligned bubbles, both in the serif. The bubble (Surface, 14px radius, up to 28em or 80% of the chat's width) keeps two cues that are not colour, its shape and its place on the column's right edge; its tint is about 1.06:1 against the paper and never the only cue. Author names remain available to assistive technology but are not printed above every message. Tool calls and reported settings remain disclosures. Copy actions appear on hover or keyboard focus.
 
 The composer has a borderless text area and compact, borderless model and effort controls sized to their selected labels, with accessible names. The model button opens a versioned model list plus the current Subscription row. Selecting that row replaces the model list with a compact subscription view and Back action; do not stack both lists. Same-agent subscriptions stay with the chat, while another agent opens a new chat after submission. Attachments, Stop, Send and native tool approvals remain operable; no Plan mode selector is shown. Model and effort share the same quiet control treatment and explanatory hover/focus tooltips. Effort adds a compact monochrome four-bar indicator, consistently mapped across providers. Model labels always include the provider-reported version; retain resolved alias metadata and never hardcode a family’s latest version. Older entries without version metadata say “version not reported” until models are refreshed. The picker shows one row per resolved model; default status belongs in its tooltip, not a duplicate row. A context suffix appears in the label only when the discovered catalog contains a distinct context variant. Existing chats retain their selected wire alias. Tooltips expose the concrete model ID, context and alias relationship. At narrow pane widths controls wrap. The sidebar shows at most 20 title-only conversation rows, pinned first, without a count or separate search field. A hover/focus menu supplies Pin/Unpin; older chats remain searchable. Row hover text contains only the title, never account metadata, and hover is quieter than the selected state.
 
@@ -549,13 +573,13 @@ One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms 
 ### Do:
 - **Do** give every human mark the hand, every unsent mark the pencil, and print everything a session writes in ink. Draw a session's mark on the page, and only that, in Session Ink.
 - **Do** keep the whole desk on paper and divide the desk's regions with the Region Rule (ink in light, `oklch(0.74 0.01 80)` in dark).
-- **Do** set everything written in the margin or the conversation (notes, the composer field, a session's message) in Source Serif 4 in every style, the manuscript in its style's face, and everything the application says in Source Sans 3.
+- **Do** set everything written in the margin or the chat (notes, the composer field, a session's message, a reply, the person's message and the draft) in Source Serif 4 in every style, the manuscript in its style's face, and everything the application says in Source Sans 3.
 - **Do** strike the chosen mode forward as filled ink inside the ink outline.
 - **Do** open a margin entry on a hairline aligned to its passage, with no fill, no radius and no shadow.
 - **Do** lead entries, the composer, the gutter and Go to with the derived § address, and treat it as a label the document can renumber.
 - **Do** state provenance in words: "You", the provider's name, "Outside glosa", "Approval", "not sent yet", "Lost its place".
 - **Do** pair every colour state with a shape: hollow or filled dot, filled, outlined or dashed chip.
-- **Do** keep the reading measure at 68ch (64ch in Spec) and paint the margin over whitespace rather than moving the manuscript.
+- **Do** keep the reading measure at 68ch (64ch in Spec), and the chat's column at 34em of a reply, and paint the margin over whitespace rather than moving the manuscript.
 - **Do** let a Spec table or code block widen only into whitespace the note rail never claims, worked out from the pane's width, never from whether the rail is showing.
 - **Do** break a word too long for any column inside its cell, and only then, so no table runs past what the pane shows and no other table splits a word.
 - **Do** write every size read in the document, the margin or the chat on the reading scale, and let chrome follow zoom.
