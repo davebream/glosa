@@ -417,6 +417,20 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     }
   });
 
+  it("GET /app/themes.css serves the checked-in theme slots as a stylesheet under the SPA's CSP, and the theme files stay unserved", async () => {
+    // shell.html links it before app.css (#409); unserved, every page would paint without a palette.
+    const res = await fetch(apiUrl("/app/themes.css"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/css; charset=utf-8");
+    expect(res.headers.get("Content-Security-Policy")).toContain("style-src 'self'");
+    const body = await res.text();
+    expect(body).toBe(readFileSync(new URL("../../spa/src/themes.css", import.meta.url), "utf8"));
+    expect(body).toContain(':root[data-theme="high-contrast-dark"]');
+    // Only the rendered stylesheet is an asset; the JSON it came from is not on the allowlist.
+    for (const path of ["themes/light.json", "themes/validate.js", "themes/stylesheet.js"])
+      expect((await fetch(apiUrl(`/app/${path}`))).status, path).toBe(404);
+  });
+
   it("the text size preload and its store are fixed allowlisted JavaScript assets", async () => {
     // shell.html loads the preload blocking, before the stylesheet; unserved, every page would lose
     // its stored text size and text-size.js, which every pane imports, would fail to load.

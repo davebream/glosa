@@ -22,7 +22,7 @@
 // CDP client is file-local on purpose: importing one out of another acceptance test would couple
 // two gates' failure modes together.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tokenPath } from "../../packages/daemon/src/security/token.ts";
@@ -1198,7 +1198,15 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         return hovered;
       };
       const setScheme = async (value: "light" | "dark") => {
-        await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value }] });
+        // The colours read below depend on contrast too (#409: more contrast paints High contrast),
+        // so every media preference is pinned rather than read from the host.
+        await tab.send("Emulation.setEmulatedMedia", {
+          features: [
+            { name: "prefers-color-scheme", value },
+            { name: "prefers-reduced-motion", value: "no-preference" },
+            { name: "prefers-contrast", value: "no-preference" },
+          ],
+        });
         await tab.evaluate(`(async()=>{const deadline=Date.now()+3000;
           while(document.documentElement.dataset.theme!==${JSON.stringify(value)}) {
             if(Date.now()>deadline) throw new Error('the app never resolved the ${value} system appearance');
@@ -1581,6 +1589,275 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       expect(diff.bedSeparation, "an added and a deleted line's beds are told apart by colour").toBeGreaterThanOrEqual(
         0.04,
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+  test(
+    "#409: the system's request for more contrast paints glosa as High contrast, a chosen High contrast holds without it, and light, dark and print paint exactly what they did before theme files",
+    async () => {
+      // What "before" means: every colour token on <html> as Chrome computed it from the tree
+      // before the palettes moved into theme files (fixtures/theme-colours-before-409.json).
+      const before = JSON.parse(
+        readFileSync(new URL("fixtures/theme-colours-before-409.json", import.meta.url), "utf8"),
+      ) as {
+        cases: Record<
+          string,
+          { tokens: Record<string, { value: string; resolved: string }> } & Record<string, unknown>
+        >;
+      };
+      const slotsOf = (id: string) =>
+        (
+          JSON.parse(readFileSync(new URL(`../../packages/spa/src/themes/${id}.json`, import.meta.url), "utf8")) as {
+            slots: Record<string, string>;
+          }
+        ).slots;
+      const highContrast = { light: slotsOf("high-contrast-light"), dark: slotsOf("high-contrast-dark") };
+      // The desktop shell's first frame is glosa's paper (packages/shell/src/policy.ts PAPER); High
+      // contrast keeps that paper, so a window opened under Increase Contrast does not flash.
+      const PAPER = { light: "#fefbf7", dark: "#1a1614" } as const;
+
+      // A document with a saved note and a session's question, through the daemon's own routes;
+      // the draft in pencil is opened on the page below, as a person opens it.
+      const DOC = "reading-desk.md";
+      writeFileSync(
+        join(workspaceRoot, DOC),
+        [
+          "# Notes on a reading desk",
+          "",
+          "The desk is one paper. A person marks the words that need work, and the mark keeps its place beside the passage it is about.",
+          "",
+          "## What a session asks",
+          "",
+          "A session can ask about a sentence without moving the page. This sentence is the one it asks about, so its words carry the session's wash and a bracket in the gutter.",
+          "",
+          "## A draft not yet sent",
+          "",
+          "Select a phrase and the composer opens under it in pencil. Nothing takes the hand until Send, and the draft stays graphite while it waits.",
+          "",
+          "- The hand is every mark a person makes.",
+          "- Pencil is the same mark before it is sent.",
+          "- Session ink is a session's mark on the page.",
+          "",
+        ].join("\n"),
+      );
+      const headers = {
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: origin(),
+        "Content-Type": "application/json",
+      };
+      const noted = await fetch(`${origin()}/w/${slug}/annotations`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          artifact_path: DOC,
+          body: "Say what the place is before you say why it matters.",
+          intent: "content",
+          target: {
+            quote: { exact: "the mark keeps its place beside the passage it is about", prefix: "", suffix: "" },
+          },
+        }),
+      });
+      expect(noted.status, `annotation: ${await noted.clone().text()}`).toBe(201);
+      const asked = await fetch(`${origin()}/api/workspaces/attention-request`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          path: workspaceRoot,
+          target_path: DOC,
+          action: "ask",
+          message: "Is the wash on these words enough, or should the bracket say more?",
+          target: { quote: { exact: "This sentence is the one it asks about" } },
+        }),
+      });
+      expect(asked.status, `attention-request: ${await asked.clone().text()}`).toBe(201);
+
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(DOC));
+      await waitForReady(tab, "before the theme files probe");
+      // A screenshot waits for the page to be still: the pane redraws its margin when its data
+      // refreshes, and the composer plays its arrival again when it does.
+      const shots = async (name: string) => {
+        await tab.evaluate(`(async()=>{const deadline=Date.now()+5000;let last=Date.now();
+          const observer=new MutationObserver(()=>{last=Date.now();});
+          observer.observe(document.body,{subtree:true,childList:true,attributes:true});
+          while(Date.now()-last<400||document.getAnimations().some(a=>a.playState==='running')) {
+            if(Date.now()>deadline) break;
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          observer.disconnect();})()`);
+        const shot = await tab.send("Page.captureScreenshot", { format: "png" });
+        mkdirSync(".context/test-results", { recursive: true });
+        writeFileSync(`.context/test-results/theme-409-${name}.png`, Buffer.from(shot.result.data, "base64"));
+      };
+
+      // Every media feature the paint depends on is pinned, never read from the host: CI's macOS
+      // runner reports reduced motion, and a Mac with Increase Contrast reports more contrast.
+      const emulate = async (
+        scheme: "light" | "dark",
+        contrast: "more" | "no-preference",
+        theme: string,
+        media: "screen" | "print" = "screen",
+      ) => {
+        await tab.send("Emulation.setEmulatedMedia", {
+          media,
+          features: [
+            { name: "prefers-color-scheme", value: scheme },
+            { name: "prefers-reduced-motion", value: "no-preference" },
+            { name: "prefers-contrast", value: contrast },
+          ],
+        });
+        await tab.evaluate(`(async()=>{const deadline=Date.now()+3000;
+          while(document.documentElement.dataset.theme!==${JSON.stringify(theme)}) {
+            if(Date.now()>deadline) throw new Error('the page never painted ${theme} (${scheme}, contrast ${contrast}); it shows '+document.documentElement.dataset.theme);
+            await new Promise(resolve=>requestAnimationFrame(resolve));
+          }
+          for (let frame=0; frame<2; frame++) await new Promise(resolve=>requestAnimationFrame(resolve));
+          await Promise.all(document.getAnimations().map(a=>a.finished.catch(()=>{})));
+        })()`);
+      };
+      type Painted = {
+        theme: string;
+        scheme: string;
+        palette: string;
+        paper: string;
+        htmlBackground: string;
+        bodyBackground: string;
+        bodyColor: string;
+        tokens: Record<string, { value: string; resolved: string }>;
+      };
+      /** Each token as <html> computes it, and the colour it resolves to on an element. */
+      const painted = (names: string[]) =>
+        tab.evaluate<Painted>(`(()=>{
+          const html=document.documentElement, style=getComputedStyle(html), tokens={};
+          for (const name of ${JSON.stringify(names)}) {
+            const probe=document.createElement('span'); document.body.append(probe);
+            const shadow=name.includes('shadow');
+            probe.style[shadow?'boxShadow':'color']='var('+name+')';
+            tokens[name]={value:style.getPropertyValue(name).trim(),resolved:getComputedStyle(probe)[shadow?'boxShadow':'color']};
+            probe.remove();
+          }
+          // The paper as the desktop shell is told it (appearance.js readPaperColor).
+          const context=document.createElement('canvas').getContext('2d');
+          context.fillStyle=getComputedStyle(document.body).backgroundColor; context.fillRect(0,0,1,1);
+          const paper='#'+[...context.getImageData(0,0,1,1).data].slice(0,3).map(v=>v.toString(16).padStart(2,'0')).join('');
+          return {theme:html.dataset.theme,scheme:html.dataset.scheme,palette:html.dataset.palette,paper,
+            htmlBackground:style.backgroundColor,bodyBackground:getComputedStyle(document.body).backgroundColor,
+            bodyColor:getComputedStyle(document.body).color,tokens};
+        })()`);
+      const goldenNames = Object.keys(before.cases["light/screen"]!.tokens);
+
+      // The draft in pencil: words selected in Review open the real composer at their passage.
+      await tab.evaluate(`(async()=>{
+        const pane=[...document.querySelectorAll('.glosa-pane')].find(p=>p.getAttribute('aria-label')===${JSON.stringify(DOC)});
+        const deadline=Date.now()+8000;
+        const phrase='Nothing takes the hand until Send';
+        let paragraph=null;
+        while(!(paragraph=[...pane.querySelectorAll('.glosa-content p')].find(p=>p.textContent.includes(phrase)))
+          || !pane.querySelector('.glosa-annotation') || !pane.querySelector('.glosa-agent-card')) {
+          if(Date.now()>deadline) throw new Error('the document, its note or the question never painted');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        const text=paragraph.firstChild, start=text.textContent.indexOf(phrase);
+        const range=document.createRange(); range.setStart(text,start); range.setEnd(text,start+phrase.length);
+        const selection=getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        pane.querySelector('.glosa-content').dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+        while(!pane.querySelector('.glosa-composer')) {
+          if(Date.now()>deadline) throw new Error('selecting words in Review did not open the composer');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        // Words in the draft, without focus: a focused draft turns ink, and this one is unsent.
+        const field=pane.querySelector('.glosa-composer textarea');
+        field.value='Keep the hand out of this until it is sent.';
+        field.dispatchEvent(new Event('input',{bubbles:true}));
+        field.blur();
+        getSelection().removeAllRanges();
+        await Promise.all(document.getAnimations().map(a=>a.finished.catch(()=>{})));
+      })()`);
+
+      for (const scheme of ["light", "dark"] as const) {
+        // Without the signal: glosa's own, exactly as before.
+        await emulate(scheme, "no-preference", scheme);
+        await shots(`glosa-${scheme}-document`);
+        const onScreen = await painted(goldenNames);
+        const { tokens: screenTokens, ...screenPage } = before.cases[`${scheme}/screen`]!;
+        expect(onScreen.tokens, `glosa ${scheme} on screen paints every colour token as before`).toEqual(screenTokens);
+        expect({ ...onScreen, tokens: undefined, palette: undefined, paper: undefined }).toMatchObject(screenPage);
+        expect(onScreen.paper).toBe(PAPER[scheme]);
+
+        // With the signal: the same page, glosa's own palette painting as High contrast.
+        await emulate(scheme, "more", `high-contrast-${scheme}`);
+        await shots(`high-contrast-${scheme}-document`);
+        const more = await painted(["--ink", "--hand", "--session", "--pencil", "--bg"]);
+        expect(more.palette, "the chosen palette is still glosa's own").toBe("glosa");
+        for (const slot of ["ink", "hand", "session", "pencil", "bg"])
+          expect(more.tokens[`--${slot}`]!.value, `--${slot} under more contrast in ${scheme}`).toBe(
+            highContrast[scheme][slot]!,
+          );
+        expect(more.paper, "High contrast keeps the paper the desktop window opens on").toBe(PAPER[scheme]);
+      }
+      for (const scheme of ["light", "dark"] as const) {
+        await emulate(scheme, "no-preference", scheme, "print");
+        const inPrint = await painted(goldenNames);
+        const { tokens: printTokens, ...printPage } = before.cases[`${scheme}/print`]!;
+        expect(inPrint.tokens, `glosa ${scheme} in print paints every colour token as before`).toEqual(printTokens);
+        expect({ ...inPrint, tokens: undefined, palette: undefined, paper: undefined }).toMatchObject(printPage);
+        // Print lays its white paper and ink over whichever theme is showing; marks keep theirs.
+        await emulate(scheme, "more", `high-contrast-${scheme}`, "print");
+        const printedMore = await painted(["--bg", "--ink", "--hand"]);
+        expect(
+          [printedMore.tokens["--bg"]!.value, printedMore.tokens["--ink"]!.value, printedMore.tokens["--hand"]!.value],
+          `High contrast ${scheme} in print`,
+        ).toEqual(["#fff", "#202020", highContrast[scheme].hand!]);
+      }
+
+      // Chosen in Settings > Appearance, as a person chooses it: High contrast, with or without the
+      // signal, in either scheme.
+      await emulate("light", "no-preference", "light");
+      await tab.evaluate(`(async()=>{
+        document.querySelector('.glosa-sidebar-settings').click();
+        const deadline=Date.now()+8000;
+        let item=null;
+        while(!(item=[...document.querySelectorAll('.glosa-settings-nav button')].find(b=>b.textContent==='Appearance'))) {
+          if(Date.now()>deadline) throw new Error('Settings never opened');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        item.click();
+        while(!document.querySelector('.glosa-settings-palettes:not([hidden]) [data-palette-choice]')?.getBoundingClientRect().height) {
+          if(Date.now()>deadline) throw new Error('Settings > Appearance never showed its palettes');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      })()`);
+      await shots("settings-appearance-light");
+      await emulate("dark", "no-preference", "dark");
+      await shots("settings-appearance-dark");
+      // glosa's own chosen while the system asks for more contrast: Settings says what is showing.
+      await emulate("light", "more", "high-contrast-light");
+      expect(
+        await tab.evaluate<string>(
+          "document.querySelector('.glosa-settings-palettes + .glosa-settings-hint:not([hidden])')?.textContent ?? ''",
+        ),
+      ).toBe("Your system asks for more contrast, so glosa shows High contrast.");
+      await shots("settings-appearance-light-more-contrast");
+      await emulate("dark", "no-preference", "dark");
+      await tab.evaluate(`document.querySelector('[data-palette-choice="high-contrast"]').click()`);
+      await emulate("dark", "no-preference", "high-contrast-dark");
+      await shots("settings-appearance-high-contrast-dark");
+      for (const [scheme, contrast] of [
+        ["dark", "no-preference"],
+        ["light", "no-preference"],
+        ["light", "more"],
+        ["dark", "more"],
+      ] as const) {
+        await emulate(scheme, contrast, `high-contrast-${scheme}`);
+        const chosen = await painted(["--ink", "--hand", "--session"]);
+        expect(chosen.palette).toBe("high-contrast");
+        for (const slot of ["ink", "hand", "session"])
+          expect(chosen.tokens[`--${slot}`]!.value, `chosen High contrast, ${scheme}, contrast ${contrast}`).toBe(
+            highContrast[scheme][slot]!,
+          );
+      }
+      await emulate("light", "no-preference", "high-contrast-light");
+      await shots("settings-appearance-high-contrast-light");
     },
     TEST_TIMEOUT_MS,
   );

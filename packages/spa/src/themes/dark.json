@@ -1,0 +1,23 @@
+{
+  "id": "dark",
+  "name": "glosa dark: the same desk under a reading lamp",
+  "scheme": "dark",
+  "slots": {
+    "bg": "oklch(0.205 0.008 60)",
+    "surface": "oklch(0.235 0.009 60)",
+    "surface-sunken": "oklch(0.275 0.01 60)",
+    "ink": "oklch(0.93 0.01 80)",
+    "muted": "oklch(0.72 0.014 70)",
+    "faint": "oklch(0.52 0.012 65)",
+    "border": "oklch(0.32 0.01 60)",
+    "border-strong": "oklch(0.58 0.012 65)",
+    "rule": "oklch(0.74 0.01 80)",
+    "hand": "oklch(0.72 0.13 45)",
+    "pencil": "oklch(0.64 0.01 70)",
+    "session": "oklch(0.76 0.1 250)",
+    "danger": "oklch(0.7 0.15 22)",
+    "warn": "oklch(0.76 0.11 80)",
+    "ok": "oklch(0.72 0.09 150)",
+    "scrim": "oklch(0 0 0 / 0.45)"
+  }
+}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { mountMcpSettings } from "./agent-mcp-settings.js";
-import { appearanceList } from "./appearance.js";
+import { appearanceList, CHECK_SVG, paletteList } from "./appearance.js";
 import { actionMenu, agentIcon, agentName } from "./agent-ui.js";
 import { confirmDialog } from "./dialog.js";
 import { mountTextSizeControl } from "./text-size.js";
@@ -69,7 +69,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
   const navigation = el("nav", { className: "glosa-settings-nav", "aria-label": "Settings" });
   const appearancePage = el("section", { className: "glosa-settings-content", hidden: true }, [
     el("h2", { className: "glosa-settings-title", textContent: "Appearance" }),
-    el("p", { className: "glosa-agent-intro", textContent: "Choose how Glosa looks on this device." }),
+    el("p", { className: "glosa-agent-intro", textContent: "Choose how glosa looks on this device." }),
   ]);
   for (const [label, panel] of [
     ["Agents & accounts", agents],
@@ -88,12 +88,18 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
     });
     navigation.append(item);
   }
+  // Mode and Palette (#409), both from the one list of appearances (#405): adding an entry there
+  // adds its button here. A mode picks the scheme; a palette the colours it paints in.
+  const modeLabel = el("h3", {
+    id: "glosa-settings-mode-label",
+    className: "glosa-settings-label",
+    textContent: "Mode",
+  });
   const appearanceOptions = el("div", {
     className: "glosa-settings-appearance",
     role: "group",
-    "aria-label": "Color theme",
+    "aria-labelledby": modeLabel.id,
   });
-  // The one list of appearances (#405): adding an entry there adds its button here.
   for (const { id, settingsLabel } of appearanceList()) {
     appearanceOptions.append(
       el("button", {
@@ -104,7 +110,47 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
       }),
     );
   }
-  if (appearance) appearancePage.append(appearanceOptions);
+  const paletteLabel = el("h3", {
+    id: "glosa-settings-palette-label",
+    className: "glosa-settings-label",
+    textContent: "Palette",
+  });
+  const paletteOptions = el("div", {
+    className: "glosa-settings-palettes",
+    role: "group",
+    "aria-labelledby": paletteLabel.id,
+  });
+  // Each row shows its palette's paper and ink as they would paint in the current scheme: the
+  // swatch names a theme (`data-theme-swatch`), and themes.css sets that theme's slots on it.
+  for (const { id, label, credit } of paletteList()) {
+    const check = el("span", { className: "glosa-settings-palette-check" });
+    check.innerHTML = CHECK_SVG;
+    paletteOptions.append(
+      el(
+        "button",
+        {
+          type: "button",
+          className: "glosa-settings-palette",
+          "data-palette-choice": id,
+          onClick: () => appearance.setPalette(id),
+        },
+        [
+          el("span", { className: "glosa-settings-palette-swatch", "aria-hidden": "true" }, [
+            el("span", { className: "glosa-settings-palette-paper", textContent: "Aa" }),
+          ]),
+          el("span", { className: "glosa-settings-palette-text" }, [
+            el("span", { className: "glosa-settings-palette-name", textContent: label }),
+            el("span", { className: "glosa-settings-palette-credit", textContent: credit }),
+          ]),
+          check,
+        ],
+      ),
+    );
+  }
+  // Said only while it is true: the chosen palette is shown as another because the operating
+  // system asks for more contrast (glosa's own becomes High contrast).
+  const paletteHint = el("p", { className: "glosa-settings-hint", role: "status" });
+  if (appearance) appearancePage.append(modeLabel, appearanceOptions, paletteLabel, paletteOptions, paletteHint);
   // The text size step (#406): the same control and the same store as the document's More menu,
   // so a change in either is the other's too.
   const textSizeField = el("div");
@@ -117,9 +163,18 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
     ? mountTextSizeControl(textSizeField, textSize, { variant: "settings", describedBy: textSizeHint.id })
     : null;
   if (textSizeControl) appearancePage.append(textSizeField, textSizeHint);
-  const stopAppearance = appearance?.subscribe(({ preference }) => {
+  const stopAppearance = appearance?.subscribe(({ preference, palette, painting, scheme }) => {
     for (const button of appearanceOptions.children)
       button.setAttribute("aria-pressed", String(button.dataset.themeChoice === preference));
+    for (const button of paletteOptions.children) {
+      const entry = paletteList().find((candidate) => candidate.id === button.dataset.paletteChoice);
+      button.setAttribute("aria-pressed", String(entry.id === palette));
+      button.querySelector(".glosa-settings-palette-paper").dataset.themeSwatch = entry.themes[scheme];
+    }
+    const shown = paletteList().find((candidate) => candidate.id === painting);
+    paletteHint.textContent =
+      painting === palette ? "" : `Your system asks for more contrast, so glosa shows ${shown.label}.`;
+    paletteHint.hidden = painting === palette;
   });
   root.append(
     el("h1", { textContent: "Settings" }),

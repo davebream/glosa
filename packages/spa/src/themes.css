@@ -1,0 +1,111 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* @glosa/spa: the theme slots (#409). GENERATED from packages/spa/src/themes/*.json by
+   `bun run themes:render`. Edit a theme file and render again; never edit this file by hand.
+   packages/spa/test/themes.test.ts fails when the two disagree, and refuses any theme below its
+   contrast floors (packages/spa/src/themes/validate.js).
+
+   A theme sets the sixteen slots on <html> when `data-theme` names it, which the one list of
+   appearances (appearance-list.js) resolves before first paint, and on a Settings swatch that names
+   it (`data-theme-swatch`). The first theme is also the page's own default, before anything is
+   resolved. What is derived from the slots (washes, hover shades, the primary action, the focus
+   ring, shadows) lives in app.css, which reads the slots and never sets them. */
+
+/* glosa light: warm paper, near-black ink, the vermilion hand */
+:root,
+:root[data-theme="light"],
+[data-theme-swatch="light"] {
+  --bg: oklch(0.99 0.007 85);
+  --surface: oklch(0.97 0.006 80);
+  --surface-sunken: oklch(0.94 0.009 78);
+  --ink: oklch(0.2 0.012 60);
+  --muted: oklch(0.47 0.016 60);
+  --faint: oklch(0.64 0.012 65);
+  --border: oklch(0.88 0.01 75);
+  --border-strong: oklch(0.6 0.014 65);
+  --rule: var(--ink);
+  --hand: oklch(0.52 0.16 42);
+  --pencil: oklch(0.56 0.01 65);
+  --session: oklch(0.42 0.11 255);
+  --danger: oklch(0.47 0.17 22);
+  --warn: oklch(0.53 0.11 80);
+  --ok: oklch(0.5 0.09 150);
+  --scrim: oklch(0.2 0.012 60 / 0.3);
+}
+
+/* glosa dark: the same desk under a reading lamp */
+:root[data-theme="dark"],
+[data-theme-swatch="dark"] {
+  --bg: oklch(0.205 0.008 60);
+  --surface: oklch(0.235 0.009 60);
+  --surface-sunken: oklch(0.275 0.01 60);
+  --ink: oklch(0.93 0.01 80);
+  --muted: oklch(0.72 0.014 70);
+  --faint: oklch(0.52 0.012 65);
+  --border: oklch(0.32 0.01 60);
+  --border-strong: oklch(0.58 0.012 65);
+  --rule: oklch(0.74 0.01 80);
+  --hand: oklch(0.72 0.13 45);
+  --pencil: oklch(0.64 0.01 70);
+  --session: oklch(0.76 0.1 250);
+  --danger: oklch(0.7 0.15 22);
+  --warn: oklch(0.76 0.11 80);
+  --ok: oklch(0.72 0.09 150);
+  --scrim: oklch(0 0 0 / 0.45);
+}
+
+/* glosa High contrast dark: the same lamplit paper, brighter ink, marks and edges */
+:root[data-theme="high-contrast-dark"],
+[data-theme-swatch="high-contrast-dark"] {
+  --bg: oklch(0.205 0.008 60);
+  --surface: oklch(0.235 0.009 60);
+  --surface-sunken: oklch(0.275 0.01 60);
+  --ink: oklch(0.97 0.008 80);
+  --muted: oklch(0.8 0.012 75);
+  --faint: oklch(0.62 0.012 65);
+  --border: oklch(0.44 0.01 60);
+  --border-strong: oklch(0.7 0.012 65);
+  --rule: oklch(0.86 0.01 80);
+  --hand: oklch(0.77 0.13 45);
+  --pencil: oklch(0.72 0.01 70);
+  --session: oklch(0.84 0.085 250);
+  --danger: oklch(0.71 0.15 22);
+  --warn: oklch(0.84 0.1 80);
+  --ok: oklch(0.82 0.09 150);
+  --scrim: oklch(0 0 0 / 0.6);
+}
+
+/* glosa High contrast light: the same paper, deeper ink, marks and edges */
+:root[data-theme="high-contrast-light"],
+[data-theme-swatch="high-contrast-light"] {
+  --bg: oklch(0.99 0.007 85);
+  --surface: oklch(0.97 0.006 80);
+  --surface-sunken: oklch(0.94 0.009 78);
+  --ink: oklch(0.16 0.012 60);
+  --muted: oklch(0.4 0.014 60);
+  --faint: oklch(0.55 0.012 65);
+  --border: oklch(0.76 0.01 75);
+  --border-strong: oklch(0.5 0.014 65);
+  --rule: var(--ink);
+  --hand: oklch(0.46 0.16 42);
+  --pencil: oklch(0.5 0.01 65);
+  --session: oklch(0.35 0.11 255);
+  --danger: oklch(0.38 0.15 22);
+  --warn: oklch(0.5 0.1 80);
+  --ok: oklch(0.41 0.08 150);
+  --scrim: oklch(0.16 0.012 60 / 0.4);
+}
+
+/* Print: white paper and near-black ink over whichever theme is showing.
+   It sets only these slots. Marks do not print, so the hand, pencil and session keep the values
+   of the theme that is showing. */
+@media print {
+  :root,
+  :root[data-theme] {
+    --bg: #fff;
+    --surface: #f4f4f4;
+    --ink: #202020;
+    --muted: #454545;
+    --border: #ccc;
+    --border-strong: #777;
+  }
+}

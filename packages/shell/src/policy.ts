@@ -476,9 +476,10 @@ export function notifyDecision(payload: unknown, seen: RecentIds): NotifyDecisio
 // ---------- the window follows glosa's appearance (#405) ----------
 
 /**
- * glosa's own paper, light and dark (`--bg` in packages/spa/src/app.css, `oklch(0.99 0.007 85)`
- * and `oklch(0.205 0.008 60)`, as sRGB). A window's first frame before any page has reported:
- * the shell cannot read a theme, so it paints the paper of the operating system's scheme.
+ * glosa's own paper, light and dark (`bg` in packages/spa/src/themes/light.json and dark.json,
+ * `oklch(0.99 0.007 85)` and `oklch(0.205 0.008 60)`, as sRGB; High contrast keeps the same
+ * paper). A window's first frame before any page has reported: the shell cannot read a theme,
+ * so it paints the paper of the operating system's scheme.
  */
 export const PAPER = Object.freeze({ light: "#fefbf7", dark: "#1a1614" });
 

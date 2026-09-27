@@ -79,7 +79,8 @@
     "test:ci": "bun run scripts/test-runner.ts ci",
     "test:docs": "bun run scripts/test-runner.ts docs",
     "test:stability": "bun run scripts/test-runner.ts stability",
-    "test:full": "bun run scripts/test-runner.ts full"
+    "test:full": "bun run scripts/test-runner.ts full",
+    "themes:render": "bun run scripts/render-themes.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",

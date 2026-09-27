@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — appearance preference state. This module owns the durable, non-sensitive
-// localStorage preference under its own key; bootstrap owns the pairing token separately, under
-// `glosa_token` in the same origin-scoped store.
+// localStorage preferences under their own keys (the mode and the palette); bootstrap owns the
+// pairing token separately, under `glosa_token` in the same origin-scoped store.
 
 // The one list of appearances (#405), a classic script the first-paint preload reads too. Imported
 // for its side effect; it publishes `globalThis.glosaAppearances`. Every function below reads the
@@ -9,11 +9,20 @@
 import "./appearance-list.js";
 
 export const APPEARANCE_STORAGE_KEY = "glosa_appearance";
+export const PALETTE_STORAGE_KEY = "glosa_palette";
 
-/** The listed appearances, in chooser order: `{ id, scheme, label, settingsLabel }`. */
+/** The listed modes, in chooser order: `{ id, scheme, label, settingsLabel }`. */
 export function appearanceList() {
   return globalThis.glosaAppearances.list;
 }
+
+/** The listed palettes, in chooser order: `{ id, label, credit, themes, moreContrast? }` (#409). */
+export function paletteList() {
+  return globalThis.glosaAppearances.palettes;
+}
+
+/** The drawn check a chosen row carries, here and in Settings > Appearance's palettes. */
+export const CHECK_SVG = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.2 10.2 3.1 3.1 6.5-6.6"/></svg>';
 
 const ICONS = {
   system:
@@ -21,7 +30,7 @@ const ICONS = {
   light:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.25"/><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.4 1.4M14.6 14.6 16 16M16 4l-1.4 1.4M5.4 14.6 4 16"/></svg>',
   dark: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.8 12.3A7 7 0 0 1 7.7 3.2 7 7 0 1 0 16.8 12.3Z"/></svg>',
-  check: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.2 10.2 3.1 3.1 6.5-6.6"/></svg>',
+  check: CHECK_SVG,
 };
 
 export function isAppearance(value) {
@@ -50,6 +59,20 @@ export function readAppearance(storage) {
   }
 }
 
+export function isPalette(value) {
+  return globalThis.glosaAppearances.findPalette(value) !== null;
+}
+
+export function readPalette(storage) {
+  const fallback = paletteList()[0].id;
+  try {
+    const stored = storage?.getItem(PALETTE_STORAGE_KEY);
+    return isPalette(stored) ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function fallbackMediaQuery() {
   return {
     matches: false,
@@ -59,11 +82,12 @@ function fallbackMediaQuery() {
 }
 
 /**
- * Creates the page-lifetime appearance controller. Explicit preferences ignore media-query
- * changes; system preference resolves every change event immediately. Storage failure never
- * prevents a session-local appearance change.
+ * Creates the page-lifetime appearance controller. Explicit modes ignore scheme changes; "Use
+ * system setting" resolves every change event immediately. A palette with a `moreContrast`
+ * palette (glosa's own) follows the operating system's request for more contrast as it changes;
+ * any other palette stays as chosen. Storage failure never prevents a session-local change.
  */
-export function createAppearanceController({ root, storage, mediaQuery } = {}) {
+export function createAppearanceController({ root, storage, mediaQuery, contrastQuery } = {}) {
   const targetRoot = root ?? document.documentElement;
   let targetStorage = storage;
   if (targetStorage === undefined) {
@@ -73,23 +97,28 @@ export function createAppearanceController({ root, storage, mediaQuery } = {}) {
       targetStorage = undefined;
     }
   }
-  const targetMedia =
-    mediaQuery ??
-    (typeof window.matchMedia === "function"
-      ? window.matchMedia("(prefers-color-scheme: dark)")
-      : fallbackMediaQuery());
+  const query = (text) => (typeof window.matchMedia === "function" ? window.matchMedia(text) : fallbackMediaQuery());
+  const targetMedia = mediaQuery ?? query("(prefers-color-scheme: dark)");
+  const targetContrast = contrastQuery ?? query("(prefers-contrast: more)");
   const listeners = new Set();
   let preference = readAppearance(targetStorage);
+  let palette = readPalette(targetStorage);
 
-  /** `resolved` is the theme id that paints; `scheme` its "light" or "dark". */
+  /** `palette` is the chosen palette and `painting` the one that paints (High contrast while the
+   * system asks for more contrast, for glosa's own); `resolved` is the theme id that paints and
+   * `scheme` its "light" or "dark". */
   function getSnapshot() {
-    const { theme, scheme } = globalThis.glosaAppearances.resolve(preference, Boolean(targetMedia.matches));
-    return { preference, resolved: theme, scheme };
+    const resolved = globalThis.glosaAppearances.resolve(preference, Boolean(targetMedia.matches), {
+      palette,
+      moreContrast: Boolean(targetContrast.matches),
+    });
+    return { preference, palette, painting: resolved.painting, resolved: resolved.theme, scheme: resolved.scheme };
   }
 
   function apply(notify) {
     const snapshot = getSnapshot();
     targetRoot.dataset.appearance = snapshot.preference;
+    targetRoot.dataset.palette = snapshot.palette;
     targetRoot.dataset.theme = snapshot.resolved;
     targetRoot.dataset.scheme = snapshot.scheme;
     targetRoot.style.colorScheme = snapshot.scheme;
@@ -101,19 +130,35 @@ export function createAppearanceController({ root, storage, mediaQuery } = {}) {
     if (followsSystem(preference)) apply(true);
   }
 
+  function onContrastChange() {
+    if (globalThis.glosaAppearances.findPalette(palette)?.moreContrast) apply(true);
+  }
+
   targetMedia.addEventListener?.("change", onSystemChange);
+  targetContrast.addEventListener?.("change", onContrastChange);
   apply(false);
+
+  /** @param {string} key @param {string} value */
+  function persist(key, value) {
+    try {
+      targetStorage?.setItem(key, value);
+    } catch {
+      // Applying the choice for this page remains useful when persistence is unavailable.
+    }
+  }
 
   return {
     getSnapshot,
     setPreference(next) {
       if (!isAppearance(next)) throw new TypeError(`Unknown appearance: ${next}`);
       preference = next;
-      try {
-        targetStorage?.setItem(APPEARANCE_STORAGE_KEY, preference);
-      } catch {
-        // Applying the choice for this page remains useful when persistence is unavailable.
-      }
+      persist(APPEARANCE_STORAGE_KEY, preference);
+      return apply(true);
+    },
+    setPalette(next) {
+      if (!isPalette(next)) throw new TypeError(`Unknown palette: ${next}`);
+      palette = next;
+      persist(PALETTE_STORAGE_KEY, palette);
       return apply(true);
     },
     subscribe(listener) {
@@ -123,6 +168,7 @@ export function createAppearanceController({ root, storage, mediaQuery } = {}) {
     },
     destroy() {
       targetMedia.removeEventListener?.("change", onSystemChange);
+      targetContrast.removeEventListener?.("change", onContrastChange);
       listeners.clear();
     },
   };
@@ -147,8 +193,10 @@ export function readPaperColor(doc = document) {
  * native UI (dialogs, menus, the title bar) follow glosa rather than the operating system. Only
  * inside the shell: a browser tab has no `reportAppearance`. The message is `{ source, scheme,
  * background }`: whether the page follows the operating system or fixed a scheme ("system",
- * "light" or "dark"), the scheme it paints with, and its paper as `#rrggbb`. Never a path or a
- * theme name (A3 §4b). Returns an unsubscribe.
+ * "light" or "dark"), the scheme it paints with, and its paper as `#rrggbb`: the painting
+ * theme's `--bg`, so a palette's own paper reaches the window too, and a change of palette or of
+ * the system's contrast reports again. Never a path or a theme name (A3 §4b). Returns an
+ * unsubscribe.
  */
 export function reportAppearanceToShell(controller, shell, { readPaper = () => readPaperColor() } = {}) {
   if (typeof shell?.reportAppearance !== "function") return () => {};
