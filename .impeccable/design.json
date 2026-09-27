@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-27T22:53:05+00:00",
+  "generatedAt": "2026-09-27T23:21:18+00:00",
   "title": "Design System: glosa",
   "extensions": {
     "colorMeta": {
@@ -182,6 +182,21 @@
           "oklch(0.75 0.01 65)",
           "oklch(0.87 0.01 65)",
           "oklch(0.95 0.01 65)"
+        ]
+      },
+      "session": {
+        "role": "secondary",
+        "displayName": "Session Ink, Blue-Black",
+        "canonical": "oklch(0.42 0.11 255)",
+        "tonalRamp": [
+          "oklch(0.15 0.11 255)",
+          "oklch(0.27 0.11 255)",
+          "oklch(0.39 0.11 255)",
+          "oklch(0.51 0.11 255)",
+          "oklch(0.63 0.11 255)",
+          "oklch(0.75 0.11 255)",
+          "oklch(0.87 0.11 255)",
+          "oklch(0.95 0.11 255)"
         ]
       },
       "danger": {
@@ -378,6 +393,426 @@
           "oklch(0.87 0.01 70)",
           "oklch(0.95 0.01 70)"
         ]
+      },
+      "dark-session": {
+        "role": "secondary",
+        "displayName": "Session Ink Under Lamplight",
+        "canonical": "oklch(0.76 0.1 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.1 250)",
+          "oklch(0.27 0.1 250)",
+          "oklch(0.39 0.1 250)",
+          "oklch(0.51 0.1 250)",
+          "oklch(0.63 0.1 250)",
+          "oklch(0.75 0.1 250)",
+          "oklch(0.87 0.1 250)",
+          "oklch(0.95 0.1 250)"
+        ]
+      },
+      "dark-faint": {
+        "role": "neutral",
+        "displayName": "Lamplit Faint Ink",
+        "canonical": "oklch(0.52 0.012 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 65)",
+          "oklch(0.27 0.012 65)",
+          "oklch(0.39 0.012 65)",
+          "oklch(0.51 0.012 65)",
+          "oklch(0.63 0.012 65)",
+          "oklch(0.75 0.012 65)",
+          "oklch(0.87 0.012 65)",
+          "oklch(0.95 0.012 65)"
+        ]
+      },
+      "dark-danger": {
+        "role": "semantic",
+        "displayName": "Lamplit Danger",
+        "canonical": "oklch(0.7 0.15 22)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 22)",
+          "oklch(0.27 0.15 22)",
+          "oklch(0.39 0.15 22)",
+          "oklch(0.51 0.15 22)",
+          "oklch(0.63 0.15 22)",
+          "oklch(0.75 0.15 22)",
+          "oklch(0.87 0.15 22)",
+          "oklch(0.95 0.15 22)"
+        ]
+      },
+      "dark-warn": {
+        "role": "semantic",
+        "displayName": "Lamplit Warning",
+        "canonical": "oklch(0.76 0.11 80)",
+        "tonalRamp": [
+          "oklch(0.15 0.11 80)",
+          "oklch(0.27 0.11 80)",
+          "oklch(0.39 0.11 80)",
+          "oklch(0.51 0.11 80)",
+          "oklch(0.63 0.11 80)",
+          "oklch(0.75 0.11 80)",
+          "oklch(0.87 0.11 80)",
+          "oklch(0.95 0.11 80)"
+        ]
+      },
+      "dark-ok": {
+        "role": "semantic",
+        "displayName": "Lamplit Success",
+        "canonical": "oklch(0.72 0.09 150)",
+        "tonalRamp": [
+          "oklch(0.15 0.09 150)",
+          "oklch(0.27 0.09 150)",
+          "oklch(0.39 0.09 150)",
+          "oklch(0.51 0.09 150)",
+          "oklch(0.63 0.09 150)",
+          "oklch(0.75 0.09 150)",
+          "oklch(0.87 0.09 150)",
+          "oklch(0.95 0.09 150)"
+        ]
+      },
+      "high-contrast-ink": {
+        "role": "primary",
+        "displayName": "High Contrast Ink",
+        "canonical": "oklch(0.16 0.012 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 60)",
+          "oklch(0.27 0.012 60)",
+          "oklch(0.39 0.012 60)",
+          "oklch(0.51 0.012 60)",
+          "oklch(0.63 0.012 60)",
+          "oklch(0.75 0.012 60)",
+          "oklch(0.87 0.012 60)",
+          "oklch(0.95 0.012 60)"
+        ]
+      },
+      "high-contrast-muted": {
+        "role": "neutral",
+        "displayName": "High Contrast Muted Ink",
+        "canonical": "oklch(0.4 0.014 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.014 60)",
+          "oklch(0.27 0.014 60)",
+          "oklch(0.39 0.014 60)",
+          "oklch(0.51 0.014 60)",
+          "oklch(0.63 0.014 60)",
+          "oklch(0.75 0.014 60)",
+          "oklch(0.87 0.014 60)",
+          "oklch(0.95 0.014 60)"
+        ]
+      },
+      "high-contrast-faint": {
+        "role": "neutral",
+        "displayName": "High Contrast Faint Ink",
+        "canonical": "oklch(0.55 0.012 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 65)",
+          "oklch(0.27 0.012 65)",
+          "oklch(0.39 0.012 65)",
+          "oklch(0.51 0.012 65)",
+          "oklch(0.63 0.012 65)",
+          "oklch(0.75 0.012 65)",
+          "oklch(0.87 0.012 65)",
+          "oklch(0.95 0.012 65)"
+        ]
+      },
+      "high-contrast-border": {
+        "role": "neutral",
+        "displayName": "High Contrast Quiet Border",
+        "canonical": "oklch(0.76 0.01 75)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 75)",
+          "oklch(0.27 0.01 75)",
+          "oklch(0.39 0.01 75)",
+          "oklch(0.51 0.01 75)",
+          "oklch(0.63 0.01 75)",
+          "oklch(0.75 0.01 75)",
+          "oklch(0.87 0.01 75)",
+          "oklch(0.95 0.01 75)"
+        ]
+      },
+      "high-contrast-border-strong": {
+        "role": "neutral",
+        "displayName": "High Contrast Strong Border",
+        "canonical": "oklch(0.5 0.014 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.014 65)",
+          "oklch(0.27 0.014 65)",
+          "oklch(0.39 0.014 65)",
+          "oklch(0.51 0.014 65)",
+          "oklch(0.63 0.014 65)",
+          "oklch(0.75 0.014 65)",
+          "oklch(0.87 0.014 65)",
+          "oklch(0.95 0.014 65)"
+        ]
+      },
+      "high-contrast-hand": {
+        "role": "primary",
+        "displayName": "High Contrast The Hand",
+        "canonical": "oklch(0.46 0.16 42)",
+        "tonalRamp": [
+          "oklch(0.15 0.16 42)",
+          "oklch(0.27 0.16 42)",
+          "oklch(0.39 0.16 42)",
+          "oklch(0.51 0.16 42)",
+          "oklch(0.63 0.16 42)",
+          "oklch(0.75 0.16 42)",
+          "oklch(0.87 0.16 42)",
+          "oklch(0.95 0.16 42)"
+        ]
+      },
+      "high-contrast-pencil": {
+        "role": "secondary",
+        "displayName": "High Contrast The Pencil",
+        "canonical": "oklch(0.5 0.01 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 65)",
+          "oklch(0.27 0.01 65)",
+          "oklch(0.39 0.01 65)",
+          "oklch(0.51 0.01 65)",
+          "oklch(0.63 0.01 65)",
+          "oklch(0.75 0.01 65)",
+          "oklch(0.87 0.01 65)",
+          "oklch(0.95 0.01 65)"
+        ]
+      },
+      "high-contrast-session": {
+        "role": "secondary",
+        "displayName": "High Contrast Session Ink",
+        "canonical": "oklch(0.35 0.11 255)",
+        "tonalRamp": [
+          "oklch(0.15 0.11 255)",
+          "oklch(0.27 0.11 255)",
+          "oklch(0.39 0.11 255)",
+          "oklch(0.51 0.11 255)",
+          "oklch(0.63 0.11 255)",
+          "oklch(0.75 0.11 255)",
+          "oklch(0.87 0.11 255)",
+          "oklch(0.95 0.11 255)"
+        ]
+      },
+      "high-contrast-danger": {
+        "role": "semantic",
+        "displayName": "High Contrast Danger",
+        "canonical": "oklch(0.38 0.15 22)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 22)",
+          "oklch(0.27 0.15 22)",
+          "oklch(0.39 0.15 22)",
+          "oklch(0.51 0.15 22)",
+          "oklch(0.63 0.15 22)",
+          "oklch(0.75 0.15 22)",
+          "oklch(0.87 0.15 22)",
+          "oklch(0.95 0.15 22)"
+        ]
+      },
+      "high-contrast-warn": {
+        "role": "semantic",
+        "displayName": "High Contrast Warning",
+        "canonical": "oklch(0.5 0.1 80)",
+        "tonalRamp": [
+          "oklch(0.15 0.1 80)",
+          "oklch(0.27 0.1 80)",
+          "oklch(0.39 0.1 80)",
+          "oklch(0.51 0.1 80)",
+          "oklch(0.63 0.1 80)",
+          "oklch(0.75 0.1 80)",
+          "oklch(0.87 0.1 80)",
+          "oklch(0.95 0.1 80)"
+        ]
+      },
+      "high-contrast-ok": {
+        "role": "semantic",
+        "displayName": "High Contrast Success",
+        "canonical": "oklch(0.41 0.08 150)",
+        "tonalRamp": [
+          "oklch(0.15 0.08 150)",
+          "oklch(0.27 0.08 150)",
+          "oklch(0.39 0.08 150)",
+          "oklch(0.51 0.08 150)",
+          "oklch(0.63 0.08 150)",
+          "oklch(0.75 0.08 150)",
+          "oklch(0.87 0.08 150)",
+          "oklch(0.95 0.08 150)"
+        ]
+      },
+      "high-contrast-dark-ink": {
+        "role": "primary",
+        "displayName": "High Contrast Lamplit Ink",
+        "canonical": "oklch(0.97 0.008 80)",
+        "tonalRamp": [
+          "oklch(0.15 0.008 80)",
+          "oklch(0.27 0.008 80)",
+          "oklch(0.39 0.008 80)",
+          "oklch(0.51 0.008 80)",
+          "oklch(0.63 0.008 80)",
+          "oklch(0.75 0.008 80)",
+          "oklch(0.87 0.008 80)",
+          "oklch(0.95 0.008 80)"
+        ]
+      },
+      "high-contrast-dark-muted": {
+        "role": "neutral",
+        "displayName": "High Contrast Lamplit Muted Ink",
+        "canonical": "oklch(0.8 0.012 75)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 75)",
+          "oklch(0.27 0.012 75)",
+          "oklch(0.39 0.012 75)",
+          "oklch(0.51 0.012 75)",
+          "oklch(0.63 0.012 75)",
+          "oklch(0.75 0.012 75)",
+          "oklch(0.87 0.012 75)",
+          "oklch(0.95 0.012 75)"
+        ]
+      },
+      "high-contrast-dark-faint": {
+        "role": "neutral",
+        "displayName": "High Contrast Lamplit Faint Ink",
+        "canonical": "oklch(0.62 0.012 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 65)",
+          "oklch(0.27 0.012 65)",
+          "oklch(0.39 0.012 65)",
+          "oklch(0.51 0.012 65)",
+          "oklch(0.63 0.012 65)",
+          "oklch(0.75 0.012 65)",
+          "oklch(0.87 0.012 65)",
+          "oklch(0.95 0.012 65)"
+        ]
+      },
+      "high-contrast-dark-border": {
+        "role": "neutral",
+        "displayName": "High Contrast Lamplit Quiet Border",
+        "canonical": "oklch(0.44 0.01 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 60)",
+          "oklch(0.27 0.01 60)",
+          "oklch(0.39 0.01 60)",
+          "oklch(0.51 0.01 60)",
+          "oklch(0.63 0.01 60)",
+          "oklch(0.75 0.01 60)",
+          "oklch(0.87 0.01 60)",
+          "oklch(0.95 0.01 60)"
+        ]
+      },
+      "high-contrast-dark-border-strong": {
+        "role": "neutral",
+        "displayName": "High Contrast Lamplit Strong Border",
+        "canonical": "oklch(0.7 0.012 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 65)",
+          "oklch(0.27 0.012 65)",
+          "oklch(0.39 0.012 65)",
+          "oklch(0.51 0.012 65)",
+          "oklch(0.63 0.012 65)",
+          "oklch(0.75 0.012 65)",
+          "oklch(0.87 0.012 65)",
+          "oklch(0.95 0.012 65)"
+        ]
+      },
+      "high-contrast-dark-rule": {
+        "role": "neutral",
+        "displayName": "High Contrast Lamplit Region Rule",
+        "canonical": "oklch(0.86 0.01 80)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 80)",
+          "oklch(0.27 0.01 80)",
+          "oklch(0.39 0.01 80)",
+          "oklch(0.51 0.01 80)",
+          "oklch(0.63 0.01 80)",
+          "oklch(0.75 0.01 80)",
+          "oklch(0.87 0.01 80)",
+          "oklch(0.95 0.01 80)"
+        ]
+      },
+      "high-contrast-dark-hand": {
+        "role": "primary",
+        "displayName": "High Contrast Lamplit The Hand",
+        "canonical": "oklch(0.77 0.13 45)",
+        "tonalRamp": [
+          "oklch(0.15 0.13 45)",
+          "oklch(0.27 0.13 45)",
+          "oklch(0.39 0.13 45)",
+          "oklch(0.51 0.13 45)",
+          "oklch(0.63 0.13 45)",
+          "oklch(0.75 0.13 45)",
+          "oklch(0.87 0.13 45)",
+          "oklch(0.95 0.13 45)"
+        ]
+      },
+      "high-contrast-dark-pencil": {
+        "role": "secondary",
+        "displayName": "High Contrast Lamplit The Pencil",
+        "canonical": "oklch(0.72 0.01 70)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 70)",
+          "oklch(0.27 0.01 70)",
+          "oklch(0.39 0.01 70)",
+          "oklch(0.51 0.01 70)",
+          "oklch(0.63 0.01 70)",
+          "oklch(0.75 0.01 70)",
+          "oklch(0.87 0.01 70)",
+          "oklch(0.95 0.01 70)"
+        ]
+      },
+      "high-contrast-dark-session": {
+        "role": "secondary",
+        "displayName": "High Contrast Lamplit Session Ink",
+        "canonical": "oklch(0.84 0.085 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.085 250)",
+          "oklch(0.27 0.085 250)",
+          "oklch(0.39 0.085 250)",
+          "oklch(0.51 0.085 250)",
+          "oklch(0.63 0.085 250)",
+          "oklch(0.75 0.085 250)",
+          "oklch(0.87 0.085 250)",
+          "oklch(0.95 0.085 250)"
+        ]
+      },
+      "high-contrast-dark-danger": {
+        "role": "semantic",
+        "displayName": "High Contrast Lamplit Danger",
+        "canonical": "oklch(0.71 0.15 22)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 22)",
+          "oklch(0.27 0.15 22)",
+          "oklch(0.39 0.15 22)",
+          "oklch(0.51 0.15 22)",
+          "oklch(0.63 0.15 22)",
+          "oklch(0.75 0.15 22)",
+          "oklch(0.87 0.15 22)",
+          "oklch(0.95 0.15 22)"
+        ]
+      },
+      "high-contrast-dark-warn": {
+        "role": "semantic",
+        "displayName": "High Contrast Lamplit Warning",
+        "canonical": "oklch(0.84 0.1 80)",
+        "tonalRamp": [
+          "oklch(0.15 0.1 80)",
+          "oklch(0.27 0.1 80)",
+          "oklch(0.39 0.1 80)",
+          "oklch(0.51 0.1 80)",
+          "oklch(0.63 0.1 80)",
+          "oklch(0.75 0.1 80)",
+          "oklch(0.87 0.1 80)",
+          "oklch(0.95 0.1 80)"
+        ]
+      },
+      "high-contrast-dark-ok": {
+        "role": "semantic",
+        "displayName": "High Contrast Lamplit Success",
+        "canonical": "oklch(0.82 0.09 150)",
+        "tonalRamp": [
+          "oklch(0.15 0.09 150)",
+          "oklch(0.27 0.09 150)",
+          "oklch(0.39 0.09 150)",
+          "oklch(0.51 0.09 150)",
+          "oklch(0.63 0.09 150)",
+          "oklch(0.75 0.09 150)",
+          "oklch(0.87 0.09 150)",
+          "oklch(0.95 0.09 150)"
+        ]
       }
     },
     "typographyMeta": {
@@ -400,6 +835,10 @@
       "manuscript-subhead": {
         "displayName": "Manuscript Subhead",
         "purpose": "The artifact's h3; closes up under its section."
+      },
+      "manuscript-minor-head": {
+        "displayName": "Manuscript Minor Head",
+        "purpose": "h4 to h6 in the serif: the body's own size at weight 650, so a minor heading still reads as a heading."
       },
       "manuscript-body": {
         "displayName": "Manuscript Body",
@@ -441,6 +880,10 @@
         "displayName": "Note",
         "purpose": "Margin note words, the composer field and a session's message, always serif."
       },
+      "conversation": {
+        "displayName": "Conversation",
+        "purpose": "The chat's own style beside every document style: a reply, the person's message and the draft in Source Serif 4 at 16px / 1.62, one text-size step under the document, on a column of 34em of the reply; a reply's headings, lists, quotes, code, tables and links take the page's prose rules."
+      },
       "headline": {
         "displayName": "Headline",
         "purpose": "Boot screens."
@@ -476,10 +919,6 @@
       "source": {
         "displayName": "Source",
         "purpose": "The source editor."
-      },
-      "conversation": {
-        "displayName": "Conversation",
-        "purpose": "The chat's own style beside every document style: a reply, the person's message and the draft in Source Serif 4 at 16px / 1.62, one text-size step under the document, on a column of 34em of the reply; a reply's headings, lists, quotes, code, tables and links take the page's prose rules."
       }
     },
     "shadows": [
@@ -557,7 +996,7 @@
       },
       {
         "name": "margin-rail",
-        "value": "1205px (pane container)"
+        "value": "240px of pane beside the painted column (1186px of pane at the default size in the serif)"
       }
     ]
   },
@@ -633,11 +1072,27 @@
       "description": "The chat in the Conversation style: the person's message in a right-aligned bubble and a session's reply as unboxed prose, both in the serif, on one 34em column.",
       "html": "<section class=\"ds-chat\"><article class=\"ds-turn-you\"><p>Review my outline, and say where the argument is weakest.</p></article><article class=\"ds-reply\"><h3>What to change</h3><p>The outline holds, with one gap. <strong>The second section</strong> promises a comparison it never makes; move <code>chat-pane.js</code> out of it.</p><ul><li>Name the two options before weighing them.</li></ul></article></section>",
       "css": ".ds-chat{max-width:34em;margin:0 auto;font:16px/1.62 \"Source Serif 4\",Georgia,serif;color:oklch(0.2 0.012 60);background:oklch(0.99 0.007 85);text-wrap:pretty}.ds-chat p{margin:0.9em 0}.ds-turn-you{width:fit-content;max-width:min(80%,28em);margin:0 0 24px auto;padding:12px 16px;border-radius:14px;background:oklch(0.97 0.006 80)}.ds-turn-you p{margin:0}.ds-reply>:first-child{margin-top:0}.ds-reply h3{font-size:1.125em;font-weight:620;line-height:1.3;margin:0 0 0.5rem}.ds-reply strong{font-weight:600}.ds-reply code{font:0.85em ui-monospace,\"SF Mono\",Menlo,monospace;background:oklch(0.97 0.006 80);border-radius:4px;padding:0.1em 0.35em}.ds-reply ul{padding-left:1.5rem;margin:0.9em 0}.ds-reply li::marker{color:oklch(0.47 0.016 60)}"
+    },
+    {
+      "name": "Text Size Stepper",
+      "kind": "custom",
+      "refersTo": "stepper",
+      "description": "The one control for the reading scale, in the More menu and in Settings > Appearance: − value + in one outline.",
+      "html": "<div class=\"ds-stepper\" role=\"group\"><button class=\"ds-stepper-step\" aria-label=\"Smaller text\">−</button><span class=\"ds-stepper-value\" role=\"spinbutton\" aria-label=\"Text size\" aria-valuenow=\"18\">18</span><button class=\"ds-stepper-step\" aria-label=\"Larger text\">+</button></div>",
+      "css": ".ds-stepper{display:inline-flex;align-items:stretch;height:36px;border:1px solid var(--border-strong,oklch(0.6 0.014 65));border-radius:6px;font:600 13px/1 \"Source Sans 3\",system-ui,sans-serif;color:var(--ink,oklch(0.2 0.012 60))}.ds-stepper-step{width:32px;border:0;background:transparent;color:var(--muted,oklch(0.47 0.016 60));cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1),color 150ms cubic-bezier(0.25,1,0.5,1)}.ds-stepper-step:hover{background:var(--surface-sunken,oklch(0.94 0.009 78));color:var(--ink,oklch(0.2 0.012 60))}.ds-stepper-step:active{background:var(--border,oklch(0.88 0.01 75))}.ds-stepper-value{display:grid;place-items:center;min-width:36px;border-inline:1px solid var(--border,oklch(0.88 0.01 75));font-variant-numeric:tabular-nums}.ds-stepper:focus-within{outline:2px solid var(--hand,oklch(0.52 0.16 42));outline-offset:3px}"
+    },
+    {
+      "name": "Palette Row",
+      "kind": "custom",
+      "refersTo": "palette-row",
+      "description": "Settings > Appearance: one row per palette, its paper and ink as a swatch, its name and a one-line credit; the chosen row takes an ink edge, a Surface bed and the drawn check.",
+      "html": "<button class=\"ds-palette\" aria-pressed=\"true\"><span class=\"ds-palette-swatch\"><span class=\"ds-palette-paper\">Aa</span></span><span class=\"ds-palette-text\"><span class=\"ds-palette-name\">glosa</span><span class=\"ds-palette-credit\">glosa's own · warm paper, near-black ink, your marks in vermilion</span></span><svg class=\"ds-palette-check\" viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"m5.2 10.2 3.1 3.1 6.5-6.6\"/></svg></button>",
+      "css": ".ds-palette{display:grid;grid-template-columns:auto minmax(0,1fr) 1rem;align-items:center;gap:0.75rem;width:30rem;max-width:100%;min-height:3.5rem;padding:0.5rem 0.75rem 0.5rem 0.5rem;text-align:left;border:1px solid var(--border,oklch(0.88 0.01 75));border-radius:6px;background:transparent;color:var(--ink,oklch(0.2 0.012 60));font:13px/1.4 \"Source Sans 3\",system-ui,sans-serif;cursor:pointer}.ds-palette:hover{background:var(--surface-sunken,oklch(0.94 0.009 78))}.ds-palette[aria-pressed=\"true\"]{border-color:var(--ink,oklch(0.2 0.012 60));background:var(--surface,oklch(0.97 0.006 80))}.ds-palette:focus-visible{outline:2px solid var(--hand,oklch(0.52 0.16 42));outline-offset:3px}.ds-palette-swatch{border:1px solid var(--border-strong,oklch(0.6 0.014 65));border-radius:4px;overflow:hidden}.ds-palette-paper{display:grid;place-items:center;width:2.75rem;height:2.25rem;background:oklch(0.99 0.007 85);color:oklch(0.2 0.012 60);font:600 1.0625rem/1 \"Source Serif 4\",Georgia,serif}.ds-palette-text{display:grid;gap:0.125rem;min-width:0}.ds-palette-name{font-weight:600}.ds-palette-credit{color:var(--muted,oklch(0.47 0.016 60));font-size:12px}.ds-palette-check{width:1rem;height:1rem;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;visibility:hidden}.ds-palette[aria-pressed=\"true\"] .ds-palette-check{visibility:visible}"
     }
   ],
   "narrative": {
     "northStar": "The Writing Desk, Two Hands",
-    "overview": "glosa reads like a well-set page, not an app. The whole desk is one warm paper: the manuscript, the top bar, the navigator and the tab strip share the same ground, and the desk's outer regions are divided by printed ink hairlines rather than grey panels. Typography does the structural work. Source Serif 4 sets the manuscript, its headings, every quote of it and every note written in the margin; Source Sans 3, its designed companion, sets the chrome. Both are vendored OFL woff2 served by the daemon, so the page never reaches a font service.\n\nTwo hands write on the sheet. The human's marks are one burnt vermilion everywhere they appear: the wash and underline on the words, the § address, the note's words, the caret, the selection, the focus ring, the unsaved dot, the drag target, and the comma logo. A mark not yet sent is the same mark in warm graphite, the pencil. A session never borrows either: its entries, chips and answers are printed in ink. Actions are ink too; the chosen mode is struck forward as filled ink inside an ink outline.\n\nDensity is calm and bookish in the manuscript (18px serif on a 68ch measure) and compact in the chrome (13px sans). The surface is flat at rest; only things genuinely above the work cast a shadow. Dark is the same desk under a reading lamp: warm near-black ground, ink lifted to warm off-white, the hand lifted only as far as it stays legible without glowing.",
+    "overview": "glosa reads like a well-set page, not an app. The whole desk is one warm paper: the manuscript, the top bar, the navigator and the tab strip share the same ground, and the desk's outer regions are divided by printed ink hairlines rather than grey panels. Typography does the structural work. Source Serif 4 sets the manuscript, its headings, every quote of it and every note written in the margin; Source Sans 3, its designed companion, sets the chrome. Both are vendored OFL woff2 served by the daemon, so the page never reaches a font service.\n\nTwo hands write on the sheet. The human's marks are one burnt vermilion everywhere they appear: the wash and underline on the words, the § address, the note's words, the caret, the selection, the focus ring, the unsaved dot, the drag target, and the comma logo. A mark not yet sent is the same mark in warm graphite, the pencil. A session never borrows either: its entries, chips and answers are printed in ink. Actions are ink too; the chosen mode is struck forward as filled ink inside an ink outline.\n\nDensity is calm and bookish in the manuscript (18px serif on a 68ch measure at the default text size, which each reader can move) and compact in the chrome (13px sans, which follows zoom instead). The surface is flat at rest; only things genuinely above the work cast a shadow. Dark is the same desk under a reading lamp: warm near-black ground, ink lifted to warm off-white, the hand lifted only as far as it stays legible without glowing.",
     "keyCharacteristics": [
       "Warm paper for the entire desk; no grey sidebar, top bar or tab strip.",
       "Ink hairlines mark the desk's regions: under the top bar and at the navigator's right edge.",
@@ -674,7 +1129,17 @@
       },
       {
         "name": "The Scheme Rule",
-        "body": "A theme is a palette; a scheme is light or dark. `<html>` carries both, `data-theme` (which palette) and `data-scheme` (which scheme), set before first paint from the one list of appearances (`packages/spa/src/appearance-list.js`: each entry's id, scheme and labels, read by the preload, the workspace popover and Settings). What every dark theme shares lives on `:root[data-scheme=\"dark\"]`, never on a theme's name. Outside the token blocks and the print block, no selector depends on the theme.",
+        "body": "A theme is one palette in one scheme; a scheme is light or dark. `<html>` carries `data-theme` (the theme that paints), `data-scheme` (its scheme) and, beside them, `data-appearance` (the chosen mode) and `data-palette` (the chosen palette), all set before first paint from the one list of appearances (`packages/spa/src/appearance-list.js`: the modes, and the palettes with the theme each paints in light and in dark, read by the preload, the workspace popover and Settings). What every dark theme shares lives on `:root[data-scheme=\"dark\"]`, never on a theme's name. Outside the theme stylesheet and the print block, no selector depends on the theme.",
+        "section": "colors"
+      },
+      {
+        "name": "The Contrast Floor Rule",
+        "body": "Every theme is checked before it ships (`packages/spa/src/themes/validate.js`, run over every shipped file by `packages/spa/test/themes.test.ts`). A theme below a floor is refused, and the refusal names the theme, the role, the measured ratio and the floor; a colour is never repaired, because a vermilion lightened until it passes is no longer the theme a person chose. Floors are WCAG 2 ratios, measured on the grounds each role is actually drawn on, not on every ground:",
+        "section": "colors"
+      },
+      {
+        "name": "The Hue Rules",
+        "body": "Two rules keep a person's marks apart whatever the palette. The hand and Session Ink sit at least 90 degrees apart in OKLCH hue (glosa light 147°, dark 155°). Danger may sit near the hand's hue (glosa's own are about 20 degrees apart); it is held apart by lightness, its OKLCH lightness at least 0.02 from the hand's, and it always arrives with a label or a shape (The Status Needs Shape Rule). The lightness floor is glosa dark's own gap (0.72 against 0.70), the smallest shipped, so it only refuses a danger at the hand's lightness; the label or shape does the real separating. The validator refuses a theme that breaks either rule.",
         "section": "colors"
       },
       {
@@ -736,7 +1201,8 @@
       "**Do** let a Spec table or code block widen only into whitespace the note rail never claims, worked out from the pane's width, never from whether the rail is showing.",
       "**Do** break a word too long for any column inside its cell, and only then, so no table runs past what the pane shows and no other table splits a word.",
       "**Do** write every size read in the document, the margin or the chat on the reading scale, and let chrome follow zoom.",
-      "**Do** serve every face from the vendored OFL woff2 files; the runtime never reaches a font service."
+      "**Do** serve every face from the vendored OFL woff2 files; the runtime never reaches a font service.",
+      "**Do** add a palette as one entry in the one list of appearances and two theme files that pass the validator; let a refusal stand and change the theme, never the floor."
     ],
     "donts": [
       "**Don't** use the hand for a button, a link, a panel fill or a session's output.",
@@ -751,7 +1217,8 @@
       "**Don't** draw cards in the margin (the open composer excepted), rounded tabs, resting shadows or coloured side-stripe panels.",
       "**Don't** let colour be the only signal for waiting, delivered, applied, stale, human, session or unknown.",
       "**Don't** set uppercase tracked labels above headlines as lead-ins; they only head a list.",
-      "**Don't** lighten the pencil or use Faint for live text; both are already at their floor."
+      "**Don't** lighten the pencil or use Faint for live text; both are already at their floor.",
+      "**Don't** give a palette a third accent, or colour headings, bold text or links; a palette changes the neutrals, the hand and Session Ink, nothing more."
     ]
   }
 }
