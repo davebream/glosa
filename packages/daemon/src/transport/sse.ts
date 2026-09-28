@@ -36,17 +36,17 @@ export interface SseFrame {
   data?: unknown;
 }
 
-/** Standard SSE framing: `id: <cursor>\nevent: <type>\ndata: <json>\n\n`. `data:` is always
- * present (even empty) so every frame ends in exactly one blank-line terminator regardless of
- * whether there's a payload — `heartbeat`/`resync_required` have none. Safe as a single `data:`
- * line because `JSON.stringify` never emits a raw newline byte (only escaped `\n` inside strings),
- * so a frame's data is always one line no matter what it encodes. */
 /** Why a stream is closing, for its `bye` frame's data (#432): `install-changed` when the daemon
  *  retires because its install changed (R-L4), otherwise `shutdown`. */
 export function byeReason(signal: AbortSignal | undefined): string {
   return typeof signal?.reason === "string" ? signal.reason : "shutdown";
 }
 
+/** Standard SSE framing: `id: <cursor>\nevent: <type>\ndata: <json>\n\n`. `data:` is always
+ * present (even empty) so every frame ends in exactly one blank-line terminator regardless of
+ * whether there's a payload — `heartbeat`/`resync_required` have none. Safe as a single `data:`
+ * line because `JSON.stringify` never emits a raw newline byte (only escaped `\n` inside strings),
+ * so a frame's data is always one line no matter what it encodes. */
 export function encodeSseFrame(frame: SseFrame): string {
   const lines: string[] = [];
   if (frame.id !== undefined) lines.push(`id: ${frame.id}`);
