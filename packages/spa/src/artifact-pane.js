@@ -5346,6 +5346,12 @@ export function createArtifactPane(host, deps) {
     },
     getMode: () => modeState.mode,
     setMode,
+    /** The pane's tab was left: the More menu closes so the tab comes back closed. Leaving a tab is
+     * not always a click the menu could read as outside (Ctrl+Tab is a key, and a tab press in
+     * Safari is not seen as one), so the workbench says so when the panel stops being visible. */
+    hidden() {
+      if (tools.getAttribute("data-open") === "true") setToolsOpen(false);
+    },
     /** Issue #155: the live claims covering this file, each with the sentence naming its holder.
      * Cards of notes whose entry is claimed say who is applying them. */
     setClaims(claims) {
