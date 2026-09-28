@@ -14,7 +14,7 @@ import { isTerminal } from "../bus/lifecycle.ts";
 import { readJournalEventsSince } from "../bus/tail.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
 import type { WorkspaceTarget } from "../workspace.ts";
-import { encodeSseFrame } from "./sse.ts";
+import { byeReason, encodeSseFrame } from "./sse.ts";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -124,7 +124,7 @@ export function createJournalStreamResponse(
       };
 
       shutdownListener = () => {
-        send(encodeSseFrame({ event: "bye" }));
+        send(encodeSseFrame({ event: "bye", data: { reason: byeReason(opts.shutdownSignal) } }));
         teardown();
         try {
           controller.close();

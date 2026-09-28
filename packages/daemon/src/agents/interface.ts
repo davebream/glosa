@@ -187,6 +187,8 @@ export type ManagedAgentCode =
   | "invalid-default"
   | "journal-corrupt"
   | "journal-unavailable"
+  // #432 (R-L3): the daemon's install changed under it, so it starts nothing new from the tree.
+  | "install-changed"
   | "login-cancelled"
   | "login-expired"
   | "login-not-found"

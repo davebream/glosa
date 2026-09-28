@@ -20,6 +20,8 @@ export interface HandshakeResponse {
   serves_socket?: boolean;
   managed_control?: boolean;
   managed_busy?: boolean;
+  /** R-L4 (#432): the daemon's install changed under it; it restarts itself once idle. */
+  install_changed?: boolean;
 }
 
 function isHandshakeShape(value: unknown): value is HandshakeResponse {

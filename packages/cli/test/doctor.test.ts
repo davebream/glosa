@@ -706,6 +706,32 @@ describe("glosa doctor", () => {
     expect(findCheck(result.data.checks, "claude-monitor")?.status).toBe("skip");
   });
 
+  test("daemon+proto: a daemon fenced by a changed install is a WARN naming why it has not restarted (#432)", async () => {
+    const handshake = (busy: boolean) =>
+      ({
+        install_changed: true,
+        managed_busy: busy,
+      }) as unknown as import("../../daemon/src/lifecycle/handshake.ts").HandshakeResponse;
+    for (const [busy, words] of [
+      [true, "once its managed chats finish"],
+      [false, "once idle"],
+    ] as const) {
+      const { deps } = makeDeps({ readHandshake: async () => handshake(busy) });
+      const row = findCheck((await runDoctor(freshDir(), deps)).data.checks, "daemon+proto");
+      expect(row?.status).toBe("warn");
+      expect(row?.detail).toContain("its install changed while it ran");
+      expect(row?.detail).toContain(words);
+    }
+    // No handshake reading (every other unit test) or an unchanged install: the row passes as before.
+    const plain = findCheck((await runDoctor(freshDir(), makeDeps().deps)).data.checks, "daemon+proto");
+    expect(plain?.status).toBe("pass");
+    const unchanged = makeDeps({
+      readHandshake: async () =>
+        ({ install_changed: false }) as unknown as import("../../daemon/src/lifecycle/handshake.ts").HandshakeResponse,
+    });
+    expect(findCheck((await runDoctor(freshDir(), unchanged.deps)).data.checks, "daemon+proto")?.status).toBe("pass");
+  });
+
   test("daemon+proto: unreachable daemon -> FAIL", async () => {
     const { deps } = makeDeps({
       createClient: async () => {

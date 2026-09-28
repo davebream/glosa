@@ -66,7 +66,19 @@ import {
   probePortBound,
 } from "./handshake.ts";
 import { apiSocketPath, ensureHomeDir, ensureRunDir, glosaHome, lockPath, logPath, runDir } from "./home.ts";
-import { INSTALL_ID } from "./install.ts";
+import { INSTALL_ID, isSourceCheckout, PACKAGE_ROOT } from "./install.ts";
+import {
+  activateInstallGuard,
+  bootMarginNs,
+  bootVerdict,
+  captureInstallSnapshot,
+  INSTALL_CHANGED_EXIT,
+  InstallGuard,
+  type InstallSnapshot,
+  processStartNs,
+  sweepIntervalMs,
+} from "./install-guard.ts";
+import { liveSpaAssets, pinnedFilePaths, pinnedSpaAssets, SPA_SRC_DIR } from "../transport/spa-assets.ts";
 import { glosaClassFPort, glosaPort } from "./port.ts";
 import {
   type DaemonLock,
@@ -502,6 +514,20 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   const lockFile = lockPath(home);
   const instanceId = `gl-${randomUUID()}`;
   const startedAt = new Date().toISOString();
+  // R-L2 (#432): an installed daemon only starts from a tree that held still while it loaded. A
+  // source checkout is never guarded (R-L10). Before anything binds or takes the lock.
+  const bootSnapshot = isSourceCheckout() ? null : captureBootSnapshot();
+  if (bootSnapshot) {
+    const verdict = bootVerdict(bootSnapshot, processStartNs(), bootMarginNs());
+    if (!verdict.ok) {
+      log(
+        home,
+        `${instanceId} install changed during boot (${verdict.why} ${relative(PACKAGE_ROOT, verdict.path) || "."}); exiting`,
+      );
+      process.exit(INSTALL_CHANGED_EXIT);
+    }
+  }
+  let installGuard: InstallGuard | null = null;
   const tokenAuthority = new TokenAuthority(home, (message) => log(home, message));
   const backend = buildBackend(home, opts);
   const shutdownController = new AbortController();
@@ -528,7 +554,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     bun: Bun.version,
   };
   let shutdownRequested = false;
-  let shutdown: (() => Promise<void>) | null = null;
+  let shutdown: ((reason?: string) => Promise<void>) | null = null;
   let startupShutdownTimer: ReturnType<typeof setTimeout> | null = null;
   // The main listener starts accepting as soon as Bun.serve returns, before the rest of boot has
   // installed the fully wired shutdown function below. A client may therefore receive a valid
@@ -600,6 +626,8 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     watchEmissions: backend.watchEmissions,
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,
+    spaAssets: spaAssetsFor(bootSnapshot !== null, backend.dictationRegistry),
+    installChanged: () => installGuard?.fenced === true,
     home,
     recordRejection: createRejectionRecorder((line) => log(home, `${instanceId} ${line}`)),
   };
@@ -716,7 +744,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   apiContext.servesSocket = true;
 
   let shuttingDown = false;
-  shutdown = async () => {
+  shutdown = async (reason?: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     if (startupShutdownTimer !== null) {
@@ -743,7 +771,8 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     const drained = await drainDaemonServers(
       [server, classFServer, socketServer],
       () => {
-        shutdownController.abort();
+        // The reason rides the SSE `bye` so a page can tell an update from an ordinary restart.
+        shutdownController.abort(reason);
         tokenAuthority.close();
       },
       backend.releaseWorkspaceResourcesForExit,
@@ -769,6 +798,31 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     void shutdown();
   } else {
     markStartupReady();
+    // R-L3/R-L4 (#432): watch the install from now on, and retire through this same drain once it
+    // has changed, settled, and no managed chat is running. Never a kill, never a foreign process.
+    if (bootSnapshot) {
+      installGuard = new InstallGuard({
+        snapshot: bootSnapshot,
+        sweepMs: sweepIntervalMs(),
+        canRetire: () => backend.managedChats?.busy !== true,
+        retire: (change) => {
+          try {
+            backend.managedChats?.quiesce();
+          } catch {
+            // A chat started between the check and now: stay fenced; the next sweep retries.
+            return;
+          }
+          log(
+            home,
+            `${instanceId} install changed (${change.why} ${relative(PACKAGE_ROOT, change.path) || "."}); retiring`,
+          );
+          void shutdown?.("install-changed");
+        },
+        log: (line) => log(home, `${instanceId} ${line}`),
+      });
+      activateInstallGuard(installGuard);
+      installGuard.start();
+    }
     log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
     if (opts.managedRuntime?.released) log(home, `${instanceId} managed chats open: preview for this daemon only`);
     // Warm the artifact watchers only now — after both binds, the lock, and the handshake gate.
@@ -784,6 +838,35 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     // bootDaemon never resolves on the happy path; the process lives until a signal handler
     // (or one of the exit-code branches above) calls process.exit().
   });
+}
+
+/** The files an installed daemon reads or starts after boot, beside the directories that reveal any
+ *  replaced file (R-L2). A file absent at boot is not guarded. */
+function captureBootSnapshot(): InstallSnapshot {
+  const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+  return captureInstallSnapshot({
+    root: PACKAGE_ROOT,
+    files: [
+      join(PACKAGE_ROOT, "package.json"),
+      ...pinnedFilePaths(SPA_SRC_DIR, []),
+      here("../matcher-worker.ts"),
+      here("../registry/hardlink-alias-worker.ts"),
+      here("../agents/guardian.ts"),
+      here("../agents/execution-host.ts"),
+    ],
+    execPath: process.execPath,
+  });
+}
+
+/** R-L1/R-L6 (#432): an installed daemon serves only the bytes it read at boot; a checkout reads per
+ *  request so an edit shows on reload. Both stamp the page with this build's hash. */
+function spaAssetsFor(installed: boolean, dictation: DictationProviderRegistry | undefined) {
+  const buildHash = parseBuildId(BUILD_ID)?.sourceHash ?? null;
+  if (installed && buildHash !== null) {
+    const providerAssets = dictation?.list().flatMap((provider) => [...provider.browserAssets()]) ?? [];
+    return pinnedSpaAssets({ buildHash, providerAssets });
+  }
+  return liveSpaAssets({ buildHash, providerAsset: (route) => dictation?.browserAsset(route) });
 }
 
 async function bindMainOrExit(
@@ -1178,7 +1261,7 @@ export type DaemonBuildDecision =
    * process does not: it was started before the tree changed under it. The daemon is right; the
    * client should be restarted when convenient, and says so once (issue #360). */
   | { action: "use"; staleClient?: true }
-  | { action: "restart"; reason: "legacy" | "newer-client" | "same-version-different-build" }
+  | { action: "restart"; reason: "legacy" | "newer-client" | "same-version-different-build" | "install-changed" }
   /** `foreignInstall` marks the one failure a user can act on directly: another install owns the
    * daemon, so the fix is to stop that process rather than to change anything about this one. */
   | { action: "fail"; reason: string; foreignInstall?: true };
@@ -1200,6 +1283,10 @@ export interface DaemonBuildInputs {
    * handshake hot path; it runs only when the two hashes already disagree. `undefined` (or a
    * throw) means "cannot tell", which keeps today's restart. */
   currentInstallBuildId?: () => string | undefined;
+  /** R-L7 (#432): the daemon reports that its install changed under it (`install_changed`). */
+  daemonInstallChanged?: boolean;
+  /** The daemon reports running managed chats (`managed_busy`); a fenced daemon then keeps serving. */
+  daemonManagedBusy?: boolean;
 }
 
 const incompatibleVersionsReason = (daemonProtocol: string): string =>
@@ -1233,6 +1320,18 @@ export function decideDaemonBuild(inputs: DaemonBuildInputs): DaemonBuildDecisio
 
   const daemon = parseBuildId(daemonBuildId);
   if (!daemon) return { action: "fail", reason: `invalid daemon build identity: ${daemonBuildId}` };
+
+  // R-L7 (#432): a daemon of this install whose tree changed under it is replaced even at an equal
+  // build (a new bundled Bun or node_modules moves no source hash), unless managed chats are running,
+  // in which case it keeps serving until it retires itself. Foreign installs fall through to the
+  // rules below, unchanged.
+  if (
+    inputs.daemonInstallChanged === true &&
+    daemonInstallId === clientInstallId &&
+    inputs.daemonManagedBusy !== true
+  ) {
+    return { action: "restart", reason: "install-changed" };
+  }
 
   const versionOrder = Bun.semver.order(client.version, daemon.version);
   if (versionOrder > 0) {
@@ -1284,6 +1383,8 @@ function decideForPeer(hs: HandshakeResponse): DaemonBuildDecision {
     daemonBuildId: hs.build_id,
     daemonInstallId: hs.install_id,
     daemonProtocol: hs.protocol_version,
+    daemonInstallChanged: hs.install_changed === true,
+    daemonManagedBusy: hs.managed_busy === true,
   });
 }
 
@@ -1759,6 +1860,13 @@ async function spawnAndWait(
     const peerBudget = Math.min(HANDSHAKE_TIMEOUT_MS, remainingMs(deadline, deps.now));
     const peer = peerBudget > 0 ? await deps.fetchHandshake(port, peerBudget) : null;
     if (peer) return null;
+  }
+  if (child.exitCode === INSTALL_CHANGED_EXIT) {
+    // R-L2 (#432): the daemon refused to boot from a tree that was changing under it.
+    return spawnFailed(
+      home,
+      "glosa's files changed while it was starting. Run the command again when the update has finished.",
+    );
   }
   if (child.exitCode !== null) {
     const probeBudget = Math.min(HANDSHAKE_TIMEOUT_MS, remainingMs(deadline, deps.now));

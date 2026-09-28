@@ -20,6 +20,10 @@ import {
   resolveMatchedFiles,
   tokenPath,
 } from "../../daemon/src/index.ts";
+import { fetchHandshake, type HandshakeResponse } from "../../daemon/src/lifecycle/handshake.ts";
+import { lockPath } from "../../daemon/src/lifecycle/home.ts";
+import { readLock } from "../../daemon/src/lifecycle/lock.ts";
+import { glosaPort } from "../../daemon/src/lifecycle/port.ts";
 import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
 import { classifyInstall, currentPackageRoot, targetsInstall } from "./install-kind.ts";
 import { type RecordedExecutable, readPackageType, readRecordedExecutable } from "./install-link.ts";
@@ -64,6 +68,9 @@ export interface DoctorDeps extends PlatformDeps {
   /** The Linux package's package-type marker beside a package root (#432). Defaults to
    *  `readPackageType`. */
   readPackageType?: (packageRoot: string) => string | null;
+  /** The reachable daemon's tokenless handshake, for its install-lifetime state (#432). Optional
+   *  and supplied only by `realDoctorDeps`, so no unit test ever probes a real port. */
+  readHandshake?: (home: string) => Promise<HandshakeResponse | null>;
   /** `realpath`, or null when the path does not resolve. Also the existence probe for the other
    * glosa executables the `install` row lists. */
   realpath?: (path: string) => string | null;
@@ -107,6 +114,7 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     packageRoot: currentPackageRoot,
     readRecordedExecutable,
     readPackageType,
+    readHandshake: (home) => fetchHandshake(readLock(lockPath(home))?.port ?? glosaPort(), 1000),
     realpath: realRealpath,
   };
 }
@@ -235,18 +243,26 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     client = await deps.createClient();
     status = await client.getStatus();
     const compatible = protocolCompatible(PROTOCOL_VERSION, status.daemon.protocol_version);
+    // Review answer 6 (#432): a daemon fenced by a changed install is reported, not hidden. Reaching
+    // it here means ensureDaemon kept it, which it does only while managed chats are running.
+    const handshake = compatible ? await deps.readHandshake?.(deps.glosaHome()).catch(() => null) : null;
+    const reachable = `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`;
     checks.push(
-      compatible
+      compatible && handshake?.install_changed === true
         ? check(
             "daemon+proto",
-            "pass",
-            `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`,
+            "warn",
+            `${reachable}; its install changed while it ran, and it restarts itself ${
+              handshake.managed_busy === true ? "once its managed chats finish" : "once idle"
+            }`,
           )
-        : check(
-            "daemon+proto",
-            "fail",
-            `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`,
-          ),
+        : compatible
+          ? check("daemon+proto", "pass", reachable)
+          : check(
+              "daemon+proto",
+              "fail",
+              `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`,
+            ),
     );
   } catch (err) {
     // The reason `createClient` gives is what the client could prove within its own budget, which

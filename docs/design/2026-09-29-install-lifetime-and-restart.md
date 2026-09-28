@@ -1,6 +1,6 @@
 # Install lifetime and restart: what a running daemon does when its install changes
 
-Status: proposal for #432, awaiting maintainer review before implementation. Companion to
+Status: accepted by the maintainer on 2026-09-29 for #432, with the review answers in §8. Companion to
 `2026-09-25-daemon-ownership-and-pairing-under-a-shell.md` (R-O1..R-O6, R-P1..R-P5), which it
 amends in two places (R-O1, R-P5). The rules apply to every install channel, not only the Linux
 package that prompted them.
@@ -191,14 +191,17 @@ Installed-package smoke (Arch container, the real `.pacman`), with user state re
 - **inotify or `fs.watch` as the trigger.** Linux-specific semantics, watch limits, and still
   asynchronous, so the stat check would remain.
 
-## 8. Questions for review
+## 8. Review answers (2026-09-29)
 
-1. The numbers: 2 s sweep, 30 s settle cap, boot margin (100 ms on Linux with `/proc` start time,
-   larger on macOS with `timeOrigin`). Tune after the x86_64 runner measurements?
-2. A plain browser tab (no shell) only gets copy telling the person to run `glosa open`; nothing
-   respawns until a CLI or MCP call. Acceptable?
-3. How long should unscoped `/app/<file>` keep answering (for pages loaded before the upgrade)?
-4. Downgrading with `pacman -U` to an older package means an older daemon reads journals a newer one
-   wrote. Document as unsupported, as A6 §F30 does for `glosa update --to`?
-5. Should `install-lifetime.test.ts` join the T8 fault suite?
-6. A daemon fenced indefinitely because chat ownership is unknown: should `glosa doctor` report it?
+1. **Timing.** 2 s sweep and 30 s settle cap as proposed. The boot check measures from the kernel's
+   process start on Linux (`/proc/self/stat`, 100 ms margin) and from `performance.timeOrigin`
+   minus 500 ms on macOS. Retune after measurements on an x86_64 runner.
+2. **A plain browser tab** (no desktop app) gets copy telling the person to run `glosa open`. The
+   page never spawns a daemon.
+3. **Unscoped `/app/<file>`** keeps answering indefinitely, for pages loaded before this change; a
+   page served under this policy only requests the scoped route.
+4. **Downgrading** with `pacman -U` to an older package is documented as unsupported, as A6 §F30
+   already does for `glosa update --to`.
+5. **T8.** `install-lifetime.test.ts` does not join the T8 fault suite in #432; that would change the
+   approved release bar and is proposed separately.
+6. **Doctor** reports a daemon that stays fenced because managed chats are busy, as a warn row.

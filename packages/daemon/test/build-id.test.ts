@@ -192,6 +192,29 @@ describe("daemon build decision", () => {
     });
   });
 
+  test("a daemon of this install whose install changed is replaced, even at an identical build (#432, R-L7)", () => {
+    const changed = (daemonInstallId: string | undefined, busy: boolean, daemonBuildId = `1.0.0-${hashA}`) =>
+      decideDaemonBuild({
+        clientBuildId: `1.0.0-${hashA}`,
+        clientInstallId: mine,
+        daemonBuildId,
+        daemonInstallId,
+        daemonProtocol: "1.0",
+        daemonInstallChanged: true,
+        daemonManagedBusy: busy,
+      });
+    // A new bundled Bun or node_modules moves no source hash, so only the flag can say it.
+    expect(changed(mine, false)).toEqual({ action: "restart", reason: "install-changed" });
+    // Running managed chats keep it serving; it retires itself once they finish.
+    expect(changed(mine, true)).toEqual({ action: "use" });
+    // Another install's daemon is never this client's to stop, flag or not.
+    const foreign = changed(theirs, false, `1.0.0-${hashB}`);
+    expect(foreign.action).toBe("fail");
+    if (foreign.action === "fail") expect(foreign.foreignInstall).toBe(true);
+    // Without the flag nothing changes: an identical build is used, as before.
+    expect(decide(`1.0.0-${hashA}`, `1.0.0-${hashA}`, "1.0")).toEqual({ action: "use" });
+  });
+
   test("uses a newer compatible daemon and rejects a newer incompatible daemon", () => {
     expect(decide(`1.0.0-${hashA}`, `2.0.0-${hashB}`, "1.0")).toEqual({ action: "use" });
     // An older client never stops anything, so a foreign install changes nothing here.

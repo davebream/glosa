@@ -19,6 +19,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 import { privateDirectory } from "../chats/journal.ts";
 import { fsyncContainingDir } from "../bus/io.ts";
+import { assertInstallUnchanged } from "../lifecycle/install-guard.ts";
 import { managedEnvironment } from "./environment.ts";
 import { ManagedAgentError, type OwnedProcess, type ProcessLauncher, type RuntimeManifest } from "./interface.ts";
 import { writeOwnership } from "./ownership.ts";
@@ -247,6 +248,16 @@ export class RuntimeCatalog {
         JSON.stringify({ name: "glosa-managed-runtime", private: true, dependencies: candidate.packages }),
         { mode: 0o600, flag: "wx" },
       );
+      // R-L3 (#432): the lockfile ships in the tree; a changed tree installs nothing.
+      try {
+        assertInstallUnchanged("a managed runtime install");
+      } catch {
+        throw new ManagedAgentError(
+          "install-changed",
+          "glosa was updated. Install the runtime again once glosa has restarted.",
+          503,
+        );
+      }
       writeFileSync(join(staging, "bun.lock"), readFileSync(candidate.lockFile), { mode: 0o600, flag: "wx" });
       child = await launcher.spawn({
         command: process.execPath,
@@ -321,7 +332,11 @@ export class RuntimeCatalog {
       return installed;
     } catch (error) {
       phase("failed");
-      if (error instanceof ManagedAgentError && error.code === "runtime-install-timeout") throw error;
+      if (
+        error instanceof ManagedAgentError &&
+        (error.code === "runtime-install-timeout" || error.code === "install-changed")
+      )
+        throw error;
       throw new ManagedAgentError(
         "runtime-unqualified",
         "The runtime could not be installed or verified. Existing installations were preserved.",

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { assertInstallUnchanged } from "./lifecycle/install-guard.ts";
 import type { ResolveMatchedFilesResult } from "./matcher.ts";
 import type { MatcherWorkerRequest, MatcherWorkerResponse } from "./matcher-worker.ts";
 import type { WorkspaceTarget } from "./workspace.ts";
@@ -31,6 +32,8 @@ export const resolveTrackedFilesAsync: ResolveTrackedFilesAsync = (workspace, op
     };
 
     try {
+      // R-L3 (#432): never start the worker from a tree that changed under this daemon.
+      assertInstallUnchanged("the matcher worker");
       worker = new Worker(new URL("./matcher-worker.ts", import.meta.url).href);
       worker.onmessage = (event: MessageEvent<MatcherWorkerResponse>) => finish(event.data);
       worker.onerror = (event) => finish(new Error(event.message || "matcher worker failed"));

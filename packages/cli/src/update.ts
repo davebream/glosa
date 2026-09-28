@@ -1083,7 +1083,9 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   if (daemonLock) {
     warnings.push({
       code: "daemon-restart-required",
-      message: `A glosa daemon (pid ${daemonLock.pid}) is running the old build: run \`glosa open\` to restart it.`,
+      // R-L4 (#432): the daemon notices its install changed and restarts itself once idle; the next
+      // glosa command starts the new build.
+      message: `A glosa daemon (pid ${daemonLock.pid}) is running the old build. It restarts itself once idle, and the next glosa command starts the new one.`,
     });
   }
 
