@@ -95,6 +95,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Reasoning summaries in chats remain collapsed under “Reasoning summary”, but their expanded prose is
+  now muted Source Serif 4 without a Surface box. It follows the reading scale two steps under the
+  document: 15px by default, 15px at the floor and 20px at the largest setting. Tool output remains
+  a 12px monospace Surface box (#426).
 - In Review, a paragraph's § address waits until the pointer has rested on it for 200ms before it
   fades in, so moving down the page no longer blinks a label beside every paragraph the pointer
   crosses. It still leaves as soon as the pointer does, keyboard focus still shows it at once, and
