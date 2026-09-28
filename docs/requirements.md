@@ -35,7 +35,7 @@ normative product contract.
   integration describes artifacts through the public CLI or MCP contract; glosa owns no integration
   package or workflow logic.
 - **Multi-agent**: Claude Code deep + Codex built to the same provider interface; provider interface is a first-class deliverable.
-- **History = full** (compare + restore). **Platform = macOS-only, pinned versions.**
+- **History = full** (compare + restore). **Platform = macOS plus experimental Linux x86_64/glibc CLI and daemon, pinned versions.**
 - **Dictation is an optional input method.** It is hidden until a user configures a provider and
   accepts versioned disclosure; it inserts drafts into prose fields and never submits them.
 - Durability, auth, daemon lifecycle, anchoring, security, CLI all hardened per appendices A1–A6.
@@ -53,7 +53,7 @@ private input and signs the sanitized report; an agent never signs on the mainta
 **Non-goals (v1)**: a packaged desktop app (v1 is daemon + browser; the unpackaged shell skeleton
 in `packages/shell` is a development surface, not a release);
 mobile/remote access; cloud sync; a second-agent provider *beyond* Claude Code + Codex; a public
-plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a non-Claude *idle* agent
+plugin/SDK surface; telemetry; Windows, Linux ARM/musl, and released Linux app/native-provider/dictation support (tracked by #432–#435); instant-wake of a non-Claude *idle* agent
 (honest limit — see R4).
 
 ## 2. Architecture (fixed)
@@ -556,9 +556,14 @@ registration epochs prevent filename collisions and restoration into a replaceme
   mutate or revoke that revision-bound verdict.
 
 ## 4. Non-functional  (detail: A6 §F30)
-- **Platform: macOS-only v1** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
-  Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥17.2. Non-Darwin →
-  exit 5.
+- **Platform: macOS** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
+  Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥17.2.
+  **Experimental Linux x86_64/glibc CLI and daemon** requires Bun 1.4.2 and Git 2.30; Chromium≥111
+  is the browser floor. Unsupported OS/architecture, libc or Bun versions exit 5 before daemon
+  discovery or network access in open, doctor, update and MCP startup. Linux uses `xdg-open` with
+  a five-second confirmation deadline; failure preserves the workspace and URL with a warning.
+  URL-only and MCP presentation never launch a browser. Linux app packaging, native managed-chat
+  qualification and dictation remain pending #432–#435; no installed Manjaro release is claimed.
 - **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
   unconfigured external runtime calls. The two update actions are explicit exceptions: `glosa update`
   (A6 §F33) and the desktop app's Check for Updates… (A3 §4b) reach out only when the person runs or

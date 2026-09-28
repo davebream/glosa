@@ -71,16 +71,17 @@ export function confirmedExit(root: string, nonce: string): z.infer<typeof exit>
 }
 // Never use a saved PID to signal a process after restart: it may now belong to someone else.
 // An absent/corrupt receipt consumes capacity until recovery proves the old run has ended.
-export function unresolvedOwnership(root: string): Set<string> {
+export function unresolvedOwnership(root: string, boot = bootIdentity()): Set<string> {
   const dir = join(root, "runs");
   if (!existsSync(dir)) return new Set();
-  const boot = bootIdentity();
   return new Set(
     readdirSync(dir).filter((nonce) => {
       if (!z.uuid().safeParse(nonce).success || confirmedExit(root, nonce)) return false;
       try {
         const previous = prepared.parse(readPrivate(join(dir, nonce, "prepared.json")));
-        if (previous.nonce === nonce && boot && previous.bootId && previous.bootId !== boot) return false;
+        const current = validBootIdentity(boot);
+        const saved = validBootIdentity(previous.bootId);
+        if (previous.nonce === nonce && current && saved && saved !== current) return false;
       } catch {
         /* Corrupt ownership stays unknown. */
       }
@@ -89,19 +90,28 @@ export function unresolvedOwnership(root: string): Set<string> {
   );
 }
 
+export function validBootIdentity(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
+}
+
 let cachedBoot: string | undefined;
-function bootIdentity(): string | undefined {
+export function bootIdentity(): string | undefined {
   if (cachedBoot) return cachedBoot;
   try {
-    const result = Bun.spawnSync(["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"], {
-      env: { PATH: "/usr/bin:/bin:/usr/sbin" },
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const value = result.stdout.toString().trim();
-    if (result.exitCode === 0 && /^[a-fA-F0-9-]{36}$/.test(value)) cachedBoot = value;
+    if (process.platform === "linux") {
+      cachedBoot = validBootIdentity(readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim());
+    } else if (process.platform === "darwin") {
+      const result = Bun.spawnSync(["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"], {
+        env: { PATH: "/usr/bin:/bin:/usr/sbin" },
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      if (result.exitCode === 0) cachedBoot = validBootIdentity(result.stdout.toString().trim());
+    }
   } catch {
-    /* Lack of a boot identity never authorizes process cleanup. */
+    // Lack of a boot identity never authorizes process cleanup.
   }
   return cachedBoot;
 }

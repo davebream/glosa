@@ -60,6 +60,10 @@ describe("repository quality gates", () => {
   });
   test("CI and release execute complete partitions, independent stability, and the same reporting runner", () => {
     for (const yaml of workflows) {
+      const linux = job(yaml, "linux");
+      expect(linux).toContain("runs-on: ubuntu-24.04");
+      expect(linux).toContain("bun run scripts/test-runner.ts linux-core");
+      expect(linux).toContain("if: needs.prepare.outputs.profile == 'full'");
       const tests = job(yaml, "tests");
       expect(tests).toContain("profile: [ci-1, ci-2, ci-3]");
       expect(tests).toContain("fail-fast: false");
@@ -69,7 +73,7 @@ describe("repository quality gates", () => {
       expect(job(yaml, "full")).toContain("bun run test:full");
       expect(job(yaml, "docs")).toContain("if: needs.prepare.outputs.profile == 'docs'");
       expect(job(yaml, "docs")).toContain("bun run test:docs");
-      for (const name of ["tests", "stability", "full", "docs"]) {
+      for (const name of ["tests", "stability", "full", "docs", "linux"]) {
         expect(job(yaml, name)).toContain("if: always()");
         expect(job(yaml, name)).toContain("retention-days: 14");
         expect(job(yaml, name)).toContain("if-no-files-found: error");
@@ -80,7 +84,7 @@ describe("repository quality gates", () => {
     for (const yaml of workflows) {
       const aggregate = job(yaml, "ci");
       expect(aggregate).toContain("if: always()");
-      expect(aggregate).toContain("needs: [prepare, quality, docs, tests, stability, shell, full]");
+      expect(aggregate).toContain("needs: [prepare, quality, docs, tests, stability, shell, linux, full]");
       expect(aggregate).toContain("TEST_PROFILE: ${{ needs.prepare.outputs.profile }}");
       expect(aggregate).toContain("TEST_WHOLE: ${{ needs.prepare.outputs.whole }}");
       expect(aggregate).toContain("TEST_RESULTS: ${{ toJSON(needs) }}");

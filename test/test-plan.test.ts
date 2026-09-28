@@ -13,6 +13,7 @@ import {
   discoverTests,
   gitEnvironment,
   expectedJobs,
+  checkedFiles,
   validatePartitions,
   validateResults,
 } from "../scripts/test-plan.ts";
@@ -236,4 +237,21 @@ test("Git hooks cannot redirect fixture operations through ambient repository se
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Linux core selection includes real process ownership, CLI and MCP boundaries", () => {
+  const files = checkedFiles("linux-core");
+  for (const file of [
+    "packages/cli/test/api-integration.test.ts",
+    "packages/cli/test/mcp-lifetime-real-subprocess.test.ts",
+    "packages/daemon/test/lifecycle.test.ts",
+    "packages/daemon/test/agents/supervisor.test.ts",
+  ])
+    expect(files).toContain(file);
+  expect(expectedJobs("full", false).linux).toBe("success");
+  const results = Object.fromEntries(
+    Object.entries(expectedJobs("full", false)).map(([job, result]) => [job, { result }]),
+  );
+  delete results.linux;
+  expect(() => validateResults("full", "false", results)).toThrow("linux");
 });

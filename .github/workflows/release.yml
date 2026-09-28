@@ -92,6 +92,33 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  linux:
+    needs: prepare
+    if: needs.prepare.outputs.profile == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run scripts/test-runner.ts linux-core
+      - name: Verify the installed Linux package
+        run: bun run package:check
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tests-linux-core
+          path: .context/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
   tests:
     needs: prepare
     if: needs.prepare.outputs.profile == 'full'
@@ -215,7 +242,7 @@ jobs:
   ci:
     name: release-ci
     if: always()
-    needs: [prepare, quality, docs, tests, stability, shell, full]
+    needs: [prepare, quality, docs, tests, stability, shell, linux, full]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

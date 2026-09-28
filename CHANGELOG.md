@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Experimental Linux x86_64/glibc CLI and daemon support with Bun 1.4.2+, `xdg-open`, headless
+  URL output, Linux boot identity and MCP parent observation. Linux core and installed-package
+  checks now run in CI and release validation. Linux desktop packaging, native managed chats,
+  dictation and Manjaro release qualification remain pending (#431).
 - A note delivered to a session now names its passage the way the page does: an `address: §2.3`
   line beside the quote and an `address` field in the entry's detail. glosa works the label out
   from the document at the moment of delivery and stores it nowhere, so after an edit that

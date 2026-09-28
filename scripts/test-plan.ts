@@ -19,8 +19,27 @@ export const STABILITY_FILES = ["packages/daemon/test/lifecycle.test.ts", "packa
  * they are not in the partition inventory: a partition job without Electron would report a skip, and
  * a skip is a failed gate. The `shell` CI job runs them with Electron present. */
 export const SHELL_FILES = ["packages/shell/test/shell-real-engine.electron.ts"];
+/** Core Linux scope. Desktop shell, dictation and native provider qualification have separate gates. */
+export const LINUX_CORE_FILES = [
+  "packages/cli/test/open.test.ts",
+  "packages/cli/test/doctor.test.ts",
+  "packages/cli/test/update.test.ts",
+  "packages/cli/test/mcp.test.ts",
+  "packages/cli/test/mcp-lifetime-real-subprocess.test.ts",
+  "packages/cli/test/api-integration.test.ts",
+  "packages/daemon/test/lifecycle.test.ts",
+  "packages/daemon/test/agents/managed-state.test.ts",
+  "packages/daemon/test/agents/supervisor.test.ts",
+];
 export const CI_PROFILES = ["ci-1", "ci-2", "ci-3"] as const;
-export type Profile = "acceptance" | (typeof CI_PROFILES)[number] | "docs" | "stability" | "shell" | "full";
+export type Profile =
+  | "acceptance"
+  | (typeof CI_PROFILES)[number]
+  | "docs"
+  | "stability"
+  | "shell"
+  | "linux-core"
+  | "full";
 type Estimate = { seconds: number; reason: string };
 export function validateTimings(
   inventory: string[],
@@ -122,6 +141,7 @@ export function buildPlan(
     docs: [...DOC_FILES],
     stability: [...STABILITY_FILES],
     shell: [...SHELL_FILES],
+    "linux-core": [...LINUX_CORE_FILES],
     full: inventory,
   };
 }
@@ -186,6 +206,7 @@ export function expectedJobs(profile: ChangeProfile, whole: boolean): Record<str
     tests: profile === "full" ? "success" : "skipped",
     stability: profile === "full" ? "success" : "skipped",
     shell: profile === "full" ? "success" : "skipped",
+    linux: profile === "full" ? "success" : "skipped",
     full: whole ? "success" : "skipped",
   };
 }

@@ -325,7 +325,7 @@ export const MCP_SHUTDOWN_BUDGET_MS = 5_000;
 
 /**
  * How often `runMcpServer` checks whether its real parent has changed. The poll cannot use
- * `process.ppid`: Bun resolves it once, on its first read, and returns that same value forever
+ * `process.ppid`: older supported Bun versions resolve it once and return that same value forever
  * after — so it can report the parent this process started with, but never that it changed.
  * Orphan detection therefore reads the live value from the OS via `getppid(2)`; see
  * `liveParentPid`.
@@ -335,12 +335,14 @@ export const MCP_PARENT_POLL_MS = 1_000;
 /** The pid every orphaned process is reparented to on macOS: launchd. */
 export const REAPER_PID = 1;
 
-const libSystem = dlopen("libSystem.B.dylib", { getppid: { args: [], returns: FFIType.i32 } });
+const libc = dlopen(process.platform === "linux" ? "libc.so.6" : "libSystem.B.dylib", {
+  getppid: { args: [], returns: FFIType.i32 },
+});
 
 /** The OS's current parent pid, read fresh every call — unlike `process.ppid` (see
- * `MCP_PARENT_POLL_MS`), this observes reparenting to launchd once the real host process exits. */
+ * `MCP_PARENT_POLL_MS`), this observes reparenting once the real host process exits. */
 function liveParentPid(): number {
-  return libSystem.symbols.getppid();
+  return libc.symbols.getppid();
 }
 
 export function createMcpServer(deps: McpDeps): GlosaMcpServer {
@@ -1101,7 +1103,7 @@ export async function runMcpServer(
   // them is not what makes this correct — measured, `process.ppid` is resolved lazily on its first
   // read rather than captured at fork: a process that never touches it until after its parent has
   // gone reads 1, not the original pid. It is used here only because the poll below cannot use it
-  // (it caches after that first read, so it can never report a change), which is also why
+  // (older supported Bun versions cache after that first read), which is also why
   // `liveParentPid()` exists at all.
   //
   // If the host double-forks — spawning `glosa mcp` through an intermediary that exits immediately

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/cli - typed Gunshi command boundary. Domain runners retain the A6 output contract.
 
+import { platformProblem } from "./platform.ts";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
@@ -773,6 +774,12 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
   );
 
   const mcp = lazyHandler({ name: "mcp", description: "MCP stdio protocol entry point", internal: true }, async () => {
+    const problem = platformProblem({ platform: () => process.platform });
+    if (problem) {
+      process.stderr.write(`glosa mcp: ${problem}\n`);
+      setExitCode(EXIT_CODES.PLATFORM_UNSUPPORTED);
+      return;
+    }
     const [{ createHttpDaemonClient }, { createHttpGlosaClient }, { runMcpServer }] = await Promise.all([
       import("./daemon-client.ts"),
       import("./api-client.ts"),

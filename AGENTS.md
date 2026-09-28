@@ -63,7 +63,7 @@ a live document week.
   direct; no bundle/transpile, no native/compiled addons). **No heavy frontend framework** — server-
   rendered HTML + small vanilla ES modules. markdown-it (+ `data-line` stamping), idiomorph, diff2html,
   picomatch, chokidar v5, system `git` (shadow repo), a vendored transcript-event normalizer.
-- **macOS-only v1** (pinned floors in A6 §F30). Monorepo:
+- **macOS plus experimental Linux x86_64/glibc CLI and daemon** (pinned floors in A6 §F30). Monorepo:
   `packages/{daemon, spa, providers/claude-code, providers/codex, providers/wispr-flow, cli}`.
 
 ## Build approach

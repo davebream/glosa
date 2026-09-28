@@ -92,6 +92,8 @@ try {
 
   const isolatedEnv = {
     BUN_INSTALL: bunHome,
+    BUN_INSTALL_BIN: join(bunHome, "bin"),
+    BUN_INSTALL_GLOBAL_DIR: join(bunHome, "install", "global"),
     GLOSA_HOME: glosaHome,
     GLOSA_PORT: String(isolatedPort),
     HOME: home,
@@ -123,6 +125,24 @@ try {
   if (url.includes("#t=") || url.includes("&t=")) fail(`glosa open --url leaked the durable token: ${url}`);
   daemonPid = readLock()?.pid;
   if (!daemonPid) fail("glosa open --url did not leave an owned daemon lock");
+
+  const fragment = new URLSearchParams(new URL(url).hash.slice(1));
+  const origin = `http://127.0.0.1:${isolatedPort}`;
+  const redeem = () =>
+    fetch(`${origin}/api/presentation-token/redeem`, {
+      method: "POST",
+      headers: { Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: fragment.get("p") }),
+    });
+  const paired = await redeem();
+  if (paired.status !== 200) fail("installed CLI URL could not pair");
+  const pairing = (await paired.json()) as { token: string };
+  if ((await redeem()).status !== 401) fail("installed CLI presentation token was reusable");
+  const document = await fetch(`${origin}/w/${encodeURIComponent(fragment.get("w") ?? "")}/artifacts/smoke.md`, {
+    headers: { Origin: origin, Authorization: `Bearer ${pairing.token}` },
+  });
+  if (document.status !== 200 || !(await document.text()).includes("Package smoke test"))
+    fail("installed CLI could not serve its document");
 
   process.stdout.write(`package smoke passed (${result.files.length} files, ${result.filename})\n`);
 } finally {

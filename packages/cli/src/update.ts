@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { platformProblem, type PlatformDeps } from "./platform.ts";
 // @glosa/cli — `glosa update` (A6 §F26). The ONE documented exception to invariant 5's "zero
 // external runtime calls": explicitly invoked only, never a background or passive check, and it
 // sends no identifying data (static User-Agent, no version beacon, no cache file that could become
@@ -368,7 +369,7 @@ export type DownloadResult =
     }
   | { ok: false; kind: "timeout" | "network" | "http" | "too-large" | "io"; message: string };
 
-export interface UpdateDeps {
+export interface UpdateDeps extends PlatformDeps {
   platform: () => NodeJS.Platform;
   /** From `import.meta.url` — already symlink-resolved by Bun. There is deliberately NO `realpath`
    *  dep: it would provably return its own argument. */
@@ -914,12 +915,13 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   data.daemon_pid = daemonLock?.pid ?? null;
 
   // ---- 1. platform (exit 5), before anything can touch the network -------------------------
-  if (deps.platform() !== "darwin") {
+  const problem = platformProblem(deps);
+  if (problem) {
     return fail(data, warnings, EXIT_CODES.PLATFORM_UNSUPPORTED, {
       code: "platform-unsupported",
       kind: "platform",
-      message: `${deps.platform()} is not supported: glosa v1 is macOS-only`,
-      hint: "See A6 §F30. Linux and Windows are out of scope for v1.",
+      message: problem,
+      hint: "See A6 §F30 for supported platforms and runtime requirements.",
     });
   }
 

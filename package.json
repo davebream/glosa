@@ -32,7 +32,8 @@
     "packages/providers/*"
   ],
   "os": [
-    "darwin"
+    "darwin",
+    "linux"
   ],
   "cpu": [
     "arm64",

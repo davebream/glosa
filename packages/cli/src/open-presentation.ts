@@ -2,6 +2,7 @@
 // @glosa/cli — shared open-target classification + presentation URL construction for `glosa open`
 // and MCP `glosa_present` (issue #46). Keeps registration, focus validation, binding warnings,
 // redirected-state reporting, and fragment behavior in one place so CLI and MCP cannot drift.
+import { platformProblem, type PlatformDeps } from "./platform.ts";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { GlosaApiClient, OpenWorkspaceResult } from "./api-client.ts";
 import { isApiError } from "./api-client.ts";
@@ -65,11 +66,11 @@ export interface OpenPresentationOptions {
   surfaceKind?: SurfaceKind;
 }
 
-export interface OpenPresentationDeps {
+export interface OpenPresentationDeps extends PlatformDeps {
   createClient: () => Promise<GlosaApiClient>;
   ensureToken: (home: string) => string;
   glosaHome: () => string;
-  openBrowser: (url: string) => void;
+  openBrowser: (url: string) => void | Promise<void>;
   platform: () => NodeJS.Platform;
   /** The CLIENT's working directory, used to resolve relative open targets before the daemon
    * call. The daemon is a persistent singleton whose own cwd is arbitrary, so a relative target
@@ -240,14 +241,15 @@ export async function runOpenPresentation(
   deps: OpenPresentationDeps,
   options: OpenPresentationOptions = {},
 ): Promise<CommandEnvelope<OpenPresentationData>> {
-  if (deps.platform() !== "darwin") {
+  const problem = platformProblem(deps);
+  if (problem) {
     return {
       ok: false,
       command: "open",
       exitCode: EXIT_CODES.PLATFORM_UNSUPPORTED,
       data: {},
       warnings: [],
-      error: { code: "platform-unsupported", kind: "platform_unsupported", message: "glosa v1 is macOS-only" },
+      error: { code: "platform-unsupported", kind: "platform_unsupported", message: problem },
     };
   }
 
@@ -393,7 +395,17 @@ export async function runOpenPresentation(
     readLock,
   });
 
-  if (options.launchBrowser !== false) deps.openBrowser(url);
+  if (options.launchBrowser !== false) {
+    try {
+      await deps.openBrowser(url);
+    } catch {
+      warnings.push({
+        code: "browser-launch-failed",
+        message:
+          "Workspace registered, but browser launch could not be confirmed. Open the returned URL, or run glosa open --url for a fresh link.",
+      });
+    }
+  }
 
   return {
     ok: true,

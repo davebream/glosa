@@ -56,7 +56,7 @@
   unknown must not be left running and called defended. A clean `stop(true)` removes the socket;
   a `SIGKILL` leaves it, and a client's `connect(2)` then gets `ECONNREFUSED` rather than
   `ENOENT`. The handshake reports `serves_socket` only once the bind has returned.
-- Detach (macOS, no setsid): `Bun.spawn stdio:["ignore",logfd,logfd]` (~/.glosa/daemon.log) + `child.unref()`; **daemon ignores SIGHUP/SIGINT** (survives Ctrl-C/terminal close), SIGTERM→graceful. Claude killing shim kills only shim.
+- Detach (macOS and experimental Linux, no setsid): `Bun.spawn stdio:["ignore",logfd,logfd]` (~/.glosa/daemon.log) + `child.unref()`; **daemon ignores SIGHUP/SIGINT** (survives Ctrl-C/terminal close), SIGTERM→graceful. Claude killing shim kills only shim.
 - Daemon boot: bind 127.0.0.1:port (EADDRINUSE + valid peer → exit0 benign race; EADDRINUSE foreign → exit3 + log) → `openSync(lock,"wx")` O_EXCL = CAS (EEXIST + live peer → exit0; else reclaim+retry once→exit4) → write+fsync lock → install signal handlers → serve (handshake→200). Bind-before-lock + O_EXCL → exactly one daemon wins.
 - reclaimStaleLock: unlink + re-openSync(wx). Stale = dead pid / unparseable / alive-but-foreign-port where the live PID is no longer a glosa daemon (PID reuse: no handshake, a stably free port, and no `__daemon` argument on its command line). A live PID that is still a glosa daemon with a free port is a daemon mid-shutdown: the client waits (≤10s, bounded by the deadline) for its lock to go or the PID to exit, and otherwise fails closed naming the PID — never reclaims it, which would start a second daemon beside one still closing its workspaces.
 - Stall watchdog: the daemon runs a Worker holding a `SharedArrayBuffer` heartbeat the main thread
@@ -196,7 +196,10 @@ fresh process group before releasing it to launch the native executable. The hos
 ordinary descendants share that owned group. Guardian stdin loss or heartbeat expiry triggers
 TERM/KILL cleanup. Writes/fences have explicit acknowledgments. A durable nonce-bound empty-group
 receipt releases capacity; missing proof blocks replacement and execution. Saved PIDs are never
-signalled after restart. A new macOS boot identity proves old processes no longer exist.
+signalled after restart. A different valid boot identity proves old processes no longer exist: macOS reads
+`kern.bootsessionuuid`; Linux reads `/proc/sys/kernel/random/boot_id`. Compare only two structurally
+valid UUIDs, case-insensitively. Missing, malformed and same-boot evidence stays unresolved; saved
+PIDs never authorize a signal after restart.
 
 Limits include starting/stopping/unknown reservations: six native processes globally, four managed
 turns, two turns per account and one active plus one queued user turn per chat. One management task
@@ -210,3 +213,14 @@ rechecks the lock before signalling. Authentication-token revocation fences mana
 reconnection restores state only. Login has a short controller lease; chats have daemon ownership.
 Provider constructors, status reads, history reads and incoming background feedback perform no
 native discovery, update, login or inference.
+
+
+### MCP parent observation on Linux
+
+MCP retains its direct-child host requirement, early parent baseline, stdin EOF and SIGHUP shutdown,
+and bounded cleanup. Parent polling calls live `getppid()` through `libSystem.B.dylib` on macOS or
+`libc.so.6` on Linux; Older supported Bun versions cache `process.ppid`, so it is not the polling source. A baseline already equal to
+PID 1 triggers immediate shutdown. On Linux, a host dying before the first baseline can instead
+leave the shim adopted by a non-PID1 subreaper. That startup case cannot be distinguished by this
+poll; EOF/SIGHUP still work. Such a host needs an explicit lifetime channel for a stronger guarantee.
+A container run with init proves PID1 adoption, not every subreaper arrangement.
