@@ -43,6 +43,7 @@ import {
   type OpenedWorkspace,
   openArgsFor,
   parseGlosaUrl,
+  parsePackageType,
   parseOpenEnvelope,
   RELEASES_API,
   RecentIds,
@@ -53,6 +54,8 @@ import {
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  targetFromArg,
+  updateChannelFor,
   updateDialog,
   updateOutcome,
   windowFor,
@@ -82,6 +85,7 @@ function resolveCli(): string {
     glosaHome: process.env.GLOSA_HOME,
     homeDir: homedir(),
     resourcesPath: app.isPackaged ? process.resourcesPath : null,
+    platform: process.platform,
   });
   // existsSync follows symlinks, so a dangling recorded executable reads as absent. An override is
   // used as given: the harness names exactly what it wants run.
@@ -414,6 +418,18 @@ function revealIn(win: BrowserWindow | null): boolean {
 
 // ---------- Check for Updates…, on click only (#424) ----------
 
+/** The package manager that installed this app, from the marker the Linux package's build writes
+ * beside its resources (#432), or null: macOS, an unpackaged run, or a Linux app pacman did not
+ * install. Read once; it cannot change while the app runs. */
+const packageType: string | null = (() => {
+  if (!app.isPackaged) return null;
+  try {
+    return parsePackageType(readFileSync(join(process.resourcesPath, "package-type"), "utf8"));
+  } catch {
+    return null;
+  }
+})();
+
 /**
  * Where the check asks. `GLOSA_SHELL_RELEASES_API` points it elsewhere and is read only by an
  * unpackaged app: it is how the real-Electron test puts a local stub in GitHub's place, never a way
@@ -444,14 +460,19 @@ function checkForUpdates(): Promise<void> {
 }
 
 async function runUpdateCheck(): Promise<void> {
-  const running = { current: pkg.version, arch: process.arch };
+  const running = { current: pkg.version, arch: process.arch, platform: process.platform };
   // Node's global fetch. One request: no redirect followed, the body capped, one timeout over both.
   const response = await requestReleases(releasesApi(), fetch);
   const outcome = updateOutcome(response, running);
   if (outcome.kind === "newer") log(`update check: found ${outcome.version} for ${running.arch}`);
   else if (outcome.kind === "current") log(`update check: up to date at ${running.current}`);
   else log(`update check: failed: ${outcome.reason}`);
-  const { actions, ...options } = updateDialog(outcome, { current: pkg.version, releasesPage: pkg.glosa.releases });
+  const { actions, ...options } = updateDialog(outcome, {
+    current: pkg.version,
+    releasesPage: pkg.glosa.releases,
+    channel: updateChannelFor(process.platform, packageType),
+    arch: process.arch,
+  });
   const win = BrowserWindow.getFocusedWindow();
   const answer = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   const action = actions[answer.response] ?? null;
@@ -676,7 +697,8 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) app.quit();
     return;
   }
-  const target = positionals[0] ?? null;
+  // A desktop entry's %U hands a folder over as file:///… on Linux (#432); the CLI wants a path.
+  const target = positionals[0] ? targetFromArg(positionals[0]) : null;
   if (target) {
     await openInWindow(target, null, positionals[1] ?? null);
     return;
