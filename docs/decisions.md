@@ -28,10 +28,13 @@ consume this contract. Codex's transport uses its documented local control-plane
 ## Runtime trust boundary
 
 glosa remains local-first and makes no telemetry, background checks, warm-ups, or unconfigured
-external runtime calls. Plugin monitor and Codex app-server connections are optional local delivery
-optimizations. MCP pull is the supported fallback. A configured provider may receive only the data
-named in current versioned consent, and only after the user starts its foreground action. Class-F
-content remains network-locked regardless of configuration.
+external runtime calls. The two update actions are the only explicit exceptions: `glosa update` and
+the desktop app's Check for Updates… reach out only when the person runs or clicks them, send no
+glosa version or machine data, and keep no cache (see "Check for Updates… checks, and installs
+nothing, until a Developer ID exists" below). Plugin monitor and Codex app-server connections are
+optional local delivery optimizations. MCP pull is the supported fallback. A configured provider may
+receive only the data named in current versioned consent, and only after the user starts its
+foreground action. Class-F content remains network-locked regardless of configuration.
 
 ## Dictation is a consented input provider, not desktop automation
 
@@ -1614,3 +1617,44 @@ manuscript's link rule in the same change.
 
 **Not decided.** Vendoring Source Code Pro for code, a user font folder and installed fonts,
 "Show all addresses", and a palette importer remain proposals in the study.
+
+
+## Check for Updates… checks, and installs nothing, until a Developer ID exists (2026-09-28)
+
+The desktop app's Check for Updates… sat in the Help menu and opened the releases page, leaving a
+person to compare version numbers. It now sits in the app menu under About, asks GitHub once on
+click, and says in a dialog whether a newer app exists (#424).
+
+**Decision.** One GET to the GitHub Releases API for `davebream/glosa`, from the main process, on
+click only, with the static User-Agent `glosa-update`, no HTTP cache, a bounded wait and nothing
+written to disk. The newest non-draft release by SemVer precedence, above the running app's
+version, with the app for the running architecture uploaded, is an upgrade. The dialog opens the
+release page (built from `package.json`, never taken from the response) or copies
+`brew upgrade --cask glosa`. The shell's version comparison now follows SemVer §11 in full, so a
+`beta` outranks any `alpha` for the daemon's minimum-version check too.
+
+**Why check only.** Every standard way for an Electron app to install its own update requires a
+real signature. Squirrel.Mac, behind Electron's `autoUpdater` and `electron-updater`, checks a
+download against the running app's designated requirement, and an ad hoc signature's is the hash of
+that one build (Apple TN3127), so no new build would match; `update.electronjs.org` requires code
+signing too. An updater of our own that replaces the bundle would pass only because files the app
+writes itself carry no quarantine, which bypasses Gatekeeper, the thing "Why not hide the prompt"
+above refuses for the cask. Install and Restart follows the Developer ID (#388), with the cask
+moving to `auto_updates true` then; until then it keeps `auto_updates false`.
+
+**Why the Releases API, not `/releases/latest` or npm.** Every glosa release is a prerelease, and
+`/releases/latest` skips prereleases, so it finds nothing. The npm package can be published before
+the app is uploaded, so an npm version does not prove there is an app to download. Two published
+releases (`v0.1.0-alpha.32` and `33`) have no assets at all, which is why an upgrade must carry the
+app for this architecture.
+
+**Why the shell asks itself, not `glosa update --check`.** A CLI inside the app bundle classifies
+itself as `app-bundle` and refuses before any request, and the CLI the shell runs may be a separate
+terminal install at another version. The question is the app's own version. The shell still never
+updates or stops the CLI or the daemon.
+
+**Why Node's `fetch`, not Electron's `net`.** The renderer's egress gate is a session
+`onBeforeRequest` that cancels everything off loopback. Measured in Electron 44.4.5: `net.fetch`
+passes that gate and fails `net::ERR_BLOCKED_BY_CLIENT`, while the main process's global `fetch` is
+Node's and does not. Widening the gate for one host would weaken the renderer's boundary to serve
+the main process, so the gate stays as it is.

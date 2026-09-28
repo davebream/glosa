@@ -40,8 +40,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   paper, for `prefers-contrast: more`. When the system asks for more contrast (macOS Increase
   Contrast does in Safari and Chrome), glosa's own palette turns into High contrast at once and
   before the page first paints; it is also a palette of its own in Settings > Appearance, which
-  holds with or without the system's request. The desktop app does not receive Increase Contrast
-  yet (Electron does not pass it to pages), so there it is the Settings choice. Paper, surface and
+  holds with or without the system's request. The desktop app follows macOS Increase Contrast too:
+  Electron does not pass it to pages, so the app reads it and tells the page, before the first
+  paint of every window and reload and again whenever it changes (#425). Paper, surface and
   sunken ground stay glosa's. High contrast light sets ink `oklch(0.16 0.012 60)`, muted
   `oklch(0.4 0.014 60)`, faint `oklch(0.55 0.012 65)`, border `oklch(0.76 0.01 75)`, strong border
   `oklch(0.5 0.014 65)`, the region rule to the ink, the hand `oklch(0.46 0.16 42)`, pencil
@@ -62,6 +63,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   swatch, its name and a one-line credit, and the chosen one carries a check. When the system's
   request for more contrast is showing High contrast in place of glosa, a line under the rows says
   so. The page's introduction now spells glosa in lowercase (#409).
+- Three palettes made by others, each in light and dark, in Settings > Appearance after glosa and
+  High contrast: Catppuccin (Latte and Mocha) by the Catppuccin Org, MIT; Gruvbox (light and dark,
+  at medium contrast) by Pavel Pertsev, MIT/X11; and Rosé Pine (Dawn and the main Rosé Pine) by
+  mvllow, MIT. Each row carries that credit, and "Palette credits" under the rows opens to say where
+  each palette comes from and that its licence is in THIRD_PARTY_NOTICES.md. A palette follows the
+  mode, so Use system setting moves between its light and dark theme. It sets the paper, ink, the
+  marks and the state colours, never a face, and it stays as chosen when the system asks for more
+  contrast. glosa keeps each palette's own colours and moves only those under a contrast floor, in
+  lightness within their own hue. Catppuccin Latte: ink `#4c4f69` to `#43455f`, strong border
+  (overlay2) `#7c7f93` to `#7c7e92`, pencil (subtext0) `#6c6f85` to `#6a6d83`, the hand (peach)
+  `#fe640b` to `#ad4102`, session ink (blue) `#1e66f5` to `#155eec`, warn (yellow) `#df8e1d` to
+  `#965c00`, ok (green) `#40a02b` to `#1f7a01` and danger (red) `#d20f39` to `#b9012f`. Catppuccin
+  Mocha: ink `#cdd6f4` to `#d8e1ff` and danger (red) `#f38ba8` to `#ff98b4`. Gruvbox light: pencil
+  (fg4) `#7c6f64` to `#786c61`, the hand (orange) `#af3a03` to `#ae3903`, warn (yellow) `#b57614` to
+  `#905c03` and ok (green) `#79740e` to `#6e6900`. Gruvbox dark: danger (red) `#fb4934` to
+  `#ff8774`. Rosé Pine Dawn: muted (subtle) `#797593` to `#6b6783`, pencil (muted) `#9893a5` to
+  `#736e7f`, the hand (rose) `#d7827e` to `#a25351`, session ink (foam) `#56949f` to `#3b7984`, warn
+  (gold) `#ea9d34` to `#9e6400` and danger (love) `#b4637a` to `#994b62`. Rosé Pine: strong border
+  (muted) `#6e6a86` to `#706c87`, pencil (muted) `#6e6a86` to `#87839f` and ok (pine) `#31748f` to
+  `#4c8eaa`. Every other colour is the palette's own; each theme file records its source and both
+  contrast ratios of every move (#410).
 
 ### Changed
 
@@ -170,11 +192,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 | A `---` rule | The browser's full-width line | The document's short centred rule |
 | The chat's scrollbar | The browser's, on the right only | Thin, in the desk's colours, with the same room kept on both sides so the column stays centred over the composer |
 
+- The primary action's hover (Send, Save, Approve) is now the theme's own ink moved toward its own
+  paper, 18% in light and 12% in dark, mixed in OKLab, instead of one fixed colour per scheme. Under
+  a palette the button keeps its ink's colour when hovered and always visibly changes; Gruvbox
+  light's did not change at all. glosa light goes from `oklch(0.34 0.012 60)` to about
+  `oklch(0.342 0.011 63)`, glosa dark from `oklch(0.84 0.01 80)` to about `oklch(0.843 0.01 78)`,
+  High contrast light from `oklch(0.34 0.012 60)` to about `oklch(0.309 0.011 63)` and High
+  contrast dark from `oklch(0.84 0.01 80)` to about `oklch(0.878 0.008 78)` (#410).
+- In the dark appearance, a destructive action's hover lifts its crimson 12% toward white instead
+  of darkening it 12% toward black, so its dark-paper label gains contrast under the pointer rather
+  than losing it: 4.6:1 to 7.2:1 in glosa dark and 4.7:1 to 7.5:1 in High contrast dark, where
+  Rosé Pine's would have fallen to 4.4:1. The light appearance is unchanged (#410).
+- The desktop app's Check for Updates… now checks, and has moved from the Help menu to the glosa
+  menu, under About glosa. A click asks GitHub once for glosa's releases and says in a dialog either
+  "glosa 0.1.0-alpha.37 is available. You have 0.1.0-alpha.36." with Open Release Page, Copy
+  Upgrade Command (which copies `brew upgrade --cask glosa`) and Later, or that you have the newest
+  version, or that the check could not complete, with Open Release Page. A release counts only once
+  the app for your Mac's architecture is uploaded to it. Nothing is checked at launch or in the
+  background, the request carries neither glosa's version nor anything about your machine, and
+  nothing is saved. The app still installs no update itself (#424).
+
 ### Fixed
 
 - In the dark appearance, the button that confirms a destructive action (Delete chat, Discard
   edits, Restore version) set its label in near-white on the lifted crimson at 2.8:1, below the
-  4.5:1 WCAG AA asks of a 13px label. It now uses the dark paper colour: 6.3:1 at rest and 4.6:1
+  4.5:1 WCAG AA asks of a 13px label. It now uses the dark paper colour: 6.3:1 at rest and 7.2:1
   while hovered. The light appearance is unchanged at 7.3:1.
 - A `###` heading inside a chat reply rendered at 12px, smaller than the reply's 15px text, because
   the style for the label above each message also reached headings inside the reply. It now renders

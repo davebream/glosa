@@ -8,27 +8,42 @@ import {
   cliCandidates,
   compareVersions,
   compatibility,
+  contrastPush,
+  contrastPushReaches,
+  contrastReply,
   egressDecision,
   firstFrameColor,
   linkFromArgv,
   loopbackApiOrigin,
+  MAX_RESPONSE_BYTES,
+  MAX_TAG_LENGTH,
   navigationDecision,
   needsConfirmation,
+  newestRelease,
   notifyDecision,
   openArgsFor,
   PAPER,
   parseGlosaUrl,
   parseOpenEnvelope,
+  parseVersion,
   plainPath,
   preloadShouldExpose,
   quitDecision,
+  RELEASES_API,
   RecentIds,
   type RoutedWindow,
+  readUpdateResponse,
+  requestReleases,
   representedFile,
   revealTarget,
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  UPDATE_HEADERS,
+  UPDATE_USER_AGENT,
+  type UpdateOutcome,
+  updateDialog,
+  updateOutcome,
   windowFor,
   withRoute,
 } from "../src/policy.ts";
@@ -144,6 +159,105 @@ describe("compatibility is checked, not repaired (R-O5)", () => {
     expect(compatibility({ contract_version: "1.18", daemon_version: "0.1.0-alpha.31" }, "0.1.0-alpha.31")).toEqual({
       state: "ok",
     });
+  });
+  test("a missing or malformed daemon version still reads as too old", () => {
+    for (const daemon_version of [undefined, 42, "", "garbage", "v0.1.0-alpha.40", "0.1", "01.2.3"]) {
+      expect(
+        compatibility({ contract_version: "1.21", daemon_version }, "0.1.0-alpha.36"),
+        String(daemon_version),
+      ).toEqual({ state: "too-old", command: "glosa update" });
+    }
+  });
+});
+
+describe("SemVer 2.0 §11 precedence: one comparator for the daemon check and for updates (#424)", () => {
+  // The spec's own chain, glosa's real tags, the next stages glosa will reach, and every §11 rule:
+  // numeric identifiers numerically, alphanumeric in ASCII order, numeric below alphanumeric, a
+  // longer list above a prefix of it, a release above its prereleases, build metadata ignored.
+  const CORPUS = [
+    "1.0.0-alpha",
+    "1.0.0-alpha.1",
+    "1.0.0-alpha.beta",
+    "1.0.0-beta",
+    "1.0.0-beta.2",
+    "1.0.0-beta.11",
+    "1.0.0-rc.1",
+    "1.0.0",
+    "0.1.0-alpha.2",
+    "0.1.0-alpha.32",
+    "0.1.0-alpha.36",
+    "0.1.0-alpha.40",
+    "0.1.0-beta.1",
+    "0.1.0-rc.1",
+    "0.1.0",
+    "0.0.0",
+    "1.0.0-0",
+    "1.0.0-1",
+    "1.0.0-9",
+    "1.0.0-10",
+    "1.0.0-0a",
+    "1.0.0-A",
+    "1.0.0-Z",
+    "1.0.0-a",
+    "1.0.0--",
+    "1.0.0-a-b",
+    "1.0.0-alpha-1",
+    "1.0.0-alpha.0a",
+    "1.0.0-alpha.a0",
+    "1.0.0-alpha.1.1",
+    "1.0.0-x.7.z.92",
+    "1.0.0+build.1",
+    "1.0.0+zzz",
+    "1.0.0-alpha+exp.sha",
+    "1.2.0",
+    "1.2.9",
+    "1.2.10",
+    "1.10.0",
+    "2.0.0",
+    "10.0.0",
+    // SemVer sets no length limit: valid versions past 256 characters are ordered, not malformed.
+    `1.0.0-${"a".repeat(300)}`,
+    `1.0.0-${"a".repeat(299)}b`,
+    `1.0.0-alpha.${"z".repeat(280)}`,
+    `1.0.0-${Array.from({ length: 150 }, () => "x").join(".")}`,
+    `0.0.1+${"b".repeat(300)}`,
+  ];
+
+  test("agrees with Bun.semver.order on every ordered pair of the corpus", () => {
+    const disagreements: string[] = [];
+    for (const a of CORPUS) {
+      for (const b of CORPUS) {
+        const expected = Bun.semver.order(a, b);
+        if (compareVersions(a, b) !== expected) disagreements.push(`${a} vs ${b}: expected ${expected}`);
+      }
+    }
+    expect(disagreements).toEqual([]);
+  });
+
+  test("a later prerelease stage outranks a higher number in an earlier one", () => {
+    expect(compareVersions("0.1.0-beta.1", "0.1.0-alpha.40")).toBe(1);
+    expect(compareVersions("0.1.0-rc.1", "0.1.0-alpha.2")).toBe(1);
+    expect(compareVersions("0.1.0-alpha.10", "0.1.0-alpha.9")).toBe(1);
+  });
+
+  test("parses only SemVer: no v prefix, no short or zero-padded forms, no empty identifiers", () => {
+    expect(parseVersion("0.1.0-alpha.36")).toEqual({ core: ["0", "1", "0"], pre: ["alpha", "36"] });
+    expect(parseVersion("1.2.3+build.5")).toEqual({ core: ["1", "2", "3"], pre: [] });
+    expect(parseVersion(`1.0.0-${"a".repeat(300)}`)?.pre).toEqual(["a".repeat(300)]);
+    for (const bad of [
+      "v1.0.0",
+      "1.0",
+      "1",
+      "01.0.0",
+      "1.0.0-01",
+      "1.0.0-",
+      "1.0.0-alpha..1",
+      "1.0.0+",
+      "latest",
+      "",
+    ]) {
+      expect(parseVersion(bad), bad).toBeNull();
+    }
   });
 });
 
@@ -513,5 +627,366 @@ describe("appearance: the window follows what the page resolved (#405, A3 §4b)"
     expect(firstFrameColor(null, true)).toBe(PAPER.dark);
     expect(firstFrameColor("#2b2a33", false)).toBe("#2b2a33");
     expect(firstFrameColor("#fefbf7", true)).toBe("#fefbf7");
+  });
+});
+
+describe("Check for Updates…: which release, and what the dialog offers (#424)", () => {
+  const RUNNING = { current: "0.1.0-alpha.36", arch: "arm64" };
+  const RELEASES_PAGE = "https://github.com/davebream/glosa/releases";
+  /** A release as GitHub's API lists glosa's: a prerelease with the app for both architectures. */
+  const release = (
+    version: string,
+    options: { tag?: string; draft?: boolean; arches?: string[]; state?: string; html_url?: string } = {},
+  ) => {
+    const tag = options.tag ?? `v${version}`;
+    const arches = options.arches ?? ["arm64", "x64"];
+    return {
+      tag_name: tag,
+      name: tag,
+      draft: options.draft ?? false,
+      prerelease: true,
+      html_url: options.html_url ?? `${RELEASES_PAGE}/tag/${tag}`,
+      assets: [
+        ...arches.flatMap((arch) =>
+          ["dmg", "zip"].map((ext) => ({
+            name: `glosa-${version}-${arch}.${ext}`,
+            state: options.state ?? "uploaded",
+          })),
+        ),
+        { name: "SHA256SUMS", state: "uploaded" },
+      ],
+    };
+  };
+  /** v0.1.0-alpha.32 and 33 are published with no assets at all. */
+  const bare = (version: string) => ({ ...release(version), assets: [] });
+
+  test("a prerelease-only list: the newest release above the running one", () => {
+    const list = ["38", "37", "36", "35", "33", "32", "31"].map((n) => release(`0.1.0-alpha.${n}`));
+    expect(newestRelease(list, RUNNING)).toEqual({ version: "0.1.0-alpha.38", tag: "v0.1.0-alpha.38" });
+  });
+
+  test("takes the maximum by version, not the first entry the API lists", () => {
+    const list = [release("0.1.0-alpha.37"), release("0.1.0-alpha.39"), release("0.1.0-alpha.38")];
+    expect(newestRelease(list, RUNNING)?.version).toBe("0.1.0-alpha.39");
+    expect(newestRelease([release("0.1.0-alpha.40"), release("0.1.0-beta.1")], RUNNING)?.version).toBe("0.1.0-beta.1");
+    expect(newestRelease([release("0.1.0-rc.1"), release("0.1.0")], RUNNING)?.version).toBe("0.1.0");
+  });
+
+  test("a release with no assets is not an upgrade, as v0.1.0-alpha.32 and 33 really are", () => {
+    expect(newestRelease([bare("0.1.0-alpha.38"), release("0.1.0-alpha.37")], RUNNING)?.version).toBe("0.1.0-alpha.37");
+    expect(newestRelease([bare("0.1.0-alpha.38")], RUNNING)).toBeNull();
+  });
+
+  test("only the other architecture's app is not an upgrade", () => {
+    const list = [release("0.1.0-alpha.38", { arches: ["x64"] }), release("0.1.0-alpha.37")];
+    expect(newestRelease(list, RUNNING)?.version).toBe("0.1.0-alpha.37");
+    expect(newestRelease(list, { ...RUNNING, arch: "x64" })?.version).toBe("0.1.0-alpha.38");
+    expect(newestRelease([release("0.1.0-alpha.38", { arches: ["x64"] })], RUNNING)).toBeNull();
+  });
+
+  test("an asset still uploading, or a name that only looks like the app, does not count", () => {
+    expect(newestRelease([release("0.1.0-alpha.38", { state: "new" })], RUNNING)).toBeNull();
+    const nearMisses = {
+      ...bare("0.1.0-alpha.38"),
+      assets: [
+        { name: "glosa-0.1.0-alpha.38-arm64.dmg.blockmap", state: "uploaded" },
+        { name: "glosa-0.1.0-alpha.37-arm64.dmg", state: "uploaded" },
+        { name: "glosa-0.1.0-alpha.38-arm64.pkg", state: "uploaded" },
+        { name: "glosa-0.1.0-alpha.38-universal.dmg", state: "uploaded" },
+        { name: "SHA256SUMS", state: "uploaded" },
+      ],
+    };
+    expect(newestRelease([nearMisses], RUNNING)).toBeNull();
+  });
+
+  test("a draft is skipped", () => {
+    const list = [release("0.1.0-alpha.39", { draft: true }), release("0.1.0-alpha.37")];
+    expect(newestRelease(list, RUNNING)?.version).toBe("0.1.0-alpha.37");
+  });
+
+  test("only draft: false qualifies; a missing or non-boolean draft is a malformed entry", () => {
+    for (const draft of [undefined, null, "false", 0, "", {}]) {
+      const { draft: _, ...rest } = release("0.1.0-alpha.39");
+      const entry = draft === undefined ? rest : { ...rest, draft };
+      expect(newestRelease([entry, release("0.1.0-alpha.37")], RUNNING)?.version, String(draft)).toBe("0.1.0-alpha.37");
+    }
+  });
+
+  test("a tag past MAX_TAG_LENGTH is skipped, even when it is valid SemVer and newer", () => {
+    const long = `0.1.0-alpha.99.${"x".repeat(MAX_TAG_LENGTH)}`;
+    expect(parseVersion(long)).not.toBeNull();
+    expect(newestRelease([release(long), release("0.1.0-alpha.37")], RUNNING)?.version).toBe("0.1.0-alpha.37");
+    const fits = `0.1.0-alpha.99.${"x".repeat(MAX_TAG_LENGTH - "v0.1.0-alpha.99.".length)}`;
+    expect(newestRelease([release(fits), release("0.1.0-alpha.37")], RUNNING)?.version).toBe(fits);
+  });
+
+  test("entries and tags that do not parse are skipped; a bare version tag counts", () => {
+    const list = [
+      null,
+      "v0.1.0-alpha.99",
+      42,
+      { ...release("0.1.0-alpha.99"), tag_name: 99 },
+      { ...release("0.1.0-alpha.99"), assets: null },
+      release("0.1.0-alpha.99", { tag: "latest" }),
+      release("0.1.0-alpha.99", { tag: "vv0.1.0-alpha.99" }),
+      release("0.1", { tag: "v0.1" }),
+      release("0.1.0-alpha.37", { tag: "0.1.0-alpha.37" }),
+    ];
+    expect(newestRelease(list, RUNNING)).toEqual({ version: "0.1.0-alpha.37", tag: "0.1.0-alpha.37" });
+  });
+
+  test("the running version and anything older is up to date", () => {
+    expect(newestRelease([release("0.1.0-alpha.36"), release("0.1.0-alpha.35")], RUNNING)).toBeNull();
+    expect(newestRelease([], RUNNING)).toBeNull();
+  });
+
+  const reasons = (outcomes: UpdateOutcome[]) => outcomes.map((o) => (o.kind === "failed" ? o.reason : o.kind));
+  const ok = JSON.stringify([release("0.1.0-alpha.37")]);
+
+  test("a 2xx JSON array is read: a newer release, or up to date", () => {
+    expect(updateOutcome({ status: 200, text: ok }, RUNNING)).toEqual({
+      kind: "newer",
+      version: "0.1.0-alpha.37",
+      tag: "v0.1.0-alpha.37",
+    });
+    expect(updateOutcome({ status: 200, text: "[]" }, RUNNING)).toEqual({ kind: "current" });
+  });
+
+  test("a non-2xx answer fails the check, even with a release list in its body", () => {
+    const outcomes = [500, 404, 403, 429, 304].map((status) => updateOutcome({ status, text: ok }, RUNNING));
+    expect(reasons(outcomes)).toEqual([
+      "GitHub answered with HTTP 500",
+      "GitHub answered with HTTP 404",
+      "GitHub is limiting requests from this network for now",
+      "GitHub is limiting requests from this network for now",
+      "GitHub answered with HTTP 304",
+    ]);
+  });
+
+  test("a redirect fails the check with its own reason: the check follows none", () => {
+    const outcomes = [301, 302, 303, 307, 308].map((status) => updateOutcome({ status, text: ok }, RUNNING));
+    expect(reasons(outcomes)).toEqual(
+      [301, 302, 303, 307, 308].map(
+        (status) => `GitHub redirected the request (HTTP ${status}), and the check follows no redirect`,
+      ),
+    );
+  });
+
+  test("a 2xx whose body is not a JSON array fails the check", () => {
+    const bodies = ['{"message":"Not Found"}', "<html>", "", "null", '"[]"', `{"0":${ok}}`];
+    expect(reasons(bodies.map((text) => updateOutcome({ status: 200, text }, RUNNING)))).toEqual(
+      bodies.map(() => "GitHub's answer was not a list of releases"),
+    );
+  });
+
+  test("no answer, or one too large, fails the check with its own reason", () => {
+    const outcomes = (["timeout", "network", "too-large"] as const).map((error) => updateOutcome({ error }, RUNNING));
+    expect(reasons(outcomes)).toEqual([
+      "GitHub did not answer in time",
+      "GitHub could not be reached",
+      "GitHub's answer was larger than 2 MiB, too large to be a list of releases",
+    ]);
+  });
+
+  /** A 4 MiB body, twice the cap, in 64 KiB chunks, counting reads and noting a cancel. It ends,
+   * so a reader without the cap finishes and fails its test rather than filling memory; a reader
+   * with it stops at the chunk that crosses 2 MiB, whatever the body would have gone on to send. */
+  const oversized = () => {
+    const seen = { pulls: 0, cancelled: false };
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          seen.pulls += 1;
+          controller.enqueue(new Uint8Array(64 * 1024).fill(0x20));
+          if (seen.pulls * 64 * 1024 >= 2 * MAX_RESPONSE_BYTES) controller.close();
+        },
+        cancel() {
+          seen.cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return { body, seen };
+  };
+
+  test("the reader returns a 2xx body whole, up to and including the cap", async () => {
+    expect(await readUpdateResponse(new Response(ok))).toEqual({ status: 200, text: ok });
+    expect(await readUpdateResponse(new Response("[1,2]"), 5)).toEqual({ status: 200, text: "[1,2]" });
+    expect(await readUpdateResponse(new Response("[1,2]"), 4)).toEqual({ error: "too-large" });
+    expect(MAX_RESPONSE_BYTES).toBe(2 * 1024 * 1024);
+  });
+
+  test("a body that grows past 2 MiB is cancelled there and fails the check, never read to its end", async () => {
+    const { body, seen } = oversized();
+    const read = await readUpdateResponse(new Response(body));
+    expect(read).toEqual({ error: "too-large" });
+    expect(seen.cancelled).toBe(true);
+    expect(seen.pulls).toBe(MAX_RESPONSE_BYTES / (64 * 1024) + 1);
+    expect(updateDialog(updateOutcome(read, RUNNING), context).message).toBe("The update check could not complete.");
+  });
+
+  test("a declared Content-Length over 2 MiB is refused before a byte is read", async () => {
+    const { body, seen } = oversized();
+    const declared = new Response(body, { headers: { "content-length": String(MAX_RESPONSE_BYTES + 1) } });
+    const read = await readUpdateResponse(declared);
+    expect(read).toEqual({ error: "too-large" });
+    expect(seen.pulls).toBe(0);
+    expect(updateOutcome(read, RUNNING)).toMatchObject({ kind: "failed" });
+  });
+
+  test("a non-2xx body is not read at all", async () => {
+    const { body, seen } = oversized();
+    expect(await readUpdateResponse(new Response(body, { status: 302 }))).toEqual({ status: 302, text: "" });
+    expect(seen.pulls).toBe(0);
+  });
+
+  const context = { current: RUNNING.current, releasesPage: RELEASES_PAGE };
+
+  test("a newer version: the release page for its tag, the upgrade command, or later", () => {
+    const outcome: UpdateOutcome = { kind: "newer", version: "0.1.0-alpha.37", tag: "v0.1.0-alpha.37" };
+    const shown = updateDialog(outcome, context);
+    expect(shown.message).toBe("glosa 0.1.0-alpha.37 is available. You have 0.1.0-alpha.36.");
+    expect(shown.buttons).toEqual(["Open Release Page", "Copy Upgrade Command", "Later"]);
+    expect(shown.actions).toEqual([
+      { open: "https://github.com/davebream/glosa/releases/tag/v0.1.0-alpha.37" },
+      { copy: "brew upgrade --cask glosa" },
+      null,
+    ]);
+    expect(shown.cancelId).toBe(2);
+  });
+
+  test("up to date: says so, and offers nothing to open", () => {
+    const shown = updateDialog({ kind: "current" }, context);
+    expect(shown.message).toBe("glosa 0.1.0-alpha.36 is the newest version.");
+    expect(shown.actions.every((action) => action === null)).toBe(true);
+  });
+
+  test("a failed check says it could not complete, gives the reason, and offers the releases page", () => {
+    const shown = updateDialog({ kind: "failed", reason: "GitHub did not answer in time" }, context);
+    expect(shown.message).toBe("The update check could not complete.");
+    expect(shown.detail).toContain("GitHub did not answer in time.");
+    expect(shown.buttons[0]).toBe("Open Release Page");
+    expect(shown.actions[0]).toEqual({ open: RELEASES_PAGE });
+    expect(
+      updateDialog({ kind: "failed", reason: "x" }, { ...context, releasesPage: `${RELEASES_PAGE}/` }).actions[0],
+    ).toEqual({ open: RELEASES_PAGE });
+  });
+
+  test("Open Release Page never opens a URL from GitHub's answer, whatever its html_url says", () => {
+    const text = JSON.stringify([
+      release("0.1.0-alpha.37", { html_url: "https://evil.example/glosa.dmg" }),
+      release("0.1.0-alpha.35", { html_url: "javascript:alert(1)" }),
+    ]);
+    const shown = updateDialog(updateOutcome({ status: 200, text }, RUNNING), context);
+    const opened = shown.actions.flatMap((action) => (action && "open" in action ? [action.open] : []));
+    expect(opened).toEqual(["https://github.com/davebream/glosa/releases/tag/v0.1.0-alpha.37"]);
+  });
+
+  test("no em dash in anything the dialog shows", () => {
+    const outcomes: UpdateOutcome[] = [
+      { kind: "newer", version: "0.1.0-alpha.37", tag: "v0.1.0-alpha.37" },
+      { kind: "current" },
+      updateOutcome({ error: "timeout" }, RUNNING),
+    ];
+    for (const outcome of outcomes) {
+      const { message, detail, buttons } = updateDialog(outcome, context);
+      expect([message, detail, ...buttons].join("\n")).not.toContain("—");
+    }
+  });
+
+  test("the request is GitHub's release list, and its headers are constant: no version, nothing about the machine", () => {
+    expect(RELEASES_API).toBe("https://api.github.com/repos/davebream/glosa/releases");
+    expect(UPDATE_USER_AGENT).toBe("glosa-update");
+    expect(UPDATE_HEADERS["user-agent"]).toBe(UPDATE_USER_AGENT);
+    for (const value of Object.values(UPDATE_HEADERS))
+      expect(value).not.toMatch(/\d+\.\d+\.\d+-|alpha|arm64|x64|darwin/);
+  });
+});
+
+describe("Check for Updates…: the one request ends, however the answer stalls (#424)", () => {
+  // Real time is the contract here: a local server that stalls, and requestReleases with a short
+  // timeout in place of the production UPDATE_TIMEOUT_MS. Bun's fetch stands in for the Node fetch
+  // the main process passes; both abort a pending read when the signal fires. The deadline below is
+  // the test's own guard, well past the timeout under test.
+  const stalling = (body: () => BodyInit | Promise<never>) =>
+    Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        const b = body();
+        return b instanceof Promise ? b : new Response(b, { headers: { "content-type": "application/json" } });
+      },
+    });
+  const RUNNING = { current: "0.1.0-alpha.36", arch: "arm64" };
+  const within = <T>(ms: number, p: Promise<T>) =>
+    Promise.race([p, new Promise<"still waiting">((resolve) => setTimeout(() => resolve("still waiting"), ms))]);
+
+  test("a body that never finishes ends as a timeout, and the check fails with the failure dialog", async () => {
+    const server = stalling(
+      () =>
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("[{"));
+          },
+        }),
+    );
+    try {
+      const started = Date.now();
+      const response = await within(5_000, requestReleases(`http://127.0.0.1:${server.port}/`, fetch, 300));
+      expect(response).toEqual({ error: "timeout" });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+      const outcome = updateOutcome(response as { error: "timeout" }, RUNNING);
+      expect(outcome).toEqual({ kind: "failed", reason: "GitHub did not answer in time" });
+      expect(
+        updateDialog(outcome, { current: RUNNING.current, releasesPage: "https://github.com/davebream/glosa/releases" })
+          .buttons,
+      ).toEqual(["Open Release Page", "Close"]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("an answer whose headers never arrive ends as a timeout too", async () => {
+    const server = stalling(() => new Promise<never>(() => {}));
+    try {
+      expect(await within(5_000, requestReleases(`http://127.0.0.1:${server.port}/`, fetch, 300))).toEqual({
+        error: "timeout",
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
+describe("more contrast: the page's read and the push (#425, A3 §4b)", () => {
+  test("the SPA origin reads the system's value; only an exact true is more contrast", () => {
+    expect(contrastReply(true, true)).toBe(true);
+    expect(contrastReply(true, false)).toBe(false);
+    for (const reading of [undefined, null, 1, "true", {}]) expect(contrastReply(true, reading)).toBe(false);
+  });
+
+  test("any other frame is refused with null whatever the system says", () => {
+    expect(contrastReply(false, true)).toBeNull();
+    expect(contrastReply(false, false)).toBeNull();
+  });
+
+  test("an updated event pushes only a change, as a boolean", () => {
+    expect(contrastPush(false, true)).toBe(true);
+    expect(contrastPush(true, false)).toBe(false);
+    expect(contrastPush(true, true)).toBeNull();
+    expect(contrastPush(false, false)).toBeNull();
+    // A getter that stops answering a boolean reads as no more contrast.
+    expect(contrastPush(true, undefined)).toBe(false);
+    expect(contrastPush(false, "true")).toBeNull();
+  });
+
+  test("a push reaches a window only while its top frame is the SPA origin recorded for it", () => {
+    expect(contrastPushReaches(SPA, SPA)).toBe(true);
+    // A blocking screen after a failed compatibility check is a data: page, whose origin is opaque.
+    expect(contrastPushReaches(SPA, "null")).toBe(false);
+    expect(contrastPushReaches(SPA, "http://127.0.0.1:4646")).toBe(false);
+    expect(contrastPushReaches(SPA, undefined)).toBe(false);
+    // A window the shell created without an origin, or never recorded, gets nothing.
+    for (const recorded of [null, undefined, ""]) expect(contrastPushReaches(recorded, SPA)).toBe(false);
   });
 });

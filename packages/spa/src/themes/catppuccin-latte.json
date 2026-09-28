@@ -1,0 +1,119 @@
+{
+  "id": "catppuccin-latte",
+  "name": "Catppuccin Latte, adapted to glosa's contrast floors",
+  "scheme": "light",
+  "upstream": {
+    "palette": "Catppuccin Latte",
+    "source": "catppuccin/palette v1.8.0 (07d02aa), palette.json, latte",
+    "colours": {
+      "bg": "base #eff1f5",
+      "surface": "mantle #e6e9ef",
+      "surface-sunken": "crust #dce0e8",
+      "ink": "text #4c4f69",
+      "muted": "subtext1 #5c5f77",
+      "faint": "overlay1 #8c8fa1",
+      "border": "surface0 #ccd0da",
+      "border-strong": "overlay2 #7c7f93",
+      "hand": "peach #fe640b",
+      "pencil": "subtext0 #6c6f85",
+      "session": "blue #1e66f5",
+      "danger": "red #d20f39",
+      "warn": "yellow #df8e1d",
+      "ok": "green #40a02b",
+      "scrim": "text #4c4f69 at 30%"
+    },
+    "moved": {
+      "ink": {
+        "from": "oklch(0.435 0.043 279.3)",
+        "to": "#43455f",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 7,
+        "was": 6.03,
+        "now": 7.01
+      },
+      "border-strong": {
+        "from": "oklch(0.601 0.03 278.7)",
+        "to": "#7c7e92",
+        "as": "line",
+        "on": "surface-sunken",
+        "floor": 3,
+        "was": 2.98,
+        "now": 3
+      },
+      "pencil": {
+        "from": "oklch(0.547 0.034 279.1)",
+        "to": "#6a6d83",
+        "as": "text",
+        "on": "elevated",
+        "floor": 4.5,
+        "was": 4.36,
+        "now": 4.5
+      },
+      "hand": {
+        "from": "oklch(0.692 0.204 42.4)",
+        "to": "#ad4102",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 4.5,
+        "was": 2.25,
+        "now": 4.51
+      },
+      "session": {
+        "from": "oklch(0.559 0.226 262.1)",
+        "to": "#155eec",
+        "as": "text",
+        "on": "surface",
+        "floor": 4.5,
+        "was": 4.03,
+        "now": 4.51
+      },
+      "warn": {
+        "from": "oklch(0.714 0.149 67.8)",
+        "to": "#965c00",
+        "as": "text",
+        "on": "surface",
+        "floor": 4.5,
+        "was": 2.15,
+        "now": 4.5
+      },
+      "ok": {
+        "from": "oklch(0.625 0.177 140.4)",
+        "to": "#1f7a01",
+        "as": "text",
+        "on": "surface",
+        "floor": 4.5,
+        "was": 2.74,
+        "now": 4.51
+      },
+      "danger": {
+        "from": "oklch(0.55 0.216 19.8)",
+        "to": "#b9012f",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 4.5,
+        "was": 4.1,
+        "now": 5.11,
+        "lightness": "0.02 below the hand's"
+      }
+    }
+  },
+  "slots": {
+    "bg": "#eff1f5",
+    "surface": "#e6e9ef",
+    "surface-sunken": "#dce0e8",
+    "ink": "oklch(0.4 0.043 279.3)",
+    "muted": "#5c5f77",
+    "faint": "#8c8fa1",
+    "border": "#ccd0da",
+    "border-strong": "oklch(0.599 0.03 278.7)",
+    "rule": "ink",
+    "hand": "oklch(0.517 0.154 42.4)",
+    "pencil": "oklch(0.54 0.034 279.1)",
+    "session": "oklch(0.533 0.225 262.1)",
+    "danger": "oklch(0.497 0.199 19.8)",
+    "warn": "oklch(0.528 0.116 67.8)",
+    "ok": "oklch(0.506 0.164 140.4)",
+    "scrim": "oklch(0.435 0.043 279.3 / 0.3)"
+  }
+}
