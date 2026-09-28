@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -29,6 +30,9 @@ import {
   appearanceDecision,
   cliCandidates,
   compatibility,
+  contrastPush,
+  contrastPushReaches,
+  contrastReply,
   egressDecision,
   firstFrameColor,
   linkFromArgv,
@@ -40,13 +44,17 @@ import {
   openArgsFor,
   parseGlosaUrl,
   parseOpenEnvelope,
+  RELEASES_API,
   RecentIds,
   type RoutedWindow,
   representedFile,
+  requestReleases,
   revealTarget,
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  updateDialog,
+  updateOutcome,
   windowFor,
   withRoute,
 } from "./policy.ts";
@@ -274,6 +282,31 @@ function osIsDark(): boolean {
 /** The paper the last page reported, for every window opened after it (brief §9). */
 let lastReportedPaper: string | null = null;
 
+// ---------- the page follows macOS Increase contrast (#425) ----------
+
+/** The more-contrast value last pushed to the SPA windows; read from `nativeTheme` once ready. */
+let pushedContrast = false;
+
+/**
+ * Electron passes no contrast preference to pages (`prefers-contrast` never matches in its
+ * renderer), so the shell relays `nativeTheme.shouldUseHighContrastColors`, which follows macOS
+ * Increase contrast. The preload reads it once per document ("glosa:more-contrast"); this pushes a
+ * change to every window the shell opened for the SPA, never to any other window.
+ */
+function pushContrast(): void {
+  const next = contrastPush(pushedContrast, nativeTheme.shouldUseHighContrastColors);
+  if (next === null) return;
+  pushedContrast = next;
+  for (const win of BrowserWindow.getAllWindows()) {
+    // The top frame's committed origin, not only the recorded one: a blocking screen loaded into a
+    // window after a failed compatibility check keeps the window's recorded origin.
+    const frameOrigin = win.webContents.mainFrame?.origin;
+    if (contrastPushReaches(windows.get(win.webContents.id)?.origin, frameOrigin))
+      win.webContents.send("glosa:more-contrast-changed", next);
+  }
+  log(`more contrast: ${next ? "on" : "off"}`);
+}
+
 function createWindow(origin: string | null): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
@@ -379,10 +412,76 @@ function revealIn(win: BrowserWindow | null): boolean {
   return true;
 }
 
+// ---------- Check for Updates…, on click only (#424) ----------
+
+/**
+ * Where the check asks. `GLOSA_SHELL_RELEASES_API` points it elsewhere and is read only by an
+ * unpackaged app: it is how the real-Electron test puts a local stub in GitHub's place, never a way
+ * to redirect a shipped app's check.
+ */
+function releasesApi(): string {
+  const override = process.env.GLOSA_SHELL_RELEASES_API;
+  return !app.isPackaged && override ? override : RELEASES_API;
+}
+
+/** The check in flight, dialog included, so a second click meanwhile starts nothing. */
+let updateCheck: Promise<void> | null = null;
+
+/**
+ * One GET to GitHub's Releases API when the person clicks, and never at launch, on a timer or on
+ * focus (invariant 5, A6 §F33). Node's global `fetch`, not Electron's `net`: `net` requests pass
+ * the renderer's egress gate (installEgressGate), which cancels them, and the gate stays as it is.
+ * Constant headers, no HTTP cache, no redirect followed, a bounded wait and a byte cap, and nothing
+ * written to disk.
+ */
+function checkForUpdates(): Promise<void> {
+  updateCheck ??= runUpdateCheck()
+    .catch((e) => log(`update check: ${(e as Error).message}`))
+    .finally(() => {
+      updateCheck = null;
+    });
+  return updateCheck;
+}
+
+async function runUpdateCheck(): Promise<void> {
+  const running = { current: pkg.version, arch: process.arch };
+  // Node's global fetch. One request: no redirect followed, the body capped, one timeout over both.
+  const response = await requestReleases(releasesApi(), fetch);
+  const outcome = updateOutcome(response, running);
+  if (outcome.kind === "newer") log(`update check: found ${outcome.version} for ${running.arch}`);
+  else if (outcome.kind === "current") log(`update check: up to date at ${running.current}`);
+  else log(`update check: failed: ${outcome.reason}`);
+  const { actions, ...options } = updateDialog(outcome, { current: pkg.version, releasesPage: pkg.glosa.releases });
+  const win = BrowserWindow.getFocusedWindow();
+  const answer = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  const action = actions[answer.response] ?? null;
+  // Both built in policy.ts: the URL from package.json's releases page, never from GitHub's answer.
+  if (action && "open" in action) await shell.openExternal(action.open);
+  else if (action && "copy" in action) clipboard.writeText(action.copy);
+}
+
 function buildMenu(): void {
   const focused = () => BrowserWindow.getFocusedWindow();
   const template: Electron.MenuItemConstructorOptions[] = [
-    { role: "appMenu" },
+    {
+      // The standard app menu, spelled out so Check for Updates… can sit under About, where macOS
+      // apps keep it. Explicit, on click, nothing scheduled: the app never checks on its own
+      // (invariant 5; A6 §F33). A click asks GitHub once from the main process and says in a
+      // dialog whether a newer app exists; it never installs one (checkForUpdates).
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { id: "check-for-updates", label: "Check for Updates…", click: () => void checkForUpdates() },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
     {
       label: "File",
       submenu: [
@@ -411,23 +510,14 @@ function buildMenu(): void {
       ],
     },
     { role: "windowMenu" },
-    {
-      role: "help",
-      submenu: [
-        {
-          // Explicit, on click, nothing scheduled: the app makes no update check on its own
-          // (invariant 5; A6 §F33). This opens the releases page in the user's browser.
-          label: "Check for Updates…",
-          click: () => void shell.openExternal(pkg.glosa.releases),
-        },
-      ],
-    },
+    // No items, but kept: the Help role is where macOS puts its menu search.
+    { role: "help", submenu: [] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function installIpc(): void {
-  const fromSpa = (event: Electron.IpcMainInvokeEvent): boolean => {
+  const fromSpa = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): boolean => {
     const origin = windows.get(event.sender.id)?.origin;
     // The class-F document reports `null` here (opaque origin under its CSP sandbox); this check,
     // not the preload's, is the boundary (readiness note §1b).
@@ -484,6 +574,19 @@ function installIpc(): void {
     lastReportedPaper = decision.background;
     if (nativeTheme.themeSource !== decision.themeSource) nativeTheme.themeSource = decision.themeSource;
     BrowserWindow.fromWebContents(event.sender)?.setBackgroundColor(decision.background);
+  });
+  // Synchronous, so the page's first-paint script already has it (#425). A `sendSync` left
+  // unanswered hangs the renderer, so every path, a refusal and an error included, sets
+  // `returnValue`; a refusal is null, which the preload reads as no more contrast.
+  ipcMain.on("glosa:more-contrast", (event) => {
+    try {
+      const allowed = fromSpa(event);
+      if (!allowed) log("refused a contrast read: not the SPA origin");
+      event.returnValue = contrastReply(allowed, nativeTheme.shouldUseHighContrastColors);
+    } catch (e) {
+      log(`contrast read failed: ${(e as Error).message}`);
+      event.returnValue = null;
+    }
   });
 }
 
@@ -546,6 +649,10 @@ app.whenReady().then(async () => {
     log(`dock icon follows macOS: ${dark ? "dark" : "light"}`);
   };
   nativeTheme.on("updated", dockIcon);
+  // Increase contrast reaches the page through the shell (#425): `updated` also fires when it
+  // changes, and `pushContrast` sends only a change.
+  pushedContrast = nativeTheme.shouldUseHighContrastColors === true;
+  nativeTheme.on("updated", pushContrast);
   if (process.platform === "darwin") {
     systemPreferences.subscribeNotification("AppleInterfaceThemeChangedNotification", dockIcon);
   }

@@ -256,8 +256,10 @@ glosa update --check   # report what would change, install nothing
 `glosa update` fetches the release over a plain HTTPS request that reads no npm configuration, checks
 the downloaded tarball against the registry's published sha512, and installs it through whichever
 package manager owns your glosa install. It runs only when you invoke it and sends no identifying
-data. The other optional external action is configured dictation, which starts only when you click
-Dictate and sends only the data named in its consent disclosure.
+data. The desktop app's Check for Updates…, in the glosa menu, makes the same kind of request only
+when you click it, asking GitHub which app releases exist; it tells you whether a newer one is out
+and installs nothing. The other optional external action is configured dictation, which starts only
+when you click Dictate and sends only the data named in its consent disclosure.
 
 > [!NOTE]
 > The plugin launcher needs a durable global install. `bunx` and `npx` are fine for one-off commands.
@@ -320,6 +322,7 @@ honestly attributed across many files and agent sessions?
 
 - glosa listens only on your Mac. `glosa open` pairs your browser tab with the local API at `http://glosa.localhost:4646`, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)). Browsers and macOS answer `.localhost` names locally without a DNS lookup. Set `GLOSA_OPEN_HOST=127.0.0.1` for `http://127.0.0.1:4646` links instead; the daemon accepts both.
 - glosa has no telemetry, cloud sync, background checks, warm-ups, or unconfigured external calls.
+  It looks for updates only when you run `glosa update` or click Check for Updates… in the app.
   The page's fonts ship inside glosa, so opening a document fetches nothing from outside your Mac.
   Optional Wispr Flow dictation sends microphone audio and up to 256 KiB of visible plaintext only
   after versioned consent and a Dictate click; it inserts a draft and never submits it. Your agent may

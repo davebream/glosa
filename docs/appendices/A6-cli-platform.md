@@ -94,10 +94,12 @@
 
 ## F33 — `glosa update` self-update
 
-- **One explicit external action under invariant 5.** `glosa update` is **explicitly invoked only** —
+- **An explicit external action under invariant 5.** `glosa update` is **explicitly invoked only** —
   never a background or passive check, never a startup probe — and sends no identifying data: a
   static `User-Agent` of `glosa-update`, no version beacon, and no cache file that could become a
   heartbeat. **`glosa update` never prompts**; the absence of a confirmation is a CI-safety contract.
+  The desktop app's Check for Updates… is the same kind of action for the app's own version, on the
+  same terms and with the same `User-Agent`, and installs nothing (A3 §4b, #424).
 - **Environment resilience is the point.** The release is resolved with a plain HTTPS `fetch` that
   reads no npm or bun configuration, so a scope mapping such as
   `@davebream:registry=https://npm.pkg.github.com` cannot redirect it. A scope mapping outranks the

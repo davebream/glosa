@@ -120,23 +120,63 @@ export function surfaceKind(url: string): "desk" | "companion" {
   return new URLSearchParams(hash).get("kind") === "desk" ? "desk" : "companion";
 }
 
-/** `0.1.0-alpha.31` style ordering: numeric parts, then a release outranks any prerelease, then
- * the prerelease number. Enough for "is the daemon at least the version this shell was built for". */
+/** A SemVer 2.0 version: the three core numbers and the prerelease identifiers, all as the digits
+ * or text they were written with. Build metadata is dropped: it never affects precedence. */
+export interface Version {
+  core: [string, string, string];
+  pre: string[];
+}
+
+// semver.org's own pattern, less the capture of build metadata. No leading zeros in numbers.
+const SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
+
+/** Parses a SemVer 2.0 version strictly; anything else, including a leading `v`, is null. SemVer
+ * sets no length limit, so neither does this: a bound on text from the network is the caller's. */
+export function parseVersion(text: string): Version | null {
+  const m = SEMVER.exec(text);
+  if (!m) return null;
+  return { core: [m[1] ?? "0", m[2] ?? "0", m[3] ?? "0"], pre: m[4] ? m[4].split(".") : [] };
+}
+
+/** Two digit strings with no leading zeros, compared as numbers of any size. */
+function compareDigits(a: string, b: string): number {
+  if (a.length !== b.length) return a.length > b.length ? 1 : -1;
+  return a === b ? 0 : a > b ? 1 : -1;
+}
+
+/**
+ * SemVer 2.0 §11 precedence: core numbers numerically; a release above any of its prereleases;
+ * prerelease identifiers left to right, numeric ones numerically, alphanumeric ones in ASCII order,
+ * numeric below alphanumeric, and a longer list above a shorter one it starts with. Build metadata
+ * is ignored. A version that does not parse ranks below every one that does, so a malformed daemon
+ * version reads as too old.
+ */
 export function compareVersions(a: string, b: string): number {
-  const parse = (v: string) => {
-    const [core = "", pre] = v.split("-", 2);
-    const nums = core.split(".").map((n) => Number.parseInt(n, 10) || 0);
-    const preNum = pre ? Number.parseInt(pre.replace(/^[^0-9]*/, ""), 10) || 0 : Number.POSITIVE_INFINITY;
-    return { nums, preNum };
-  };
-  const x = parse(a);
-  const y = parse(b);
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  if (!x || !y) return x ? 1 : y ? -1 : 0;
   for (let i = 0; i < 3; i++) {
-    const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0);
-    if (d !== 0) return Math.sign(d);
+    const d = compareDigits(x.core[i] as string, y.core[i] as string);
+    if (d !== 0) return d;
   }
-  if (x.preNum === y.preNum) return 0;
-  return x.preNum > y.preNum ? 1 : -1;
+  // A release (no identifiers) is above any of its prereleases.
+  if (x.pre.length === 0 || y.pre.length === 0) return Math.sign(y.pre.length - x.pre.length);
+  for (let i = 0; i < Math.min(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i] as string;
+    const q = y.pre[i] as string;
+    const pNumeric = /^\d+$/.test(p);
+    const qNumeric = /^\d+$/.test(q);
+    if (pNumeric && qNumeric) {
+      const d = compareDigits(p, q);
+      if (d !== 0) return d;
+    } else if (pNumeric !== qNumeric) {
+      return pNumeric ? -1 : 1;
+    } else if (p !== q) {
+      return p > q ? 1 : -1;
+    }
+  }
+  return Math.sign(x.pre.length - y.pre.length);
 }
 
 export type Handshake = { contract_version?: unknown; daemon_version?: unknown };
@@ -515,4 +555,273 @@ export function appearanceDecision(payload: unknown): AppearanceDecision | null 
 /** A new window's first frame: the paper the last report named, else the operating system's. */
 export function firstFrameColor(lastReported: string | null, osIsDark: boolean): string {
   return lastReported ?? (osIsDark ? PAPER.dark : PAPER.light);
+}
+
+// ---------- Check for Updates…, on click only (#424) ----------
+
+/** Every glosa release, newest created first. The Releases API, not `/releases/latest`: every
+ * glosa release so far is a prerelease, and `/releases/latest` skips those. */
+export const RELEASES_API = "https://api.github.com/repos/davebream/glosa/releases";
+
+/** The same static User-Agent as `glosa update` (A6 §F33): no version, nothing about the machine,
+ * so a check is never a version beacon. */
+export const UPDATE_USER_AGENT = "glosa-update";
+
+/** Every header the check sends. Constant, so no request says anything about who sent it. */
+export const UPDATE_HEADERS = Object.freeze({
+  accept: "application/vnd.github+json",
+  "user-agent": UPDATE_USER_AGENT,
+  "x-github-api-version": "2022-11-28",
+});
+
+/** The command the dialog copies. The app never installs itself: Homebrew owns the bundle. */
+export const UPGRADE_COMMAND = "brew upgrade --cask glosa";
+
+/** What the running app is: its `package.json` version and `process.arch`. */
+export interface RunningApp {
+  current: string;
+  arch: string;
+}
+
+/** A release the running app could move to, with the tag it was published under. */
+export interface FoundRelease {
+  version: string;
+  tag: string;
+}
+
+/** The longest tag selection reads. glosa's are about 16 characters; the bound keeps text from the
+ * network away from the version parser and out of an asset name, a dialog and a URL. */
+export const MAX_TAG_LENGTH = 64;
+
+/**
+ * The newest release this app could upgrade to, or null. A release counts when its `draft` is
+ * exactly `false`, its tag is `v` plus a SemVer version (or the bare version) no longer than
+ * `MAX_TAG_LENGTH`, that version is above the running one, and it has `glosa-<version>-<arch>.dmg`
+ * or `.zip` fully uploaded for the running architecture: a published release with no app on it (as
+ * `v0.1.0-alpha.32` and `33` are) is not one. The API lists releases by creation, so this takes the
+ * maximum by version, never the first. Entries that do not have that shape are skipped, including
+ * one whose `draft` is missing or not a boolean.
+ */
+export function newestRelease(releases: readonly unknown[], running: RunningApp): FoundRelease | null {
+  let best: FoundRelease | null = null;
+  for (const entry of releases) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const release = entry as { draft?: unknown; tag_name?: unknown; assets?: unknown };
+    if (release.draft !== false || typeof release.tag_name !== "string" || !Array.isArray(release.assets)) continue;
+    const tag = release.tag_name;
+    if (tag.length > MAX_TAG_LENGTH) continue;
+    const version = tag.startsWith("v") ? tag.slice(1) : tag;
+    if (parseVersion(version) === null || compareVersions(version, running.current) <= 0) continue;
+    const names = [`glosa-${version}-${running.arch}.dmg`, `glosa-${version}-${running.arch}.zip`];
+    const installable = release.assets.some((asset: unknown) => {
+      if (typeof asset !== "object" || asset === null) return false;
+      const { name, state } = asset as { name?: unknown; state?: unknown };
+      return typeof name === "string" && names.includes(name) && state === "uploaded";
+    });
+    if (installable && (best === null || compareVersions(version, best.version) > 0)) best = { version, tag };
+  }
+  return best;
+}
+
+export type UpdateOutcome =
+  | { kind: "newer"; version: string; tag: string }
+  | { kind: "current" }
+  | { kind: "failed"; reason: string };
+
+/** What the main process got back: GitHub's status and body, or no usable answer at all. */
+export type UpdateResponse = { status: number; text: string } | { error: "timeout" | "network" | "too-large" };
+
+/** The most of GitHub's answer the check reads: 2 MiB. The real list of 30 releases is about 117 KB. */
+export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Reads a fetched answer into an `UpdateResponse`, holding at most `cap` bytes. A non-2xx answer's
+ * body is not read. A declared `Content-Length` over the cap is refused before reading, and a body
+ * that grows past it is cancelled there, so a hostile answer ends as a failed check rather than
+ * filling the main process's memory. Takes any WHATWG `Response` and does no I/O of its own: a
+ * read that fails (a timeout's abort) rejects, for the caller to report.
+ */
+export async function readUpdateResponse(res: Response, cap = MAX_RESPONSE_BYTES): Promise<UpdateResponse> {
+  if (res.status < 200 || res.status > 299) {
+    await res.body?.cancel().catch(() => {});
+    return { status: res.status, text: "" };
+  }
+  const declared = Number(res.headers.get("content-length") ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > cap) {
+    await res.body?.cancel().catch(() => {});
+    return { error: "too-large" };
+  }
+  const reader = res.body?.getReader();
+  if (!reader) return { status: res.status, text: "" };
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > cap) {
+      await reader.cancel().catch(() => {});
+      return { error: "too-large" };
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { status: res.status, text: new TextDecoder().decode(bytes) };
+}
+
+/** How long one check may take, the answer's headers and its whole body together. */
+export const UPDATE_TIMEOUT_MS = 10_000;
+
+/** The `fetch` a check uses, injected the way RevealIo is: the main process passes Node's global
+ * `fetch` (never Electron's `net`, which the renderer's egress gate cancels). */
+export type UpdateFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+/**
+ * The one request a click makes, read into an `UpdateResponse`. Constant headers, no HTTP cache, no
+ * redirect followed (a 3xx comes back as itself, and `updateOutcome` fails it), and one timeout
+ * that bounds the headers and the capped body read together, so an answer that never finishes ends
+ * as `timeout` rather than a check that never returns. Never throws.
+ */
+export async function requestReleases(
+  url: string,
+  fetchFn: UpdateFetch,
+  timeoutMs = UPDATE_TIMEOUT_MS,
+): Promise<UpdateResponse> {
+  try {
+    const res = await fetchFn(url, {
+      headers: { ...UPDATE_HEADERS },
+      cache: "no-store",
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return await readUpdateResponse(res);
+  } catch (e) {
+    return { error: (e as Error).name === "TimeoutError" ? "timeout" : "network" };
+  }
+}
+
+/** Reads the answer to one check. A non-2xx status, or a body that is not a JSON array, fails. */
+export function updateOutcome(response: UpdateResponse, running: RunningApp): UpdateOutcome {
+  if ("error" in response) {
+    const reasons = {
+      timeout: "GitHub did not answer in time",
+      network: "GitHub could not be reached",
+      "too-large": "GitHub's answer was larger than 2 MiB, too large to be a list of releases",
+    };
+    return { kind: "failed", reason: reasons[response.error] };
+  }
+  // The main process fetches with `redirect: "manual"`, so a redirect arrives here, unfollowed.
+  if ([301, 302, 303, 307, 308].includes(response.status)) {
+    return {
+      kind: "failed",
+      reason: `GitHub redirected the request (HTTP ${response.status}), and the check follows no redirect`,
+    };
+  }
+  if (response.status === 403 || response.status === 429) {
+    return { kind: "failed", reason: "GitHub is limiting requests from this network for now" };
+  }
+  if (response.status < 200 || response.status > 299) {
+    return { kind: "failed", reason: `GitHub answered with HTTP ${response.status}` };
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(response.text);
+  } catch {
+    body = null;
+  }
+  if (!Array.isArray(body)) return { kind: "failed", reason: "GitHub's answer was not a list of releases" };
+  const found = newestRelease(body, running);
+  return found ? { kind: "newer", ...found } : { kind: "current" };
+}
+
+/** What one dialog button does: open a URL in the browser, copy text, or nothing. */
+export type UpdateAction = { open: string } | { copy: string } | null;
+
+/** A native message box's options, and what each of its buttons does, by index. */
+export interface UpdateDialog {
+  type: "info" | "warning";
+  message: string;
+  detail: string;
+  buttons: string[];
+  defaultId: number;
+  cancelId: number;
+  actions: UpdateAction[];
+}
+
+/**
+ * The dialog for a check's outcome. Open Release Page never opens a URL from GitHub's answer: for a
+ * release found it is `<releasesPage>/tag/<tag>`, the tag already validated as a version, and
+ * otherwise the releases page itself.
+ */
+export function updateDialog(outcome: UpdateOutcome, context: { current: string; releasesPage: string }): UpdateDialog {
+  const releases = context.releasesPage.replace(/\/+$/, "");
+  if (outcome.kind === "newer") {
+    return {
+      type: "info",
+      message: `glosa ${outcome.version} is available. You have ${context.current}.`,
+      detail: `Installed with Homebrew? Copy Upgrade Command copies ${UPGRADE_COMMAND} for a terminal. Otherwise, download it from the release page.`,
+      buttons: ["Open Release Page", "Copy Upgrade Command", "Later"],
+      defaultId: 0,
+      cancelId: 2,
+      actions: [{ open: `${releases}/tag/${encodeURIComponent(outcome.tag)}` }, { copy: UPGRADE_COMMAND }, null],
+    };
+  }
+  if (outcome.kind === "current") {
+    return {
+      type: "info",
+      message: `glosa ${context.current} is the newest version.`,
+      detail: "",
+      buttons: ["OK"],
+      defaultId: 0,
+      cancelId: 0,
+      actions: [null],
+    };
+  }
+  return {
+    type: "warning",
+    message: "The update check could not complete.",
+    detail: `${outcome.reason}. The release page lists every version.`,
+    buttons: ["Open Release Page", "Close"],
+    defaultId: 0,
+    cancelId: 1,
+    actions: [{ open: releases }, null],
+  };
+}
+
+// ---------- the page follows macOS Increase contrast (#425) ----------
+
+/**
+ * The answer to the page's synchronous "does the system ask for more contrast?" read (A3 §4b).
+ * Electron passes no contrast preference to pages, so the preload asks once per document, before
+ * the page's first script. `reading` is `nativeTheme.shouldUseHighContrastColors` at that moment.
+ * A frame that is not the window's SPA origin is refused with null, which the preload reads as no
+ * more contrast; only an exact `true` is more contrast.
+ */
+export function contrastReply(fromSpa: boolean, reading: unknown): boolean | null {
+  return fromSpa ? reading === true : null;
+}
+
+/**
+ * What one `nativeTheme` `updated` pushes to the SPA windows: the new value when it differs from
+ * the last one pushed, else null. `updated` fires for any theme change, the page's own
+ * `themeSource` included, so an unchanged value pushes nothing.
+ */
+export function contrastPush(lastPushed: boolean, reading: unknown): boolean | null {
+  const value = reading === true;
+  return value === lastPushed ? null : value;
+}
+
+/**
+ * Whether a push reaches a window: only while its top frame has committed the SPA origin the shell
+ * recorded for it. A window keeps its recorded origin when the shell loads a blocking screen into it
+ * (a `data:` page, whose origin is opaque) after a failed compatibility check, and that screen is not
+ * the SPA (A3 §4b).
+ */
+export function contrastPushReaches(recordedOrigin: string | null | undefined, frameOrigin: unknown): boolean {
+  return typeof recordedOrigin === "string" && recordedOrigin !== "" && frameOrigin === recordedOrigin;
 }

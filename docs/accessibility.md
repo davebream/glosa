@@ -28,13 +28,21 @@ cuts off, text painted over text and a sideways page scroll. They do not replace
 and text-only enlargement pass below, which covers Safari, the chrome and long names.
 
 Contrast is checked twice. Every theme file glosa ships (light, dark, High contrast light and
-dark, print) passes its WCAG 2 floors on the grounds each role is drawn on, in
-`packages/spa/test/themes.test.ts`, which refuses a theme below a floor by name. And in
-`test/acceptance/workbench-real-engine.test.ts`, Chromium with `prefers-contrast: more` emulated
-paints glosa as High contrast in light and dark, a High contrast palette chosen in Settings holds
-without it, and light, dark and print paint the same colour tokens they did before theme files.
-That emulates the media query; whether an operating system's setting reaches it is the manual item
-below.
+dark, print, and Catppuccin, Gruvbox and Rosé Pine in light and dark) passes its WCAG 2 floors on
+the grounds each role is drawn on, in `packages/spa/test/themes.test.ts`, which refuses a theme
+below a floor by name; for the three palettes made by others it also holds each file's record of
+the colours moved to reach a floor. And in `test/acceptance/workbench-real-engine.test.ts`,
+Chromium with `prefers-contrast: more` emulated paints glosa as High contrast in light and dark, a
+High contrast palette chosen in Settings holds without it, each of the three palettes paints its
+file's colours in light and dark and stays as chosen under more contrast, the label on a filled
+primary or danger action keeps 4.5:1 at rest and hovered in every palette, and light, dark and print
+paint the colour tokens recorded before theme files. That emulates the media query; whether an
+operating system's setting reaches it is the manual item below. Electron does not pass macOS
+Increase contrast to `prefers-contrast`, so the desktop app relays it: the shell reads
+`nativeTheme.shouldUseHighContrastColors`, the page reads that once per document before it first
+paints and follows each change after, and glosa's own palette turns into High contrast as it does
+in Safari. `packages/shell/test/shell-real-engine.electron.ts` drives that path in the real app
+with the getter overridden and its `updated` event emitted, not with the macOS setting.
 
 The 2026-07-22 browser pass covered light, dark, and system-resolved appearances; a 1440 × 900
 desktop viewport; the browser's 500 × 844 minimum emulated narrow viewport; keyboard traversal;
@@ -87,6 +95,10 @@ establish practical screen-reader usability:
   value.
 - [ ] macOS Reduce Motion and Increase Contrast: confirm state remains understandable when motion
   is removed and system contrast preferences are enabled. With Increase Contrast on, Safari should
-  show High contrast with glosa's own palette chosen (WebKit maps it to `prefers-contrast: more`),
-  and the desktop app should not until Electron passes it to pages; there, choose High contrast in
-  Settings > Appearance. Not yet observed on a Mac; the automated check above emulates the query.
+  show High contrast while glosa's own palette is chosen (WebKit maps it to
+  `prefers-contrast: more`) and keep Catppuccin, Gruvbox or Rosé Pine as chosen. The desktop app
+  should do the same through the shell: High contrast from the first frame of a new window and
+  after View > Reload, a switch without a reload when the setting changes while glosa runs, and
+  Settings > Appearance saying "Increase contrast is on for this Mac, so glosa shows High
+  contrast. glosa's own palette returns when it is off." Not yet observed on a Mac; the automated
+  checks above emulate the query in Chromium and override the shell's getter in Electron.

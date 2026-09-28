@@ -1,0 +1,65 @@
+{
+  "id": "catppuccin-mocha",
+  "name": "Catppuccin Mocha, adapted to glosa's contrast floors",
+  "scheme": "dark",
+  "upstream": {
+    "palette": "Catppuccin Mocha",
+    "source": "catppuccin/palette v1.8.0 (07d02aa), palette.json, mocha",
+    "colours": {
+      "bg": "base #1e1e2e",
+      "surface": "surface0 #313244",
+      "surface-sunken": "surface1 #45475a",
+      "ink": "text #cdd6f4",
+      "muted": "subtext1 #bac2de",
+      "faint": "overlay0 #6c7086",
+      "border": "surface1 #45475a",
+      "border-strong": "overlay2 #9399b2",
+      "rule": "subtext0 #a6adc8",
+      "hand": "peach #fab387",
+      "pencil": "subtext0 #a6adc8",
+      "session": "blue #89b4fa",
+      "danger": "red #f38ba8",
+      "warn": "yellow #f9e2af",
+      "ok": "green #a6e3a1",
+      "scrim": "glosa's own, black at 45%"
+    },
+    "moved": {
+      "ink": {
+        "from": "oklch(0.879 0.043 272.3)",
+        "to": "#d8e1ff",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 7,
+        "was": 6.3,
+        "now": 7
+      },
+      "danger": {
+        "from": "oklch(0.756 0.13 2.8)",
+        "to": "#ff98b4",
+        "as": "text",
+        "on": "surface-sunken",
+        "floor": 4.5,
+        "was": 3.93,
+        "now": 4.5
+      }
+    }
+  },
+  "slots": {
+    "bg": "#1e1e2e",
+    "surface": "#313244",
+    "surface-sunken": "#45475a",
+    "ink": "oklch(0.912 0.042 272.3)",
+    "muted": "#bac2de",
+    "faint": "#6c7086",
+    "border": "#45475a",
+    "border-strong": "#9399b2",
+    "rule": "#a6adc8",
+    "hand": "#fab387",
+    "pencil": "#a6adc8",
+    "session": "#89b4fa",
+    "danger": "oklch(0.793 0.127 2.8)",
+    "warn": "#f9e2af",
+    "ok": "#a6e3a1",
+    "scrim": "oklch(0 0 0 / 0.45)"
+  }
+}

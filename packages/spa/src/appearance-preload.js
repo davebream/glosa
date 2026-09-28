@@ -17,9 +17,19 @@
   }
 
   const matches = (query) => typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+  // Electron does not pass macOS Increase contrast to `prefers-contrast`, so inside the desktop app
+  // the shell says it (#425). A browser tab has no bridge; a bridge that fails never stops the paint.
+  const shellAsksMoreContrast = () => {
+    try {
+      const shell = window.glosaShell;
+      return Boolean(shell) && typeof shell.moreContrast === "function" && shell.moreContrast() === true;
+    } catch {
+      return false;
+    }
+  };
   const resolved = appearances.resolve(stored, matches("(prefers-color-scheme: dark)"), {
     palette,
-    moreContrast: matches("(prefers-contrast: more)"),
+    moreContrast: matches("(prefers-contrast: more)") || shellAsksMoreContrast(),
   });
   const root = document.documentElement;
   root.dataset.appearance = resolved.preference;

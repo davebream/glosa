@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-27T23:21:18+00:00",
+  "generatedAt": "2026-09-27T23:45:34+00:00",
   "title": "Design System: glosa",
   "extensions": {
     "colorMeta": {
@@ -67,16 +67,16 @@
       "ink-hover": {
         "role": "primary",
         "displayName": "Ink Hover",
-        "canonical": "oklch(0.34 0.012 60)",
+        "canonical": "oklch(0.342 0.011 63)",
         "tonalRamp": [
-          "oklch(0.15 0.012 60)",
-          "oklch(0.27 0.012 60)",
-          "oklch(0.39 0.012 60)",
-          "oklch(0.51 0.012 60)",
-          "oklch(0.63 0.012 60)",
-          "oklch(0.75 0.012 60)",
-          "oklch(0.87 0.012 60)",
-          "oklch(0.95 0.012 60)"
+          "oklch(0.15 0.011 63)",
+          "oklch(0.27 0.011 63)",
+          "oklch(0.39 0.011 63)",
+          "oklch(0.51 0.011 63)",
+          "oklch(0.63 0.011 63)",
+          "oklch(0.75 0.011 63)",
+          "oklch(0.87 0.011 63)",
+          "oklch(0.95 0.011 63)"
         ]
       },
       "muted": {
@@ -1007,7 +1007,7 @@
       "refersTo": "button-primary",
       "description": "Send to session, Save, Approve: filled ink, never the hand.",
       "html": "<button class=\"ds-btn-primary\">Send to session</button>",
-      "css": ".ds-btn-primary{display:inline-flex;align-items:center;padding:0.25rem 0.75rem;border-radius:6px;border:1px solid var(--ink,oklch(0.2 0.012 60));background:var(--ink,oklch(0.2 0.012 60));color:var(--bg,oklch(0.99 0.007 85));font:500 13px/1.5 \"Source Sans 3\",system-ui,sans-serif;cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1),border-color 150ms cubic-bezier(0.25,1,0.5,1)}.ds-btn-primary:hover{background:oklch(0.34 0.012 60);border-color:oklch(0.34 0.012 60)}.ds-btn-primary:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;padding:0.25rem 0.75rem;border-radius:6px;border:1px solid var(--ink,oklch(0.2 0.012 60));background:var(--ink,oklch(0.2 0.012 60));color:var(--bg,oklch(0.99 0.007 85));font:500 13px/1.5 \"Source Sans 3\",system-ui,sans-serif;cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1),border-color 150ms cubic-bezier(0.25,1,0.5,1)}.ds-btn-primary:hover{background:color-mix(in oklab,var(--ink,oklch(0.2 0.012 60)) 82%,var(--bg,oklch(0.99 0.007 85)));border-color:color-mix(in oklab,var(--ink,oklch(0.2 0.012 60)) 82%,var(--bg,oklch(0.99 0.007 85)))}.ds-btn-primary:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
     },
     {
       "name": "Secondary Button",
@@ -1085,7 +1085,7 @@
       "name": "Palette Row",
       "kind": "custom",
       "refersTo": "palette-row",
-      "description": "Settings > Appearance: one row per palette, its paper and ink as a swatch, its name and a one-line credit; the chosen row takes an ink edge, a Surface bed and the drawn check.",
+      "description": "Settings > Appearance: one row per palette (glosa, High contrast, Catppuccin, Gruvbox, Rosé Pine), its paper and ink as a swatch, its name and a one-line credit; the chosen row takes an ink edge, a Surface bed and the drawn check. A closed Palette credits disclosure sits under the rows.",
       "html": "<button class=\"ds-palette\" aria-pressed=\"true\"><span class=\"ds-palette-swatch\"><span class=\"ds-palette-paper\">Aa</span></span><span class=\"ds-palette-text\"><span class=\"ds-palette-name\">glosa</span><span class=\"ds-palette-credit\">glosa's own · warm paper, near-black ink, your marks in vermilion</span></span><svg class=\"ds-palette-check\" viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"m5.2 10.2 3.1 3.1 6.5-6.6\"/></svg></button>",
       "css": ".ds-palette{display:grid;grid-template-columns:auto minmax(0,1fr) 1rem;align-items:center;gap:0.75rem;width:30rem;max-width:100%;min-height:3.5rem;padding:0.5rem 0.75rem 0.5rem 0.5rem;text-align:left;border:1px solid var(--border,oklch(0.88 0.01 75));border-radius:6px;background:transparent;color:var(--ink,oklch(0.2 0.012 60));font:13px/1.4 \"Source Sans 3\",system-ui,sans-serif;cursor:pointer}.ds-palette:hover{background:var(--surface-sunken,oklch(0.94 0.009 78))}.ds-palette[aria-pressed=\"true\"]{border-color:var(--ink,oklch(0.2 0.012 60));background:var(--surface,oklch(0.97 0.006 80))}.ds-palette:focus-visible{outline:2px solid var(--hand,oklch(0.52 0.16 42));outline-offset:3px}.ds-palette-swatch{border:1px solid var(--border-strong,oklch(0.6 0.014 65));border-radius:4px;overflow:hidden}.ds-palette-paper{display:grid;place-items:center;width:2.75rem;height:2.25rem;background:oklch(0.99 0.007 85);color:oklch(0.2 0.012 60);font:600 1.0625rem/1 \"Source Serif 4\",Georgia,serif}.ds-palette-text{display:grid;gap:0.125rem;min-width:0}.ds-palette-name{font-weight:600}.ds-palette-credit{color:var(--muted,oklch(0.47 0.016 60));font-size:12px}.ds-palette-check{width:1rem;height:1rem;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;visibility:hidden}.ds-palette[aria-pressed=\"true\"] .ds-palette-check{visibility:visible}"
     }
@@ -1140,6 +1140,16 @@
       {
         "name": "The Hue Rules",
         "body": "Two rules keep a person's marks apart whatever the palette. The hand and Session Ink sit at least 90 degrees apart in OKLCH hue (glosa light 147°, dark 155°). Danger may sit near the hand's hue (glosa's own are about 20 degrees apart); it is held apart by lightness, its OKLCH lightness at least 0.02 from the hand's, and it always arrives with a label or a shape (The Status Needs Shape Rule). The lightness floor is glosa dark's own gap (0.72 against 0.70), the smallest shipped, so it only refuses a danger at the hand's lightness; the label or shape does the real separating. The validator refuses a theme that breaks either rule.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mapping Rule",
+        "body": "Each slot takes the upstream colour whose own documented use matches the role: paper is the palette's base background, ink its body text, muted its secondary text, faint its dimmest text, the borders its own border or highlight colours; the hand is its warm accent (Catppuccin peach, Gruvbox orange, Rosé Pine rose), Session Ink its blue (Catppuccin blue, Gruvbox blue, Rosé Pine foam), and danger, warn and ok its red, yellow and green (Rosé Pine's love, gold and pine, its terminal green). The two grounds step darker than the paper in light and lighter in dark, as glosa's do, so what floats lifts under the lamp. Where two upstream colours fit a role equally, the one that passes unmoved wins, and the one nearer glosa's own step from the paper breaks a tie. A palette changes the neutrals, the hand, Session Ink and the state colours; it never adds a third accent, never colours headings, bold text or links, and never sets a face or a register: a theme file holds colour slots and nothing else.",
+        "section": "colors"
+      },
+      {
+        "name": "The Adaptation Rule",
+        "body": "A role below its floor moves in OKLCH lightness only, away from the paper, until every ground it is drawn on passes; its chroma falls only where sRGB holds no more at the new lightness, and its hue never changes, so the hue distances below are the palette's own. Danger keeps moving until it is 0.02 from the hand's lightness. Twenty-four roles moved across the six files; every other slot is the upstream colour unchanged. Each file carries an `upstream` record beside its slots: the source (catppuccin/palette v1.8.0, morhetz/gruvbox at ef8864b, rose-pine/palette at 92af52b), the upstream colour each slot takes, and for every moved role its upstream OKLCH, the adapted hex, the ground it failed on and both ratios. `packages/spa/test/themes.test.ts` holds the record to the slots: every move was needed, kept its hue, stayed in sRGB and stopped at its floor.",
         "section": "colors"
       },
       {
@@ -1202,7 +1212,7 @@
       "**Do** break a word too long for any column inside its cell, and only then, so no table runs past what the pane shows and no other table splits a word.",
       "**Do** write every size read in the document, the margin or the chat on the reading scale, and let chrome follow zoom.",
       "**Do** serve every face from the vendored OFL woff2 files; the runtime never reaches a font service.",
-      "**Do** add a palette as one entry in the one list of appearances and two theme files that pass the validator; let a refusal stand and change the theme, never the floor."
+      "**Do** add a palette as one entry in the one list of appearances and two theme files that pass the validator; let a refusal stand and change the theme, never the floor. A palette made by others takes its upstream colours by the Mapping Rule, moves only what is under a floor by the Adaptation Rule, records every colour's source in its file, and is credited in its row, the Palette credits disclosure and `THIRD_PARTY_NOTICES.md`."
     ],
     "donts": [
       "**Don't** use the hand for a button, a link, a panel fill or a session's output.",

@@ -16,7 +16,8 @@ export function appearanceList() {
   return globalThis.glosaAppearances.list;
 }
 
-/** The listed palettes, in chooser order: `{ id, label, credit, themes, moreContrast? }` (#409). */
+/** The listed palettes, in chooser order: `{ id, label, credit, source?, themes, moreContrast? }`
+ * (#409, #410). */
 export function paletteList() {
   return globalThis.glosaAppearances.palettes;
 }
@@ -78,6 +79,53 @@ function fallbackMediaQuery() {
     matches: false,
     addEventListener() {},
     removeEventListener() {},
+  };
+}
+
+/**
+ * The system's request for more contrast inside the desktop shell (#425), as the controller's
+ * `contrastQuery`: `matches` while `(prefers-contrast: more)` matches or the shell's
+ * `moreContrast()` is true (Electron does not pass macOS Increase contrast to the query), and `change`
+ * only when that answer flips. Undefined without a shell that has both `moreContrast` and
+ * `onMoreContrastChange`, so a browser tab keeps the media query alone.
+ */
+export function shellContrastQuery(shell, mediaQuery) {
+  if (typeof shell?.moreContrast !== "function" || typeof shell?.onMoreContrastChange !== "function") return undefined;
+  const media =
+    mediaQuery ??
+    (typeof window.matchMedia === "function" ? window.matchMedia("(prefers-contrast: more)") : fallbackMediaQuery());
+  const fromShell = () => {
+    try {
+      return shell.moreContrast() === true;
+    } catch {
+      return false;
+    }
+  };
+  const current = () => Boolean(media.matches) || fromShell();
+  const listeners = new Set();
+  let last = current();
+  const recheck = () => {
+    const next = current();
+    if (next === last) return;
+    last = next;
+    for (const listener of listeners) listener({ matches: next });
+  };
+  media.addEventListener?.("change", recheck);
+  try {
+    shell.onMoreContrastChange(recheck);
+  } catch {
+    // The page still follows the media query and the value read at load.
+  }
+  return {
+    get matches() {
+      return current();
+    },
+    addEventListener(type, listener) {
+      if (type === "change") listeners.add(listener);
+    },
+    removeEventListener(type, listener) {
+      if (type === "change") listeners.delete(listener);
+    },
   };
 }
 

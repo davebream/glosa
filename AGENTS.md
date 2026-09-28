@@ -52,8 +52,8 @@ a live document week.
    `ANTHROPIC_API_KEY` from every spawned child env. Glosa makes no telemetry, background checks,
    warm-ups, or unconfigured egress. A configured external provider may receive only the data named
    in current versioned consent, and only after the user starts its foreground action. `glosa update`
-   remains explicitly invoked only (A6 §F33), with a static `User-Agent`, no version beacon, and no
-   cache file that could become a heartbeat.
+   and the desktop app's Check for Updates… remain explicitly invoked only (A6 §F33, A3 §4b), with a
+   static `User-Agent`, no version beacon, and no cache file that could become a heartbeat.
 6. **The SPA reaches the daemon through ONE data-access module** (so a future hosted shell is a deploy,
    not a refactor) (R6).
 

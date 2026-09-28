@@ -155,7 +155,38 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
   // Said only while it is true: the chosen palette is shown as another because the operating
   // system asks for more contrast (glosa's own becomes High contrast).
   const paletteHint = el("p", { className: "glosa-settings-hint", role: "status" });
-  if (appearance) appearancePage.append(modeLabel, appearanceOptions, paletteLabel, paletteOptions, paletteHint);
+  // Palettes made by others (#410): where each comes from, that glosa adapts it, and where the
+  // licences are, one disclosure under the rows. Each row's own credit names the author.
+  const borrowed = paletteList().filter((entry) => entry.source);
+  const borrowedNames = borrowed
+    .map((entry) => entry.label)
+    .reduce(
+      (names, name, index, all) => (index === 0 ? name : `${names}${index === all.length - 1 ? " and " : ", "}${name}`),
+      "",
+    );
+  const paletteCredits = borrowed.length
+    ? el("details", { className: "glosa-settings-credits" }, [
+        el("summary", { textContent: "Palette credits" }),
+        el("p", {
+          textContent: `${borrowedNames} keep their own colours wherever those meet glosa's contrast floors. A colour below its floor is made darker on light paper, or lighter on dark, in its own hue, so some marks differ from the originals.`,
+        }),
+        el(
+          "ul",
+          {},
+          borrowed.map((entry) => el("li", { textContent: `${entry.label} · ${entry.source}` })),
+        ),
+        el("p", { textContent: "Their licences are in THIRD_PARTY_NOTICES.md, which comes with glosa." }),
+      ])
+    : null;
+  if (appearance)
+    appearancePage.append(
+      modeLabel,
+      appearanceOptions,
+      paletteLabel,
+      paletteOptions,
+      paletteHint,
+      ...(paletteCredits ? [paletteCredits] : []),
+    );
   // The text size step (#406): the same control and the same store as the document's More menu,
   // so a change in either is the other's too.
   const textSizeField = el("div");
