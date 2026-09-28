@@ -214,6 +214,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- With Reduce Motion on, the notes tray at the foot of a narrow document still slid open and
+  its chevron still turned. Both now change at once, like the rest of glosa under that setting;
+  colour fades on hover stay, since they do not move anything.
 - In the dark appearance, the button that confirms a destructive action (Delete chat, Discard
   edits, Restore version) set its label in near-white on the lifted crimson at 2.8:1, below the
   4.5:1 WCAG AA asks of a 13px label. It now uses the dark paper colour: 6.3:1 at rest and 7.2:1

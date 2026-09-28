@@ -757,6 +757,51 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   );
 
   test(
+    "under reduced motion nothing in an open document transitions a property that moves it, the notes tray and its chevron included",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "initial open");
+      // Colour, background and opacity fades are not motion and may stay. These move or resize
+      // something on the page, which a reduced-motion request asks to happen at once.
+      const sweep = () =>
+        tab.evaluate<string[]>(`(()=>{
+          const MOVES=/^(all|transform|translate|rotate|scale|inset|top|right|bottom|left|width|height|max-height|min-height|margin.*|grid-template-rows|grid-template-columns)$/;
+          const seconds=(time)=>time.endsWith('ms')?Number.parseFloat(time)/1000:Number.parseFloat(time);
+          const found=new Set();
+          for(const element of document.querySelectorAll('*')){
+            const style=getComputedStyle(element);
+            const properties=style.transitionProperty.split(',').map(p=>p.trim());
+            const durations=style.transitionDuration.split(',').map(d=>seconds(d.trim()));
+            properties.forEach((property,index)=>{
+              const duration=durations[index%durations.length];
+              if(duration>0&&MOVES.test(property)) found.add(String(element.className).split(' ')[0]+' '+property);
+            });
+          }
+          return [...found].sort();
+        })()`);
+      const prefer = async (value: "no-preference" | "reduce") => {
+        await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value }] });
+        await tab.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      };
+      // The positive control: without the request, the sweep sees the tray open and its chevron turn,
+      // so a clean sweep below means the rule removed them, not that the sweep cannot see them.
+      await prefer("no-preference");
+      const moving = await sweep();
+      expect(moving, "the tray and its chevron move when motion is allowed").toEqual(
+        expect.arrayContaining([
+          "glosa-annotations-tray grid-template-rows",
+          "glosa-tray-chevron rotate",
+          "glosa-tray-chevron translate",
+        ]),
+      );
+      await prefer("reduce");
+      expect(await sweep(), "nothing moves under reduced motion").toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
     "§11: a class-F pane's iframe survives a tab switch and a tab move — same frame, no reload, no re-mint",
     async () => {
       const { browser, cdpPort } = await launchBrowser();

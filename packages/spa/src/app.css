@@ -6945,6 +6945,13 @@ input,
     transition: none;
   }
 
+  /* The notes tray opens and its chevron turns at once; the count strip and the open list still
+     say which state it is in. */
+  .glosa-annotations-tray,
+  .glosa-tray-chevron {
+    transition: none;
+  }
+
   .glosa-composer,
   .glosa-ask-layer .glosa-agent-card,
   .glosa-session-bracket[data-arrived],
