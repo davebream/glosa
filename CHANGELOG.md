@@ -214,6 +214,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A document's More menu stayed open after its tab was left, so switching back showed the menu
+  still open. Leaving by Ctrl+Tab or Ctrl+Shift+Tab did it everywhere, and so did pressing another
+  tab in Safari. The menu now closes whenever its tab is left, however that happens.
 - With Reduce Motion on, the notes tray at the foot of a narrow document still slid open and
   its chevron still turned. Both now change at once, like the rest of glosa under that setting;
   colour fades on hover stay, since they do not move anything.

@@ -1164,6 +1164,11 @@ export function mountApp(
     });
     pane.kind = "artifact";
     panes.set(id, pane);
+    // A tab that is left, by any means, tells its pane, which closes its More menu.
+    const visibility = panelApi?.onDidVisibilityChange?.((event) => {
+      if (!event.isVisible) pane.hidden?.();
+    });
+    pane.releaseVisibility = () => visibility?.dispose?.();
     // Seeded from what this panel was restored (or opened) with, so restoring a layout does not
     // immediately write the same arrangement back over itself.
     persistedModes.set(id, pane.getMode?.() ?? params.mode ?? requestedMode);
@@ -1178,6 +1183,7 @@ export function mountApp(
   }
 
   function destroyPane(id, pane) {
+    pane?.releaseVisibility?.();
     pane?.destroy?.();
     panes.delete(id);
     persistedModes.delete(id);
