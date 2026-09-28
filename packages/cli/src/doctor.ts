@@ -3,6 +3,7 @@
 // bun, git, claude-code, browser, daemon+proto, token/pairing, workspace, pending-delivery,
 // live-updates, orphaned-state, claude-monitor, transcript-root, claude-config-roots,
 // orphaned-entries, workspace-root, legacy-config, install.
+import { browserLauncher, platformProblem, runtimeFloor, type PlatformDeps } from "./platform.ts";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -36,7 +37,7 @@ export interface DoctorData {
   checks: CheckResult[];
 }
 
-export interface DoctorDeps {
+export interface DoctorDeps extends PlatformDeps {
   createClient: () => Promise<GlosaApiClient>;
   platform: () => NodeJS.Platform;
   bunVersion: () => string;
@@ -162,20 +163,19 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
 
   // 1. platform
   const platform = deps.platform();
-  checks.push(
-    platform === "darwin"
-      ? check("platform", "pass", `${platform} (macOS-only v1, A6 §F30)`)
-      : check("platform", "fail", `${platform} is not supported: glosa v1 is macOS-only`),
-  );
-  if (platform !== "darwin") return checks; // nothing else here is meaningful off-Darwin
+  const problem = platformProblem(deps, false);
+  checks.push(problem ? check("platform", "fail", problem) : check("platform", "pass", `${platform} (A6 §F30)`));
+  if (problem) return checks;
 
-  // 2. bun
-  const bunOk = meetsFloor(deps.bunVersion(), "1.2.7");
+  // Runtime failure stops before daemon discovery.
+  const floor = runtimeFloor(platform);
+  const runtimeProblem = platformProblem(deps);
   checks.push(
-    bunOk === true
-      ? check("bun", "pass", `Bun ${deps.bunVersion()} (floor 1.2.7)`)
-      : check("bun", "fail", `Bun ${deps.bunVersion()} is below the pinned floor 1.2.7`),
+    runtimeProblem
+      ? check("bun", "fail", runtimeProblem)
+      : check("bun", "pass", `Bun ${deps.bunVersion()} (floor ${floor})`),
   );
+  if (runtimeProblem) return checks;
 
   // 3. git
   const gitPath = deps.which("git");
@@ -215,22 +215,12 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     );
   }
 
-  // 5. browser — v1 has no generic way to enumerate/verify an actual Chromium≥111/Safari≥17.2
-  // install; this is a best-effort proxy ("can macOS's own `open` launcher hand off to SOMETHING")
-  // honestly labeled as such, not a fabricated pass of the real floor check.
-  const openPath = deps.which("open");
+  // Presence is only a launcher check, not proof of a graphical session or browser version.
+  const launcher = browserLauncher(platform);
   checks.push(
-    openPath
-      ? check(
-          "browser",
-          "pass",
-          "macOS `open` launcher is available (does not verify a specific browser/version floor)",
-        )
-      : check(
-          "browser",
-          "warn",
-          "macOS `open` launcher not found: `glosa open` will not be able to launch a browser automatically",
-        ),
+    deps.which(launcher)
+      ? check("browser", "pass", `${launcher} launcher is available (does not verify a specific browser/version floor)`)
+      : check("browser", "warn", `${launcher} launcher not found: use glosa open --url and open the URL in a browser`),
   );
 
   // 6. daemon+proto — `status` is hoisted for the pending-delivery/orphaned-state checks below,
@@ -736,7 +726,7 @@ export async function runDoctor(
 ): Promise<CommandEnvelope<DoctorData>> {
   const checks = await runChecks(dir, deps, options);
   const anyFail = checks.some((c) => c.status === "fail");
-  const platformFail = checks[0]?.name === "platform" && checks[0].status === "fail";
+  const platformFail = checks.some((c) => ["platform", "bun"].includes(c.name) && c.status === "fail");
 
   const exitCode = platformFail ? EXIT_CODES.PLATFORM_UNSUPPORTED : anyFail ? EXIT_CODES.DEGRADED : EXIT_CODES.OK;
   return {
