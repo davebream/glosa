@@ -19,13 +19,18 @@ export const CONTRACT_VERSION = "1.21";
 // touch `window`/`document` only inside function bodies, never at module load.
 import { mountApp } from "./viewer.js";
 import { createDataAccess } from "./data-access.js";
-import { createAppearanceController, reportAppearanceToShell } from "./appearance.js";
+import { createAppearanceController, reportAppearanceToShell, shellContrastQuery } from "./appearance.js";
 import { createTextSizeStore } from "./text-size.js";
 
 // Constructed before `main()` performs its handshake so all four screens inherit appearance.
 // appearance-preload.js already applied the same resolution synchronously before first paint;
 // this controller takes over persistence and live system-theme changes for the page lifetime.
-const appearance = typeof window === "undefined" ? null : createAppearanceController();
+// Inside the desktop shell, macOS Increase contrast arrives from the bridge as well as the media
+// query (#425); a browser tab has no bridge, so the query alone decides there.
+const appearance =
+  typeof window === "undefined"
+    ? null
+    : createAppearanceController({ contrastQuery: shellContrastQuery(/** @type {any} */ (window).glosaShell) });
 // Inside the desktop shell, the window's first frame and native UI follow what the page resolved
 // (#405). A no-op in a browser tab, which has no bridge.
 if (appearance) reportAppearanceToShell(appearance, /** @type {any} */ (window).glosaShell);

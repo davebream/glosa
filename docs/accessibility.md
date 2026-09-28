@@ -37,7 +37,12 @@ High contrast palette chosen in Settings holds without it, each of the three pal
 file's colours in light and dark and stays as chosen under more contrast, the label on a filled
 primary or danger action keeps 4.5:1 at rest and hovered in every palette, and light, dark and print
 paint the colour tokens recorded before theme files. That emulates the media query; whether an
-operating system's setting reaches it is the manual item below.
+operating system's setting reaches it is the manual item below. Electron does not pass macOS
+Increase contrast to `prefers-contrast`, so the desktop app relays it: the shell reads
+`nativeTheme.shouldUseHighContrastColors`, the page reads that once per document before it first
+paints and follows each change after, and glosa's own palette turns into High contrast as it does
+in Safari. `packages/shell/test/shell-real-engine.electron.ts` drives that path in the real app
+with the getter overridden and its `updated` event emitted, not with the macOS setting.
 
 The 2026-07-22 browser pass covered light, dark, and system-resolved appearances; a 1440 × 900
 desktop viewport; the browser's 500 × 844 minimum emulated narrow viewport; keyboard traversal;
@@ -92,6 +97,8 @@ establish practical screen-reader usability:
   is removed and system contrast preferences are enabled. With Increase Contrast on, Safari should
   show High contrast while glosa's own palette is chosen (WebKit maps it to
   `prefers-contrast: more`) and keep Catppuccin, Gruvbox or Rosé Pine as chosen. The desktop app
-  should not show High contrast until Electron passes the setting to pages; there, choose High
-  contrast in Settings > Appearance. Not yet observed on a Mac; the automated check above emulates
-  the query.
+  should do the same through the shell: High contrast from the first frame of a new window and
+  after View > Reload, a switch without a reload when the setting changes while glosa runs, and
+  Settings > Appearance saying "Increase contrast is on for this Mac, so glosa shows High
+  contrast. glosa's own palette returns when it is off." Not yet observed on a Mac; the automated
+  checks above emulate the query in Chromium and override the shell's getter in Electron.

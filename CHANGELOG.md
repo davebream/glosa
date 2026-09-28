@@ -40,8 +40,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   paper, for `prefers-contrast: more`. When the system asks for more contrast (macOS Increase
   Contrast does in Safari and Chrome), glosa's own palette turns into High contrast at once and
   before the page first paints; it is also a palette of its own in Settings > Appearance, which
-  holds with or without the system's request. The desktop app does not receive Increase Contrast
-  yet (Electron does not pass it to pages), so there it is the Settings choice. Paper, surface and
+  holds with or without the system's request. The desktop app follows macOS Increase Contrast too:
+  Electron does not pass it to pages, so the app reads it and tells the page, before the first
+  paint of every window and reload and again whenever it changes (#425). Paper, surface and
   sunken ground stay glosa's. High contrast light sets ink `oklch(0.16 0.012 60)`, muted
   `oklch(0.4 0.014 60)`, faint `oklch(0.55 0.012 65)`, border `oklch(0.76 0.01 75)`, strong border
   `oklch(0.5 0.014 65)`, the region rule to the ink, the hand `oklch(0.46 0.16 42)`, pencil

@@ -8,10 +8,12 @@ import {
   createAppearanceController,
   mountAppearanceControl,
   PALETTE_STORAGE_KEY,
+  paletteList,
   readAppearance,
   readPalette,
   reportAppearanceToShell,
   resolveAppearance,
+  shellContrastQuery,
 } from "../src/appearance.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
 
@@ -43,6 +45,28 @@ function fakeMediaQuery(initial: boolean) {
     setMatches(next: boolean) {
       this.matches = next;
       for (const listener of listeners) listener();
+    },
+  };
+}
+
+/** The desktop shell's contrast members as the preload exposes them (#425): `moreContrast()` and
+ * `onMoreContrastChange(listener)`. `push` calls every listener whether or not the value changed,
+ * so a test can send a push that changes nothing. */
+function fakeShell(initial: boolean) {
+  const listeners = new Set<(value: boolean) => void>();
+  let value = initial;
+  return {
+    moreContrast: () => value,
+    onMoreContrastChange(listener: (value: boolean) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    push(next: boolean) {
+      value = next;
+      for (const listener of listeners) listener(next);
+    },
+    get listeners() {
+      return listeners.size;
     },
   };
 }
@@ -336,6 +360,103 @@ describe("createAppearanceController", () => {
     expect(() => reportAppearanceToShell(controller, {})()).not.toThrow();
     controller.destroy();
   });
+
+  test("the shell's more contrast joins the media query as one contrast query that changes only when the combined answer flips (#425)", () => {
+    // A browser tab, or a shell without both members: no combined query, so the controller keeps
+    // `(prefers-contrast: more)` alone.
+    expect(shellContrastQuery(undefined, fakeMediaQuery(true))).toBeUndefined();
+    expect(shellContrastQuery(null, fakeMediaQuery(true))).toBeUndefined();
+    expect(shellContrastQuery({ reportAppearance() {} }, fakeMediaQuery(true))).toBeUndefined();
+    expect(shellContrastQuery({ moreContrast: () => true }, fakeMediaQuery(true))).toBeUndefined();
+
+    const media = fakeMediaQuery(false);
+    const shell = fakeShell(false);
+    const query = shellContrastQuery(shell, media)!;
+    const seen: boolean[] = [];
+    const listener = (event: { matches: boolean }) => seen.push(event.matches);
+    query.addEventListener("change", listener);
+    expect(shell.listeners).toBe(1);
+    expect(query.matches).toBe(false);
+
+    shell.push(true);
+    expect([query.matches, seen]).toEqual([true, [true]]);
+    // A push that changes nothing, and the media query turning on while the shell already says
+    // more contrast, leave the answer as it was: no change event.
+    shell.push(true);
+    media.setMatches(true);
+    expect(seen).toEqual([true]);
+    shell.push(false);
+    expect([query.matches, seen]).toEqual([true, [true]]);
+    media.setMatches(false);
+    expect([query.matches, seen]).toEqual([false, [true, false]]);
+    // The media query alone still counts.
+    media.setMatches(true);
+    expect(seen).toEqual([true, false, true]);
+    media.setMatches(false);
+
+    query.removeEventListener("change", listener);
+    shell.push(true);
+    expect([query.matches, seen]).toEqual([true, [true, false, true, false]]);
+
+    // A getter that throws, or answers anything but true, is no more contrast.
+    const throwing = shellContrastQuery(
+      {
+        moreContrast: () => {
+          throw new Error("bridge gone");
+        },
+        onMoreContrastChange: () => () => {},
+      },
+      fakeMediaQuery(false),
+    )!;
+    expect(throwing.matches).toBe(false);
+    const truthy = shellContrastQuery({ moreContrast: () => "true", onMoreContrastChange: () => () => {} }, media)!;
+    expect(truthy.matches).toBe(false);
+  });
+
+  test("inside the desktop shell glosa's own palette follows the shell's more contrast live, with Settings' sentence; any other palette stays as chosen (#425)", () => {
+    const storage = fakeStorage("light");
+    const shell = fakeShell(false);
+    const controller = createAppearanceController({
+      root: dom.document.documentElement,
+      storage,
+      mediaQuery: fakeMediaQuery(false) as unknown as MediaQueryList,
+      contrastQuery: shellContrastQuery(shell, fakeMediaQuery(false)) as unknown as MediaQueryList,
+    });
+    const html = dom.document.documentElement;
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const settings = mountAgentSettings(host, {
+      appearance: controller,
+      onChange: undefined,
+      dataAccess: { getAgentStatus: async () => ({ available: true, providers: [], profiles: [] }) },
+    });
+    const hint = () => host.querySelector(".glosa-settings-palettes + .glosa-settings-hint") as unknown as HTMLElement;
+    const shown = () => [html.dataset.palette, html.dataset.theme, hint().hidden, hint().textContent];
+    expect(shown()).toEqual(["glosa", "light", true, ""]);
+
+    shell.push(true);
+    expect(shown()).toEqual([
+      "glosa",
+      "high-contrast-light",
+      false,
+      "Increase contrast is on for this Mac, so glosa shows High contrast. glosa's own palette returns when it is off.",
+    ]);
+    controller.setPreference("dark");
+    expect(html.dataset.theme).toBe("high-contrast-dark");
+    shell.push(false);
+    expect(shown()).toEqual(["glosa", "dark", true, ""]);
+
+    // Every palette without a `moreContrast` palette stays as chosen whichever way the shell goes.
+    for (const entry of paletteList().filter((candidate: { moreContrast?: string }) => !candidate.moreContrast)) {
+      controller.setPalette(entry.id);
+      for (const value of [true, false]) {
+        shell.push(value);
+        expect(shown(), `${entry.id}, shell more contrast ${value}`).toEqual([entry.id, entry.themes.dark, true, ""]);
+      }
+    }
+    settings.destroy();
+    controller.destroy();
+  });
 });
 
 // A classic script runs in the page's one global scope: here, the realm the SPA's modules run in.
@@ -511,6 +632,57 @@ describe("the one list of appearances (#405, #409)", () => {
         });
       }
     }
+  });
+
+  test("inside the desktop shell, the shell's more contrast paints glosa's own palette as High contrast before first paint, every other palette as chosen; a tab or a failing bridge paints as the media query says (#425)", () => {
+    const bridge = dom.window as unknown as { glosaShell?: unknown };
+    const moreContrastTheme = (entry: { moreContrast?: string }, scheme: "light" | "dark") =>
+      paletteList().find((candidate: { id: string }) => candidate.id === entry.moreContrast)!.themes[scheme];
+    for (const entry of paletteList()) {
+      dom.window.localStorage.setItem(PALETTE_STORAGE_KEY, entry.id);
+      for (const dark of [false, true]) {
+        const scheme = dark ? "dark" : "light";
+        for (const shellSays of [false, true]) {
+          bridge.glosaShell = { moreContrast: () => shellSays };
+          system({ dark, moreContrast: false });
+          const expected = shellSays && entry.moreContrast ? moreContrastTheme(entry, scheme) : entry.themes[scheme];
+          expect(firstPaint(), `${entry.id}, ${scheme}, shell more contrast ${shellSays}`).toMatchObject({
+            palette: entry.id,
+            theme: expected,
+            scheme,
+          });
+          // The media query still counts beside the shell.
+          system({ dark, moreContrast: true });
+          expect(firstPaint(), `${entry.id}, ${scheme}, media query and shell ${shellSays}`).toMatchObject({
+            theme: entry.moreContrast ? moreContrastTheme(entry, scheme) : entry.themes[scheme],
+          });
+        }
+      }
+    }
+
+    dom.window.localStorage.setItem(PALETTE_STORAGE_KEY, "glosa");
+    // A browser tab: no bridge, the media query alone.
+    delete bridge.glosaShell;
+    system({ moreContrast: false });
+    expect(firstPaint()).toMatchObject({ palette: "glosa", theme: "light" });
+    // A bridge that throws, or answers anything but true, still paints, as the media query says.
+    for (const glosaShell of [
+      {
+        moreContrast: () => {
+          throw new Error("bridge gone");
+        },
+      },
+      { moreContrast: () => "true" },
+      { moreContrast: true },
+      {},
+    ]) {
+      bridge.glosaShell = glosaShell;
+      system({ moreContrast: false });
+      expect(firstPaint()).toMatchObject({ palette: "glosa", theme: "light" });
+      system({ moreContrast: true });
+      expect(firstPaint()).toMatchObject({ palette: "glosa", theme: "high-contrast-light" });
+    }
+    delete bridge.glosaShell;
   });
 
   test("an unlisted stored value paints the list's defaults through the operating system", () => {

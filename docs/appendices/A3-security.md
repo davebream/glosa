@@ -232,10 +232,11 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   equals the SPA origin exactly, and every `ipcMain` handler re-checks `event.senderFrame.origin`
   before acting; that handler check is the boundary (a class-F document reports a `null` origin under
   its CSP sandbox and is refused even by a deliberately unscoped preload). The class-F frame receives
-  no preload. The bridge carries five calls: a one-shot presentation token, "open folder", an OS
-  notification, "reveal in Finder", and the page's resolved appearance. No call takes a path from
-  the page. Reveal in Finder takes no argument at all: the main process derives the file from the
-  window's own URL (`a=`) under the folder `glosa open` answered with (`data.path`, the workspace's
+  no preload. The bridge carries six calls and one push: a one-shot presentation token, "open
+  folder", an OS notification, "reveal in Finder", the page's resolved appearance, and a
+  synchronous read of whether macOS asks for more contrast; the push is that value when it changes.
+  No call takes a path from the page. Reveal in Finder takes no argument at all: the main process
+  derives the file from the window's own URL (`a=`) under the folder `glosa open` answered with (`data.path`, the workspace's
   absolute `worktree_path`), reveals nothing when the URL's workspace (`w=`) is not the one that
   window opened, and requires the file's real path to stay inside the folder's real path, so a
   symlink in a workspace cannot point Finder outside it (#160). The notification call takes one message, `{ id, title, body, badge }`, and no
@@ -250,6 +251,16 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   from `source`, so native dialogs, menus and `prefers-color-scheme` follow glosa's choice, and
   paints the reporting window's background and every later window's first frame with the
   paper; the Dock icon reads macOS's own `AppleInterfaceStyle` and never follows the page (#405).
+  The contrast read takes nothing from the page (#425). Electron passes macOS Increase contrast to
+  no page's `prefers-contrast`, so the preload asks once per document with `ipcRenderer.sendSync`,
+  before the page's first script, and the main process answers
+  `nativeTheme.shouldUseHighContrastColors` as a boolean when the sender frame is the window's SPA
+  origin, and null otherwise. Its handler answers on every path, a refusal and an error included,
+  because an unanswered synchronous call hangs the renderer. On `nativeTheme`'s `updated` event the
+  main process pushes the value, only when it changed and only to the windows it opened for the SPA
+  whose top frame has committed that origin, so a blocking screen the shell loaded into one after a
+  failed compatibility check gets nothing; the push carries one boolean, and the preload ignores
+  anything else and exposes no way to set it.
 - **The pairing token never travels in a URL the shell loads.** The main process runs the same
   `glosa open <folder> --url --json` the CLI runs, strips `p=` from the fragment, loads the tokenless
   URL and hands the token to the page over the bridge once per window load; the page redeems it as it
