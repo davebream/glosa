@@ -108,5 +108,7 @@ sudo pacman -U ./dist/x64/glosa-<version>-x64.pacman            # install it on 
   digest-pinned Arch Linux containers that get nothing but the package files. It runs the CLI and
   MCP on the bundled Bun, the recorded-executable rules, doctor, the update refusal, a missing
   dependency failing without the network, and a running daemon across an upgrade, a removal and a
-  reinstall (`docs/design/2026-09-29-install-lifetime-and-restart.md`). Container evidence does not
-  qualify a Manjaro desktop; that is #435's.
+  reinstall (`docs/design/2026-09-29-install-lifetime-and-restart.md`). A second container runs the
+  desktop app on a virtual display: opening a folder, the Chromium sandbox, a `glosa://` link to the
+  running app, and reopening onto the same daemon. Container evidence does not qualify a Manjaro
+  desktop; that is #435's.

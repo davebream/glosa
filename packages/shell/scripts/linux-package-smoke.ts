@@ -12,6 +12,9 @@
 //       doctor, update, open, MCP, and --no-install with a dependency removed
 //   L*  the same container: the install lifetime policy (docs/design/2026-09-29-install-lifetime-
 //       and-restart.md) across an upgrade, a removal and a reinstall under a running daemon
+//   G*  a second container with a virtual display (Xvfb, installed before glosa so D1's dependency
+//       proof stays clean): the desktop app opens a folder, keeps Chromium's sandbox on, takes a
+//       glosa:// link while running, and leaves its daemon running across close and reopen
 //
 // Usage: bun scripts/linux-package-smoke.ts --package <glosa.pacman> --upgrade <glosa.pacman>
 //          --stage <build/stage> --unpacked <dist/x64/linux-unpacked> [--report <file.json>]
@@ -62,6 +65,11 @@ export const DECLARED_STAGES = [
   "L1 upgrade under a running daemon",
   "L2 removal under a running daemon",
   "L3 reinstall",
+  "G0 the desktop app beside a display",
+  "G1 the desktop launcher opens a folder",
+  "G2 Chromium's sandbox stays on",
+  "G3 glosa:// reaches the running app",
+  "G4 the daemon outlives the window",
 ] as const;
 
 interface Result {
@@ -90,12 +98,17 @@ class Container {
     this.name = name;
   }
 
-  static start(packageDir: string): Container {
+  /** `gui` adds what Chromium needs in a container: shared memory, and seccomp left to Chromium's
+   *  own filter (Docker's default profile refuses the calls its sandbox makes). The app still runs
+   *  with its sandbox on; this is the harness giving it room, never a flag to the app. */
+  static start(packageDir: string, options: { gui?: boolean } = {}): Container {
     const name = `glosa-smoke-${randomBytes(4).toString("hex")}`;
+    const gui = options.gui ? ["--shm-size", "1g", "--security-opt", "seccomp=unconfined"] : [];
     const r = exec("docker", [
       "run",
       "-d",
       "--init",
+      ...gui,
       "--platform",
       "linux/amd64",
       "--name",
@@ -169,6 +182,10 @@ async function main(): Promise<void> {
   const version = shellManifest.version;
   const results: { stage: string; ok: boolean; seconds: number; problem?: string }[] = [];
   const archiveDate = process.env.GLOSA_SMOKE_ARCHIVE_DATE ?? ARCHIVE_DATE;
+  // Debugging only: `GLOSA_SMOKE_ONLY=G` runs just the named stage groups (P, D, G; L runs with D).
+  // Every other declared stage then counts as not run, so such a run always fails overall.
+  const only = process.env.GLOSA_SMOKE_ONLY?.split(",").map((group) => group.trim());
+  const runs = (group: string) => only === undefined || only.includes(group);
   let container: Container | null = null;
 
   const stage = async (id: (typeof DECLARED_STAGES)[number], body: () => void | Promise<void>): Promise<void> => {
@@ -188,75 +205,82 @@ async function main(): Promise<void> {
   const listing = parsePackageListing(exec("bsdtar", ["-tvf", options.pkg]).stdout);
   const extract = (member: string) => exec("bsdtar", ["-xOf", options.pkg, member]).stdout;
 
-  await stage("P0 package metadata", () => {
-    const info = parsePkgInfo(extract(".PKGINFO"));
-    check(info.get("pkgname")?.[0] === "glosa", `pkgname is ${info.get("pkgname")}`);
-    check(info.get("pkgver")?.[0] === `${pacmanVersion(version)}-1`, `pkgver is ${info.get("pkgver")}`);
-    check(info.get("arch")?.[0] === "x86_64", `arch is ${info.get("arch")}`);
-    check(info.get("license")?.[0] === "Apache-2.0", `license is ${info.get("license")}`);
-    check(info.get("url")?.[0] === "https://github.com/davebream/glosa", `url is ${info.get("url")}`);
-    const depends = info.get("depend") ?? [];
-    check(
-      JSON.stringify(depends) === JSON.stringify(shellManifest.build.pacman.depends),
-      `depends ${depends.join(", ")} differ from the declared ${shellManifest.build.pacman.depends.join(", ")}`,
-    );
-    const functions = installFunctions(extract(".INSTALL"));
-    check(
-      JSON.stringify([...functions.keys()].sort()) === JSON.stringify(["post_install", "post_remove"]),
-      `.INSTALL defines ${[...functions.keys()].join(", ")}`,
-    );
-    for (const [name, body] of functions)
+  if (runs("P"))
+    await stage("P0 package metadata", () => {
+      const info = parsePkgInfo(extract(".PKGINFO"));
+      check(info.get("pkgname")?.[0] === "glosa", `pkgname is ${info.get("pkgname")}`);
+      check(info.get("pkgver")?.[0] === `${pacmanVersion(version)}-1`, `pkgver is ${info.get("pkgver")}`);
+      check(info.get("arch")?.[0] === "x86_64", `arch is ${info.get("arch")}`);
+      check(info.get("license")?.[0] === "Apache-2.0", `license is ${info.get("license")}`);
+      check(info.get("url")?.[0] === "https://github.com/davebream/glosa", `url is ${info.get("url")}`);
+      const depends = info.get("depend") ?? [];
       check(
-        body.every((line) => line === ":"),
-        `${name} does something: ${body.join("; ")}`,
+        JSON.stringify(depends) === JSON.stringify(shellManifest.build.pacman.depends),
+        `depends ${depends.join(", ")} differ from the declared ${shellManifest.build.pacman.depends.join(", ")}`,
       );
-  });
-
-  await stage("P1 package contents", () => {
-    const shipped = listingUnder(listing, "opt/glosa");
-    const unpacked = treeListing(options.unpacked);
-    const differences = listingDifferences(unpacked, shipped);
-    check(differences.length === 0, `opt/glosa differs from the unpacked app: ${differences.join("; ")}`);
-    const staged = treeListing(join(options.stage, "glosa"));
-    const glosa = listingUnder(listing, "opt/glosa/resources/glosa");
-    const stagedDiff = listingDifferences(staged, glosa);
-    check(stagedDiff.length === 0, `resources/glosa differs from the staged tree: ${stagedDiff.join("; ")}`);
-    for (const extra of PACKAGE_EXTRAS) check(listing.has(extra), `missing from the package: ${extra}`);
-    for (const license of ["electron-LICENSE.txt", "chromium-LICENSES.html", "bun-LICENSE.md"])
-      check(listing.has(`opt/glosa/resources/licenses/${license}`), `missing from the package: licenses/${license}`);
-    const link = listing.get("usr/bin/glosa");
-    check(link?.link === LAUNCHER && link.uid === "0", `usr/bin/glosa is ${JSON.stringify(link)}`);
-    const sandbox = listing.get("opt/glosa/chrome-sandbox");
-    check(sandbox?.mode === "-rwsr-xr-x" && sandbox.uid === "0", `chrome-sandbox is ${JSON.stringify(sandbox)}`);
-    check(extract("opt/glosa/resources/package-type") === "pacman\n", "resources/package-type is not `pacman`");
-    const forbidden = forbiddenPackagePaths(listing.keys());
-    check(forbidden.length === 0, forbidden.slice(0, 10).join("; "));
-  });
-
-  await stage("P2 bundled Bun", () => {
-    const bun = readFileSync(join(options.stage, "bin", "bun"));
-    check(
-      bun.subarray(0, 4).toString("hex") === "7f454c46" && bun.readUInt16LE(18) === 0x3e,
-      "staged Bun is not x86-64 ELF",
-    );
-    const shipped = spawnSync("bsdtar", ["-xOf", options.pkg, "opt/glosa/resources/bin/bun"], {
-      maxBuffer: 512 * 1024 * 1024,
+      const functions = installFunctions(extract(".INSTALL"));
+      check(
+        JSON.stringify([...functions.keys()].sort()) === JSON.stringify(["post_install", "post_remove"]),
+        `.INSTALL defines ${[...functions.keys()].join(", ")}`,
+      );
+      for (const [name, body] of functions)
+        check(
+          body.every((line) => line === ":"),
+          `${name} does something: ${body.join("; ")}`,
+        );
     });
-    check(sha(shipped.stdout) === sha(bun), "the shipped Bun is not the staged, SHASUMS-verified one");
-  });
 
-  await stage("P3 desktop entry", () => {
-    const text = extract("usr/share/applications/glosa.desktop");
-    const entry = parseDesktopEntry(text);
-    check(entry.get("Exec") === "/opt/glosa/glosa %U", `Exec is ${entry.get("Exec")}`);
-    check(entry.get("MimeType")?.split(";").includes("x-scheme-handler/glosa"), `MimeType is ${entry.get("MimeType")}`);
-    check(
-      entry.get("Icon") === "glosa" && entry.get("StartupWMClass") === "glosa",
-      "Icon or StartupWMClass is not glosa",
-    );
-    check(!/no-sandbox/.test(text), "the desktop entry disables the sandbox");
-    check(!/—/.test(text), "the desktop entry carries an em dash");
-  });
+  if (runs("P"))
+    await stage("P1 package contents", () => {
+      const shipped = listingUnder(listing, "opt/glosa");
+      const unpacked = treeListing(options.unpacked);
+      const differences = listingDifferences(unpacked, shipped);
+      check(differences.length === 0, `opt/glosa differs from the unpacked app: ${differences.join("; ")}`);
+      const staged = treeListing(join(options.stage, "glosa"));
+      const glosa = listingUnder(listing, "opt/glosa/resources/glosa");
+      const stagedDiff = listingDifferences(staged, glosa);
+      check(stagedDiff.length === 0, `resources/glosa differs from the staged tree: ${stagedDiff.join("; ")}`);
+      for (const extra of PACKAGE_EXTRAS) check(listing.has(extra), `missing from the package: ${extra}`);
+      for (const license of ["electron-LICENSE.txt", "chromium-LICENSES.html", "bun-LICENSE.md"])
+        check(listing.has(`opt/glosa/resources/licenses/${license}`), `missing from the package: licenses/${license}`);
+      const link = listing.get("usr/bin/glosa");
+      check(link?.link === LAUNCHER && link.uid === "0", `usr/bin/glosa is ${JSON.stringify(link)}`);
+      const sandbox = listing.get("opt/glosa/chrome-sandbox");
+      check(sandbox?.mode === "-rwsr-xr-x" && sandbox.uid === "0", `chrome-sandbox is ${JSON.stringify(sandbox)}`);
+      check(extract("opt/glosa/resources/package-type") === "pacman\n", "resources/package-type is not `pacman`");
+      const forbidden = forbiddenPackagePaths(listing.keys());
+      check(forbidden.length === 0, forbidden.slice(0, 10).join("; "));
+    });
+
+  if (runs("P"))
+    await stage("P2 bundled Bun", () => {
+      const bun = readFileSync(join(options.stage, "bin", "bun"));
+      check(
+        bun.subarray(0, 4).toString("hex") === "7f454c46" && bun.readUInt16LE(18) === 0x3e,
+        "staged Bun is not x86-64 ELF",
+      );
+      const shipped = spawnSync("bsdtar", ["-xOf", options.pkg, "opt/glosa/resources/bin/bun"], {
+        maxBuffer: 512 * 1024 * 1024,
+      });
+      check(sha(shipped.stdout) === sha(bun), "the shipped Bun is not the staged, SHASUMS-verified one");
+    });
+
+  if (runs("P"))
+    await stage("P3 desktop entry", () => {
+      const text = extract("usr/share/applications/glosa.desktop");
+      const entry = parseDesktopEntry(text);
+      check(entry.get("Exec") === "/opt/glosa/glosa %U", `Exec is ${entry.get("Exec")}`);
+      check(
+        entry.get("MimeType")?.split(";").includes("x-scheme-handler/glosa"),
+        `MimeType is ${entry.get("MimeType")}`,
+      );
+      check(
+        entry.get("Icon") === "glosa" && entry.get("StartupWMClass") === "glosa",
+        "Icon or StartupWMClass is not glosa",
+      );
+      check(!/no-sandbox/.test(text), "the desktop entry disables the sandbox");
+      check(!/—/.test(text), "the desktop entry carries an em dash");
+    });
 
   // ---- D and L: a fresh container ------------------------------------------------------------
   const pkgDir = dirname(options.pkg);
@@ -292,217 +316,412 @@ async function main(): Promise<void> {
     return JSON.stringify(rows.map((row) => [row.slug, row.registration_id, row.first_seen]));
   };
 
-  try {
-    container = Container.start(pkgDir);
-    const c = container;
+  if (runs("D"))
+    try {
+      container = Container.start(pkgDir);
+      const c = container;
 
-    await stage("D0 a clean system", () => {
-      for (const tool of ["bun", "node", "git"])
-        check(c.sh(`command -v ${tool}`).status !== 0, `${tool} is already installed before glosa`);
-      check(c.sh("test -e /opt/glosa").status !== 0, "/opt/glosa exists before the install");
-    });
+      await stage("D0 a clean system", () => {
+        for (const tool of ["bun", "node", "git"])
+          check(c.sh(`command -v ${tool}`).status !== 0, `${tool} is already installed before glosa`);
+        check(c.sh("test -e /opt/glosa").status !== 0, "/opt/glosa exists before the install");
+      });
 
-    await stage("D1 install resolves dependencies", () => {
-      c.out(
-        `printf 'Server = https://archive.archlinux.org/repos/${archiveDate}/$repo/os/$arch\\n' > /etc/pacman.d/mirrorlist`,
-      );
-      c.out(`${pacman} -Syu`);
-      c.out(`${pacman} -U ${pkgA}`);
-      check(c.out("pacman -Q glosa").trim() === `glosa ${pacmanVersion(version)}-1`, "glosa is not installed");
-      check(/as a dependency/.test(c.out("pacman -Qi git")), "git was not installed as glosa's dependency");
-      for (const tool of ["bun", "node"])
-        check(c.sh(`command -v ${tool}`).status !== 0, `${tool} came with the install`);
-      c.out(`useradd -m ${USER}`);
-    });
-
-    await stage("D2 package-owned files", () => {
-      check(/is owned by glosa/.test(c.out("pacman -Qo /usr/bin/glosa")), "/usr/bin/glosa is not glosa's");
-      check(c.out("readlink /usr/bin/glosa").trim() === LAUNCHER, "/usr/bin/glosa does not point at the launcher");
-      check(
-        c.out("stat -c '%a %U:%G' /opt/glosa/chrome-sandbox").trim() === "4755 root:root",
-        "chrome-sandbox is not root 4755",
-      );
-    });
-
-    await stage("D3 shared libraries", () => {
-      const missing = c.out(
-        `for f in $(find /opt/glosa -maxdepth 1 -type f -perm -u+x) /opt/glosa/*.so*; do ldd "$f" 2>/dev/null | grep 'not found' | sed "s|^|$f: |"; done; true`,
-      );
-      check(missing.trim() === "", `libraries not found:\n${missing}`);
-    });
-
-    await stage("D4 CLI on the bundled Bun", () => {
-      const r = product("glosa --version");
-      check(r.status === 0 && r.stdout.trim() === `glosa ${version}`, `glosa --version said ${r.stdout}${r.stderr}`);
-    });
-
-    await stage("D5 recorded executable", () => {
-      check(
-        c.out(`readlink ${HOME}/.glosa/bin/glosa`).trim() === LAUNCHER,
-        "an absent record did not become the launcher",
-      );
-      const cases = [
-        ["dangling", `ln -s /nowhere/glosa h/bin/glosa`, `readlink h/bin/glosa`, LAUNCHER],
-        [
-          "foreign",
-          `mkdir -p other && printf '#!/bin/sh\\n' > other/glosa && chmod +x other/glosa && ln -s ${HOME}/other/glosa h/bin/glosa`,
-          `readlink h/bin/glosa`,
-          `${HOME}/other/glosa`,
-        ],
-        ["pinned", `printf 'pinned\\n' > h/bin/glosa`, `cat h/bin/glosa`, "pinned"],
-      ] as const;
-      for (const [label, setup, read, expected] of cases) {
-        product(`rm -rf h && mkdir -p h/bin && ${setup}`);
-        check(product("glosa --version", { GLOSA_HOME: `${HOME}/h` }).status === 0, `${label}: glosa --version failed`);
-        const now = product(read).stdout.trim();
-        check(now === expected, `${label} record became ${now}, expected ${expected}`);
-      }
-    });
-
-    await stage("D6 doctor names the install", () => {
-      const doctor = JSON.parse(product("glosa doctor --json").stdout) as {
-        data: { checks: { name: string; status: string; detail: string }[] };
-      };
-      const row = doctor.data.checks.find((entry) => entry.name === "install");
-      check(row?.status === "pass", `install row is ${JSON.stringify(row)}`);
-      check(
-        row.detail.startsWith("this glosa: pacman at /opt/glosa/resources/glosa;"),
-        `install row says ${row.detail}`,
-      );
-      check(row.detail.includes(`recorded: ${LAUNCHER} (this install)`), `install row says ${row.detail}`);
-      check(!/brew/i.test(row.detail), "the install row mentions Homebrew");
-    });
-
-    await stage("D7 update refuses with pacman", () => {
-      const r = product("glosa update --json");
-      const update = JSON.parse(r.stdout) as { data: { install_kind: string }; error?: { code: string; hint: string } };
-      check(r.status === 2, `glosa update exited ${r.status}`);
-      check(update.data.install_kind === "pacman" && update.error?.code === "update-unmanaged-install", r.stdout);
-      check(/sudo pacman -U/.test(update.error.hint) && !/brew/i.test(r.stdout), `update said ${update.error.hint}`);
-    });
-
-    await stage("D8 open pairs on the bundled Bun", () => {
-      product("mkdir -p ws && printf '# Notes\\n\\nA paragraph.\\n' > ws/notes.md");
-      const opened = JSON.parse(product("glosa open ws --url --json").stdout) as { ok: boolean; data: { url: string } };
-      check(opened.ok && opened.data.url.includes("#p=") && !opened.data.url.includes("#t="), JSON.stringify(opened));
-      const lock = readLock();
-      check(lock !== null, "no daemon lock after glosa open");
-      const cmdline = c.out(`tr '\\0' ' ' < /proc/${lock.pid}/cmdline`);
-      check(cmdline.includes(BUN) && cmdline.trim().endsWith("__daemon"), `the daemon runs as ${cmdline}`);
-    });
-
-    await stage("D9 MCP answers", () => {
-      const initialize = `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "glosa-smoke", version: "1" } } })}\n`;
-      const r = container?.sh("timeout 60 glosa mcp", {
-        user: true,
-        env: { GLOSA_PORT: port },
-        input: initialize,
-      }) as Result;
-      check(/"serverInfo"/.test(r.stdout), `glosa mcp did not answer initialize: ${(r.stdout + r.stderr).slice(-800)}`);
-    });
-
-    await stage("D10 a missing dependency fails without the network", () => {
-      // The launcher runs Bun with --no-install: a hole in the package must fail loudly, never be
-      // filled from a registry. The registry points at a closed port, and the run gets a fresh HOME
-      // so anything Bun writes can be attributed to it. Bun creates ~/.bun/install/cache on every
-      // run and keeps its transpiler cache there (`@t@`); a downloaded package would be anything else.
-      c.out("mv /opt/glosa/resources/glosa/node_modules /opt/glosa/resources/glosa/node_modules.aside");
-      try {
-        const env = {
-          BUN_CONFIG_REGISTRY: "http://127.0.0.1:9",
-          HOME: `${HOME}/fresh`,
-          GLOSA_HOME: `${HOME}/fresh/.glosa`,
-        };
-        product(`mkdir -p ${HOME}/fresh`);
-        const r = product("glosa --version", env);
-        const output = r.stdout + r.stderr;
-        check(r.status !== 0, "the CLI started with its dependencies removed");
-        check(/Cannot find (module|package)/.test(output), `unexpected failure: ${output.slice(-600)}`);
-        check(
-          !/127\.0\.0\.1:9|ConnectionRefused|Resolving|downloading/i.test(output),
-          `Bun reached for the network: ${output.slice(-600)}`,
+      await stage("D1 install resolves dependencies", () => {
+        c.out(
+          `printf 'Server = https://archive.archlinux.org/repos/${archiveDate}/$repo/os/$arch\\n' > /etc/pacman.d/mirrorlist`,
         );
-        const fetched = product(
-          `find ${HOME}/fresh/.bun/install/cache -mindepth 1 -maxdepth 1 ! -name '@t@' 2>/dev/null`,
-        ).stdout.trim();
-        check(fetched === "", `Bun cached a package: ${fetched}`);
-      } finally {
-        c.out("mv /opt/glosa/resources/glosa/node_modules.aside /opt/glosa/resources/glosa/node_modules");
-      }
-    });
+        c.out(`${pacman} -Syu`);
+        c.out(`${pacman} -U ${pkgA}`);
+        check(c.out("pacman -Q glosa").trim() === `glosa ${pacmanVersion(version)}-1`, "glosa is not installed");
+        check(/as a dependency/.test(c.out("pacman -Qi git")), "git was not installed as glosa's dependency");
+        for (const tool of ["bun", "node"])
+          check(c.sh(`command -v ${tool}`).status !== 0, `${tool} came with the install`);
+        c.out(`useradd -m ${USER}`);
+      });
 
-    const tokenBefore = sha(file(`${HOME}/.glosa/token`));
-    const registrationBefore = registration();
+      await stage("D2 package-owned files", () => {
+        check(/is owned by glosa/.test(c.out("pacman -Qo /usr/bin/glosa")), "/usr/bin/glosa is not glosa's");
+        check(c.out("readlink /usr/bin/glosa").trim() === LAUNCHER, "/usr/bin/glosa does not point at the launcher");
+        check(
+          c.out("stat -c '%a %U:%G' /opt/glosa/chrome-sandbox").trim() === "4755 root:root",
+          "chrome-sandbox is not root 4755",
+        );
+      });
 
-    await stage("L1 upgrade under a running daemon", async () => {
-      const before = readLock();
-      check(before !== null, "no daemon is running before the upgrade");
-      const original = sha(file("/opt/glosa/resources/glosa/packages/spa/src/bootstrap.js"));
-      // A poller inside the container, as the page would be: every answer must be the old build's
-      // bytes or a refused connection; never the new bytes, never an error.
-      c.out(
-        `nohup sh -c 'n=0; while kill -0 ${before.pid} 2>/dev/null && [ $n -lt 1200 ]; do code=$(curl -s -o /tmp/p.js -w "%{http_code}" http://127.0.0.1:${before.port}/app/bootstrap.js); case "$code" in 200) [ "$(sha256sum /tmp/p.js | cut -d" " -f1)" = "${original}" ] && echo old || echo NEW;; 000|"") echo refused;; *) echo "http-$code";; esac; n=$((n+1)); sleep 0.05; done' > /tmp/poll.log 2>&1 &`,
-      );
-      c.out(`${pacman} -U ${pkgB}`);
-      check(await waitGone(before.pid, 30), "the old daemon did not retire after its install changed");
-      const seen = file("/tmp/poll.log").split("\n").filter(Boolean);
-      check(seen.includes("old"), "the poller never reached the old daemon");
-      const bad = seen.filter((line) => line !== "old" && line !== "refused");
-      check(bad.length === 0, `the old daemon answered ${[...new Set(bad)].join(", ")}`);
-      const log = file(`${HOME}/.glosa/daemon.log`);
-      check(log.includes(`${before.instance_id} install changed`), "the old daemon did not log the change");
-      check(
-        log.includes(`${before.instance_id} graceful shutdown complete`),
-        "the old daemon did not drain gracefully",
-      );
-      check(product("glosa status --json").status === 0, "glosa status failed after the upgrade");
-      const after = readLock();
-      check(after !== null && after.instance_id !== before.instance_id, "the next command did not start a new daemon");
-      check(after.build_id !== before.build_id, `the new daemon runs the old build ${after.build_id}`);
-      check(sha(file(`${HOME}/.glosa/token`)) === tokenBefore, "the pairing token changed");
-      check(registration() === registrationBefore, "the workspace registration changed");
-    });
+      await stage("D3 shared libraries", () => {
+        const missing = c.out(
+          `for f in $(find /opt/glosa -maxdepth 1 -type f -perm -u+x) /opt/glosa/*.so*; do ldd "$f" 2>/dev/null | grep 'not found' | sed "s|^|$f: |"; done; true`,
+        );
+        check(missing.trim() === "", `libraries not found:\n${missing}`);
+      });
 
-    await stage("L2 removal under a running daemon", async () => {
-      const before = readLock();
-      check(before !== null, "no daemon is running before the removal");
-      c.out(`${pacman} -R glosa`);
-      check(
-        c.sh("test -e /opt/glosa || test -L /usr/bin/glosa || test -e /usr/bin/glosa").status !== 0,
-        "files remain",
-      );
-      check(await waitGone(before.pid, 30), "the daemon did not retire after its install was removed");
-      check(
-        c.sh(`test -e ${HOME}/.glosa/daemon.lock || test -S ${HOME}/.glosa/run/api.sock`).status !== 0,
-        "lock or socket left",
-      );
-      check(
-        file(`${HOME}/.glosa/daemon.log`).includes(`${before.instance_id} graceful shutdown complete`),
-        "not graceful",
-      );
-      check(sha(file(`${HOME}/.glosa/token`)) === tokenBefore, "the pairing token changed");
-      check(
-        c.sh(`test -L ${HOME}/.glosa/bin/glosa && ! test -e ${HOME}/.glosa/bin/glosa`).status === 0,
-        "record not dangling",
-      );
-    });
+      await stage("D4 CLI on the bundled Bun", () => {
+        const r = product("glosa --version");
+        check(r.status === 0 && r.stdout.trim() === `glosa ${version}`, `glosa --version said ${r.stdout}${r.stderr}`);
+      });
 
-    await stage("L3 reinstall", () => {
-      c.out(`${pacman} -U ${pkgA}`);
-      check(c.sh(`test -e ${HOME}/.glosa/bin/glosa`).status === 0, "the recorded launcher did not resolve again");
-      const reopened = JSON.parse(product("glosa open ws --url --json").stdout) as { ok: boolean };
-      check(reopened.ok, "reopening the workspace failed");
-      check(registration() === registrationBefore, "the workspace registration changed");
-      check(sha(file(`${HOME}/.glosa/token`)) === tokenBefore, "the pairing token changed");
-    });
-  } finally {
-    container?.remove();
-  }
+      await stage("D5 recorded executable", () => {
+        check(
+          c.out(`readlink ${HOME}/.glosa/bin/glosa`).trim() === LAUNCHER,
+          "an absent record did not become the launcher",
+        );
+        const cases = [
+          ["dangling", `ln -s /nowhere/glosa h/bin/glosa`, `readlink h/bin/glosa`, LAUNCHER],
+          [
+            "foreign",
+            `mkdir -p other && printf '#!/bin/sh\\n' > other/glosa && chmod +x other/glosa && ln -s ${HOME}/other/glosa h/bin/glosa`,
+            `readlink h/bin/glosa`,
+            `${HOME}/other/glosa`,
+          ],
+          ["pinned", `printf 'pinned\\n' > h/bin/glosa`, `cat h/bin/glosa`, "pinned"],
+        ] as const;
+        for (const [label, setup, read, expected] of cases) {
+          product(`rm -rf h && mkdir -p h/bin && ${setup}`);
+          check(
+            product("glosa --version", { GLOSA_HOME: `${HOME}/h` }).status === 0,
+            `${label}: glosa --version failed`,
+          );
+          const now = product(read).stdout.trim();
+          check(now === expected, `${label} record became ${now}, expected ${expected}`);
+        }
+      });
+
+      await stage("D6 doctor names the install", () => {
+        const doctor = JSON.parse(product("glosa doctor --json").stdout) as {
+          data: { checks: { name: string; status: string; detail: string }[] };
+        };
+        const row = doctor.data.checks.find((entry) => entry.name === "install");
+        check(row?.status === "pass", `install row is ${JSON.stringify(row)}`);
+        check(
+          row.detail.startsWith("this glosa: pacman at /opt/glosa/resources/glosa;"),
+          `install row says ${row.detail}`,
+        );
+        check(row.detail.includes(`recorded: ${LAUNCHER} (this install)`), `install row says ${row.detail}`);
+        check(!/brew/i.test(row.detail), "the install row mentions Homebrew");
+      });
+
+      await stage("D7 update refuses with pacman", () => {
+        const r = product("glosa update --json");
+        const update = JSON.parse(r.stdout) as {
+          data: { install_kind: string };
+          error?: { code: string; hint: string };
+        };
+        check(r.status === 2, `glosa update exited ${r.status}`);
+        check(update.data.install_kind === "pacman" && update.error?.code === "update-unmanaged-install", r.stdout);
+        check(/sudo pacman -U/.test(update.error.hint) && !/brew/i.test(r.stdout), `update said ${update.error.hint}`);
+      });
+
+      await stage("D8 open pairs on the bundled Bun", () => {
+        product("mkdir -p ws && printf '# Notes\\n\\nA paragraph.\\n' > ws/notes.md");
+        const opened = JSON.parse(product("glosa open ws --url --json").stdout) as {
+          ok: boolean;
+          data: { url: string };
+        };
+        check(opened.ok && opened.data.url.includes("#p=") && !opened.data.url.includes("#t="), JSON.stringify(opened));
+        const lock = readLock();
+        check(lock !== null, "no daemon lock after glosa open");
+        const cmdline = c.out(`tr '\\0' ' ' < /proc/${lock.pid}/cmdline`);
+        check(cmdline.includes(BUN) && cmdline.trim().endsWith("__daemon"), `the daemon runs as ${cmdline}`);
+      });
+
+      await stage("D9 MCP answers", () => {
+        const initialize = `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "glosa-smoke", version: "1" } } })}\n`;
+        const r = container?.sh("timeout 60 glosa mcp", {
+          user: true,
+          env: { GLOSA_PORT: port },
+          input: initialize,
+        }) as Result;
+        check(
+          /"serverInfo"/.test(r.stdout),
+          `glosa mcp did not answer initialize: ${(r.stdout + r.stderr).slice(-800)}`,
+        );
+      });
+
+      await stage("D10 a missing dependency fails without the network", () => {
+        // The launcher runs Bun with --no-install: a hole in the package must fail loudly, never be
+        // filled from a registry. The registry points at a closed port, and the run gets a fresh HOME
+        // so anything Bun writes can be attributed to it. Bun creates ~/.bun/install/cache on every
+        // run and keeps its transpiler cache there (`@t@`); a downloaded package would be anything else.
+        c.out("mv /opt/glosa/resources/glosa/node_modules /opt/glosa/resources/glosa/node_modules.aside");
+        try {
+          const env = {
+            BUN_CONFIG_REGISTRY: "http://127.0.0.1:9",
+            HOME: `${HOME}/fresh`,
+            GLOSA_HOME: `${HOME}/fresh/.glosa`,
+          };
+          product(`mkdir -p ${HOME}/fresh`);
+          const r = product("glosa --version", env);
+          const output = r.stdout + r.stderr;
+          check(r.status !== 0, "the CLI started with its dependencies removed");
+          check(/Cannot find (module|package)/.test(output), `unexpected failure: ${output.slice(-600)}`);
+          check(
+            !/127\.0\.0\.1:9|ConnectionRefused|Resolving|downloading/i.test(output),
+            `Bun reached for the network: ${output.slice(-600)}`,
+          );
+          const fetched = product(
+            `find ${HOME}/fresh/.bun/install/cache -mindepth 1 -maxdepth 1 ! -name '@t@' 2>/dev/null`,
+          ).stdout.trim();
+          check(fetched === "", `Bun cached a package: ${fetched}`);
+        } finally {
+          c.out("mv /opt/glosa/resources/glosa/node_modules.aside /opt/glosa/resources/glosa/node_modules");
+        }
+      });
+
+      const tokenBefore = sha(file(`${HOME}/.glosa/token`));
+      const registrationBefore = registration();
+
+      await stage("L1 upgrade under a running daemon", async () => {
+        const before = readLock();
+        check(before !== null, "no daemon is running before the upgrade");
+        const original = sha(file("/opt/glosa/resources/glosa/packages/spa/src/bootstrap.js"));
+        // A poller inside the container, as the page would be: every answer must be the old build's
+        // bytes or a refused connection; never the new bytes, never an error.
+        c.out(
+          `nohup sh -c 'n=0; while kill -0 ${before.pid} 2>/dev/null && [ $n -lt 1200 ]; do code=$(curl -s -o /tmp/p.js -w "%{http_code}" http://127.0.0.1:${before.port}/app/bootstrap.js); case "$code" in 200) [ "$(sha256sum /tmp/p.js | cut -d" " -f1)" = "${original}" ] && echo old || echo NEW;; 000|"") echo refused;; *) echo "http-$code";; esac; n=$((n+1)); sleep 0.05; done' > /tmp/poll.log 2>&1 &`,
+        );
+        c.out(`${pacman} -U ${pkgB}`);
+        check(await waitGone(before.pid, 30), "the old daemon did not retire after its install changed");
+        const seen = file("/tmp/poll.log").split("\n").filter(Boolean);
+        check(seen.includes("old"), "the poller never reached the old daemon");
+        const bad = seen.filter((line) => line !== "old" && line !== "refused");
+        check(bad.length === 0, `the old daemon answered ${[...new Set(bad)].join(", ")}`);
+        const log = file(`${HOME}/.glosa/daemon.log`);
+        check(log.includes(`${before.instance_id} install changed`), "the old daemon did not log the change");
+        check(
+          log.includes(`${before.instance_id} graceful shutdown complete`),
+          "the old daemon did not drain gracefully",
+        );
+        check(product("glosa status --json").status === 0, "glosa status failed after the upgrade");
+        const after = readLock();
+        check(
+          after !== null && after.instance_id !== before.instance_id,
+          "the next command did not start a new daemon",
+        );
+        check(after.build_id !== before.build_id, `the new daemon runs the old build ${after.build_id}`);
+        check(sha(file(`${HOME}/.glosa/token`)) === tokenBefore, "the pairing token changed");
+        check(registration() === registrationBefore, "the workspace registration changed");
+      });
+
+      await stage("L2 removal under a running daemon", async () => {
+        const before = readLock();
+        check(before !== null, "no daemon is running before the removal");
+        c.out(`${pacman} -R glosa`);
+        check(
+          c.sh("test -e /opt/glosa || test -L /usr/bin/glosa || test -e /usr/bin/glosa").status !== 0,
+          "files remain",
+        );
+        check(await waitGone(before.pid, 30), "the daemon did not retire after its install was removed");
+        check(
+          c.sh(`test -e ${HOME}/.glosa/daemon.lock || test -S ${HOME}/.glosa/run/api.sock`).status !== 0,
+          "lock or socket left",
+        );
+        check(
+          file(`${HOME}/.glosa/daemon.log`).includes(`${before.instance_id} graceful shutdown complete`),
+          "not graceful",
+        );
+        check(sha(file(`${HOME}/.glosa/token`)) === tokenBefore, "the pairing token changed");
+        check(
+          c.sh(`test -L ${HOME}/.glosa/bin/glosa && ! test -e ${HOME}/.glosa/bin/glosa`).status === 0,
+          "record not dangling",
+        );
+      });
+
+      await stage("L3 reinstall", () => {
+        c.out(`${pacman} -U ${pkgA}`);
+        check(c.sh(`test -e ${HOME}/.glosa/bin/glosa`).status === 0, "the recorded launcher did not resolve again");
+        const reopened = JSON.parse(product("glosa open ws --url --json").stdout) as { ok: boolean };
+        check(reopened.ok, "reopening the workspace failed");
+        check(registration() === registrationBefore, "the workspace registration changed");
+        check(sha(file(`${HOME}/.glosa/token`)) === tokenBefore, "the pairing token changed");
+      });
+    } finally {
+      container?.remove();
+    }
+
+  // ---- G: the desktop app, in a second container with a virtual display ----------------------
+  let gui: Container | null = null;
+  let emulated = false;
+  const cdpPort = "9222";
+  if (runs("G"))
+    try {
+      gui = Container.start(pkgDir, { gui: true });
+      const g = gui;
+      const display = { DISPLAY: ":99", GLOSA_PORT: port };
+      const pages = (): { id: string; title: string; url: string; type: string }[] => {
+        try {
+          return (
+            JSON.parse(g.sh(`curl -s http://127.0.0.1:${cdpPort}/json`).stdout) as {
+              id: string;
+              title: string;
+              url: string;
+              type: string;
+            }[]
+          ).filter((target) => target.type === "page");
+        } catch {
+          return [];
+        }
+      };
+      // True as soon as the condition holds once. It is not asked again after holding: a page that
+      // matched and then moved on still matched.
+      const until = async (condition: () => boolean, seconds: number) => {
+        for (let i = 0; i < seconds; i++) {
+          if (condition()) return true;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        return condition();
+      };
+      // A page showing `name` from the fixture folder: the SPA titles it "<document> · ws". Matching
+      // the whole title matters, because while a page loads Chromium titles it with its URL, and the
+      // URL's fragment already names the document the link asked for.
+      const showsDocument = (page: { title: string }, name: string) => page.title === `${name} · ws`;
+      const showsFolder = (page: { title: string }) => page.title.endsWith(" · ws");
+      /** Diagnostics only, after a failure: the page's title and visible text, read over the debugging
+       *  protocol with the Bun the package ships (the container has no other runtime for WebSocket). */
+      const pageText = (): string => {
+        // Title, the API requests the page has finished, visible text, and the exceptions and console
+        // errors Chromium buffered before the harness attached (Runtime.enable and Log.enable replay
+        // them), so a stalled page says why.
+        const expression =
+          'document.title + " | requests=" + performance.getEntriesByType("resource").filter((e) => !e.name.includes("/app/")).map((e) => new URL(e.name).pathname).join(",") + " | " + document.body.innerText.slice(0, 200)';
+        const script = [
+          `const t = (await (await fetch("http://127.0.0.1:${cdpPort}/json")).json()).find((x) => x.type === "page");`,
+          'if (!t) { console.log("no page"); process.exit(0); }',
+          "const w = new WebSocket(t.webSocketDebuggerUrl);",
+          "const out = [];",
+          `w.onopen = () => { w.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression: ${JSON.stringify(expression)}, returnByValue: true } })); w.send(JSON.stringify({ id: 2, method: "Runtime.enable" })); w.send(JSON.stringify({ id: 3, method: "Log.enable" })); };`,
+          "w.onmessage = (m) => { const e = JSON.parse(m.data);",
+          "  if (e.id === 1) out.unshift(String(e.result?.result?.value));",
+          '  if (e.method === "Runtime.exceptionThrown") out.push("exception: " + String(e.params.exceptionDetails.exception?.description ?? e.params.exceptionDetails.text).slice(0, 400));',
+          '  if (e.method === "Runtime.consoleAPICalled" && e.params.type === "error") out.push("console.error: " + JSON.stringify(e.params.args.map((a) => a.value ?? a.description)).slice(0, 300));',
+          '  if (e.method === "Log.entryAdded" && e.params.entry.level === "error") out.push("log: " + e.params.entry.text.slice(0, 300));',
+          "};",
+          'setTimeout(() => { console.log(out.join(" || ")); process.exit(0); }, 4000);',
+        ].join("\n");
+        return g
+          .sh(`${BUN} -e "$SCRIPT"`, { env: { SCRIPT: script } })
+          .stdout.trim()
+          .replace(/\s+/g, " ");
+      };
+      const launch = (target: string) =>
+        g.out(`nohup /opt/glosa/glosa --remote-debugging-port=${cdpPort} '${target}' > /tmp/electron.log 2>&1 &`, {
+          user: true,
+          env: display,
+        });
+      const mainPid = () => g.sh("pgrep -o -f '^/opt/glosa/glosa --remote-debugging-port'").stdout.trim();
+      const guiLock = (): DaemonLock | null => {
+        try {
+          return JSON.parse(g.sh(`cat ${HOME}/.glosa/daemon.lock`).stdout) as DaemonLock;
+        } catch {
+          return null;
+        }
+      };
+
+      await stage("G0 the desktop app beside a display", () => {
+        g.out(
+          `printf 'Server = https://archive.archlinux.org/repos/${archiveDate}/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist`,
+        );
+        g.out(`${pacman} -Syu xorg-server-xvfb`);
+        g.out(`${pacman} -U ${pkgA}`);
+        g.out(`useradd -m ${USER}`);
+        g.out("nohup Xvfb :99 -screen 0 1280x900x24 > /tmp/xvfb.log 2>&1 &");
+        g.sh("mkdir -p ws && printf '# Notes\\n\\nA paragraph.\\n' > ws/notes.md", { user: true });
+      });
+
+      await stage("G1 the desktop launcher opens a folder", async () => {
+        // What the menu entry runs (Exec=/opt/glosa/glosa %U), with a folder, plus a debugging port.
+        launch(`${HOME}/ws`);
+        if (!(await until(() => pages().some((page) => showsDocument(page, "notes.md")), 180)))
+          check(
+            false,
+            `no window opened the folder: ${JSON.stringify(pages().map((page) => [page.title, page.url]))}; the page says: ${pageText()}; daemon: ${g.sh(`tail -3 ${HOME}/.glosa/daemon.log`).stdout}`,
+          );
+        const page = pages().find((entry) => showsDocument(entry, "notes.md"));
+        check(
+          page !== undefined && new URL(page.url).port === port,
+          `the window is not on the daemon's origin: ${page?.url}`,
+        );
+        check(guiLock()?.build_id !== undefined, "no daemon runs behind the window");
+      });
+
+      await stage("G2 Chromium's sandbox stays on", () => {
+        // Every process whose argv[0] is the packaged Electron binary. Under emulation (Rosetta), a
+        // forked child's command line starts with "[rosetta]"; the binary is the next field.
+        const probe = g.out(
+          `for d in /proc/[0-9]*; do a=$(tr '\\0' ' ' < $d/cmdline 2>/dev/null); case "$a" in "/opt/glosa/glosa "*|"[rosetta] /opt/glosa/glosa "*) echo "$(grep -E '^(Seccomp|NSpid):' $d/status | tr -s ' \\t' ' ' | tr '\\n' ' ')|$a";; esac; done`,
+        );
+        const processes = probe.split("\n").filter(Boolean);
+        emulated = processes.some((line) => line.includes("|[rosetta] "));
+        check(processes.length >= 3, `too few Electron processes: ${processes.length}`);
+        const flagged = processes.filter((line) =>
+          /--no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox|--disable-seccomp-filter-sandbox/.test(
+            line,
+          ),
+        );
+        check(flagged.length === 0, `sandbox disabled: ${flagged.join("\n")}`);
+        const namespaced = processes.filter(
+          (line) => (/NSpid:((?:\s+\d+)+)/.exec(line)?.[1] ?? "").trim().split(/\s+/).length > 1,
+        );
+        check(namespaced.length > 0, "no Electron process runs in its own PID namespace: the namespace sandbox is off");
+        // seccomp-bpf is unavailable under Rosetta; on x86_64 hardware a sandboxed process must have it.
+        if (!emulated)
+          check(
+            namespaced.some((line) => /Seccomp: 2/.test(line)),
+            `no sandboxed process has seccomp: ${namespaced.join("\n")}`,
+          );
+      });
+
+      await stage("G3 glosa:// reaches the running app", async () => {
+        const handler = g
+          .sh("xdg-mime query default x-scheme-handler/glosa", { user: true, env: display })
+          .stdout.trim();
+        check(handler === "glosa.desktop", `the glosa:// handler is ${handler || "unset"}`);
+        // The link names a document no window shows yet, so only a routed link can put it on screen.
+        g.out("printf '# Other\\n' > ws/other.md", { user: true });
+        const before = mainPid();
+        const link = `glosa://open?path=${encodeURIComponent(`${HOME}/ws`)}&focus=other.md&kind=desk`;
+        const second = g.sh(`timeout 60 /opt/glosa/glosa '${link}'`, { user: true, env: display });
+        check(
+          second.status === 0,
+          `the second launch did not hand its link over (exit ${second.status}): ${second.stderr.slice(-400)}`,
+        );
+        check(mainPid() === before, "the running app is not the one that took the link");
+        if (!(await until(() => pages().some((page) => showsDocument(page, "other.md")), 60)))
+          check(
+            false,
+            `no window shows the linked document: ${JSON.stringify(pages().map((page) => page.title))}; the page says: ${pageText()}`,
+          );
+      });
+
+      await stage("G4 the daemon outlives the window", async () => {
+        const daemon = guiLock();
+        check(daemon !== null, "no daemon before closing the window");
+        const main = mainPid();
+        for (const page of pages()) g.sh(`curl -s http://127.0.0.1:${cdpPort}/json/close/${page.id}`);
+        check(
+          await until(() => g.sh(`kill -0 ${main} 2>/dev/null`).status !== 0, 30),
+          "the app did not quit when its last window closed",
+        );
+        check(g.sh(`kill -0 ${daemon.pid} 2>/dev/null`).status === 0, "the daemon stopped with the window (R-O4)");
+        launch(`${HOME}/ws`);
+        if (!(await until(() => pages().some(showsFolder), 180)))
+          check(
+            false,
+            `the app did not reopen the folder: ${JSON.stringify(pages().map((page) => page.title))}; the page says: ${pageText()}`,
+          );
+        check(guiLock()?.instance_id === daemon.instance_id, "reopening started another daemon instead of reusing it");
+      });
+    } finally {
+      gui?.remove();
+    }
 
   const ran = results.map((r) => r.stage);
   const unrun = DECLARED_STAGES.filter((id) => !ran.includes(id));
   mkdirSync(dirname(options.report), { recursive: true });
-  writeFileSync(options.report, `${JSON.stringify({ version, archiveDate, image: IMAGE, results, unrun }, null, 2)}\n`);
+  writeFileSync(
+    options.report,
+    `${JSON.stringify({ version, archiveDate, image: IMAGE, emulated, results, unrun }, null, 2)}\n`,
+  );
   const failed = results.filter((r) => !r.ok);
   if (failed.length > 0 || unrun.length > 0) {
     throw new Error(

@@ -124,8 +124,14 @@ every stage in fresh `archlinux:base` containers pinned by digest. Their reposit
 pinned Arch Linux Archive day (`ARCHIVE_DATE` in the script; `GLOSA_SMOKE_ARCHIVE_DATE` overrides it
 when that snapshot ages out). The containers get only the package files, read-only, and run with
 `--init` so a daemon that exits is reaped. The harness passes pacman `--disable-sandbox`, which is
-about pacman's own download sandbox in a container, not the app's. Its report lands in
-`.context/test-results/pacman/report.json`, and a declared stage that did not run fails the job.
+about pacman's own download sandbox in a container, not the app's. The container that runs the
+desktop app on a virtual display (Xvfb) also gets 1 GB of shared memory and
+`--security-opt seccomp=unconfined`, because Docker's default seccomp profile refuses the calls
+Chromium's own sandbox makes. The app still runs with its sandbox on, and the smoke fails if any
+Electron process has it off. Seccomp itself is asserted only on x86_64 hardware: it is unavailable
+under emulation. Its report lands in `.context/test-results/pacman/report.json`, and a declared stage
+that did not run fails the job. While debugging, `GLOSA_SMOKE_ONLY=G` (or `P`, `D`) runs one group of
+stages; such a run always fails overall, because the others did not run.
 
 Still manual, and pending #435 on a real Manjaro KDE desktop (x86_64): launching from the menu and
 its icon, Wayland and X11, `glosa://` links through `kde-open` with the app closed and open,

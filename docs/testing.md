@@ -154,7 +154,9 @@ only the package files. Its stages are declared up front and a declared stage th
 fails the job, the same rule as a skipped test. It covers installation and dependencies, the CLI
 and MCP on the bundled Bun, the recorded executable, doctor, the update refusal, a missing
 dependency failing without the network, and a running daemon across an upgrade, a removal and a
-reinstall.
+reinstall. A second container adds a virtual display and runs the desktop app itself: the launcher
+opening a folder, Chromium's sandbox staying on, a `glosa://` link reaching the running app, and the
+daemon outliving the window.
 
 Local Linux containers must provide init, system Git/ps and executable temporary storage for the
 launcher fixtures so process-lifetime tests observe their intended topology. Container evidence does not qualify an installed Manjaro desktop app.
