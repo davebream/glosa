@@ -28,9 +28,14 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
   const launcher: ProcessLauncher = {
     async spawn(options) {
       expect(options.env.CODEX_HOME).toBe("/isolated/profile-a");
-      expect(options.args).toContain('cli_auth_credentials_store="file"');
-      expect(options.args).toContain("features.apps=false");
-      expect(options.args).toContain("features.plugins=false");
+      if (spec.profile.configuration) {
+        expect(options.args).not.toContain('cli_auth_credentials_store="file"');
+        expect(options.args).not.toContain("features.plugins=false");
+      } else {
+        expect(options.args).toContain('cli_auth_credentials_store="file"');
+        expect(options.args).toContain("features.apps=false");
+        expect(options.args).toContain("features.plugins=false");
+      }
       expect(options.args).toContain("analytics.enabled=false");
       expect(options.cwd).toBe(neutral);
       for (let i = 0; i < options.args.length; i++) {
@@ -95,6 +100,17 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
           if (frame.method === "thread/start" || frame.method === "thread/resume")
             result = { thread: { id: "thread-a" } };
           if (frame.method === "mcpServerStatus/list") result = await mcpStatus(frame.params);
+          if (frame.method === "skills/list")
+            result = {
+              data: [
+                {
+                  cwd,
+                  skills: [
+                    { name: "review", description: "Review", path: "/native/skills/review/SKILL.md", enabled: true },
+                  ],
+                },
+              ],
+            };
           if (frame.method === "turn/start") {
             output({ method: "turn/started", params: { threadId: "thread-a", turn: { id: "turn-a" } } });
             result = { turn: { id: "turn-a" } };
@@ -354,4 +370,38 @@ test("Codex waits for the built-in catalog before sending and reinstalls guidanc
   } finally {
     await connection.close();
   }
+});
+
+test("Codex selected skills send the native skill item and dollar syntax", async () => {
+  const f = fixture();
+  const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, () => {});
+  try {
+    const commands = await connection.commands!(true);
+    const skill = commands.find((item) => item.name === "review")!;
+    await connection.startTurn({
+      turnId: "logical",
+      text: "/review notes",
+      commandId: skill.id,
+      settings: { model: "model", effort: "high", permissionMode: "plan" },
+      attachments: [],
+    });
+    expect(f.sent.find((frame) => frame.method === "turn/start")!.params.input).toEqual([
+      { type: "text", text: "$review notes" },
+      { type: "skill", name: "review", path: "/native/skills/review/SKILL.md" },
+    ]);
+  } finally {
+    await connection.close();
+  }
+});
+
+test("linked Codex preserves native credentials and project tools but refuses a reserved MCP name", async () => {
+  const f = fixture();
+  f.spec.profile.configuration = { mode: "linked", path: f.spec.configRoot };
+  mkdirSync(join(f.spec.cwd, ".codex"));
+  writeFileSync(join(f.spec.cwd, ".codex", "config.toml"), "[features]\nplugins = true\n");
+  f.setLayers([{ name: { type: "project" }, config: { features: { plugins: true } } }]);
+  const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, () => {});
+  await connection.close();
+  f.setConfig({ mcp_servers: { glosa: { command: "conflict" } } });
+  await expect(new CodexManagedAdapter().connect(f.spec, f.launcher, () => {})).rejects.toThrow("reserved glosa");
 });

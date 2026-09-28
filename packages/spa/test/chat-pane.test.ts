@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { composerToken, editReferences, createComposerPicker } from "../src/composer-picker.js";
 import MarkdownIt from "markdown-it";
 import { createSafeChatRenderer } from "../src/chat-markdown.js";
 import { createChatPane, applyChatEvent } from "../src/chat-pane.js";
@@ -1054,4 +1055,62 @@ test("account settings expose actionable health, enabling and default selection 
   expect(name.value).toBe(profiles[0]!.label);
   expect(updates).toHaveLength(1);
   pane.destroy();
+});
+
+test("composer picker binds selections, retains focus and consumes Enter without sending", async () => {
+  const host = document.createElement("div"),
+    input = document.createElement("textarea");
+  document.body.append(host);
+  host.append(input);
+  let starts = 0;
+  const picker = createComposerPicker(input, {
+    getFiles: () => ["notes.md", "long notes.md"],
+    getCatalog: async () => ({
+      loaded: true,
+      commands: [{ id: "a", name: "review", kind: "skill", description: "Review writing" }],
+    }),
+    loadCatalog: async () => {
+      starts++;
+      return { commands: [], loaded: true };
+    },
+    onAction: async () => true,
+    onChange() {},
+  });
+  try {
+    input.focus();
+    input.value = "@no";
+    input.setSelectionRange(3, 3);
+    input.dispatchEvent(new Event("input"));
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    input.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(input.value).toBe("@notes.md ");
+    expect(picker.references).toEqual([{ kind: "file", id: "notes.md", start: 0, end: 9, text: "@notes.md" }]);
+    expect(document.activeElement).toBe(input);
+    input.value = "/rev";
+    input.setSelectionRange(4, 4);
+    input.dispatchEvent(new Event("input"));
+    await flush();
+    expect(starts).toBe(0);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
+    expect(input.value).toBe("/review ");
+    expect(picker.references[0]?.id).toBe("a");
+    input.value = "/revXiew ";
+    input.dispatchEvent(new Event("input"));
+    expect(picker.references).toEqual([]);
+  } finally {
+    picker.destroy();
+    host.remove();
+  }
+});
+
+test("composer trigger boundaries and UTF-16 reference edits preserve surrounding writing", () => {
+  expect(composerToken("mail@example", 12)).toBeNull();
+  expect(composerToken("Please /review", 14)).toBeNull();
+  expect(composerToken("  /review", 9)?.start).toBe(2);
+  const ref = { kind: "file", id: "a", text: "@a", start: 3, end: 5 };
+  expect(editReferences("😀 @a", "x😀 @a", [ref])[0]?.start).toBe(4);
+  expect(editReferences("😀 @a", "😀 @ab", [ref])).toEqual([]);
+  expect(editReferences("😀 @a", "😀 @z", [ref])).toEqual([]);
 });

@@ -333,6 +333,7 @@ function setup(options: Partial<ChatServiceOptions> = {}) {
   });
   return {
     service,
+    adapter,
     store,
     workspace,
     profile,
@@ -1399,5 +1400,114 @@ test("native disconnect or completion during preparation records an unsent failu
     expect(h.store.chat(chat.id).state.turns[0]!.error).toContain("Your message was not sent");
     expect(h.inputs).toEqual([]);
     expect(h.writes).toEqual([]);
+  }
+});
+
+test("references preserve exact text, survive replay, and stale commands hold before native dispatch", async () => {
+  const h = setup(),
+    chat = h.chat();
+  let available = true;
+  const connect = h.adapter.connect.bind(h.adapter);
+  h.adapter.connect = async (...args) => ({
+    ...(await connect(...args)),
+    commands: async () => (available ? [{ id: "skill-a", name: "review", description: "Review", kind: "skill" }] : []),
+  });
+  expect(h.service.commandCatalog(h.workspace, chat.id).loaded).toBe(false);
+  expect(h.spawns()).toBe(0);
+  await h.service.refreshCommands(h.workspace, chat.id);
+  expect(h.service.commandCatalog(h.workspace, chat.id).commands[0]?.id).toBe("skill-a");
+  const text = "  /review 😀  ";
+  const references = [{ kind: "command" as const, id: "skill-a", start: 2, end: 9, text: "/review" }];
+  h.service.saveDraft(h.workspace, chat.id, { requestId: randomUUID(), revision: 0, text, references });
+  expect(h.service.snapshot(h.workspace, chat.id).draftReferences).toEqual(references);
+  available = false;
+  h.service.send(h.workspace, chat.id, {
+    requestId: randomUUID(),
+    turnId: randomUUID(),
+    configRevision: 1,
+    draftRevision: 1,
+    text,
+    references,
+  });
+  for (let i = 0; i < 100 && h.store.chat(chat.id).state.turns[0]?.status !== "held"; i++) await Promise.resolve();
+  expect(h.store.chat(chat.id).state.turns[0]?.status).toBe("held");
+  expect(h.inputs).toEqual([]);
+  expect(h.service.snapshot(h.workspace, chat.id).turns[0]?.text).toBe(text);
+  expect(h.service.snapshot(h.workspace, chat.id).turns[0]?.references).toEqual(references);
+});
+
+test("workspace file references are live paths and cannot escape the workspace", async () => {
+  const h = setup(),
+    chat = h.chat();
+  writeFileSync(join(h.root, "notes.md"), "private content is not embedded");
+  const text = "Read @notes.md";
+  const references = [{ kind: "file", id: "notes.md", text: "@notes.md", start: 5, end: 14 }];
+  h.service.send(h.workspace, chat.id, {
+    requestId: randomUUID(),
+    turnId: randomUUID(),
+    configRevision: 1,
+    draftRevision: 0,
+    text,
+    references,
+  });
+  for (let i = 0; i < 100 && !h.inputs.length; i++) await Promise.resolve();
+  expect(h.inputs[0]?.text).toBe('Read "notes.md"');
+  expect(h.inputs[0]?.attachments).toEqual([]);
+  const other = h.chat();
+  h.service.send(h.workspace, other.id, {
+    requestId: randomUUID(),
+    turnId: randomUUID(),
+    configRevision: 1,
+    draftRevision: 0,
+    text: "Read @../outside.md",
+    references: [{ kind: "file", start: 5, end: 19, text: "@../outside.md", id: "../outside.md" }],
+  });
+  for (let i = 0; i < 100 && h.store.chat(other.id).state.turns[0]?.status !== "held"; i++) await Promise.resolve();
+  expect(h.store.chat(other.id).state.turns[0]?.status).toBe("held");
+  expect(h.inputs).toHaveLength(1);
+});
+
+test("unlinking native configuration never launches logout or deletes native files", async () => {
+  const h = setup();
+  const external = realpathSync(mkdtempSync(join(tmpdir(), "glosa-native-link-")));
+  try {
+    writeFileSync(join(external, "auth.json"), "native-owned");
+    const profile = h.service.createProfile({
+      requestId: randomUUID(),
+      provider: "fixture",
+      label: "Native",
+      configuration: { mode: "linked", path: external },
+    });
+    mkdirSync(join(h.root, "profiles", profile.id, "native"), { recursive: true });
+    h.adapter.logoutArgs = () => {
+      throw new Error("native logout must never launch");
+    };
+    expect(() =>
+      h.service.createProfile({
+        requestId: randomUUID(),
+        provider: "fixture",
+        label: "Duplicate",
+        configuration: { mode: "linked", path: external },
+      }),
+    ).toThrow("already linked");
+    await expect(h.service.login(profile.id)).rejects.toThrow("native agent");
+    const removed = await h.service.signOut(profile.id, {
+      requestId: randomUUID(),
+      revision: profile.revision,
+      remove: true,
+    });
+    expect(removed.removed).toBe(true);
+    expect(existsSync(join(external, "auth.json"))).toBe(true);
+    expect(h.spawns()).toBe(0);
+    expect(() =>
+      h.service.createProfile({
+        requestId: randomUUID(),
+        provider: "fixture",
+        label: "Owned",
+        configuration: { mode: "linked", path: h.root },
+      }),
+    ).toThrow("outside Glosa");
+  } finally {
+    rmSync(external, { recursive: true, force: true });
   }
 });
