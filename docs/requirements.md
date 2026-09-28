@@ -355,7 +355,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.22: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.23: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -363,8 +363,10 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   deletion (`glosa forget`, issue #156), starred workspaces (star, unstar, reopen by star id),
   provider-neutral dictation status/session grants, daemon-wide attention counts with an
   `attention_changed` stream frame, issue #389, the passage address on annotation
-  presentations, issue #411, and a folder's default style with a `folder_style` stream frame,
-  issue #407) — schemas, status codes, 1 MiB body cap,
+  presentations, issue #411, a folder's default style with a `folder_style` stream frame,
+  issue #407, and install-change handling: the handshake's `install_changed`, build-scoped
+  `/app/@<hash>/` assets that answer 410 `build-changed` for another build, and a reason on a
+  stream's `bye` frame, issue #432) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
 
