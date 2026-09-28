@@ -37,7 +37,16 @@ import {
   STAGED_TREE_CEILING_BYTES,
   unpackedPathFor,
   unzipCommand,
+  upgradeFixtureVersion,
 } from "../scripts/package-app.ts";
+import {
+  forbiddenPackagePaths,
+  installFunctions,
+  listingUnder,
+  parseDesktopEntry,
+  parsePackageListing,
+  parsePkgInfo,
+} from "../scripts/pacman-package.ts";
 import pkg from "../package.json";
 
 const temps: string[] = [];
@@ -404,5 +413,77 @@ describe("after-pack on each platform (#371, #432)", () => {
     expect(() => afterPack.copyStage(temp(), resources, ["package-type"])).toThrow("package-type is missing");
     afterPack.sealSandbox(out);
     expect(statSync(join(out, "chrome-sandbox")).mode & 0o7777).toBe(0o4755);
+  });
+});
+
+describe("reading a built pacman package (#432)", () => {
+  const LISTING = [
+    "-rw-r--r--  0 0      0         512 Sep 28 18:29 .PKGINFO",
+    "drwxr-xr-x  0 0      0           0 Sep 28 18:29 opt/glosa/",
+    "-rwsr-xr-x  0 0      0       18688 Sep 28 18:29 opt/glosa/chrome-sandbox",
+    "-rw-r--r--  0 0      0           7 Sep 28 18:29 opt/glosa/resources/package-type",
+    "lrwxrwxrwx  0 0      0           0 Sep 28 18:29 usr/bin/glosa -> /opt/glosa/resources/bin/glosa",
+  ].join("\n");
+
+  test("a bsdtar listing gives mode, owner, size and a symlink's target", () => {
+    const entries = parsePackageListing(LISTING);
+    expect(entries.get("opt/glosa/chrome-sandbox")).toEqual({ mode: "-rwsr-xr-x", uid: "0", gid: "0", size: "18688" });
+    expect(entries.get("usr/bin/glosa")?.link).toBe("/opt/glosa/resources/bin/glosa");
+    expect(entries.get("opt/glosa")?.mode).toBe("drwxr-xr-x");
+    expect(listingUnder(entries, "opt/glosa")).toEqual(
+      new Map([
+        ["chrome-sandbox", "18688"],
+        ["resources/package-type", "7"],
+      ]),
+    );
+  });
+
+  test(".PKGINFO keeps every value of a repeated key, in order", () => {
+    const info = parsePkgInfo("# fpm\npkgname = glosa\ndepend = git\ndepend = gtk3\n");
+    expect(info.get("pkgname")).toEqual(["glosa"]);
+    expect(info.get("depend")).toEqual(["git", "gtk3"]);
+  });
+
+  test(".INSTALL functions reduce to what they do; glosa's do nothing", () => {
+    const text =
+      "post_install() {\n    :\n#!/bin/sh\n# comment\n:\n\n}\npost_remove() {\n    :\nrm -f /usr/bin/glosa\n}\n";
+    expect(installFunctions(text)).toEqual(
+      new Map([
+        ["post_install", [":", ":"]],
+        ["post_remove", [":", "rm -f /usr/bin/glosa"]],
+      ]),
+    );
+  });
+
+  test("a desktop entry's keys", () => {
+    const entry = parseDesktopEntry("[Desktop Entry]\nExec=/opt/glosa/glosa %U\nMimeType=x-scheme-handler/glosa;\n");
+    expect(entry.get("Exec")).toBe("/opt/glosa/glosa %U");
+    expect(entry.get("MimeType")).toBe("x-scheme-handler/glosa;");
+  });
+
+  test("development state, credentials and update metadata never ship; third-party tests may", () => {
+    const root = "opt/glosa/resources/glosa";
+    const problems = forbiddenPackagePaths([
+      `${root}/packages/daemon/test/helpers.ts`,
+      `${root}/docs/requirements.md`,
+      `${root}/.git/HEAD`,
+      "opt/glosa/resources/app-update.yml",
+      `${root}/.npmrc`,
+      `${root}/node_modules/qs/test/index.js`,
+      `${root}/packages/cli/src/main.ts`,
+    ]);
+    expect(problems).toHaveLength(5);
+    expect(problems.join("\n")).toContain("source checkout");
+    expect(problems.join("\n")).not.toContain("node_modules/qs");
+    expect(problems.join("\n")).not.toContain("packages/cli/src/main.ts");
+  });
+
+  test("the smoke's upgrade package is newer in glosa's ordering and in pacman's", () => {
+    expect(upgradeFixtureVersion("0.1.0-alpha.36")).toBe("0.1.0-alpha.36.1");
+    expect(upgradeFixtureVersion("0.1.0")).toBe("0.1.1-smoke.1");
+    expect(Bun.semver.order(upgradeFixtureVersion("0.1.0-alpha.36"), "0.1.0-alpha.36")).toBe(1);
+    expect(Bun.semver.order(upgradeFixtureVersion("0.1.0"), "0.1.0")).toBe(1);
+    // pacman: 0.1.0alpha.36.1 > 0.1.0alpha.36 (a numeric part after a separator sorts newer).
+    expect(pacmanVersion(upgradeFixtureVersion("0.1.0-alpha.36"))).toBe("0.1.0alpha.36.1");
   });
 });

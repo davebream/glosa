@@ -254,13 +254,13 @@ export function builderEnvironment(base: NodeJS.ProcessEnv, unsigned: boolean): 
  */
 export function renderLinuxBuilderConfig(
   build: Record<string, unknown>,
-  options: { version: string; shellRoot: string },
+  options: { version: string; shellRoot: string; output?: string },
 ): Record<string, unknown> {
   const config = JSON.parse(JSON.stringify(build)) as Record<string, unknown>;
   delete config.mac;
   delete config.dmg;
   const directories = { ...((config.directories as Record<string, unknown> | undefined) ?? {}) };
-  directories.output = "dist/x64";
+  directories.output = options.output ?? "dist/x64";
   config.directories = directories;
   config.extraMetadata = { homepage: "https://github.com/davebream/glosa", license: "Apache-2.0" };
   const pacman = { ...((config.pacman as Record<string, unknown> | undefined) ?? {}) };
@@ -290,6 +290,15 @@ export function linuxBuilderEnvironment(base: NodeJS.ProcessEnv): NodeJS.Process
   ])
     delete env[name];
   return env;
+}
+
+/** The version of the smoke's test-only upgrade package (#432): newer than `version` in both glosa's
+ *  and pacman's ordering. A prerelease gets one more numeric part (`0.1.0-alpha.36` then
+ *  `0.1.0-alpha.36.1`); a release gets the next patch as a `smoke` prerelease. Never published. */
+export function upgradeFixtureVersion(version: string): string {
+  if (version.includes("-")) return `${version}.1`;
+  const [major, minor, patch] = version.split(".").map(Number) as [number, number, number];
+  return `${major}.${minor}.${patch + 1}-smoke.1`;
 }
 
 /** Where electron-builder leaves the unpacked Linux app, and the package, for x86_64. */
@@ -483,8 +492,11 @@ function writeLinuxExtras(): void {
 
 /** Runs electron-builder for the pacman target. `prepackaged` repackages an already unpacked app (the
  *  smoke's upgrade fixture), and `version` overrides the package version for it. */
-function buildPacman(build: Record<string, unknown>, options: { version: string; prepackaged?: string }): string {
-  const config = renderLinuxBuilderConfig(build, { version: options.version, shellRoot });
+function buildPacman(
+  build: Record<string, unknown>,
+  options: { version: string; prepackaged?: string; output?: string },
+): string {
+  const config = renderLinuxBuilderConfig(build, { version: options.version, shellRoot, output: options.output });
   const configPath = join(buildDir, `electron-builder.linux${options.prepackaged ? ".prepackaged" : ""}.json`);
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   const args = [
@@ -507,7 +519,10 @@ function buildPacman(build: Record<string, unknown>, options: { version: string;
   process.stdout.write(String(result.stdout ?? ""));
   process.stderr.write(String(result.stderr ?? ""));
   if (result.status !== 0) fail(`electron-builder ${args.slice(1).join(" ")} exited ${result.status}`);
-  const artifact = pacmanArtifactPath(shellRoot, String(readJson(join(shellRoot, "package.json")).version));
+  const name = `glosa-${String(readJson(join(shellRoot, "package.json")).version)}-x64.pacman`;
+  const artifact = options.output
+    ? join(shellRoot, options.output, name)
+    : pacmanArtifactPath(shellRoot, options.version);
   if (!existsSync(artifact)) fail(`electron-builder did not produce ${artifact}`);
   process.stdout.write(`package-app: ${artifact} (${(statSync(artifact).size / 1e6).toFixed(1)} MB)\n`);
   return artifact;
@@ -624,9 +639,39 @@ async function main(): Promise<void> {
     }
     const artifact = buildPacman(build, { version });
     if (options.smoke) {
+      // The upgrade the smoke installs over a running daemon: the same unpacked app with a newer
+      // version in resources/glosa (so a new build id), repackaged without re-running afterPack.
+      const fixture = join(buildDir, "upgrade-unpacked");
+      run("cp", ["-a", unpackedPathFor(shellRoot), fixture]);
+      const manifest = join(fixture, "resources", "glosa", "package.json");
+      const bumped = { ...readJson(manifest), version: upgradeFixtureVersion(version) };
+      writeFileSync(manifest, `${JSON.stringify(bumped, null, 2)}\n`);
+      const upgrade = buildPacman(build, {
+        version: upgradeFixtureVersion(version),
+        prepackaged: fixture,
+        output: "dist/x64-upgrade",
+      });
+      // Both packages in one directory: the smoke mounts it, read-only, and nothing else.
+      const packages = join(buildDir, "smoke-packages");
+      mkdirSync(packages, { recursive: true });
+      cpSync(artifact, join(packages, "glosa.pacman"));
+      cpSync(upgrade, join(packages, "glosa-upgrade.pacman"));
       const smoke = join(here, "linux-package-smoke.ts");
-      const args = [smoke, "--package", artifact, "--stage", stageDir, "--unpacked", unpackedPathFor(shellRoot)];
-      run(process.execPath, args, { stdio: "inherit", cwd: shellRoot });
+      run(
+        process.execPath,
+        [
+          smoke,
+          "--package",
+          join(packages, "glosa.pacman"),
+          "--upgrade",
+          join(packages, "glosa-upgrade.pacman"),
+          "--stage",
+          stageDir,
+          "--unpacked",
+          unpackedPathFor(shellRoot),
+        ],
+        { stdio: "inherit", cwd: shellRoot },
+      );
     }
     return;
   }
