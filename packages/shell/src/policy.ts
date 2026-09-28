@@ -516,3 +516,36 @@ export function appearanceDecision(payload: unknown): AppearanceDecision | null 
 export function firstFrameColor(lastReported: string | null, osIsDark: boolean): string {
   return lastReported ?? (osIsDark ? PAPER.dark : PAPER.light);
 }
+
+// ---------- the page follows macOS Increase contrast (#425) ----------
+
+/**
+ * The answer to the page's synchronous "does the system ask for more contrast?" read (A3 §4b).
+ * Electron passes no contrast preference to pages, so the preload asks once per document, before
+ * the page's first script. `reading` is `nativeTheme.shouldUseHighContrastColors` at that moment.
+ * A frame that is not the window's SPA origin is refused with null, which the preload reads as no
+ * more contrast; only an exact `true` is more contrast.
+ */
+export function contrastReply(fromSpa: boolean, reading: unknown): boolean | null {
+  return fromSpa ? reading === true : null;
+}
+
+/**
+ * What one `nativeTheme` `updated` pushes to the SPA windows: the new value when it differs from
+ * the last one pushed, else null. `updated` fires for any theme change, the page's own
+ * `themeSource` included, so an unchanged value pushes nothing.
+ */
+export function contrastPush(lastPushed: boolean, reading: unknown): boolean | null {
+  const value = reading === true;
+  return value === lastPushed ? null : value;
+}
+
+/**
+ * Whether a push reaches a window: only while its top frame has committed the SPA origin the shell
+ * recorded for it. A window keeps its recorded origin when the shell loads a blocking screen into it
+ * (a `data:` page, whose origin is opaque) after a failed compatibility check, and that screen is not
+ * the SPA (A3 §4b).
+ */
+export function contrastPushReaches(recordedOrigin: string | null | undefined, frameOrigin: unknown): boolean {
+  return typeof recordedOrigin === "string" && recordedOrigin !== "" && frameOrigin === recordedOrigin;
+}
