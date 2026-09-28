@@ -8,6 +8,9 @@ import {
   cliCandidates,
   compareVersions,
   compatibility,
+  contrastPush,
+  contrastPushReaches,
+  contrastReply,
   egressDecision,
   firstFrameColor,
   linkFromArgv,
@@ -952,5 +955,38 @@ describe("Check for Updates…: the one request ends, however the answer stalls 
     } finally {
       server.stop(true);
     }
+  });
+});
+
+describe("more contrast: the page's read and the push (#425, A3 §4b)", () => {
+  test("the SPA origin reads the system's value; only an exact true is more contrast", () => {
+    expect(contrastReply(true, true)).toBe(true);
+    expect(contrastReply(true, false)).toBe(false);
+    for (const reading of [undefined, null, 1, "true", {}]) expect(contrastReply(true, reading)).toBe(false);
+  });
+
+  test("any other frame is refused with null whatever the system says", () => {
+    expect(contrastReply(false, true)).toBeNull();
+    expect(contrastReply(false, false)).toBeNull();
+  });
+
+  test("an updated event pushes only a change, as a boolean", () => {
+    expect(contrastPush(false, true)).toBe(true);
+    expect(contrastPush(true, false)).toBe(false);
+    expect(contrastPush(true, true)).toBeNull();
+    expect(contrastPush(false, false)).toBeNull();
+    // A getter that stops answering a boolean reads as no more contrast.
+    expect(contrastPush(true, undefined)).toBe(false);
+    expect(contrastPush(false, "true")).toBeNull();
+  });
+
+  test("a push reaches a window only while its top frame is the SPA origin recorded for it", () => {
+    expect(contrastPushReaches(SPA, SPA)).toBe(true);
+    // A blocking screen after a failed compatibility check is a data: page, whose origin is opaque.
+    expect(contrastPushReaches(SPA, "null")).toBe(false);
+    expect(contrastPushReaches(SPA, "http://127.0.0.1:4646")).toBe(false);
+    expect(contrastPushReaches(SPA, undefined)).toBe(false);
+    // A window the shell created without an origin, or never recorded, gets nothing.
+    for (const recorded of [null, undefined, ""]) expect(contrastPushReaches(recorded, SPA)).toBe(false);
   });
 });

@@ -9,6 +9,31 @@ const originArg = process.argv.find((a) => a.startsWith("--glosa-spa-origin="));
 const spaOrigin = originArg ? originArg.slice("--glosa-spa-origin=".length) : null;
 
 if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin) {
+  // Whether the system asks for more contrast (#425): read synchronously once per document, so the
+  // page's first-paint script has the main process's value at this load, then kept current from
+  // the main process's pushes. Anything but a boolean is ignored; a refused read is no.
+  let moreContrast = false;
+  try {
+    moreContrast = ipcRenderer.sendSync("glosa:more-contrast") === true;
+  } catch {
+    // No answer: the page paints as if the system asked for nothing.
+  }
+  // A push sent while this script runs, before or after the main process answered the read above,
+  // is not lost between the read and this listener: an incoming message is dispatched as a later
+  // task, after this synchronous script finishes (probed in Electron 44.4.5 with 200 ms between the
+  // two). The page may paint the value that was read, and the push then corrects it.
+  const contrastListeners = new Set();
+  ipcRenderer.on("glosa:more-contrast-changed", (_event, value) => {
+    if (typeof value !== "boolean" || value === moreContrast) return;
+    moreContrast = value;
+    for (const listener of contrastListeners) {
+      try {
+        listener(value);
+      } catch {
+        // One page listener failing does not stop the others.
+      }
+    }
+  });
   contextBridge.exposeInMainWorld("glosaShell", {
     /** One-shot: the presentation token for this window load, or null once taken (R-P1, R-P2). */
     presentationToken: () => ipcRenderer.invoke("glosa:presentation-token"),
@@ -25,5 +50,16 @@ if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin
      * "dark", "light" or "dark", and its paper as `#rrggbb`. The window's background and the
      * native UI follow it. No path; the main process refuses anything else (policy.ts). */
     reportAppearance: (appearance) => ipcRenderer.invoke("glosa:appearance", appearance),
+    /** True while macOS asks for more contrast (Increase contrast), which Electron does not pass
+     * to `prefers-contrast` (#425). Synchronous: current from before the page's first script. */
+    moreContrast: () => moreContrast,
+    /** Calls `listener(value)` each time `moreContrast()` changes, and returns an unsubscribe. */
+    onMoreContrastChange: (listener) => {
+      if (typeof listener !== "function") return () => {};
+      contrastListeners.add(listener);
+      return () => {
+        contrastListeners.delete(listener);
+      };
+    },
   });
 }

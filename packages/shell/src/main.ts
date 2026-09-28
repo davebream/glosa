@@ -30,6 +30,9 @@ import {
   appearanceDecision,
   cliCandidates,
   compatibility,
+  contrastPush,
+  contrastPushReaches,
+  contrastReply,
   egressDecision,
   firstFrameColor,
   linkFromArgv,
@@ -279,6 +282,31 @@ function osIsDark(): boolean {
 /** The paper the last page reported, for every window opened after it (brief §9). */
 let lastReportedPaper: string | null = null;
 
+// ---------- the page follows macOS Increase contrast (#425) ----------
+
+/** The more-contrast value last pushed to the SPA windows; read from `nativeTheme` once ready. */
+let pushedContrast = false;
+
+/**
+ * Electron passes no contrast preference to pages (`prefers-contrast` never matches in its
+ * renderer), so the shell relays `nativeTheme.shouldUseHighContrastColors`, which follows macOS
+ * Increase contrast. The preload reads it once per document ("glosa:more-contrast"); this pushes a
+ * change to every window the shell opened for the SPA, never to any other window.
+ */
+function pushContrast(): void {
+  const next = contrastPush(pushedContrast, nativeTheme.shouldUseHighContrastColors);
+  if (next === null) return;
+  pushedContrast = next;
+  for (const win of BrowserWindow.getAllWindows()) {
+    // The top frame's committed origin, not only the recorded one: a blocking screen loaded into a
+    // window after a failed compatibility check keeps the window's recorded origin.
+    const frameOrigin = win.webContents.mainFrame?.origin;
+    if (contrastPushReaches(windows.get(win.webContents.id)?.origin, frameOrigin))
+      win.webContents.send("glosa:more-contrast-changed", next);
+  }
+  log(`more contrast: ${next ? "on" : "off"}`);
+}
+
 function createWindow(origin: string | null): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
@@ -489,7 +517,7 @@ function buildMenu(): void {
 }
 
 function installIpc(): void {
-  const fromSpa = (event: Electron.IpcMainInvokeEvent): boolean => {
+  const fromSpa = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): boolean => {
     const origin = windows.get(event.sender.id)?.origin;
     // The class-F document reports `null` here (opaque origin under its CSP sandbox); this check,
     // not the preload's, is the boundary (readiness note §1b).
@@ -546,6 +574,19 @@ function installIpc(): void {
     lastReportedPaper = decision.background;
     if (nativeTheme.themeSource !== decision.themeSource) nativeTheme.themeSource = decision.themeSource;
     BrowserWindow.fromWebContents(event.sender)?.setBackgroundColor(decision.background);
+  });
+  // Synchronous, so the page's first-paint script already has it (#425). A `sendSync` left
+  // unanswered hangs the renderer, so every path, a refusal and an error included, sets
+  // `returnValue`; a refusal is null, which the preload reads as no more contrast.
+  ipcMain.on("glosa:more-contrast", (event) => {
+    try {
+      const allowed = fromSpa(event);
+      if (!allowed) log("refused a contrast read: not the SPA origin");
+      event.returnValue = contrastReply(allowed, nativeTheme.shouldUseHighContrastColors);
+    } catch (e) {
+      log(`contrast read failed: ${(e as Error).message}`);
+      event.returnValue = null;
+    }
   });
 }
 
@@ -608,6 +649,10 @@ app.whenReady().then(async () => {
     log(`dock icon follows macOS: ${dark ? "dark" : "light"}`);
   };
   nativeTheme.on("updated", dockIcon);
+  // Increase contrast reaches the page through the shell (#425): `updated` also fires when it
+  // changes, and `pushContrast` sends only a change.
+  pushedContrast = nativeTheme.shouldUseHighContrastColors === true;
+  nativeTheme.on("updated", pushContrast);
   if (process.platform === "darwin") {
     systemPreferences.subscribeNotification("AppleInterfaceThemeChangedNotification", dockIcon);
   }
