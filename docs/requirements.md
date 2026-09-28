@@ -560,9 +560,12 @@ registration epochs prevent filename collisions and restoration into a replaceme
   Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥17.2. Non-Darwin →
   exit 5.
 - **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
-  unconfigured external runtime calls. After versioned consent, a configured provider may receive
-  only its disclosed data following a foreground user action. Class-F network egress remains blocked
-  by CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
+  unconfigured external runtime calls. The two update actions are explicit exceptions: `glosa update`
+  (A6 §F33) and the desktop app's Check for Updates… (A3 §4b) reach out only when the person runs or
+  clicks them, send no glosa version or machine data, and keep no cache that could become a
+  heartbeat; the app's check installs nothing. After versioned consent, a configured provider may
+  receive only its disclosed data following a foreground user action. Class-F network egress remains
+  blocked by CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
 - **Robustness**: daemon crash loses nothing (journal-as-truth + fsync-before-ACK + replay; SSE
   reconnect replays from cursor; watcher catch-up on restart). Any face (push/MCP/CLI) failing changes
   which mechanism delivers, never whether the entry survives.
