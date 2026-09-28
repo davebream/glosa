@@ -1,3 +1,4 @@
+import { IMAGE_EXTENSIONS, imageIgnored, looseImagePaths, listImages } from "./images.ts";
 // SPDX-License-Identifier: Apache-2.0
 // Shared, bounded artifact watching. A directory workspace is watched with ONE native recursive
 // `fs.watch` on its root (FSEvents on macOS), and every event is filtered through the canonical
@@ -161,14 +162,21 @@ export function nativeWorkspaceWatch(request: WorkspaceWatchRequest): WorkspaceW
       watchers.push(watcher);
     } else {
       const targets = new Set(request.files);
-      for (const directory of new Set(request.files.map((file) => dirname(file)))) {
+      // Missing image references watch the nearest existing parent, so creation is observable.
+      const parents = request.files.map((file) => {
+        let directory = dirname(file);
+        while (!existsSync(directory) && directory !== request.root) directory = dirname(directory);
+        return directory;
+      });
+      for (const directory of new Set(parents)) {
         const watcher = watch(directory, (_event, filename) => {
           if (filename === null || filename === undefined) {
             for (const file of targets) if (dirname(file) === directory) request.onChange(file);
             return;
           }
           const absPath = join(directory, String(filename));
-          if (targets.has(absPath)) request.onChange(absPath);
+          if (targets.has(absPath) || [...targets].some((file) => file.startsWith(`${absPath}/`)))
+            request.onChange(absPath);
         });
         watcher.on("error", (error) => request.onError(error));
         watchers.push(watcher);
@@ -181,7 +189,30 @@ export function nativeWorkspaceWatch(request: WorkspaceWatchRequest): WorkspaceW
   return { close };
 }
 
+function imageIndex(workspace: WorkspaceTarget): string {
+  const listing = listImages(workspace);
+  return JSON.stringify([listing.images.map((image) => [image.path, image.version]), listing.directories]);
+}
+
+// A missing referenced image watches its nearest existing parent. Parent creation/replacement
+// must move that watch even when the Markdown reference itself has not changed.
+function imageWatchKey(root: string, paths: string[]): string {
+  return JSON.stringify(
+    paths.map((path) => {
+      let parent = dirname(join(root, path));
+      while (!existsSync(parent) && parent !== root) parent = dirname(parent);
+      try {
+        const stat = lstatSync(parent);
+        return [path, parent, stat.dev, stat.ino];
+      } catch {
+        return [path, parent];
+      }
+    }),
+  );
+}
+
 export type ArtifactWatcherEvent =
+  | { type: "image"; data: { path: string | null } }
   | {
       type: "artifact";
       data: { path: string; class: "R" | "F"; source_sha256: string };
@@ -218,6 +249,10 @@ interface WatchState {
    * the last listener leaving must NOT tear it down — that is the whole point of #153's amendment. */
   daemonLifetime: boolean;
   snapshot: ResolveMatchedFilesResult;
+  imagePaths?: string[];
+  imageWatchKey?: string;
+  imageIndex?: string;
+  pendingImageIndex?: boolean;
   watcher: WorkspaceWatch | null;
   mode: WatchMode;
   /** Path-only matcher filter for `tree` events: excluded subtrees and files the matcher would
@@ -523,7 +558,7 @@ export class ArtifactWatcherRegistry {
         } catch {
           // Gone: a deletion, or a directory removed with its contents. Only the path can decide.
         }
-        return matches(absPath, stats);
+        return IMAGE_EXTENSIONS.test(absPath) ? imageIgnored(state.workspace)(absPath, stats) : matches(absPath, stats);
       };
     } else {
       state.ignored = null;
@@ -532,6 +567,19 @@ export class ArtifactWatcherRegistry {
     const onChange = (absPath: string) => {
       if (state.generation !== generation || state.mode === "disabled") return;
       if (state.ignored?.(absPath)) return;
+      const relativePath = toRelPosixPath(root, absPath);
+      let directory = absPath === root || state.snapshot.directories.some((item) => item.path === relativePath);
+      try {
+        directory ||= lstatSync(absPath).isDirectory();
+      } catch {
+        /* Deletion uses the previous snapshot. */
+      }
+      if (!directory && IMAGE_EXTENSIONS.test(absPath)) {
+        this.notify(state, { type: "image", data: { path: toRelPosixPath(root, absPath) } });
+        return;
+      }
+      // Directory moves can add or remove an entire image subtree.
+      if (directory) state.pendingImageIndex = true;
       state.pendingPaths.add(toRelPosixPath(root, absPath));
       this.scheduleReconcile(state);
     };
@@ -539,7 +587,16 @@ export class ArtifactWatcherRegistry {
       if (state.generation === generation) this.handleWatcherError(state);
     };
     try {
-      state.watcher = this.watchFactory({ mode, root, files: boundedTargets(state.workspace), onChange, onError });
+      state.imageIndex = imageIndex(state.workspace);
+      state.imagePaths = looseImagePaths(state.workspace);
+      state.imageWatchKey = imageWatchKey(root, state.imagePaths);
+      state.watcher = this.watchFactory({
+        mode,
+        root,
+        files: [...boundedTargets(state.workspace), ...state.imagePaths.map((path) => join(root, path))],
+        onChange,
+        onError,
+      });
       state.failureReason = null;
     } catch {
       state.watcher = null;
@@ -596,6 +653,22 @@ export class ArtifactWatcherRegistry {
     const changedPaths = new Set(state.pendingPaths);
     state.pendingPaths.clear();
     state.reconciles += 1;
+    if (state.pendingImageIndex) {
+      state.pendingImageIndex = false;
+      const index = imageIndex(state.workspace);
+      if (index !== state.imageIndex) {
+        state.imageIndex = index;
+        this.notify(state, { type: "image", data: { path: null } });
+      }
+    }
+    if (
+      state.mode === "files" &&
+      state.imageWatchKey !== imageWatchKey(workspaceWorktree(state.workspace), looseImagePaths(state.workspace))
+    ) {
+      this.retireWatcher(state, "files");
+      this.startWatcher(state);
+      this.notify(state, { type: "image", data: { path: null } });
+    }
 
     const previous = state.snapshot;
     const next = resolveTrackedFiles(state.workspace, { limit: this.maxTrackedArtifacts });

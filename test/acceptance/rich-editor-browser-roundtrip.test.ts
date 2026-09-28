@@ -677,6 +677,234 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     // Three bounded browser probes (15s), handshake (15s), workspace open (5s), cleanup margin.
     beforeEach(setupWorkspace, 40_000);
 
+    for (const face of ["block", "rich", "source"]) {
+      test(`image paste in ${face} saves a local reference without changing surrounding Markdown bytes`, async () => {
+        const original =
+          "Alpha &amp; beta.\r\n\r\nUntouched **bold** and [link][ref].\r\n\r\n[ref]: https://example.invalid/\r\n";
+        writeFileSync(join(workspaceRoot, "insert.md"), original);
+        const { client } = await launchBrowser({ initialUrl: documentUrl("document", "insert.md", "edit") });
+        cdp = client;
+        await waitForRoute(client, "document", "Alpha");
+        const result = await client.evaluate<{ pasted: boolean }>(`(async () => {
+          const wait = async fn => { const end = Date.now() + 5000; while(Date.now() < end) { const value = fn(); if(value) return value; await new Promise(r => setTimeout(r, 20)); } throw Error("image insertion readiness: " + document.body.innerText); };
+          const face = ${JSON.stringify(face)};
+          if(face === "block") document.querySelector('.glosa-content p').click();
+          else { document.querySelector('.glosa-tools-edit-source').click(); if(face === "source") document.querySelector('.glosa-face-source').click(); }
+          const host = await wait(() => face === "source" ? document.querySelector('.glosa-edit-area:not([hidden])') : document.querySelector('.ProseMirror[contenteditable]'));
+          host.focus();
+          if(face === "source") host.setSelectionRange(host.value.indexOf("\\n"), host.value.indexOf("\\n"));
+          else { const range = document.createRange(); range.selectNodeContents(host.querySelector('p')); range.collapse(false); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); }
+          const bytes = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4uoAAAAASUVORK5CYII="), c => c.charCodeAt(0));
+          const transfer = new DataTransfer(); transfer.items.add(new File([bytes], 'pasted.png', {type:'image/png'}));
+          host.dispatchEvent(new ClipboardEvent('paste', {clipboardData:transfer, bubbles:true, cancelable:true}));
+          await wait(() => face === "source" ? host.value.includes('images/pasted-') : host.querySelector('[data-image-src] img')?.naturalWidth);
+          // The imported asset remains on disk while the document reference participates in undo.
+          if(face === "source") document.execCommand('undo');
+          else host.dispatchEvent(new KeyboardEvent('keydown',{key:'z',code:'KeyZ',keyCode:90,metaKey:true,bubbles:true,cancelable:true}));
+          await wait(() => face === "source" ? !host.value.includes('images/pasted-') : !host.querySelector('[data-image-src]'));
+          if(face === "source") document.execCommand('redo');
+          else host.dispatchEvent(new KeyboardEvent('keydown',{key:'z',code:'KeyZ',keyCode:90,metaKey:true,shiftKey:true,bubbles:true,cancelable:true}));
+          await wait(() => face === "source" ? host.value.includes('images/pasted-') : host.querySelector('[data-image-src]'));
+          if(face === "block") {
+            document.dispatchEvent(new KeyboardEvent('keydown',{key:'k',metaKey:true,bubbles:true,cancelable:true}));
+            const search=await wait(()=>document.querySelector('.glosa-palette:not([hidden]) input'));
+            search.value='>insert image';search.dispatchEvent(new Event('input',{bubbles:true}));
+            (await wait(()=>[...document.querySelectorAll('.glosa-palette-item')].find(item=>item.textContent.includes('Insert image')))).click();
+            const picker=await wait(()=>document.querySelector('.glosa-image-picker'));
+            const choose=await wait(()=>[...picker.querySelectorAll('button')].find(button=>button.textContent==='Insert selected image' && !button.disabled));
+            choose.click();
+            await wait(()=>host.querySelectorAll('[data-image-src]').length === 2);
+            document.querySelector('.glosa-modebar [data-control="edit"]').click();
+          }
+          else document.querySelector('.glosa-save').click();
+          return { pasted: true };
+        })()`);
+        expect(result.pasted).toBe(true);
+        expect(
+          await waitUntil(
+            () => readFileSync(join(workspaceRoot, "insert.md"), "utf8").includes("images/pasted-"),
+            5000,
+          ),
+        ).toBe(true);
+        const saved = readFileSync(join(workspaceRoot, "insert.md"), "utf8");
+        expect(saved.replace(/!\[\]\(images\/pasted-[a-f0-9]+\.png\)/g, "")).toBe(original);
+        const reference = /images\/pasted-[a-f0-9]+\.png/.exec(saved)![0];
+        expect(readFileSync(join(workspaceRoot, reference))).toEqual(
+          Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4uoAAAAASUVORK5CYII=",
+            "base64",
+          ),
+        );
+      }, 40_000);
+    }
+
+    test("dropping an image on an unopened edit block opens that block and preserves the document", async () => {
+      const original = "A &amp; B.\r\n\r\nKept **exactly**.\r\n";
+      writeFileSync(join(workspaceRoot, "drop.md"), original);
+      const { client } = await launchBrowser({ initialUrl: documentUrl("document", "drop.md", "edit") });
+      cdp = client;
+      await waitForRoute(client, "document", "A & B.");
+      await client.evaluate(`(async () => {
+        const target=document.querySelector('.glosa-content p');const bounds=target.getBoundingClientRect();
+        const transfer=new DataTransfer();transfer.items.add(new File(['<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>'],'drop.svg',{type:'image/svg+xml'}));
+        target.dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,clientX:bounds.left+8,clientY:bounds.top+8,bubbles:true,cancelable:true}));
+        const end=Date.now()+5000;while(!document.querySelector('.glosa-run-editor [data-image-src] img')?.naturalWidth && Date.now()<end)await new Promise(r=>setTimeout(r,20));
+        if(!document.querySelector('.glosa-run-editor [data-image-src] img')?.naturalWidth)throw Error(document.body.innerText);
+        document.querySelector('.glosa-modebar [data-control="edit"]').click();
+      })()`);
+      expect(
+        await waitUntil(() => readFileSync(join(workspaceRoot, "drop.md"), "utf8").includes("images/drop-"), 5000),
+      ).toBe(true);
+      expect(
+        readFileSync(join(workspaceRoot, "drop.md"), "utf8").replace(/!\[\]\(images\/drop-[a-f0-9]+\.svg\)/, ""),
+      ).toBe(original);
+    }, 40_000);
+
+    test("tree drop imports an asset and the Insert image picker inserts it into Source", async () => {
+      writeFileSync(join(workspaceRoot, "picker.md"), "Picker document.\n");
+      const { client } = await launchBrowser({ initialUrl: documentUrl("workspace", "picker.md", "edit") });
+      cdp = client;
+      await waitForRoute(client, "workspace", "Picker document");
+      const result = await client.evaluate<{ path: string; source: string }>(`(async () => {
+        const wait = async fn => { const end=Date.now()+5000;while(Date.now()<end){const v=fn();if(v)return v;await new Promise(r=>setTimeout(r,20));}throw Error(document.body.innerText); };
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(['<svg xmlns="http://www.w3.org/2000/svg" width="30" height="20"><rect width="30" height="20"/></svg>'], 'dropped.svg', {type:'image/svg+xml'}));
+        document.querySelector('[role="tree"]').dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));
+        const row = await wait(() => document.querySelector('[data-file-kind="image"]'));
+        const path = row.getAttribute('data-node-id').slice(2);
+        document.querySelector('.glosa-tools-edit-source').click();
+        document.querySelector('.glosa-face-source').click();
+        const source = document.querySelector('.glosa-edit-area');source.focus();source.setSelectionRange(0,0);
+        document.querySelector('.glosa-insert-image').click();
+        const picker = await wait(() => document.querySelector('.glosa-image-picker'));
+        await wait(() => ![...picker.querySelectorAll('button')].find(b => b.textContent==='Insert selected image').disabled);
+        picker.querySelector('select').value=path;
+        picker.querySelector('input[type="text"]').value='A diagram';
+        [...picker.querySelectorAll('button')].find(b=>b.textContent==='Insert selected image').click();
+        await wait(()=>source.value.startsWith('![A diagram]'));
+        document.querySelector('.glosa-save').click();
+        return {path,source:source.value};
+      })()`);
+      expect(result.source).toBe(`![A diagram](${result.path})Picker document.\n`);
+      expect(
+        await waitUntil(() => readFileSync(join(workspaceRoot, "picker.md"), "utf8") === result.source, 5000),
+      ).toBe(true);
+      expect(existsSync(join(workspaceRoot, result.path))).toBe(true);
+    }, 40_000);
+
+    test("image tabs render SVG inertly, zoom by keyboard, restore, and follow file changes", async () => {
+      writeFileSync(
+        join(workspaceRoot, "view.svg"),
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><script>parent.imageScriptRan=true</script><rect width="1600" height="900" fill="red"/></svg>',
+      );
+      const { client } = await launchBrowser({ initialUrl: documentUrl("workspace") });
+      cdp = client;
+      await waitForRoute(client, "workspace", "A paragraph");
+      const opened = await client.evaluate<{ width: number; scriptRan: boolean; metadata: string }>(`(async () => {
+        const wait = async fn => { const end = Date.now()+5000; while(Date.now()<end){const v=fn();if(v)return v;await new Promise(r=>setTimeout(r,20));}throw Error(document.body.innerText); };
+        (await wait(() => document.querySelector('[data-node-id="f:view.svg"] .glosa-tree-row'))).click();
+        const img = await wait(() => { const img=document.querySelector('.glosa-image-pane img'); return img?.naturalWidth ? img : null; });
+        const canvas=await wait(() => document.querySelector('.glosa-image-canvas[data-ready="true"]'));canvas.focus();
+        canvas.dispatchEvent(new KeyboardEvent('keydown',{key:'1',bubbles:true}));
+        await wait(() => document.querySelector('.glosa-image-toolbar output')?.textContent === '100%');
+        canvas.dispatchEvent(new KeyboardEvent('keydown',{key:'+',bubbles:true}));
+        await wait(() => parseInt(document.querySelector('.glosa-image-toolbar output')?.textContent)>100);
+        const beforeWheel = parseInt(document.querySelector('.glosa-image-toolbar output').textContent);
+        document.querySelector('.glosa-image-transform').dispatchEvent(new WheelEvent('wheel', {deltaY:-100, ctrlKey:true, bubbles:true, cancelable:true}));
+        await wait(() => parseInt(document.querySelector('.glosa-image-toolbar output').textContent) > beforeWheel);
+        const beforePan = document.querySelector('.glosa-image-transform-content').style.transform;
+        canvas.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
+        await wait(() => document.querySelector('.glosa-image-transform-content').style.transform !== beforePan);
+        [...document.querySelectorAll('.glosa-image-toolbar button')].find(button => button.textContent === 'Fit').click();
+        await wait(() => parseInt(document.querySelector('.glosa-image-toolbar output').textContent) < 100);
+        const imageBox=img.getBoundingClientRect(), canvasBox=canvas.getBoundingClientRect();
+        if(imageBox.left<canvasBox.left || imageBox.right>canvasBox.right || imageBox.top<canvasBox.top || imageBox.bottom>canvasBox.bottom) throw Error('Fit clipped the image: '+JSON.stringify({image:imageBox.toJSON(),canvas:canvasBox.toJSON()}));
+        return {width:img.naturalWidth,scriptRan:!!window.imageScriptRan, metadata:document.querySelector('.glosa-image-metadata').textContent};
+      })()`);
+      expect(opened.width).toBe(1600);
+      expect(opened.scriptRan).toBe(false);
+      expect(opened.metadata).toContain("1600 × 900 px");
+      const previousPage = await client.evaluate<number>("performance.timeOrigin");
+      await client.send("Page.reload", {});
+      let restored = false;
+      const reloadDeadline = Date.now() + 8000;
+      while (!restored && Date.now() < reloadDeadline) {
+        try {
+          restored = await client.evaluate<boolean>(
+            `performance.timeOrigin > ${previousPage} && document.querySelector('.glosa-image-pane img')?.naturalWidth === 1600`,
+          );
+        } catch {
+          /* The old execution context is being destroyed. */
+        }
+        if (!restored) await Bun.sleep(25);
+      }
+      expect(restored).toBe(true);
+      await client.evaluate(`(async () => {
+        const {createDataAccess}=await import('/app/data-access.js');
+        window.imageEvents=[];
+        window.stopImageProbe=createDataAccess().openStream(${JSON.stringify(slug)}, {onEvent: event => window.imageEvents.push(event.event)});
+        const end=Date.now()+5000;while(!window.imageEvents.length && Date.now()<end)await new Promise(r=>setTimeout(r,25));
+        if(!window.imageEvents.length)throw Error('No stream readiness frame');
+      })()`);
+      // Bun's native watch can miss the first save while FSEvents arms after a reload.
+      // As in artifact-watcher's saveUntil, repeat identical editor saves, never a failed assertion.
+      const changedBytes =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="blue"/></svg>';
+      let changed = false;
+      const deadline = Date.now() + 8000;
+      while (!changed && Date.now() < deadline) {
+        writeFileSync(join(workspaceRoot, "view.svg"), changedBytes);
+        changed = await client.evaluate<boolean>(
+          `(async () => {const end=Date.now()+250;while(Date.now()<end){if(document.querySelector('.glosa-image-pane img')?.naturalWidth===320)return true;await new Promise(r=>setTimeout(r,25));}return false;})()`,
+        );
+      }
+      const diagnostics = await client.evaluate(
+        `({events:window.imageEvents,text:document.body.innerText,images:performance.getEntriesByType('resource').filter(r=>r.name.includes('/images/')).map(r=>r.name)})`,
+      );
+      await client.evaluate("window.stopImageProbe()");
+      expect(changed, JSON.stringify(diagnostics)).toBe(true);
+    }, 40_000);
+
+    test("local document image renders without a mode toggle", async () => {
+      mkdirSync(join(workspaceRoot, "images"));
+      writeFileSync(
+        join(workspaceRoot, "images/a.png"),
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4uoAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      );
+      writeFileSync(
+        join(workspaceRoot, "images.md"),
+        "# Image witness\n\n![figure](images/a.png)\n\n![remote](https://example.invalid/private.png)\n",
+      );
+      const { client } = await launchBrowser({ initialUrl: documentUrl("document", "images.md") });
+      cdp = client;
+      await waitForRoute(client, "document", "Image witness");
+      let state: any;
+      const imageDeadline = Date.now() + 5_000;
+      while (Date.now() < imageDeadline) {
+        state = await client.evaluate(`(() => {
+          const image = document.querySelector('.glosa-content img');
+          return {width: image?.naturalWidth, complete: image?.complete, src: image?.getAttribute('src'),
+            errors: [...document.querySelectorAll('.glosa-image-placeholder')].map(el => el.textContent),
+            requests: performance.getEntriesByType('resource').filter(r => r.name.includes('a.png')).map(r => ({url: r.name, status: r.responseStatus}))};
+        })()`);
+        if (state.width > 0 || state.complete || state.errors.some((text: string) => !text.startsWith("Loading")))
+          break;
+        await Bun.sleep(25);
+      }
+      expect(state.width, JSON.stringify(state)).toBe(1);
+      expect(
+        await client.evaluate<number>(
+          `performance.getEntriesByType('resource').filter(r => r.name.includes('example.invalid')).length`,
+        ),
+      ).toBe(0);
+      expect(
+        await client.evaluate<string>(`document.querySelector('[data-image-alt="remote"]').textContent`),
+      ).toContain("Remote images are not loaded");
+    }, 40_000);
+
     test(
       "R6: an external write morphs the open page in place, keeping what did not change",
       async () => {

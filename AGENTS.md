@@ -61,7 +61,8 @@ a live document week.
 
 - **Bun + TypeScript** end to end; one daemon process serves the SPA + API. **No build step** (`bun run`
   direct; no bundle/transpile, no native/compiled addons). **No heavy frontend framework** — server-
-  rendered HTML + small vanilla ES modules. markdown-it (+ `data-line` stamping), idiomorph, diff2html,
+  rendered HTML + small vanilla ES modules. The owner-approved exception is a lazily loaded,
+  prebuilt React image viewer inside image tabs only (decisions.md, 2026-09-28). markdown-it (+ `data-line` stamping), idiomorph, diff2html,
   picomatch, chokidar v5, system `git` (shadow repo), a vendored transcript-event normalizer.
 - **macOS plus experimental Linux x86_64/glibc CLI and daemon** (pinned floors in A6 §F30). Monorepo:
   `packages/{daemon, spa, providers/claude-code, providers/codex, providers/wispr-flow, cli}`.

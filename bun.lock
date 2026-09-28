@@ -9,8 +9,10 @@
         "@modelcontextprotocol/sdk": "^1.30.0",
         "chokidar": "^5",
         "diff2html": "^3.4.56",
+        "fast-xml-parser": "5.11.1",
         "gunshi": "0.37.3",
         "idiomorph": "^0.8.0",
+        "image-size": "2.0.4",
         "markdown-it": "^14.3.1",
         "picomatch": "^4.0.7",
         "zod": "^4.6.5",
@@ -20,7 +22,6 @@
         "@types/bun": "^1.4.0",
         "@types/markdown-it": "^14.2.0",
         "@types/picomatch": "^4.0.3",
-        "fast-xml-parser": "5.11.1",
         "happy-dom": "^20.13.2",
         "lefthook": "^2.1.12",
         "license-checker-rseidelsohn": "5.0.1",
@@ -402,6 +403,8 @@
     "idiomorph": ["idiomorph@0.8.0", "", {}, "sha512-R47JBL+6jHDQvcnbppIUtXXcxi5h6+wuCEEZXnRhUltsgzPFKzThL5PuHppP9ypJuy+7WawcY1TsSBD/iQbMhw=="],
 
     "ignore-walk": ["ignore-walk@8.0.0", "", { "dependencies": { "minimatch": "^10.0.3" } }, "sha512-FCeMZT4NiRQGh+YkeKMtWrOmBgWjHjMJ26WQWrRQyoyzqevdaGSakUaJW5xQYmjLlUVk2qUnCjYVBax9EKKg8A=="],
+
+    "image-size": ["image-size@2.0.4", "", { "bin": { "image-size": "bin/image-size.js" } }, "sha512-QRUkFFsRV/6fuESxb9Vkq+a0LkSrgKXuc2NEqfikiXxxN/G3tjWt5EVUlMaImRBZRZK/jRBEbYvpPYZL8t08Zw=="],
 
     "inherits": ["inherits@2.0.4", "", {}, "sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ=="],
 

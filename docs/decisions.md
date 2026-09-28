@@ -1658,3 +1658,33 @@ updates or stops the CLI or the daemon.
 passes that gate and fails `net::ERR_BLOCKED_BY_CLIENT`, while the main process's global `fetch` is
 Node's and does not. Widening the gate for one host would weaken the renderer's boundary to serve
 the main process, so the gate stays as it is.
+
+
+## Local images and a scoped React viewer (2026-09-28, #401)
+
+The owner approved these choices during planning for #401, including image insertion in block
+Edit and full-page Rich and Source. This records the stack exception before the viewer lands.
+
+- Images are assets, listed separately from tracked documents. They never enter shadow Git,
+  document checkpoints, document attribution or agent claims. Saving inserted Markdown is an
+  ordinary human document edit. Undo and discard remove the reference, not the imported file.
+- Imported PNG, JPEG, GIF, WebP, SVG and AVIF keep their original bytes, up to 20 MiB per file.
+  There is no automatic downscaling. Document imports use a fixed adjacent `images/` directory
+  and a readable filename with a collision-resistant suffix. A workspace image outside the
+  document's directory is copied alongside it rather than inserting a parent-traversal reference.
+- The tree accepts file drops into an existing folder (blank space means root). Loose-document
+  workspaces list explicit image references and adjacent imports without scanning siblings.
+- React is allowed only inside an image tab. React, React DOM and react-zoom-pan-pinch are
+  vendored as prebuilt ES modules and loaded when an image tab opens. There is no runtime build,
+  JSX, CDN or network provider. Document editing and the rest of the SPA remain vanilla modules.
+- Local paths are relative to the document. Absolute paths, every parent segment, exclusions
+  and all symlinks are refused. Remote images stay inert. SVG is never inline markup and its
+  response has sandbox CSP and nosniff. Existing external-network permissions do not widen.
+
+**Component choice.** react-zoom-pan-pinch 4.2.0 provides the gesture engine while glosa owns the
+controls, keyboard handling, labels and theme. It and React use MIT licenses. Its published engine
+is approximately 32 KiB gzip; the vendored production bundle including React DOM is about 269 KB
+uncompressed. Yet Another React Lightbox 3.32.2 was considered (roughly 23 KiB gzip for core,
+inline and zoom), but its lightbox/gallery model adds a second UI model to a docked single image.
+react-quick-pinch-zoom was rejected because its repository is archived. These measurements are
+selection estimates, not runtime performance guarantees.

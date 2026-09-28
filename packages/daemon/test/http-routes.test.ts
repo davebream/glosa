@@ -32,7 +32,7 @@ import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
 import { EXCLUSIVE_CLAIM_TTL_MS, CLAIM_RENEW_GRACE_MS } from "../src/bus/lease.ts";
 import { inboxDir, inboxEntryPath, journalPath } from "../src/bus/paths.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
-import { checkpoint, headSha } from "../src/git/shadow.ts";
+import { checkpoint, headSha, runGit } from "../src/git/shadow.ts";
 import { resolveTrackedFiles } from "../src/matcher.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
@@ -116,6 +116,115 @@ describe("A1 §5 route catalog", () => {
   }
 
   // --- GET /api/workspaces (5.2) ---
+
+  test("image uploads preserve bytes, stay out of checkpoints, and reject unsafe paths", async () => {
+    writeFileSync(join(root, "document.md"), "# Images\n");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4uoAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const upload = async (name: string, contents: Uint8Array, destination = "document.md") => {
+      const body = new FormData();
+      body.append("file", new File([new Uint8Array(contents)], name, { type: "image/png" }));
+      body.append("document_path", destination);
+      return fetchFn(stateChangingReq(`/w/${slug}/images`, { method: "POST", body }));
+    };
+    const first = await upload("screenshot.png", bytes);
+    expect(first.status, await first.clone().text()).toBe(201);
+    const image = await first.json();
+    expect(image.relative_path).toMatch(/^images\/screenshot-[a-f0-9]{8}\.png$/);
+    expect(readFileSync(join(root, image.path))).toEqual(bytes);
+    const second = await upload("screenshot.png", bytes);
+    expect((await second.json()).path).not.toBe(image.path);
+    mkdirSync(join(root, ".glosa"), { recursive: true });
+    writeFileSync(join(root, ".glosa/config.json"), JSON.stringify({ artifacts: { include: ["**/*"] } }));
+    expect(resolveTrackedFiles(root).tracked.map((file) => file.path)).toEqual(["document.md"]);
+    await ctx.getWorkspaceBus(root).reconcile();
+    const tree = await runGit(root, ["ls-tree", "-r", "--name-only", "HEAD"]);
+    expect(tree.stdout.trim().split("\n")).toEqual(["document.md"]);
+    const fetched = await fetchFn(req(`/w/${slug}/images/${image.path}`));
+    expect(fetched.status).toBe(200);
+    expect(fetched.headers.get("Content-Type")).toBe("image/png");
+    expect(new Uint8Array(await fetched.arrayBuffer())).toEqual(new Uint8Array(bytes));
+    expect(
+      (
+        await fetchFn(
+          new Request(`http://127.0.0.1:${PORT}/w/${slug}/images/${image.path}`, {
+            headers: { Host: `127.0.0.1:${PORT}` },
+          }),
+        )
+      ).status,
+    ).toBe(401);
+    expect((await upload("fake.png", Buffer.from("<html>not an image</html>"))).status).toBe(422);
+    expect((await upload("huge.png", new Uint8Array(20 * 1024 * 1024 + 1))).status).toBe(413);
+    for (const encoded of [
+      "%2e%2e%2foutside.png",
+      "%2Fetc%2Ftest.png",
+      "images%2F%2e%2e%2Fdocument.md",
+      "images%00.png",
+      "%ZZ",
+    ]) {
+      expect((await fetchFn(req(`/w/${slug}/images/${encoded}`))).status, encoded).toBe(400);
+    }
+    symlinkSync(join(root, image.path), join(root, "alias.png"));
+    symlinkSync(join(root, "images"), join(root, "alias-dir"));
+    expect((await fetchFn(req(`/w/${slug}/images/alias.png`))).status).toBe(400);
+    expect((await fetchFn(req(`/w/${slug}/images/alias-dir/${image.path.split("/").pop()}`))).status).toBe(400);
+    const list = await (await fetchFn(req(`/w/${slug}/images`))).json();
+    expect(list.images).toHaveLength(2);
+    expect(readdirSync(join(root, "images")).every((name) => !name.startsWith(".glosa-image"))).toBe(true);
+  });
+
+  test("loose document images expose only references and adjacent imports, with malformed uploads rejected", async () => {
+    const source = join(userHome, "loose.md");
+    writeFileSync(source, "![figure](referenced.svg)\n");
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h10v10z"/></svg>';
+    writeFileSync(join(userHome, "referenced.svg"), svg);
+    writeFileSync(join(userHome, "private.svg"), svg);
+    const { entry } = await workspaceIndex.resolveOpenTarget(source);
+    try {
+      const listed = await (await fetchFn(req(`/w/${entry.slug}/images`))).json();
+      expect(listed.images.map((image: { path: string }) => image.path)).toEqual(["referenced.svg"]);
+      expect((await fetchFn(req(`/w/${entry.slug}/images/private.svg`))).status).toBe(400);
+      const body = new FormData();
+      body.append("file", new File([svg], "import.svg"));
+      body.append("document_path", "loose.md");
+      const uploaded = await fetchFn(stateChangingReq(`/w/${entry.slug}/images`, { method: "POST", body }));
+      expect(uploaded.status).toBe(201);
+      const imported = await uploaded.json();
+      expect(
+        (await (await fetchFn(req(`/w/${entry.slug}/images`))).json()).images.map(
+          (image: { path: string }) => image.path,
+        ),
+      ).toContain(imported.path);
+      expect(
+        (await fetchFn(stateChangingReq(`/w/${entry.slug}/images`, { method: "POST", body: "not multipart" }))).status,
+      ).toBe(422);
+      body.append("file", new File([svg], "second.svg"));
+      expect((await fetchFn(stateChangingReq(`/w/${entry.slug}/images`, { method: "POST", body }))).status).toBe(422);
+    } finally {
+      await busRegistry.close(entry);
+    }
+  });
+
+  test("SVG image responses retain sandbox policy through the authenticated pipeline", async () => {
+    writeFileSync(
+      join(root, "figure.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script><rect width="10" height="10"/></svg>',
+    );
+    const response = await fetchFn(req(`/w/${slug}/images/figure.svg`));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Security-Policy")).toBe(
+      "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none';",
+    );
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Content-Type")).toBe("image/svg+xml");
+    writeFileSync(
+      join(root, "figure.svg"),
+      '<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg width="10" height="10">&x;</svg>',
+    );
+    expect((await fetchFn(req(`/w/${slug}/images/figure.svg`))).status).toBe(422);
+  });
 
   test("GET /api/workspaces lists the registered, present workspace", async () => {
     const res = await fetchFn(req("/api/workspaces"));

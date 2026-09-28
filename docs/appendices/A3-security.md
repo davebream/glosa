@@ -398,3 +398,19 @@ Glosa does not rewrite organizational configuration. Explicit CLI settings disab
 plugins, hooks, analytics, feedback, OpenTelemetry, update checks and login-shell startup.
 Claude uses empty settings sources, strict MCP configuration and disabled account-connected
 tools. Native startup egress and OS-managed policy behavior still require G2/G3 qualification.
+
+
+## Local image assets (#401)
+
+Image reads and imports use the authenticated daemon boundary in A1 §5.24. They apply the
+workspace's exclusions, prohibit every symlink component, and reject absolute/parent paths.
+Reads use a no-follow descriptor and bounded buffer; imports use exclusive temporary creation,
+fsync and atomic no-overwrite publication. A file must have a supported image signature and
+valid dimensions, not merely an allowed filename or client MIME. SVG must be well-formed XML
+without DTD/entity declarations. SVG is displayed only as an image, never injected markup;
+its byte response carries sandbox CSP and nosniff even through the shared response pipeline.
+
+Markdown images resolve relative to their document. Remote URLs remain inert placeholders;
+no remote request is attempted. The SPA obtains local bytes through its one data-access module
+and paints data URLs under the existing `img-src 'self' data:` policy. No egress or blob permission
+is added. Missing, unreadable and refused images retain their description and original path.

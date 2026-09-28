@@ -5,6 +5,11 @@
 import type { ManagedAgentCode } from "../agents/interface.ts";
 
 export type ProblemSlug =
+  | "invalid-image-path"
+  | "image-missing"
+  | "image-too-large"
+  | "invalid-image"
+  | "invalid-image-upload"
   | ManagedAgentCode
   | "invalid-agent-request"
   | "managed-operation-failed"

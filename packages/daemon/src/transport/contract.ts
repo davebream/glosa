@@ -78,7 +78,9 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * on `GET /w/:slug/stream` when the folder's default changes. No route takes a path (A3 §4).
  * Additive, N/N-1 safe: an N-1 page never calls the routes and ignores the frame, and an N-1 daemon
  * answers the routes 404, which the page reads as a folder with no default. */
-export const CONTRACT_VERSION = "1.21";
+// v1.22 (#401): authenticated local image listing/read/import and image invalidation frames.
+// Assets remain outside document checkpoints. Older clients ignore the additive routes/frame.
+export const CONTRACT_VERSION = "1.22";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

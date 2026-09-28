@@ -251,6 +251,9 @@ describe("the fetch matchers fire on a real call and stay silent on a comment", 
 
 describe("viewer.js and its UI modules import only from data-access.js, their sanctioned set, and vendor/ — never a raw daemon URL helper", () => {
   const ALLOWED_RELATIVE_IMPORTS = new Set([
+    "./document-images.js",
+    "./image-insertion.js",
+    "./image-pane.js",
     "./data-access.js",
     // Dictation is a local controller; daemon access stays caller-injected through data-access.js.
     "./dictation.js",
@@ -328,6 +331,7 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     visit(resolve(SPA_SRC_DIR, "viewer.js"));
     expect([...seen]).toContain(resolve(SPA_SRC_DIR, "outline.js"));
     expect([...seen]).not.toContain(resolve(SPA_SRC_DIR, "vendor/prosemirror.js"));
+    expect([...seen]).not.toContain(resolve(SPA_SRC_DIR, "vendor/image-viewer.js"));
   });
 
   test("artifact-pane.js's local imports are exactly the sanctioned set", () => {
@@ -410,6 +414,7 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     // network guard; the exact allowlist here additionally pins the editor's dependency boundary.
     const specifiers = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
     expect(specifiers.sort()).toEqual([
+      "./document-images.js",
       "./markdown-non-manuscript.js",
       "./markdown-parser.js",
       "./vendor/prosemirror.js",
@@ -418,7 +423,11 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
 
   test("the shared markdown tokenizer imports only portable rules and the vendored parser", () => {
     const specifiers = [...read("../src/markdown-parser.js").matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
-    expect(specifiers.sort()).toEqual(["./markdown-non-manuscript.js", "./vendor/prosemirror.js"]);
+    expect(specifiers.sort()).toEqual([
+      "./document-images.js",
+      "./markdown-non-manuscript.js",
+      "./vendor/prosemirror.js",
+    ]);
     expect(read("../src/markdown-non-manuscript.js").match(/\bimport\s+(?:["']|[^;]*\bfrom\s+["'])/g)).toBeNull();
   });
   test("every hand-written SPA module the browser can reach is one the daemon will serve", () => {

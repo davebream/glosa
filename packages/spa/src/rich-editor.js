@@ -1,3 +1,4 @@
+import { imageNodeView } from "./document-images.js";
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the rich markdown editor (the full-page editor's default face under More, and the
 // engine behind Edit's block editing; the source textarea remains one toggle away in the full-page
@@ -1881,6 +1882,8 @@ export function mountRichEditor(
   const doc = parseMarkdown(source);
   const splice = createSplicer(source, doc);
   let dirty = false;
+  let disposed = false;
+  const insertions = new Set();
 
   container.textContent = "";
   // `toolbar: false` is per-block editing (#271): one run of the manuscript becomes writable in
@@ -1914,6 +1917,7 @@ export function mountRichEditor(
 
   const view = new EditorView(mountEl, {
     state,
+    nodeViews: { image: imageNodeView },
     attributes: {
       role: "textbox",
       // A block editor names the passage it opened on ("Editing §2.1"), because a screen reader
@@ -1922,6 +1926,10 @@ export function mountRichEditor(
       "aria-multiline": "true",
     },
     dispatchTransaction(tr) {
+      for (const insertion of insertions) {
+        insertion.from = tr.mapping.map(insertion.from, -1);
+        insertion.to = tr.mapping.map(insertion.to, 1);
+      }
       view.updateState(view.state.apply(tr));
       if (tr.docChanged) {
         dirty = true;
@@ -1966,6 +1974,28 @@ export function mountRichEditor(
   refreshToolbar();
 
   return {
+    captureImageInsertion(coords) {
+      const at = coords ? view.posAtCoords(coords)?.pos : null;
+      const position = { from: at ?? view.state.selection.from, to: at ?? view.state.selection.to };
+      insertions.add(position);
+      const insert = (markdown) => {
+        if (disposed) return false;
+        const state = view.state;
+        const parent = state.doc.resolve(position.from).parent;
+        const transaction = parent.type.spec.code
+          ? state.tr.insertText(markdown, position.from, position.to)
+          : state.tr.replaceWith(position.from, position.to, parseMarkdown(markdown).firstChild.content);
+        const candidate = splice(transaction.doc);
+        if (candidate.degraded || candidate.collateral.length) return false;
+        const end = transaction.mapping.map(position.to, 1);
+        view.dispatch(transaction.scrollIntoView());
+        position.from = position.to = end;
+        view.focus();
+        return true;
+      };
+      insert.release = () => insertions.delete(position);
+      return insert;
+    },
     getSave: () => splice(view.state.doc),
     getMarkdown: () => splice(view.state.doc).markdown,
     getDoc: () => view.state.doc,
@@ -2002,6 +2032,8 @@ export function mountRichEditor(
       view.dispatch(tr.setSelection(TextSelection.create(tr.doc, pos)));
     },
     destroy: () => {
+      disposed = true;
+      insertions.clear();
       view.destroy();
       container.textContent = "";
     },

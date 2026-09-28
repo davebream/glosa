@@ -236,3 +236,11 @@ work. Managed history remains tied to registration ID plus epoch, never rebound 
 Bounds: 64 KiB serialized journal records; 64 MiB per intent journal; 256 MiB blob bytes per chat;
 10 MiB per attachment, ten attachments and 20 MiB aggregate per send. Display/history paging does
 not delete original durable messages. Disk errors stop admission instead of acknowledging lost intent.
+
+
+## Image assets (#401)
+
+Images are a separate asset listing, not tracked document inputs. Their imports and filesystem
+notifications do not create checkpoints, journal entries or agent claims. The Markdown save that
+inserts a reference uses the existing human-edit transaction. Undo/discard leaves the asset on disk;
+checkpoint restore restores document bytes only. There is no image garbage collection in this scope.

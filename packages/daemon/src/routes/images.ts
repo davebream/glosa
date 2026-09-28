@@ -1,0 +1,87 @@
+// SPDX-License-Identifier: Apache-2.0
+import { importImage, listImages, readImage, ImageError, MAX_IMAGE_BYTES } from "../images.ts";
+import { decodePathCapture } from "../security/confine-path.ts";
+import { findWorkspace, WorkspaceLookupError, type WorkspaceAccess } from "../services/workspace-access.ts";
+import { problem } from "../transport/problem.ts";
+import type { RouteMatch } from "./types.ts";
+
+export function imageRoutes(deps: WorkspaceAccess, method: string, pathname: string): RouteMatch | null {
+  const match = /^\/w\/([^/]+)\/images(?:\/(.+))?$/.exec(pathname);
+  if (!match || !["GET", "POST"].includes(method) || (method === "POST" && match[2])) return null;
+  return {
+    routeClass: method === "GET" ? "authed-read" : "state-changing",
+    bodyLimit: MAX_IMAGE_BYTES + 64 * 1024,
+    handle: async (req, _server, authSignal) => {
+      try {
+        const slug = decodePathCapture(match[1]!);
+        if (!slug.ok) throw new ImageError(400, "invalid-image-path", "Invalid workspace path.");
+        let workspace = findWorkspace(deps, slug.path);
+        if (method === "GET" && !match[2])
+          return Response.json(listImages(workspace), { headers: { "Cache-Control": "no-store" } });
+        if (method === "GET") {
+          const path = decodePathCapture(match[2]!);
+          if (!path.ok) throw new ImageError(400, "invalid-image-path", "Invalid image path.");
+          const image = readImage(workspace, path.path);
+          return new Response(new Uint8Array(image.bytes), {
+            headers: {
+              "Content-Type": image.mime,
+              "Content-Length": String(image.bytes.length),
+              "Cache-Control": "no-store",
+              ETag: `"${image.version}"`,
+              "X-Content-Type-Options": "nosniff",
+              "Content-Security-Policy": "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none';",
+            },
+          });
+        }
+        let form: FormData;
+        try {
+          form = await req.formData();
+        } catch {
+          throw new ImageError(422, "invalid-image-upload", "Choose an image and a destination.");
+        }
+        const file = form.get("file");
+        const document = form.get("document_path");
+        const directory = form.get("directory_path");
+        if (
+          !(file instanceof File) ||
+          file.size > MAX_IMAGE_BYTES ||
+          (document !== null && typeof document !== "string") ||
+          (directory !== null && typeof directory !== "string") ||
+          [...form.keys()].some(
+            (key) => !["file", "document_path", "directory_path"].includes(key) || form.getAll(key).length !== 1,
+          )
+        ) {
+          throw new ImageError(
+            file instanceof File && file.size > MAX_IMAGE_BYTES ? 413 : 422,
+            "invalid-image-upload",
+            "Choose an image up to 20 MiB and a destination.",
+          );
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (authSignal?.aborted) throw new ImageError(401, "unauthorized", "This connection is no longer authorized.");
+        // Revalidate after every asynchronous boundary, before a synchronous filesystem commit.
+        workspace = findWorkspace(deps, slug.path);
+        return Response.json(
+          importImage(workspace, {
+            name: file.name,
+            bytes,
+            ...(typeof document === "string" ? { document } : {}),
+            ...(typeof directory === "string" ? { directory } : {}),
+          }),
+          { status: 201 },
+        );
+      } catch (error) {
+        if (error instanceof ImageError) return problem(error.status, error.code, error.message, undefined, pathname);
+        if (error instanceof WorkspaceLookupError)
+          return problem(
+            error.code === "not-found" ? 404 : 409,
+            error.code,
+            "Workspace is unavailable.",
+            undefined,
+            pathname,
+          );
+        throw error;
+      }
+    },
+  };
+}

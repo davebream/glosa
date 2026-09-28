@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Local images in Markdown, image paste/drop and an Insert image picker in block Edit, Rich and
+  Source, plus image files in the tree and docked image tabs with fit, zoom, pan and live updates.
+  Imports preserve original bytes up to 20 MiB and stay outside document checkpoints. Remote images
+  remain blocked; local missing/refused images show their description and path (#401).
 - Experimental Linux x86_64/glibc CLI and daemon support with Bun 1.4.2+, `xdg-open`, headless
   URL output, Linux boot identity and MCP parent observation. Linux core and installed-package
   checks now run in CI and release validation. Linux desktop packaging, native managed chats,

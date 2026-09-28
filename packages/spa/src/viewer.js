@@ -1,3 +1,5 @@
+import { createImagePane } from "./image-pane.js";
+import { droppedImages } from "./image-insertion.js";
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the workspace surface (R6). Since the multi-artifact workbench (design brief
 // docs/design/2026-09-04-multi-artifact-workbench-brief.md) this module owns everything that is
@@ -188,6 +190,7 @@ export function mountApp(
         })
       : null;
   let dock = null;
+  let knownImages = new Map();
   let knownArtifacts = new Map(); // path → summary, for restore validation and tab state
   /** @type {Map<string, any>} */
   const panes = new Map(); // panel id → pane handle
@@ -776,6 +779,8 @@ export function mountApp(
     if (pane && pane.kind === "artifact" && !readLock) {
       const mode = pane.getMode?.();
       if (mode === "edit") {
+        if (/\.md$/i.test(pane.path))
+          commands.push({ id: "insert-image", label: "Insert image", run: () => pane.insertImage?.() });
         commands.push({ id: "done", label: "Done editing", detail: "⌘E", run: () => pane.toggleEdit?.() });
       } else {
         commands.push({
@@ -948,7 +953,7 @@ export function mountApp(
   function tabLabels() {
     return disambiguateLabels(
       openPanelIds()
-        .filter(isArtifactPanel)
+        .filter((id) => ["artifact", "image"].includes(decodePanelId(id)[0]))
         .map((id) => decodePanelId(id)[1]),
     );
   }
@@ -956,6 +961,13 @@ export function mountApp(
   function tabStateFor(id) {
     const pane = panes.get(id);
     if (!pane) return { label: id, tooltip: id };
+    if (pane.kind === "image")
+      return {
+        kind: "image",
+        label: tabLabels().get(pane.path) ?? pane.title,
+        tooltip: pane.path,
+        missing: pane.isMissing(),
+      };
     if (["chat", "external-chat", "agent-settings"].includes(pane.kind))
       return {
         kind: pane.kind,
@@ -1008,7 +1020,7 @@ export function mountApp(
 
   function paneEmptyState() {
     const wrap = el("div", { className: "glosa-empty" });
-    if (knownArtifacts.size === 0) {
+    if (knownArtifacts.size + knownImages.size === 0) {
       wrap.append(
         el("p", { className: "glosa-empty-title", textContent: "No documents yet." }),
         el("p", { className: "glosa-empty-hint", textContent: "Add a document to begin." }),
@@ -1052,6 +1064,17 @@ export function mountApp(
   }
 
   function createPane(id, params, host, panelApi) {
+    if (params.kind === "image") {
+      const pane = createImagePane(host, {
+        dataAccess,
+        slug: currentSlug,
+        path: params.path,
+        onStateChange: refreshTabs,
+      });
+      panes.set(id, pane);
+      void pane.ready.then(refreshTabs);
+      return pane;
+    }
     if (params.kind === "external-chat") {
       let disposed = false,
         unmount;
@@ -1210,8 +1233,32 @@ export function mountApp(
    * "one tab per file, no duplicates" needs no bookkeeping of its own. Opening a file that is
    * already visible focuses the pane that holds it; it never copies the file into another one.
    */
+  function openImage(path, group) {
+    if (!dock) return false;
+    const id = JSON.stringify(["image", path]);
+    const existing = dock.api.getPanel(id);
+    if (existing) {
+      existing.api.setActive();
+      return true;
+    }
+    dock.api.addPanel({
+      id,
+      component: "pane",
+      tabComponent: "pane",
+      title: path.split("/").pop(),
+      params: { kind: "image", path },
+      renderer: "always",
+      minimumWidth: MIN_PANE_WIDTH,
+      ...(group ? { position: { referenceGroup: group } } : {}),
+    });
+    markActivePane();
+    markNavigatorOpenSet();
+    return true;
+  }
+
   async function openArtifact(path, { mode, group } = {}) {
     if (!path || !currentSlug) return false;
+    if (knownImages.has(path)) return openImage(path, group);
     if (mode) requestedMode = mode;
     const existing = dock?.api.getPanel(artifactPanelId(path));
     if (existing) {
@@ -1264,11 +1311,13 @@ export function mountApp(
   function markNavigatorOpenSet() {
     artifactNavigator.setOpenPaths?.(
       openPanelIds()
-        .filter(isArtifactPanel)
+        .filter((id) => ["artifact", "image"].includes(decodePanelId(id)[0]))
         .map((id) => decodePanelId(id)[1]),
     );
     artifactNavigator.setCurrent(
-      activePanelId && isArtifactPanel(activePanelId) ? decodePanelId(activePanelId)[1] : null,
+      activePanelId && ["artifact", "image"].includes(decodePanelId(activePanelId)[0])
+        ? decodePanelId(activePanelId)[1]
+        : null,
       {
         reveal: false,
       },
@@ -1358,13 +1407,54 @@ export function mountApp(
     dictationController,
   });
 
+  const imageImportStatus = el("p", { className: "glosa-image-import-status", hidden: true, role: "status" });
+  artifactList.after(imageImportStatus);
+  artifactList.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer?.types.includes("Files") || readLock) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  });
+  artifactList.addEventListener("drop", (event) => {
+    const files = droppedImages(event);
+    if (!files.length || readLock || !currentSlug) return;
+    event.preventDefault();
+    const item = event.target.closest('[role="treeitem"]');
+    const nodeId = item?.getAttribute("data-node-id");
+    const targetPath = nodeId?.slice(2) ?? "";
+    const directory =
+      item?.getAttribute("data-kind") === "directory"
+        ? targetPath
+        : targetPath.includes("/")
+          ? targetPath.slice(0, targetPath.lastIndexOf("/"))
+          : "";
+    const targetSlug = currentSlug;
+    void (async () => {
+      for (const file of files) {
+        imageImportStatus.hidden = false;
+        imageImportStatus.textContent = `Adding ${file.name}…`;
+        try {
+          await dataAccess.importImage(targetSlug, file, { directory_path: directory });
+          imageImportStatus.textContent = `Added ${file.name}.`;
+        } catch (error) {
+          imageImportStatus.textContent = `${file.name}: ${error.message}`;
+        }
+      }
+      if (targetSlug === currentSlug) await refreshArtifactList();
+    })();
+  });
+
   // ---------- workspace data ----------
 
   async function refreshArtifactList() {
-    const artifacts = await dataAccess.getArtifacts(currentSlug);
+    const slug = currentSlug;
+    const imageRequest = dataAccess.getImages?.(slug);
+    const artifacts = await dataAccess.getArtifacts(slug);
+    const assets = imageRequest ? await imageRequest : { images: [], directories: [] };
+    if (slug !== currentSlug) return artifacts;
+    knownImages = new Map(assets.images.map((image) => [image.path, image]));
     knownArtifacts = new Map(artifacts.map((artifact) => [artifact.path, artifact]));
-    artifactListEmpty.hidden = artifacts.length > 0;
-    artifactNavigator.setArtifacts(artifacts);
+    artifactListEmpty.hidden = artifacts.length + assets.images.length > 0;
+    artifactNavigator.setArtifacts([...artifacts, ...assets.images], assets.directories);
     markNavigatorOpenSet();
     refreshTabs();
     return artifacts;
@@ -1418,7 +1508,10 @@ export function mountApp(
         void styleStore.loadFolder(currentSlug);
         void hydrateClaims();
         void refreshArtifactList();
-        for (const pane of panes.values()) void pane.refreshArtifact?.();
+        for (const pane of panes.values()) {
+          void pane.refreshArtifact?.();
+          void pane.refreshImages?.();
+        }
         void attentionTray.refresh();
         void refreshAgentFeedback();
         attentionWatch?.resync();
@@ -1426,6 +1519,10 @@ export function mountApp(
       onEvent: (frame) => {
         attentionWatch?.handleFrame(frame);
         if (frame.event === "artifact" && frame.data?.path) refreshOpenArtifact(frame.data.path);
+        if (frame.event === "image") {
+          void refreshArtifactList();
+          for (const pane of panes.values()) void pane.refreshImages?.();
+        }
         if (frame.event === "artifact_index") void refreshArtifactIndex();
         if (frame.event === "journal") {
           trackClaims(frame.data);
@@ -1493,6 +1590,8 @@ export function mountApp(
     palette.close();
     stopChatsStream?.();
     currentSlug = slug;
+    imageImportStatus.hidden = true;
+    imageImportStatus.textContent = "";
     chatList = [];
     externalSessions = [];
     rememberedExternal = [];
@@ -1524,6 +1623,7 @@ export function mountApp(
       dock.restoreLayout(
         (_id, params) =>
           params.kind === "agent-settings" ||
+          (params.kind === "image" && knownImages.has(params.path)) ||
           (params.kind === "external-chat" &&
             externalSessions.some((session) => session.session_id === params.sessionId)) ||
           (params.kind === "chat" && chatList.some((chat) => chat.id === params.chatId)) ||
