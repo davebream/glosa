@@ -706,3 +706,73 @@ The independent design critique scored the preceding interface 21/40; that is no
 The workbench retains its existing 360px minimum pane width. Showing the 232px navigator alongside it requires 592px; narrower windows can hide the navigator or scroll the desk. This refinement does not change that existing desktop-layout contract or any managed-provider release gate.
 
 Validation before the installation-progress and spacing follow-up: `bun run check` passed 3,268 tests across 210 files, plus lint, typecheck, version and format checks. Package smoke passed for 231 packaged files. The live documentation corpus gained three editable blocks in DESIGN.md; only its measured denominators changed (756 blocks / 686 edits), with all serializer-loss and detection counts unchanged. Real-browser checks exercised the missing-runtime lock, visible installation state, duplicate-click prevention and successful unlock, and measured 16px provider marks at a 390px Settings viewport without overflow. The follow-up adversarial review found no remaining blocker in the four repaired interactions. This is interface validation, not evidence that the outstanding native-provider activation gates have closed.
+
+
+## Composer references and linked configuration (#427)
+
+The composer offers workspace files after `@` at a word boundary and native skills/commands after
+`/` as the first non-whitespace token. Both providers use the same picker. Catalogs belong to the
+selected provider, account and workspace. Glosa does not copy skills between providers.
+
+### Account ownership
+
+Existing profiles keep their isolated configuration. A new linked profile stores the canonical path
+of an existing configuration directory outside Glosa storage. The native runtime owns sign-in and
+credentials. Glosa starts separate supervised processes; it never takes over an external session.
+The selected path cannot silently retarget through a symlink. Unlinking stops owned processes and
+removes only Glosa metadata; it never runs logout or deletes native files. Native sign-in is managed
+in the native agent, followed by Check account in Glosa.
+
+Linked Claude sessions load user, project and local settings. Linked Codex sessions preserve its
+native credential store and project configuration. Native hooks, plugins and MCP servers are included;
+workspace permission explicitly covers startup hooks before sending. Glosa still selects the model,
+effort and execution mode, suppresses telemetry/update checks and refuses conflicting billing routes.
+The `glosa` MCP server name is reserved. Configuration revision joins the workspace consent digest.
+A changed revision blocks subsequent admission until the user grants permission again. Skill bodies
+and descriptions do not themselves renew workspace authority.
+
+### Discovery and dispatch
+
+Reading a saved catalog never starts a runtime. Load commands and Refresh commands are foreground
+actions. Discovery reuses an active connection or opens a bounded, supervised connection without a
+model prompt, then verifies cleanup. Successful catalogs persist in the control journal, scoped to
+workspace registration, account epoch, runtime and configuration revision. Provider change events
+invalidate cached lists. Dispatch asks the provider again before admitting a selected command.
+
+Claude supplies its SDK command list and full command-change replacements. Codex supplies its
+skills list. A selected Codex skill sends both `$name` text and the native `{type: "skill", name, path}`
+input. The displayed text remains `/name`. The app actions `/mcp` and `/mcp-status` use existing tool
+settings and connection inventory. They require a sole action with no attachments. Provider selections
+insert text without sending. Unknown text remains ordinary message text.
+
+### Durable references
+
+Drafts and immutable turns retain exact text plus half-open UTF-16 reference ranges. Validation rejects
+mismatched text, overlapping ranges and split surrogate pairs. Account/provider changes clear draft
+bindings. Edits within a reference unbind it; edits before it move its range. Selected commands are
+checked again against their native identity. Missing commands or files hold the turn before dispatch.
+Workspace file paths pass the existing confinement check and are serialized as quoted live paths;
+file contents are not copied into attachments. History highlights recorded references without consulting
+current skill names. Existing journals without reference metadata still replay.
+
+### UI and evidence boundaries
+
+The native textarea retains selection, IME, dictation and undo. A noninteractive background marks
+references while native text stays opaque. The listbox uses a native popover with fixed positioning,
+keeps focus in the input, announces result counts, supports arrows/Enter/Tab/Escape, and uses the
+existing fonts and neutral theme tokens. A real Chromium witness covers native undo, IME handling,
+focus, narrow viewport placement and clipping. Synthetic provider tests establish protocol behavior;
+they do not qualify authenticated native hooks, plugins or skill invocation. The existing joint provider
+release gate remains in force until those attended scenarios pass.
+
+Verification on September 28: all 96 focused tests across the six affected test files passed,
+including the real-browser picker witness. Temporary removal of structured skill input, reference
+persistence, stale-command validation and linked-profile logout protection each produced a named
+failure. The guards were restored. Type, lint, version and format checks passed.
+
+The full suite recorded 3,645 passing tests, four failures and one between-tests error. The failures
+were the external-write browser morph, lost-history watcher repair, monitor reconnection and live
+transcript push. All four passed in a separate focused run. The browser-morph failure also reproduced
+on unchanged baseline source. This evidence does not establish the cause of the other failures or
+make the full suite green. Authenticated skill invocation with linked native configuration remains
+an attended verification task; this change does not close the provider activation gates.

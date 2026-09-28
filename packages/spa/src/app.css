@@ -8065,7 +8065,8 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-composer:focus-within {
   border-color: var(--ink);
 }
-.glosa-chat-pane .glosa-chat-draft {
+.glosa-chat-pane .glosa-chat-draft,
+.glosa-chat-pane .glosa-chat-reference-mirror {
   width: 100%;
   display: block;
   border: 0;
@@ -8736,4 +8737,101 @@ button:is(
   position: absolute;
   right: 4px;
   bottom: -26px;
+}
+
+/* Composer references share the native textarea's exact metrics. Text stays opaque. */
+.glosa-chat-input-wrap {
+  position: relative;
+  min-width: 0;
+}
+.glosa-chat-input-wrap > textarea {
+  position: relative;
+  z-index: 1;
+}
+.glosa-chat-reference-mirror {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  color: transparent;
+  border: 0;
+}
+.glosa-chat-reference-mirror mark {
+  color: transparent;
+  background: var(--surface-sunken);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+}
+.glosa-composer-picker {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 4px;
+  box-sizing: border-box;
+  overflow: auto;
+  overscroll-behavior: contain;
+  z-index: var(--z-tooltip, 60);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  font: 1rem / 1.4 var(--font-sans);
+}
+.glosa-composer-picker[hidden] {
+  display: none;
+}
+.glosa-composer-option {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.glosa-composer-option[aria-selected="true"] {
+  background: var(--surface-sunken);
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+}
+.glosa-composer-name {
+  font-weight: 600;
+  min-width: 0;
+}
+.glosa-composer-description {
+  flex: 1 1 15em;
+  min-width: 0;
+}
+.glosa-composer-source {
+  flex-basis: 100%;
+  font-size: 0.875em;
+}
+.glosa-composer-group,
+.glosa-composer-empty {
+  padding: 8px 10px;
+  font-size: 0.875em;
+}
+.glosa-composer-group {
+  border-top: 1px solid var(--border);
+}
+.glosa-composer-group:first-child {
+  border-top: 0;
+}
+@media (forced-colors: active) {
+  .glosa-composer-option[aria-selected="true"] {
+    outline-color: Highlight;
+  }
+  .glosa-chat-reference-mirror mark {
+    text-decoration-color: CanvasText;
+  }
+}
+.glosa-chat-reference {
+  background: var(--surface-sunken);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
 }

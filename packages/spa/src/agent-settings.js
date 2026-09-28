@@ -24,6 +24,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
   };
   const selectedAccounts = new Map();
   const accountDrafts = new Map();
+  const configurationDrafts = new Map();
   const accountState = (profile) =>
     profile.cleanup
       ? "Cleanup needed"
@@ -641,6 +642,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
         const identity = el("dl", { className: "glosa-agent-facts" });
         for (const [label, value] of [
           ["Signed in as", profile.auth.label ?? "Not identified"],
+          ["Configuration", profile.configuration ? `Linked · ${profile.configuration.path}` : "Owned by Glosa"],
           ["Login", profile.auth.method ?? "Not connected"],
           [
             "Last checked",
@@ -692,36 +694,54 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
               });
               loginHost.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
             },
-            !profile.enabled || !state.available,
+            !!profile.configuration || !profile.enabled || !state.available,
           ),
           button(
             "Load models",
-            () => dataAccess.discoverAgentModels(profile.id),
+            async () => {
+              if (
+                profile.configuration &&
+                !(await confirmDialog({
+                  title: "Load models with native configuration?",
+                  body: "This starts an owned session in a neutral directory. Native plugins, hooks and MCP servers may run before any message is sent. No workspace message will be sent.",
+                  confirmLabel: "Load models",
+                }))
+              )
+                return;
+              await dataAccess.discoverAgentModels(profile.id);
+            },
             !state.available || !profile.enabled || profile.auth.state !== "authenticated",
           ),
-          button(profile.cleanup ? "Retry account cleanup" : "Sign out", async () => {
-            if (
-              profile.cleanup ||
-              (await confirmDialog({
-                title: `Sign out of ${profile.label}?`,
-                body: "Stop its chats and sign out through the agent. Private configuration and chat history stay available for reconnecting.",
-                confirmLabel: "Sign out",
-              }))
-            )
-              await dataAccess.signOutAgent(profile.id, {
-                requestId: crypto.randomUUID(),
-                revision: profile.revision,
-                remove: profile.cleanup === "remove",
-              });
-          }),
           button(
-            "Remove account",
+            profile.cleanup ? "Retry account cleanup" : profile.configuration ? "Disconnect" : "Sign out",
+            async () => {
+              if (
+                profile.cleanup ||
+                (await confirmDialog({
+                  title: profile.configuration ? `Disconnect ${profile.label}?` : `Sign out of ${profile.label}?`,
+                  body: profile.configuration
+                    ? "Stop its Glosa chats and disable this link. Native sign-in and configuration stay untouched."
+                    : "Stop its chats and sign out through the agent. Private configuration and chat history stay available for reconnecting.",
+                  confirmLabel: profile.configuration ? "Disconnect" : "Sign out",
+                }))
+              )
+                await dataAccess.signOutAgent(profile.id, {
+                  requestId: crypto.randomUUID(),
+                  revision: profile.revision,
+                  remove: profile.cleanup === "remove",
+                });
+            },
+          ),
+          button(
+            profile.configuration ? "Unlink account" : "Remove account",
             async () => {
               if (
                 await confirmDialog({
                   title: `Remove ${profile.label}?`,
-                  body: "Stop its chats and remove this account's login and private configuration. Existing chat history stays available.",
-                  confirmLabel: "Remove account",
+                  body: profile.configuration
+                    ? "Stop its Glosa chats and remove this link. Native files, sign-in and existing chat history stay available."
+                    : "Stop its chats and remove this account's login and private configuration. Existing chat history stays available.",
+                  confirmLabel: profile.configuration ? "Unlink account" : "Remove account",
                 })
               )
                 await update(profile, { remove: true });
@@ -757,7 +777,9 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
             : verify
               ? check
               : !connected
-                ? signIn
+                ? profile.configuration
+                  ? check
+                  : signIn
                 : !state.capabilities?.[profile.id]?.models?.length
                   ? models
                   : check;
@@ -773,7 +795,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
           },
         });
         const showDefault = profile.enabled && connected && !profile.isDefault && !profile.cleanup;
-        const maintenance = [rename, defaultButton, check, signIn, models].filter(
+        const maintenance = [rename, defaultButton, check, ...(profile.configuration ? [] : [signIn]), models].filter(
           (item) => item !== primary && !(showDefault && item === defaultButton),
         );
         const destructive = [enable, signOut, remove].filter((item) => item !== primary);
@@ -820,8 +842,39 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
         required: true,
         "aria-label": `${provider.name} account label`,
       });
+      const configurationDraft = configurationDrafts.get(provider.id) ?? {
+        mode: "owned",
+        path: provider.configurationPath ?? "",
+      };
+      const configuration = el("select", { "aria-label": "Account configuration" }, [
+        el("option", { value: "owned", textContent: "Separate Glosa account" }),
+        el("option", { value: "linked", textContent: "Link native account" }),
+      ]);
+      configuration.value = configurationDraft.mode;
+      const configurationPath = el("input", {
+        value: configurationDraft.path,
+        "aria-label": "Native configuration directory",
+        placeholder: "Absolute configuration directory",
+        hidden: configuration.value !== "linked",
+      });
+      const configurationHelp = el("p", {
+        className: "glosa-agent-help",
+        hidden: configuration.value !== "linked",
+        textContent:
+          "Use the native agent’s existing sign-in, skills, plugins, hooks and MCP servers. Glosa starts its own sessions. Unlinking leaves native files and sign-in untouched. Manage sign-in in the native agent.",
+      });
+      const rememberConfiguration = () =>
+        configurationDrafts.set(provider.id, { mode: configuration.value, path: configurationPath.value });
+      configuration.addEventListener("change", () => {
+        configurationPath.hidden = configurationHelp.hidden = configuration.value !== "linked";
+        rememberConfiguration();
+      });
+      configurationPath.addEventListener("input", rememberConfiguration);
       const form = el("form", { className: "glosa-agent-add-account" }, [
         el("label", {}, [el("span", { textContent: "Add an account" }), label]),
+        configuration,
+        configurationPath,
+        configurationHelp,
         el("button", { type: "submit", textContent: "Add account" }),
       ]);
       form.addEventListener("submit", (event) => {
@@ -833,10 +886,14 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
               requestId: crypto.randomUUID(),
               provider: provider.id,
               label: label.value.trim(),
+              ...(configuration.value === "linked"
+                ? { configuration: { mode: "linked", path: configurationPath.value.trim() } }
+                : {}),
             });
             if (created?.id) selectedAccounts.set(provider.id, created.id);
             label.value = "";
             accountDrafts.delete(provider.id);
+            configurationDrafts.delete(provider.id);
           });
       });
       accountArea.append(form);

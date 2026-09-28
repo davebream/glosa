@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-import { randomUUID } from "node:crypto";
+import { readFileSync, realpathSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
+import { configurationRevision } from "../../../daemon/src/agents/configuration.ts";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -22,7 +26,9 @@ import { managedToolsUnavailable, waitForManagedTools } from "../../../daemon/sr
 
 // Structural boundary checked against the published 0.3.280 declarations. The optional commercial
 // SDK is loaded only from an explicitly installed/qualified runtime, never imported by core.
+type ClaudeCommand = { name: string; description: string; argumentHint?: string; builtin?: boolean };
 export interface ClaudeQuery extends AsyncIterable<unknown> {
+  supportedCommands?(): Promise<ClaudeCommand[]>;
   supportedModels(): Promise<
     { value: string; displayName: string; resolvedModel?: string; supportedEffortLevels?: string[] }[]
   >;
@@ -70,6 +76,7 @@ export interface ClaudeSdk {
       resume?: string;
       includePartialMessages: boolean;
       settingSources: string[];
+      plugins?: { type: "local"; path: string }[];
       strictMcpConfig: boolean;
       settings: { disableClaudeAiConnectors: boolean };
       persistSession: boolean;
@@ -228,6 +235,104 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
   logoutArgs(): string[] {
     return ["auth", "logout"];
   }
+  defaultConfiguration(): string {
+    return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  }
+  private nativePlugins(configRoot: string, cwd: string): { type: "local"; path: string }[] {
+    const read = (path: string): Record<string, unknown> => {
+      try {
+        return z.record(z.string(), z.unknown()).parse(JSON.parse(readFileSync(path, "utf8")));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+        throw error;
+      }
+    };
+    const ancestors: string[] = [];
+    for (let current = cwd; ; current = dirname(current)) {
+      ancestors.unshift(current);
+      if (current === dirname(current)) break;
+    }
+    const enabled: Record<string, unknown> = {};
+    for (const path of [
+      join(configRoot, "settings.json"),
+      ...ancestors.flatMap((root) => [
+        join(root, ".claude", "settings.json"),
+        join(root, ".claude", "settings.local.json"),
+      ]),
+    ])
+      Object.assign(enabled, read(path).enabledPlugins ?? {});
+    const installed = read(join(configRoot, "plugins", "installed_plugins.json")).plugins as
+      | Record<string, unknown>
+      | undefined;
+    const plugins: { type: "local"; path: string }[] = [];
+    for (const [id, on] of Object.entries(enabled)) {
+      if (on !== true) continue;
+      const entries = z
+        .array(z.object({ scope: z.string(), installPath: z.string(), projectPath: z.string().optional() }))
+        .parse(installed?.[id] ?? []);
+      const candidates = entries.filter(
+        (entry) =>
+          ["user", "managed"].includes(entry.scope) ||
+          (entry.projectPath && (cwd === entry.projectPath || cwd.startsWith(`${entry.projectPath}/`))),
+      );
+      candidates.sort(
+        (a, b) =>
+          (b.projectPath?.length ?? 0) - (a.projectPath?.length ?? 0) ||
+          Number(b.scope === "local") - Number(a.scope === "local"),
+      );
+      const entry = candidates[0];
+      if (!entry)
+        throw new ManagedAgentError(
+          "provider-unavailable",
+          "An enabled native plugin is not installed for this workspace. Resolve it in Claude before continuing.",
+        );
+      const path = realpathSync(entry.installPath);
+      if (!plugins.some((plugin) => plugin.path === path)) plugins.push({ type: "local", path });
+    }
+    return plugins;
+  }
+  configurationRevision(configRoot: string, cwd: string): string {
+    const paths = [
+      join(configRoot, "settings.json"),
+      join(configRoot, ".claude.json"),
+      join(configRoot, "plugins", "installed_plugins.json"),
+    ];
+    for (let current = cwd; ; current = dirname(current)) {
+      paths.push(
+        join(current, ".claude", "settings.json"),
+        join(current, ".claude", "settings.local.json"),
+        join(current, ".mcp.json"),
+      );
+      if (current === dirname(current)) break;
+    }
+    for (const plugin of this.nativePlugins(configRoot, cwd))
+      paths.push(
+        join(plugin.path, ".claude-plugin", "plugin.json"),
+        join(plugin.path, "hooks", "hooks.json"),
+        join(plugin.path, ".mcp.json"),
+      );
+    return configurationRevision(paths, (path, raw) => {
+      const config = z.record(z.string(), z.unknown()).parse(raw);
+      const env = (config.env ?? {}) as Record<string, unknown>;
+      const mcp = config.mcpServers as Record<string, unknown> | undefined;
+      const projects = config.projects as Record<string, { mcpServers?: Record<string, unknown> }> | undefined;
+      if (
+        mcp?.glosa ||
+        projects?.[cwd]?.mcpServers?.glosa ||
+        config.apiKeyHelper ||
+        Object.keys(env).some((key) =>
+          /^(ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY))$/u.test(key),
+        )
+      )
+        throw new ManagedAgentError(
+          "provider-unavailable",
+          "Native billing configuration or the reserved glosa MCP name conflicts with this account.",
+        );
+      if (path === join(configRoot, ".claude.json"))
+        return { mcpServers: mcp, projectMcpServers: projects?.[cwd]?.mcpServers };
+      return config;
+    });
+  }
   profileEnvironment(configRoot: string): Record<string, string> {
     return { CLAUDE_CONFIG_DIR: configRoot, DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1" };
   }
@@ -274,6 +379,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         "account-mismatch",
         "Sign in to the original Claude subscription account before continuing.",
       );
+    if (spec.profile.configuration) this.configurationRevision(spec.configRoot, spec.cwd);
     const sdk = await this.loadSdk(spec.manifest.sdkModule),
       input = new InputQueue();
     const pending = new Map<
@@ -311,8 +417,9 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
           : {}),
         // Project instructions are supplied by the native agent. User/global hooks, MCP and billing
         // configuration are not inherited. Additional sources require separate explicit consent.
-        settingSources: [],
-        strictMcpConfig: true,
+        ...(spec.profile.configuration ? { plugins: this.nativePlugins(spec.configRoot, spec.cwd) } : {}),
+        settingSources: spec.profile.configuration ? ["user", "project", "local"] : [],
+        strictMcpConfig: !spec.profile.configuration,
         settings: { disableClaudeAiConnectors: true },
         mcpServers: {
           ...Object.fromEntries(
@@ -412,6 +519,23 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         );
       }
       const normalize = new ClaudeEventNormalizer(onEvent);
+      let commandList: ClaudeCommand[] | undefined;
+      const commands = async (forceReload = false) => {
+        if (forceReload || !commandList) commandList = (await query.supportedCommands?.()) ?? [];
+        const native = new Map<string, ClaudeCommand>();
+        for (const entry of commandList) if (!native.has(entry.name) || entry.builtin) native.set(entry.name, entry);
+        return [...native.values()]
+          .filter((entry) => !entry.builtin || ["compact", "context", "usage"].includes(entry.name))
+          .map((entry) => ({
+            id: createHash("sha256")
+              .update(`${entry.builtin ? "builtin" : "custom"}:${entry.name}`)
+              .digest("hex"),
+            name: entry.name,
+            description: entry.description,
+            ...(entry.argumentHint ? { argumentHint: entry.argumentHint } : {}),
+            kind: (entry.builtin ? "command" : "skill") as "command" | "skill",
+          }));
+      };
       let prepared: string | undefined;
       const prepareTurn = async (settings: TurnSettings) => {
         if (active || closed) throw new ManagedAgentError("turn-active", "This runtime already accepted a turn.");
@@ -439,7 +563,16 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
       void (async () => {
         try {
           for await (const message of query) {
-            const init = message as { type?: string; subtype?: string; model?: string };
+            const init = message as {
+              type?: string;
+              subtype?: string;
+              model?: string;
+              commands?: ClaudeCommand[];
+            };
+            if (init.type === "system" && init.subtype === "commands_changed") {
+              commandList = init.commands;
+              onEvent({ type: "commands_changed" });
+            }
             if (init.type === "system" && init.subtype === "init" && typeof init.model === "string")
               onEvent({ type: "effective_settings", model: init.model });
             normalize.accept(message);
@@ -462,6 +595,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         }
       })();
       return {
+        commands,
         prepareTurn,
         capabilities: {
           models: models.map((model) => ({
@@ -479,9 +613,11 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         async startTurn(turn: AgentInput) {
           if (active || closed) throw new ManagedAgentError("turn-active", "This runtime already accepted a turn.");
           if (prepared !== JSON.stringify(turn.settings)) await prepareTurn(turn.settings);
+          if (turn.commandId && !(await commands()).some((item) => item.id === turn.commandId))
+            throw new ManagedAgentError("stale-reference", "This Claude command is no longer available.");
           active = true;
           prepared = undefined;
-          const content: unknown[] = [{ type: "text", text: turn.text }];
+          const content: unknown[] = [{ type: "text", text: turn.commandId ? turn.text.trimStart() : turn.text }];
           for (const file of turn.attachments) {
             if (file.mime.startsWith("image/"))
               content.push({
@@ -562,12 +698,19 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
 
 /** Normalize SDK events into structured data; never HTML or ANSI scraping. */
 export class ClaudeEventNormalizer {
+  private emittedText = false;
   private readonly messageIds = new Map<string, string>();
   private readonly streamed = new Set<string>();
   private readonly completedBlocks = new Map<string, number>();
   private readonly activeBlocks = new Map<string, number>();
   private readonly tools = new Map<string, string>();
-  constructor(private readonly emit: (event: AgentEvent) => void) {}
+  private readonly emit: (event: AgentEvent) => void;
+  constructor(emit: (event: AgentEvent) => void) {
+    this.emit = (event) => {
+      if (event.type === "text" && !event.reasoning && event.text) this.emittedText = true;
+      emit(event);
+    };
+  }
   accept(raw: unknown): void {
     if (!raw || typeof raw !== "object") return;
     const value = raw as Record<string, unknown>;
@@ -681,6 +824,9 @@ export class ClaudeEventNormalizer {
             });
     }
     if (value.type === "result") {
+      if (!this.emittedText && typeof value.result === "string" && value.result)
+        this.emit({ type: "text", id: `result-${String(value.uuid ?? "local")}`, text: value.result });
+      this.emittedText = false;
       const usage = value.usage as Record<string, number> | undefined;
       const totals: Record<string, string | number | null> = {
         scope: "native-session",

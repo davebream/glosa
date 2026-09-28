@@ -553,6 +553,10 @@ export function createDataAccess(deps = {}) {
         chatPath(slug) +
           `?${new URLSearchParams({ q: options.q ?? "", after: options.after ?? "", archived: String(options.archived ?? false) })}`,
       ),
+    /** @param {string} slug @param {string} id */
+    getChatCommands: (slug, id) => requestJson(chatPath(slug, id, "commands")),
+    /** @param {string} slug @param {string} id */
+    refreshChatCommands: (slug, id) => postJson(chatPath(slug, id, "commands"), {}),
     /** @param {string} slug @param {string} id @param {unknown} input */
     moveChatDraft: (slug, id, input) => postJson(chatPath(slug, id, "move-draft"), input),
     /** @param {string} slug @param {unknown} input */

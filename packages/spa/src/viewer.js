@@ -1096,6 +1096,7 @@ export function mountApp(
         dataAccess,
         slug: currentSlug,
         chatId: params.chatId,
+        getFiles: () => [...knownArtifacts.keys()],
         sourceChatId: params.sourceChatId,
         onDeleted: () => {
           const panel = dock?.api.getPanel(chatPanelId(params.chatId));

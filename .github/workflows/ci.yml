@@ -274,6 +274,12 @@ jobs:
           path: packages/shell/dist/*/*.dmg
           if-no-files-found: warn
           retention-days: 7
+      # Bun can install Electron's package without its binary. The app build installs the binary
+      # when it runs, but source-only PRs skip that build and still require the renderer suite.
+      - name: Install Electron for the renderer suite
+        run: |
+          node packages/shell/node_modules/electron/install.js
+          bun run --cwd packages/shell brand
       - name: Run the shell's renderer security suite in real Electron
         run: bun run scripts/test-runner.ts shell
       - name: Preserve test evidence
