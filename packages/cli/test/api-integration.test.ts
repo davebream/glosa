@@ -9,7 +9,17 @@
 // (separate workspace dirs keep the scenarios independent).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  readFileSync,
+  existsSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureToken, inboxEntryPath, lockPath, readLock } from "@glosa/daemon";
@@ -19,6 +29,7 @@ import { randomPort, stopDetachedDaemon, superviseDaemonHome, trackDetachedDaemo
 import { rotateToken, tokenPath } from "../../daemon/src/security/token.ts";
 import { createHttpGlosaClient, type GlosaApiClient } from "../src/api-client.ts";
 import { createHttpDaemonClient } from "../src/daemon-client.ts";
+import { stopFixtureLauncher } from "./test-utils.ts";
 
 test("session HTTP errors remain distinct from unreachable daemon failures (#141)", async () => {
   const hook = await createHttpDaemonClient();
@@ -517,3 +528,84 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     await expect(client.dismissEntry(workspaceDir, entry1)).rejects.toMatchObject({ status: 409 });
   }, 20000);
 });
+
+// This uses the real source CLI, its launcher and the suite's isolated daemon. The stalled
+// launcher remains alive past five seconds; the CLI must return its warning and paired URL.
+test.each(["headless", "success", "failure", "missing", "stalled"])(
+  "source CLI browser mode %s retains a usable paired document URL",
+  async (mode) => {
+    const workspace = freshWorkspaceDir();
+    writeFileSync(join(workspace, "launcher.md"), "# Launcher fixture document\n");
+    const bin = freshWorkspaceDir();
+    const marker = join(bin, "launcher.pid");
+    const launcher = join(bin, process.platform === "linux" ? "xdg-open" : "open");
+    if (mode !== "missing") {
+      writeFileSync(
+        launcher,
+        `#!/bin/sh\necho $$ > '${marker}'\n${mode === "stalled" ? "exec /bin/sleep 60" : mode === "failure" ? "exit 1" : "exit 0"}\n`,
+      );
+      chmodSync(launcher, 0o755);
+    }
+    const env: Record<string, string | undefined> = { ...Bun.env, PATH: bin };
+    delete env.ANTHROPIC_API_KEY;
+    const cli = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "../src/main.ts"),
+        "open",
+        "--json",
+        ...(mode === "headless" ? ["--url"] : []),
+        workspace,
+      ],
+      { env, stdout: "pipe", stderr: "pipe" },
+    );
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const code = await Promise.race([
+        cli.exited,
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("source CLI did not exit within opener deadline")), 15_000);
+        }),
+      ]);
+      expect(code, await new Response(cli.stderr).text()).toBe(0);
+      if (mode === "stalled") {
+        // Exclude module startup from the five-second launcher budget; allow scheduling slack.
+        expect(Date.now() - statSync(marker).mtimeMs).toBeLessThan(7_000);
+      }
+      const result = JSON.parse(await new Response(cli.stdout).text());
+      expect(result.ok).toBe(true);
+      expect(result.data.path).toBe(realpathSync(workspace));
+      expect(result.warnings.some((w: { code: string }) => w.code === "browser-launch-failed")).toBe(
+        ["failure", "missing", "stalled"].includes(mode),
+      );
+      expect(existsSync(marker)).toBe(!["headless", "missing"].includes(mode));
+      const fragment = new URLSearchParams(new URL(result.data.url).hash.slice(1));
+      const origin = `http://127.0.0.1:${Bun.env.GLOSA_PORT}`;
+      const redeem = () =>
+        fetch(`${origin}/api/presentation-token/redeem`, {
+          method: "POST",
+          headers: { Origin: origin, "Content-Type": "application/json" },
+          body: JSON.stringify({ token: fragment.get("p") }),
+        });
+      const paired = await redeem();
+      expect(paired.status).toBe(200);
+      const pairedToken = ((await paired.json()) as { token: string }).token;
+      expect((await redeem()).status).toBe(401);
+      const doc = await fetch(`${origin}/w/${encodeURIComponent(result.data.slug)}/artifacts/launcher.md`, {
+        headers: { Origin: origin, Authorization: `Bearer ${pairedToken}` },
+      });
+      expect(doc.status).toBe(200);
+      expect(await doc.text()).toContain("Launcher fixture document");
+    } finally {
+      clearTimeout(deadline);
+      if (cli.exitCode === null) cli.kill();
+      await cli.exited;
+      // The isolated launcher writes its own PID before exec; it never starts another process.
+      if (mode === "stalled" && existsSync(marker)) {
+        const pid = Number(readFileSync(marker, "utf8").trim());
+        await stopFixtureLauncher(pid);
+      }
+    }
+  },
+  25_000,
+);

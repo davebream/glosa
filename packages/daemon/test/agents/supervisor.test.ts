@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RuntimeSupervisor } from "../../src/agents/supervisor.ts";
@@ -188,3 +188,37 @@ test("revocation between chunks closes partial native input before a cancellatio
     rmSync(dir, { recursive: true, force: true });
   }
 }, 10_000);
+
+test("only confirmed exit or two valid different boot identities release persisted uncertainty", async () => {
+  const { bootIdentity, unresolvedOwnership } = await import("../../src/agents/ownership.ts");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-boot-ownership-")));
+  const nonce = crypto.randomUUID();
+  const dir = join(root, "runs", nonce);
+  const current = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  mkdirSync(dir, { recursive: true });
+  try {
+    expect(bootIdentity()).toMatch(/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/);
+    for (const saved of [undefined, "corrupt", "-".repeat(36), current, current.toUpperCase()]) {
+      writeFileSync(
+        join(dir, "prepared.json"),
+        JSON.stringify({ schema: 1, nonce, at: new Date().toISOString(), bootId: saved }),
+      );
+      expect(unresolvedOwnership(root, current).has(nonce), String(saved)).toBe(true);
+    }
+    writeFileSync(
+      join(dir, "prepared.json"),
+      JSON.stringify({ schema: 1, nonce, at: new Date().toISOString(), bootId: crypto.randomUUID() }),
+    );
+    expect(unresolvedOwnership(root, current).has(nonce)).toBe(false);
+    for (const unknown of ["", "invalid"]) expect(unresolvedOwnership(root, unknown).has(nonce)).toBe(true);
+    writeFileSync(join(dir, "prepared.json"), "corrupt");
+    expect(unresolvedOwnership(root, current).has(nonce)).toBe(true);
+    writeFileSync(
+      join(dir, "exit.json"),
+      JSON.stringify({ schema: 1, nonce, code: 0, signal: null, groupEmpty: true, at: new Date().toISOString() }),
+    );
+    expect(unresolvedOwnership(root, "").has(nonce)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

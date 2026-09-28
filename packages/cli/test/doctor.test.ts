@@ -258,8 +258,8 @@ describe("glosa doctor", () => {
     });
   });
 
-  test("non-darwin platform -> only the platform check runs, exit 5", async () => {
-    const { deps } = makeDeps({ platform: () => "linux" });
+  test("unsupported platform -> only the platform check runs, exit 5", async () => {
+    const { deps } = makeDeps({ platform: () => "win32" });
     const dir = freshDir();
     const result = await runDoctor(dir, deps);
     expect(result.exitCode).toBe(5);
@@ -921,4 +921,27 @@ describe("glosa doctor", () => {
     await runDoctor(dir, deps, { workspace: "not-registered", repairBaseline: true });
     expect(calls).toEqual(["health:selected", "repair:selected"]);
   });
+});
+
+test("Linux doctor reports its runtime floor and permits a missing desktop opener for headless use", async () => {
+  const { deps } = makeDeps({
+    platform: () => "linux",
+    arch: () => "x64",
+    glibcVersion: () => "2.35",
+    bunVersion: () => "1.4.2",
+  });
+  const result = await runDoctor(freshDir(), deps);
+  expect(findCheck(result.data.checks, "platform")?.status).toBe("pass");
+  expect(findCheck(result.data.checks, "bun")?.detail).toContain("1.4.2");
+  expect(findCheck(result.data.checks, "browser")).toMatchObject({
+    status: "warn",
+    detail: expect.stringContaining("glosa open --url"),
+  });
+  deps.bunVersion = () => "1.4.1";
+  deps.createClient = async () => {
+    throw new Error("must not discover daemon");
+  };
+  const old = await runDoctor(freshDir(), deps);
+  expect(old.exitCode).toBe(5);
+  expect(old.data.checks.map((c) => c.name)).toEqual(["platform", "bun"]);
 });

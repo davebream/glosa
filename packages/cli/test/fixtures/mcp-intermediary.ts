@@ -21,7 +21,7 @@ const HOLDER_PATH = fileURLToPath(new URL("./mcp-stdio-holder.ts", import.meta.u
 const cmd = process.argv.slice(2);
 if (cmd.length === 0) throw new Error("mcp-intermediary requires a command to spawn");
 
-const libSystem = dlopen("libSystem.B.dylib", {
+const libSystem = dlopen(process.platform === "linux" ? "libc.so.6" : "libSystem.B.dylib", {
   socketpair: { args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
 });
 const AF_UNIX = 1;

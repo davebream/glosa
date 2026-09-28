@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // P5.1 / issue #46 — `glosa open [target] [focus]` (A6 §F26).
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import { type OpenDeps, printOpenResult, realOpenDeps, runOpen } from "../src/open.ts";
 import { apiError, daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { useTempHome } from "./home.ts";
-import { captureStderr, captureStdout } from "./test-utils.ts";
+import { captureStderr, captureStdout, stopFixtureLauncher } from "./test-utils.ts";
 
 // Never let this suite inspect or contend with the developer's real Glosa installation.
 useTempHome();
@@ -35,7 +35,9 @@ function makeDeps(overrides: Partial<OpenDeps> = {}): {
     createClient: async () => client as unknown as GlosaApiClient,
     ensureToken: () => "test-token-abc",
     glosaHome: () => "/tmp/fake-glosa-home",
-    openBrowser: (url) => browserCalls.push(url),
+    openBrowser: (url) => {
+      browserCalls.push(url);
+    },
     platform: () => "darwin",
     dirExists: () => true,
     fileExists: () => false,
@@ -46,6 +48,43 @@ function makeDeps(overrides: Partial<OpenDeps> = {}): {
 }
 
 describe("glosa open", () => {
+  test("a stalled browser launcher does not keep its caller alive after the deadline", async () => {
+    const dir = freshDir();
+    const marker = join(dir, "launcher.pid");
+    const launcher = join(dir, process.platform === "linux" ? "xdg-open" : "open");
+    writeFileSync(launcher, `#!/bin/sh\necho $$ > '${marker}'\nexec /bin/sleep 60\n`);
+    chmodSync(launcher, 0o755);
+    // No process.exit: this boundary detects a referenced subprocess handle keeping Bun alive.
+    const child = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "-e",
+        `
+        const { launchBrowser } = await import(${JSON.stringify(join(import.meta.dir, "../src/open.ts"))});
+        try { await launchBrowser("http://127.0.0.1:4646/"); }
+        catch { console.log("launcher deadline reached"); }
+      `,
+      ],
+      env: { ...Bun.env, PATH: dir },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = new Response(child.stdout).text();
+    const stderr = new Response(child.stderr).text();
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 12_000);
+    try {
+      expect(await child.exited, await stderr).toBe(0);
+      expect(await stdout).toContain("launcher deadline reached");
+    } finally {
+      clearTimeout(deadline);
+      if (child.exitCode === null) child.kill();
+      await child.exited;
+      if (existsSync(marker)) {
+        await stopFixtureLauncher(Number(readFileSync(marker, "utf8").trim()));
+      }
+    }
+  }, 15_000);
+
   test("realOpenDeps wires the injected client and classifies real files without following symlinks", async () => {
     const dir = freshDir();
     const file = join(dir, "draft.md");
@@ -68,7 +107,7 @@ describe("glosa open", () => {
 
   test("realOpenDeps scrubs ANTHROPIC_API_KEY from the browser launcher", async () => {
     const dir = freshDir();
-    const fakeOpen = join(dir, "open");
+    const fakeOpen = join(dir, process.platform === "linux" ? "xdg-open" : "open");
     const outputPath = join(dir, "child-env.txt");
     writeFileSync(
       fakeOpen,
@@ -89,7 +128,7 @@ describe("glosa open", () => {
            if (launcher) throw new Error("expected exactly one browser launcher");
            return launcher = spawn(options);
          };
-         try { realOpenDeps(async () => ({})).openBrowser("http://127.0.0.1:4646/"); }
+         try { await realOpenDeps(async () => ({})).openBrowser("http://127.0.0.1:4646/"); }
          finally { Bun.spawn = spawn; }
          if (!launcher) throw new Error("browser launcher was not started");
          const deadline = setTimeout(() => launcher.kill("SIGKILL"), 10_000);
@@ -119,10 +158,10 @@ describe("glosa open", () => {
     expect(JSON.parse(await stdout)).toEqual({ exitCode: 0, observed: "unset|w03-open-control-sentinel" });
   }, 20_000);
 
-  test("non-darwin platform -> exit 5, never touches the daemon", async () => {
+  test("unsupported platform -> exit 5, never touches the daemon", async () => {
     let daemonTouched = false;
     const { deps } = makeDeps({
-      platform: () => "linux",
+      platform: () => "win32",
       createClient: async () => {
         daemonTouched = true;
         throw daemonUnreachable();
@@ -459,5 +498,46 @@ describe("glosa open", () => {
     const err = captureStderr(() => captureStdout(() => printOpenResult(result, false)));
     expect(err).not.toContain("glosa init");
     expect(err).not.toContain("restart or /resume");
+  });
+});
+
+test.each([
+  ["linux", "x64", "2.35", "1.4.2", true],
+  ["linux", "arm64", "2.35", "1.4.2", false],
+  ["linux", "x64", undefined, "1.4.2", false],
+  ["linux", "x64", "2.35", "1.4.1", false],
+  ["darwin", "arm64", undefined, "1.2.7", true],
+  ["darwin", "x64", undefined, "1.2.6", false],
+] as const)("open admission %s/%s libc=%s Bun=%s", async (platform, arch, glibc, bun, accepted) => {
+  const { deps, client, browserCalls } = makeDeps({
+    platform: () => platform,
+    arch: () => arch,
+    glibcVersion: () => glibc,
+    bunVersion: () => bun,
+  });
+  let connected = false;
+  deps.createClient = async () => {
+    connected = true;
+    return client as unknown as GlosaApiClient;
+  };
+  const result = await runOpen("/workspace", deps, { launchBrowser: false });
+  expect(result.exitCode).toBe(accepted ? 0 : 5);
+  expect(connected).toBe(accepted);
+  expect(browserCalls).toEqual([]);
+});
+
+test("failed browser launch retains the registered workspace and paired URL", async () => {
+  const { deps } = makeDeps({
+    openBrowser: async () => {
+      throw new Error("launcher unavailable");
+    },
+  });
+  const result = await runOpen("/workspace", deps);
+  expect(result.ok).toBe(true);
+  expect(result.data.path).toBeDefined();
+  expect(result.data.url).toContain("#p=");
+  expect(result.warnings).toContainEqual({
+    code: "browser-launch-failed",
+    message: expect.stringContaining("Workspace registered"),
   });
 });

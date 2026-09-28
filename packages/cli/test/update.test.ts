@@ -850,8 +850,8 @@ function makeDeps(overrides: Partial<UpdateDeps> = {}): Harness {
 }
 
 describe("runUpdate — evaluation order", () => {
-  test("non-darwin exits 5 before any network call", async () => {
-    const h = makeDeps({ platform: () => "linux" });
+  test("unsupported OS exits 5 before any network call", async () => {
+    const h = makeDeps({ platform: () => "win32" });
     const r = await runUpdate({}, h.deps);
     expect(r.exitCode).toBe(5);
     expect(h.calls.fetchPackument).toBe(0);
@@ -985,7 +985,7 @@ describe("runUpdate — envelope invariants", () => {
       () => runUpdate({ to: "0.1.0-alpha.0" }, makeDeps({ currentVersion: () => "0.1.0-alpha.3" }).deps),
     ],
     ["refused-volta", () => runUpdate({}, makeDeps({ packageRoot: () => VOLTA_PATH }).deps)],
-    ["platform", () => runUpdate({}, makeDeps({ platform: () => "linux" }).deps)],
+    ["platform", () => runUpdate({}, makeDeps({ platform: () => "win32" }).deps)],
     ["invalid-registry", () => runUpdate({ registry: "http://evil" }, makeDeps().deps)],
     ["flag-combo", () => runUpdate({ allowOffsiteTarball: true }, makeDeps().deps)],
     [
@@ -1042,7 +1042,7 @@ describe("runUpdate — envelope invariants", () => {
   // The platform check runs before classifyInstall, so install_kind has no honest value yet.
   // A fabricated "unknown" would be a lie a consumer branching on install_kind would act on.
   test("install_kind is null, not fabricated, when we exited before classifying", async () => {
-    const r = await runUpdate({}, makeDeps({ platform: () => "linux" }).deps);
+    const r = await runUpdate({}, makeDeps({ platform: () => "win32" }).deps);
     expect(r.exitCode).toBe(5);
     expect(r.data.install_kind).toBeNull();
   });
@@ -1258,7 +1258,7 @@ describe("runUpdate — daemon liveness is reported on EVERY path", () => {
       () =>
         runUpdate(
           {},
-          makeDeps({ platform: () => "linux", readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps,
+          makeDeps({ platform: () => "win32", readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps,
         ),
     ],
     [
@@ -1390,4 +1390,23 @@ describe("runUpdate — bun pre-install removal", () => {
     await runUpdate({}, h.deps);
     expect(h.stdout).not.toContain("briefly uninstalled");
   });
+});
+
+test("Linux update admits the supported runtime but still refuses unmanaged installs before network", async () => {
+  const linux = {
+    platform: () => "linux" as const,
+    arch: () => "x64",
+    glibcVersion: () => "2.35",
+    bunVersion: () => "1.4.2",
+  };
+  const managed = makeDeps(linux);
+  expect((await runUpdate({ check: true }, managed.deps)).ok).toBe(true);
+  expect(managed.calls.fetchPackument).toBe(1);
+  const source = makeDeps({ ...linux, pathExists: (path) => path.endsWith("/.git") });
+  expect((await runUpdate({}, source.deps)).data.install_kind).toBe("source-checkout");
+  expect(source.calls.fetchPackument).toBe(0);
+  expect(source.calls.spawnInstaller).toBe(0);
+  const old = makeDeps({ ...linux, bunVersion: () => "1.4.1" });
+  expect((await runUpdate({}, old.deps)).exitCode).toBe(5);
+  expect(old.calls.fetchPackument).toBe(0);
 });
