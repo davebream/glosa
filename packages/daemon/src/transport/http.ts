@@ -55,6 +55,7 @@ import { attentionRoutes } from "../routes/attention.ts";
 import { claimProblem, claimRoutes } from "../routes/claims.ts";
 import { composerRoutes } from "../routes/composer.ts";
 import { dictationRoutes } from "../routes/dictation.ts";
+import { imageRoutes } from "../routes/images.ts";
 import { chatRoutes } from "../routes/chats.ts";
 import type { ManagedChatService } from "../chats/service.ts";
 import { shadowRoutes } from "../routes/shadow.ts";
@@ -132,6 +133,11 @@ const SPA_ASSETS: Record<string, string> = {
   // P3.3 additions — the class-R viewer + its ONE data-access module (R6), and idiomorph
   // vendored under src/vendor/ (see that file's own header for why it's vendored rather than a
   // bare-specifier import).
+  "document-images.js": "text/javascript; charset=utf-8",
+  "image-insertion.js": "text/javascript; charset=utf-8",
+  "image-pane.js": "text/javascript; charset=utf-8",
+  "vendor/image-viewer.js": "text/javascript; charset=utf-8",
+  "vendor/image-viewer.css": "text/css; charset=utf-8",
   "data-access.js": "text/javascript; charset=utf-8",
   "dictation.js": "text/javascript; charset=utf-8",
   "viewer.js": "text/javascript; charset=utf-8",
@@ -410,7 +416,10 @@ function lifecycleSignal(
 
 function withHeaders(res: Response, extra: Record<string, string>): Response {
   const headers = new Headers(res.headers);
-  for (const [key, value] of Object.entries(extra)) headers.set(key, value);
+  for (const [key, value] of Object.entries(extra)) {
+    if (key === "Content-Security-Policy" && headers.has(key)) continue;
+    headers.set(key, value);
+  }
   return new Response(res.body, { status: res.status, headers });
 }
 
@@ -3001,6 +3010,8 @@ function sessionCandidates(records: ReturnType<SessionRegistry["forWorkspace"]>)
 
 function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMatch | null {
   const method = req.method;
+  const imageRoute = imageRoutes(ctx, method, pathname);
+  if (imageRoute) return imageRoute;
   const managedRoute = chatRoutes({ ...ctx, service: ctx.managedChats }, method, pathname);
   if (managedRoute) return managedRoute;
   if (method === "GET" && pathname === "/api/handshake") {

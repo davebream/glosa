@@ -305,6 +305,9 @@ export function buildWatchIgnored(
   };
 }
 
+/** Images are assets even when a workspace broadens its document include glob. */
+export const IMAGE_ASSET_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
+
 /** The one tracked-file resolver used by production consumers. Plain strings retain the legacy
  * recursive matcher form for lower-level callers and tests; registered workspaces additionally
  * carry their daemon-selected state directory and may replace the recursive walk with a bounded
@@ -316,11 +319,17 @@ export function resolveTrackedFiles(
   const root = workspaceWorktree(workspace);
   const tracking = workspaceTracking(workspace);
   if (tracking.mode === "matcher") {
-    return resolveMatchedFiles(root, loadMatcherConfig(root, workspaceBusPath(workspace)), options);
+    const files = resolveMatchedFiles(root, loadMatcherConfig(root, workspaceBusPath(workspace)), options);
+    return {
+      ...files,
+      tracked: files.tracked.filter((file) => !IMAGE_ASSET_EXTENSIONS.test(file.path)),
+      oversize: files.oversize.filter((file) => !IMAGE_ASSET_EXTENSIONS.test(file.path)),
+    };
   }
 
   const tracked: MatchedFile[] = [];
   for (const path of tracking.paths) {
+    if (IMAGE_ASSET_EXTENSIONS.test(path)) continue;
     const rawPath = join(root, ...path.split("/"));
     try {
       const stat = lstatSync(rawPath);
@@ -358,6 +367,7 @@ export function matchTrackedFile(
   const root = workspaceWorktree(workspace);
   const tracking = workspaceTracking(workspace);
 
+  if (IMAGE_ASSET_EXTENSIONS.test(rawPath)) return null;
   const relRaw = relative(root, rawPath);
   if (relRaw === "" || relRaw === ".." || relRaw.startsWith(`..${sep}`) || isAbsolute(relRaw)) return null;
   const segments = relRaw.split(sep);

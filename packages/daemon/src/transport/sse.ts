@@ -11,6 +11,7 @@
 // 500 or a dropped connection, A2 §F16 "Failure Recovery") — same wire mechanics as every other
 // frame type, just a separate cursor space (A1 §8.1's "two independent cursor spaces").
 export type SseEventType =
+  | "image"
   | "snapshot"
   | "journal"
   | "artifact"

@@ -39,7 +39,7 @@ const TOKEN_KEY = "glosa_token";
  *   expectedInstallId?: string | null,
  *   onForeignDaemon?: () => void,
  * }} DataAccessDeps */
-/** @typedef {{ method?: string, headers?: Record<string, string>, body?: string | Blob, signal?: AbortSignal }} RequestOptions */
+/** @typedef {{ method?: string, headers?: Record<string, string>, body?: string | Blob | FormData, signal?: AbortSignal }} RequestOptions */
 
 /** Thrown by every data-access call that gets a non-2xx response. Carries the parsed
  * problem+json body (A1 §1) when the daemon sent one, so a caller can branch on `.status`/
@@ -716,6 +716,32 @@ export function createDataAccess(deps = {}) {
      * rather than only from the next journal frame. @param {string} slug */
     getClaims(slug) {
       return requestJson(`/w/${encodeURIComponent(slug)}/claims`);
+    },
+    /** @param {string} slug */
+    getImages(slug) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/images`).catch((error) => {
+        if (error.status === 404) return { images: [], directories: [], truncated: false };
+        throw error;
+      });
+    },
+    /** @param {string} slug @param {string} path */
+    async getImage(slug, path) {
+      const response = await request(`/w/${encodeURIComponent(slug)}/images/${encodePathSegments(path)}`);
+      const blob = await response.blob();
+      const url = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Image could not be read."));
+        reader.readAsDataURL(blob);
+      });
+      return { url, size: blob.size, mime: blob.type };
+    },
+    /** @param {string} slug @param {File} file @param {Record<string, string>} destination */
+    importImage(slug, file, destination) {
+      const body = new FormData();
+      body.append("file", file, file.name || "pasted-image");
+      for (const [key, value] of Object.entries(destination)) body.append(key, value);
+      return requestJson(`/w/${encodeURIComponent(slug)}/images`, { method: "POST", body });
     },
     /** @param {string} slug */
     getArtifacts(slug) {

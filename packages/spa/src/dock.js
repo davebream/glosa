@@ -177,7 +177,10 @@ export function createDock(host, deps) {
       function refresh() {
         const state = getTabState(id) ?? {};
         glyph.innerHTML = state.kind === "diff" ? DIFF_GLYPH : (CLASS_GLYPHS[state.artifactClass] ?? CLASS_GLYPHS.R);
-        if (state.kind === "chat" && state.provider) glyph.replaceChildren(agentIcon(state.provider));
+        if (state.kind === "image")
+          glyph.innerHTML =
+            '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="1"/><circle cx="5.5" cy="5.5" r="1"/><path d="m3 12 4-4 2 2 2-3 2 5"/></svg>';
+        else if (state.kind === "chat" && state.provider) glyph.replaceChildren(agentIcon(state.provider));
         else if (state.kind === "chat" || state.kind === "external-chat")
           glyph.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h10v8H7l-4 3z"/></svg>';
         else if (state.kind === "agent-settings")

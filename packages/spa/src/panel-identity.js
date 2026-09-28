@@ -3,6 +3,9 @@
 export function artifactPanelId(path) {
   return JSON.stringify(["artifact", path]);
 }
+export function imagePanelId(path) {
+  return JSON.stringify(["image", path]);
+}
 export function chatPanelId(id) {
   return JSON.stringify(["chat", id]);
 }
@@ -16,6 +19,8 @@ export function comparisonPanelId(path, from, to) {
   return JSON.stringify(["diff", path, from, to]);
 }
 export function panelIdentity(id, params = {}) {
+  if (params.kind === "image" && typeof params.path === "string")
+    return { id: imagePanelId(params.path), params: { ...params, kind: "image" } };
   if (params.kind === "chat" && typeof params.chatId === "string")
     return { id: chatPanelId(params.chatId), params: { ...params, kind: "chat" } };
   if (params.kind === "external-chat" && typeof params.sessionId === "string")
@@ -35,7 +40,10 @@ export function panelIdentity(id, params = {}) {
 export function decodePanelId(id) {
   try {
     const value = JSON.parse(id);
-    if (Array.isArray(value) && ["artifact", "diff", "chat", "external-chat", "agent-settings"].includes(value[0]))
+    if (
+      Array.isArray(value) &&
+      ["artifact", "image", "diff", "chat", "external-chat", "agent-settings"].includes(value[0])
+    )
       return value;
   } catch {
     /* Before migration, old ids are literal artifact paths. */
