@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { createComposerPicker } from "./composer-picker.js";
 import { mountAgentLogin } from "./agent-login.js";
 import { mountMcpSettings } from "./agent-mcp-settings.js";
 import { actionMenu, agentIcon, agentName, effortIcon, effortPresentation, modelPicker } from "./agent-ui.js";
@@ -51,6 +52,7 @@ export function createChatPane(
     onNewChat,
     onSettings,
     onDeleted = () => {},
+    getFiles = () => [],
   },
 ) {
   let state,
@@ -510,7 +512,9 @@ export function createChatPane(
           const result = await dataAccess.nativeChatMcp(slug, chatId);
           const inventory = el("div", { role: "status" });
           for (const server of result.servers) {
-            const row = el("p", { textContent: `${server.name} · ${server.status} · authentication ${server.auth}` });
+            const row = el("p", {
+              textContent: `${server.name} · ${server.source === "native" ? "Native configuration · " : ""}${server.status} · authentication ${server.auth}`,
+            });
             if (server.login && server.name !== "glosa")
               row.append(
                 el("button", {
@@ -544,6 +548,38 @@ export function createChatPane(
         }),
     }),
   );
+  async function showNativeConnections() {
+    let result;
+    try {
+      result = await dataAccess.nativeChatMcp(slug, chatId);
+    } catch (error) {
+      if (!error.problem?.type?.endsWith("/runtime-closed")) throw error;
+      result = { servers: [] };
+    }
+    status.textContent = result.servers.length
+      ? result.servers.map((server) => `${server.name}: ${server.status}`).join(" · ")
+      : "No agent is running. Connections will be listed while a chat is active.";
+  }
+  async function allowWorkspace(confirmLabel) {
+    const policy = await dataAccess.getMcpPolicy?.(slug, state.profileId);
+    const profile = catalog.profiles.find((item) => item.id === state.profileId);
+    const servers = (policy?.servers ?? [])
+      .filter((server) => server.enabled)
+      .map((server) => `${server.label}: ${server.transport === "http" ? server.url : server.command}`)
+      .join("\n");
+    const accepted = await confirmDialog({
+      title: "Allow this account to work in this workspace?",
+      body:
+        "The coding agent can read workspace files and receive your messages and attachments through its configured provider. File changes and commands follow its approval mode." +
+        (profile?.configuration
+          ? " Its native settings, permission rules, plugins, hooks and MCP servers will also run, including startup hooks before a message is sent. Configuration changes require renewed permission."
+          : " This permission lasts until revoked in this workspace.") +
+        (servers ? `\nEnabled MCP servers may receive this content:\n${servers}` : ""),
+      confirmLabel,
+    });
+    if (accepted) await dataAccess.setAgentConsent(state.profileId, slug, true);
+    return accepted;
+  }
   controls.append(picker.element, effortField);
   menu.popup.append(
     el("button", {
@@ -613,6 +649,35 @@ export function createChatPane(
       send,
     ]),
   ]);
+  const completion = createComposerPicker(draft, {
+    getFiles,
+    enabled: () => !sendIntent && !pending && !changingAccount && !changingSettings,
+    getCatalog: () => dataAccess.getChatCommands?.(slug, chatId) ?? Promise.resolve({ commands: [], loaded: false }),
+    loadCatalog: async () => {
+      try {
+        return await dataAccess.refreshChatCommands(slug, chatId);
+      } catch (error) {
+        if (!error.problem?.type?.endsWith("/consent-required")) throw error;
+        if (!(await allowWorkspace("Allow and load commands")))
+          throw new Error("Command loading was cancelled. Your draft has been kept.");
+        return dataAccess.refreshChatCommands(slug, chatId);
+      }
+    },
+    onAction: async (action) => {
+      if (attachments.length)
+        throw new Error("Remove attachments before using a workspace action. Your draft has been kept.");
+      if (action === "mcp") {
+        mcp.open = true;
+        mcp.scrollIntoView?.({ block: "nearest" });
+      } else await showNativeConnections();
+      return true;
+    },
+    onChange: () => {
+      dirty = true;
+      scheduleSave();
+    },
+  });
+
   const footer = el("div", { className: "glosa-chat-footer" }, [
     status,
     el("span", { className: "glosa-chat-key-hint", textContent: "Enter to send · Shift Enter for a new line" }),
@@ -649,6 +714,7 @@ export function createChatPane(
       lifetime.abort();
       tableFit?.disconnect();
       picker.destroy();
+      completion.destroy();
       clearTimeout(timer);
       stopStream?.();
       document.removeEventListener("selectionchange", selectionChanged);
@@ -864,8 +930,27 @@ export function createChatPane(
     older.disabled = !state.page?.hasEarlier || paging;
     recent.hidden = !state.page?.hasLater;
     for (const turn of state.turns) {
-      if (typeof turn.text === "string")
+      if (typeof turn.text === "string") {
         textRow(`user:${turn.id}`, `You · ${turn.status.replaceAll("_", " ")}`, turn.text);
+        const row = rows.get(`user:${turn.id}`);
+        if (turn.references?.length && row && !row.references) {
+          row.content.replaceChildren();
+          let offset = 0;
+          for (const ref of [...turn.references].sort((a, b) => a.start - b.start)) {
+            row.content.append(
+              document.createTextNode(turn.text.slice(offset, ref.start)),
+              el("span", {
+                className: "glosa-chat-reference",
+                textContent: turn.text.slice(ref.start, ref.end),
+                title: ref.kind === "file" ? `Workspace file: ${ref.id}` : "Selected native command",
+              }),
+            );
+            offset = ref.end;
+          }
+          row.content.append(document.createTextNode(turn.text.slice(offset)));
+          row.references = true;
+        }
+      }
       if (typeof turn.text === "string" && turn.settings)
         textRow(
           `settings:${turn.id}`,
@@ -936,6 +1021,7 @@ export function createChatPane(
                     return;
                   if (disposed) return;
                   draft.value = turn.text;
+                  completion.setReferences(turn.references);
                   attachments = [...(turn.attachments ?? [])];
                   dirty = true;
                   renderAttachments();
@@ -1196,11 +1282,13 @@ export function createChatPane(
     state = next;
     if (!dirty && !sendIntent) {
       draft.value = next.draft;
+      completion.setReferences(next.draftReferences);
       lastDraft = next.draft;
       attachments = next.draftAttachments;
       baseDraftRevision = next.draftRevision;
       renderAttachments();
     }
+    completion.setScope(`${state.provider}:${state.profileId}`);
     renderControls();
     render();
   }
@@ -1231,6 +1319,7 @@ export function createChatPane(
       if (!dirty || !state || sendIntent) return;
       const text = draft.value,
         sentAttachments = [...attachments],
+        references = completion.references,
         revision = baseDraftRevision;
       try {
         const result = await dataAccess.saveChatDraft(slug, chatId, {
@@ -1238,11 +1327,16 @@ export function createChatPane(
           revision,
           text,
           attachments: sentAttachments,
+          references,
         });
         state.draftRevision = result.draftRevision;
+        state.draftReferences = references;
         baseDraftRevision = result.draftRevision;
         lastDraft = text;
-        dirty = draft.value !== text || JSON.stringify(attachments) !== JSON.stringify(sentAttachments);
+        dirty =
+          draft.value !== text ||
+          JSON.stringify(attachments) !== JSON.stringify(sentAttachments) ||
+          JSON.stringify(completion.references) !== JSON.stringify(references);
         status.textContent = dirty ? "Draft changed while saving" : "Draft saved";
       } catch (error) {
         failure(error);
@@ -1268,6 +1362,8 @@ export function createChatPane(
     pending = true;
     render();
     try {
+      completion.resolveTyped();
+      if (JSON.stringify(completion.references) !== JSON.stringify(state.draftReferences ?? [])) dirty = true;
       await save();
       if (dirty) throw new Error("Save or reconcile the draft before sending. Your local text has been kept.");
       sendIntent ??= {
@@ -1276,35 +1372,23 @@ export function createChatPane(
         configRevision: state.configRevision,
         draftRevision: state.draftRevision,
         text: draft.value,
+        references: completion.references,
         attachments: [...attachments],
       };
       try {
         await dataAccess.sendChatTurn(slug, chatId, sendIntent);
       } catch (error) {
         if (!error.problem?.type?.endsWith("/consent-required")) throw error;
-        const policy = await dataAccess.getMcpPolicy?.(slug, state.profileId);
-        const servers = (policy?.servers ?? [])
-          .filter((server) => server.enabled)
-          .map((server) => `${server.label}: ${server.transport === "http" ? server.url : server.command}`)
-          .join("\n");
-        if (
-          !(await confirmDialog({
-            title: "Allow this account to work in this workspace?",
-            body:
-              "The coding agent can read workspace files and receive your messages and attachments through its configured provider. File changes and commands remain subject to its approval mode. This permission lasts until revoked in this workspace." +
-              (servers ? `\nEnabled MCP servers may receive this content:\n${servers}` : ""),
-            confirmLabel: "Allow and send",
-          }))
-        ) {
+        if (!(await allowWorkspace("Allow and send"))) {
           sendIntent = null;
           return;
         }
-        await dataAccess.setAgentConsent(state.profileId, slug, true);
         await dataAccess.sendChatTurn(slug, chatId, sendIntent);
       }
       sendIntent = null;
       dirty = false;
       draft.value = "";
+      completion.setReferences([]);
       lastDraft = "";
       attachments = [];
       renderAttachments();
@@ -1338,13 +1422,22 @@ export function createChatPane(
     if (sendIntent) {
       status.textContent = "The previous submission is unresolved. Retry it before editing this draft.";
       draft.value = sendIntent.text;
+      completion.setReferences(sendIntent.references);
       return;
     }
-    dirty = draft.value !== lastDraft;
+    dirty =
+      draft.value !== lastDraft ||
+      JSON.stringify(completion.references) !== JSON.stringify(state?.draftReferences ?? []);
     scheduleSave();
   });
   draft.addEventListener("keydown", (event) => {
-    if (!event.isComposing && event.key === "Enter" && !event.shiftKey) {
+    if (
+      !event.defaultPrevented &&
+      !event.isComposing &&
+      event.keyCode !== 229 &&
+      event.key === "Enter" &&
+      !event.shiftKey
+    ) {
       event.preventDefault();
       void submit();
     }
@@ -1505,6 +1598,7 @@ export function createChatPane(
             if (!dirty && !sendIntent) {
               state = frame.data;
               if (draft.value !== state.draft) draft.value = state.draft;
+              completion.setReferences(state.draftReferences);
               lastDraft = state.draft;
               attachments = state.draftAttachments;
               baseDraftRevision = state.draftRevision;

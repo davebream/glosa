@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
+import { commandSchema, referencesSchema, validateReferences } from "./references.ts";
+import { confinePath } from "../security/confine-path.ts";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { profileLocations } from "../agents/environment.ts";
+import { linkedConfiguration, profileLocations } from "../agents/environment.ts";
 import {
   type AgentEvent,
   type AgentInput,
@@ -150,9 +152,10 @@ export const sendTurnSchema = z
     draftRevision: z.number().int().nonnegative(),
     text: z
       .string()
-      .trim()
       .min(1)
-      .max(64 * 1024),
+      .max(64 * 1024)
+      .refine((text) => !!text.trim(), "Write a message before sending."),
+    references: referencesSchema.default([]),
     attachments: z.array(attachmentSchema).max(10).default([]),
     origin: z.enum(["user", "feedback"]).default("user"),
   })
@@ -174,6 +177,7 @@ export const draftSchema = z
     requestId: z.uuid(),
     revision: z.number().int().nonnegative(),
     text: z.string().max(64 * 1024),
+    references: referencesSchema.default([]),
     attachments: z.array(attachmentSchema).max(10).default([]),
   })
   .strict();
@@ -246,6 +250,107 @@ function validateAttachment(mime: string, bytes: Uint8Array): void {
 }
 
 export class ManagedChatService {
+  private readonly staleCatalogs = new Set<string>();
+  private readonly commandRefreshes = new Map<string, Promise<unknown>>();
+  private commandScope(state: ChatState) {
+    return `${state.workspaceId}:${state.workspaceEpoch}:${state.provider}:${state.profileId}`;
+  }
+  private commandRevision(state: ChatState): string {
+    const profile = this.store.profile(state.profileId!);
+    return digest({
+      epoch: profile.epoch,
+      runtime: this.options.manifest(profile.provider)?.id,
+      configuration: this.mcpDigest(profile.id, { id: state.workspaceId, epoch: state.workspaceEpoch }),
+    });
+  }
+  commandCatalog(workspace: ChatWorkspace, chatId: string) {
+    const state = this.chat(workspace, chatId).state;
+    const saved = this.store.savedCommands(this.commandScope(state));
+    return {
+      commands: saved?.commands ?? [],
+      loaded: !!saved,
+      stale:
+        !!saved && (this.staleCatalogs.has(this.commandScope(state)) || saved.revision !== this.commandRevision(state)),
+    };
+  }
+  refreshCommands(workspace: ChatWorkspace, chatId: string): Promise<unknown> {
+    const state = this.chat(workspace, chatId).state;
+    const scope = this.commandScope(state);
+    const pending = this.commandRefreshes.get(scope);
+    if (pending) return pending;
+    this.eligible(state);
+    const refresh = this.loadCommands(workspace, chatId).finally(() => this.commandRefreshes.delete(scope));
+    this.commandRefreshes.set(scope, refresh);
+    return refresh;
+  }
+  private async loadCommands(workspace: ChatWorkspace, chatId: string) {
+    const state = this.chat(workspace, chatId).state;
+    const revision = this.commandRevision(state);
+    const active = this.runs.get(chatId);
+    let connection = active?.connection;
+    let operation: LoginOperation | undefined;
+    try {
+      if (!connection) {
+        if (active || this.management)
+          throw new ManagedAgentError("management-busy", "Wait for the current agent operation to finish.");
+        const spec = this.launchSpec(state.profileId!);
+        operation = {
+          id: randomUUID(),
+          secret: randomUUID(),
+          profileId: spec.profile.id,
+          epoch: spec.profile.epoch,
+          state: "running",
+          output: "",
+          offset: 0,
+          expiresAt: Date.now() + 30_000,
+          workspace,
+          mcpDigest: this.mcpDigest(spec.profile.id, workspace),
+        };
+        this.management = operation;
+        const owned = operation;
+        const connecting = this.options.registry.get(state.provider).connect(
+          {
+            ...spec,
+            cwd: workspace.path,
+            sessionId: randomUUID(),
+            runId: randomUUID(),
+            generation: 1,
+            settings: state.settings,
+          },
+          this.operationLauncher(owned),
+          () => {},
+        );
+        void connecting.then(
+          (value) => {
+            if (this.management !== owned) void value.close().catch(() => {});
+          },
+          () => {},
+        );
+        connection = await bounded(connecting, 25_000);
+      }
+      if (!connection.commands)
+        throw new ManagedAgentError("provider-unavailable", "This runtime cannot list commands.");
+      const commands = z
+        .array(commandSchema)
+        .max(2000)
+        .parse(await bounded(connection.commands(true), 5_000));
+      this.eligible(state, undefined, operation);
+      if (revision !== this.commandRevision(state))
+        throw new ManagedAgentError("account-changed", "Configuration changed while loading commands.");
+      this.store.saveCommands(this.commandScope(state), revision, commands);
+      this.staleCatalogs.delete(this.commandScope(state));
+      return this.commandCatalog(workspace, chatId);
+    } finally {
+      if (operation) {
+        try {
+          await bounded(Promise.resolve(connection?.close()), 5_000);
+        } finally {
+          await this.stopLogin(operation);
+        }
+      }
+    }
+  }
+
   readonly store: AgentStore;
   private readonly runs = new Map<string, LiveRun>();
   private readonly ready = new Set<string>();
@@ -378,6 +483,7 @@ export class ManagedChatService {
       providers: this.options.registry.list().map((provider) => ({
         id: provider.id,
         name: provider.name,
+        configurationPath: provider.defaultConfiguration?.(),
         ...(this.options.runtimeStatus?.(provider.id) ?? {
           installed: !!this.options.manifest(provider.id),
           qualified: this.options.manifest(provider.id)?.qualified === true,
@@ -539,6 +645,10 @@ export class ManagedChatService {
           type: "draft",
           textHash: target.blob(Buffer.from(source.text(state.draftHash))),
           attachments: state.draftAttachments,
+          references:
+            target.state.provider === state.provider && target.state.profileId === state.profileId
+              ? state.draftReferences
+              : [],
           revision: input.targetRevision + 1,
         },
         { id: input.requestId, input: { op: "move-draft", ...input }, result: {} },
@@ -587,7 +697,15 @@ export class ManagedChatService {
 
   createProfile(raw: unknown): AgentProfile {
     const input = z
-      .object({ requestId: z.uuid(), provider: z.string().max(64), label: z.string().trim().min(1).max(80) })
+      .object({
+        requestId: z.uuid(),
+        provider: z.string().max(64),
+        label: z.string().trim().min(1).max(80),
+        configuration: z
+          .object({ mode: z.literal("linked"), path: z.string().min(1).max(4096) })
+          .strict()
+          .optional(),
+      })
       .strict()
       .parse(raw);
     this.options.registry.get(input.provider);
@@ -596,6 +714,12 @@ export class ManagedChatService {
     if (this.store.listProfiles().length >= 32)
       throw new ManagedAgentError("profile-capacity", "At most 32 agent accounts can be configured.");
     const profile = newProfile(input.provider, input.label);
+    if (input.configuration) {
+      const path = linkedConfiguration(this.store.root, input.configuration.path);
+      if (this.store.listProfiles().some((p) => p.provider === input.provider && p.configuration?.path === path))
+        throw new ManagedAgentError("account-busy", "This native configuration is already linked.");
+      profile.configuration = { mode: "linked", path };
+    }
     this.store.saveProfiles([profile], {
       id: input.requestId,
       input: { op: "create-profile", ...input },
@@ -693,7 +817,7 @@ export class ManagedChatService {
       adapter = this.options.registry.get(profile.provider);
     const base = join(this.store.root, "profiles", profileId),
       native = join(base, "native");
-    if (existsSync(native)) {
+    if (!profile.configuration && existsSync(native)) {
       const manifest = this.options.manifest(profile.provider);
       if (!manifest?.qualified)
         throw new ManagedAgentError(
@@ -702,7 +826,7 @@ export class ManagedChatService {
         );
       if (this.management)
         throw new ManagedAgentError("management-busy", "Finish the current account operation first.");
-      const location = profileLocations(this.store.root, profileId, adapter);
+      const location = profileLocations(this.store.root, profileId, adapter, profile.configuration);
       const operation: LoginOperation = {
         id: randomUUID(),
         secret: randomUUID(),
@@ -757,7 +881,7 @@ export class ManagedChatService {
         manifest?.reason ?? "A tested agent runtime must be installed first.",
         503,
       );
-    const location = profileLocations(this.store.root, profileId, adapter);
+    const location = profileLocations(this.store.root, profileId, adapter, profile.configuration);
     return {
       profile,
       configRoot: location.configRoot,
@@ -952,6 +1076,11 @@ export class ManagedChatService {
     if (this.management) throw new ManagedAgentError("management-busy", "Finish the current account operation first.");
     const spec = this.launchSpec(profileId);
     const adapter = this.options.registry.get(spec.profile.provider);
+    if (spec.profile.configuration)
+      throw new ManagedAgentError(
+        "account-unavailable",
+        "Manage this linked account’s sign-in in its native agent, then check the account here.",
+      );
     let nativeArgs = adapter.loginArgs();
     if (mcpWorkspace) {
       this.validateWorkspace(mcpWorkspace);
@@ -1116,6 +1245,16 @@ export class ManagedChatService {
   private mcpDigest(profileId: string, workspace: Pick<ChatWorkspace, "id" | "epoch">): string {
     const policy = this.store.mcpPolicy(profileId, workspace.id, workspace.epoch);
     const servers = policy.servers.filter((server) => server.enabled);
+    const profile = this.store.profile(profileId);
+    if (profile.configuration) {
+      const registered = this.options.workspace(workspace.id, workspace.epoch);
+      const revision = this.options.registry
+        .get(profile.provider)
+        .configurationRevision?.(profile.configuration.path, registered.path);
+      if (!revision)
+        throw new ManagedAgentError("provider-unavailable", "This provider cannot verify linked configuration.");
+      return digest({ version: 2, servers, configuration: profile.configuration, revision });
+    }
     return servers.length ? digest(servers) : "";
   }
   create(workspace: ChatWorkspace, raw: unknown): ChatState {
@@ -1215,11 +1354,13 @@ export class ManagedChatService {
     if (log.journal.receipt(input.requestId, { op: "draft", ...input }).found) return log.state;
     if (log.state.draftRevision !== input.revision)
       throw new ManagedAgentError("stale-draft", "The draft changed in another tab. Your local draft has been kept.");
+    validateReferences(input.text, input.references);
     this.attachments(log, input.attachments);
     log.append(
       {
         type: "draft",
         textHash: log.blob(Buffer.from(input.text)),
+        references: input.references,
         attachments: input.attachments,
         revision: input.revision + 1,
       },
@@ -1247,7 +1388,7 @@ export class ManagedChatService {
     if (total > 20 * 1024 * 1024)
       throw new ManagedAgentError("attachments-too-large", "Attachments exceed 20 MiB in total.", 413);
   }
-  private eligible(state: ChatState, turn?: ChatTurn): AgentProfile {
+  private eligible(state: ChatState, turn?: ChatTurn, management?: LoginOperation): AgentProfile {
     this.available();
     this.validateWorkspace({ id: state.workspaceId, epoch: state.workspaceEpoch, path: state.workspacePath });
     if (this.options.workspace(state.workspaceId, state.workspaceEpoch).managedExecution === false)
@@ -1283,7 +1424,7 @@ export class ManagedChatService {
       );
     if (turn && (profile.epoch !== turn.profileEpoch || profile.identityRevision !== turn.identityRevision))
       throw new ManagedAgentError("account-changed", "Account access changed. Review the held turn before resuming.");
-    if (this.management?.profileId === profile.id)
+    if (this.management?.profileId === profile.id && this.management !== management)
       throw new ManagedAgentError("account-busy", "Finish signing in before sending a message.");
     return profile;
   }
@@ -1348,6 +1489,7 @@ export class ManagedChatService {
       throw new ManagedAgentError("stale-chat", "Chat settings or the draft changed. Refresh before sending.");
     if (state.turns.some((t) => ["accepted", "queued", "held"].includes(t.status)))
       throw new ManagedAgentError("queue-full", "There is already a waiting turn in this chat.");
+    validateReferences(input.text, input.references);
     this.attachments(log, input.attachments);
     if (
       state.handoffHash &&
@@ -1363,6 +1505,7 @@ export class ManagedChatService {
     const turn: ChatTurn = {
       id: input.turnId,
       textHash: log.blob(Buffer.from(input.text)),
+      references: input.references,
       attachments: input.attachments,
       settings: state.settings,
       profileId: profile.id,
@@ -1494,7 +1637,10 @@ export class ManagedChatService {
                     },
                   ]);
               }
-              await this.failedRun(log, run, error instanceof ManagedAgentError ? error.message : undefined);
+              if (error instanceof ManagedAgentError && error.code === "stale-reference" && !run.dispatched) {
+                log.append({ type: "turn_status", turnId: turn.id, status: "held", error: error.message });
+                await this.finishRun(log, run);
+              } else await this.failedRun(log, run, error instanceof ManagedAgentError ? error.message : undefined);
               if (authFailure) await this.stopProfile(run.profileId);
             })
             .catch(() => {
@@ -1636,9 +1782,34 @@ export class ManagedChatService {
       }
       this.admit(log, turn, run);
     }
+    let text = log.text(turn.textHash);
+    const references = turn.references ?? [];
+    validateReferences(text, references);
+    const selected = references.find((ref) => ref.kind === "command");
+    if (
+      selected &&
+      !(await connection.commands?.(true))?.some(
+        (entry) => entry.id === selected.id && `/${entry.name}` === selected.text,
+      )
+    )
+      throw new ManagedAgentError(
+        "stale-reference",
+        "The selected command is no longer available. Restore this message and select it again.",
+      );
+    for (const ref of [...references].sort((a, b) => b.start - a.start)) {
+      if (ref.kind !== "file") continue;
+      const confined = confinePath(state.workspacePath, ref.id);
+      if (!confined.ok || !existsSync(confined.realPath))
+        throw new ManagedAgentError(
+          "stale-reference",
+          "A referenced file is no longer available. Restore this message and select it again.",
+        );
+      text = text.slice(0, ref.start) + JSON.stringify(ref.id) + text.slice(ref.end);
+    }
     const input: AgentInput = {
       turnId: turn.id,
-      text: log.text(turn.textHash),
+      commandId: selected?.id,
+      text,
       settings: turn.settings,
       attachments: [
         ...(turn.contextHash && turn.contextHash === log.state.handoffHash
@@ -1666,6 +1837,10 @@ export class ManagedChatService {
   }
   private event(log: ChatLog, run: LiveRun, event: AgentEvent): void {
     if (run.fenced || run.finishing || this.runs.get(run.chatId) !== run) return;
+    if (event.type === "commands_changed") {
+      this.staleCatalogs.add(this.commandScope(log.state));
+      return;
+    }
     const state = log.state,
       turn = state.turns.find((item) => item.id === run.turnId)!;
     if (event.type === "session") {
@@ -1941,7 +2116,16 @@ export class ManagedChatService {
     ]);
     const result = await bounded(run.connection.mcpStatus?.() ?? Promise.resolve([]), 15_000);
     this.admit(log, turn, run);
-    return { servers: result.filter((server) => allowed.has(server.name)) };
+    const linked = !!this.store.profile(run.profileId).configuration;
+    return {
+      servers: result
+        .filter((server) => linked || allowed.has(server.name))
+        .map((server) => ({
+          ...server,
+          login: linked ? false : server.login,
+          source: allowed.has(server.name) ? "glosa" : "native",
+        })),
+    };
   }
   async stop(workspace: ChatWorkspace, chatId: string, turnId?: string): Promise<void> {
     const log = this.chat(workspace, chatId),

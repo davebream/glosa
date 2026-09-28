@@ -176,6 +176,7 @@ const SPA_ASSETS: Record<string, string> = {
   "agent-login.js": "text/javascript; charset=utf-8",
   "chat-markdown.js": "text/javascript; charset=utf-8",
   "vendor/markdown-it.js": "text/javascript; charset=utf-8",
+  "composer-picker.js": "text/javascript; charset=utf-8",
   "chat-pane.js": "text/javascript; charset=utf-8",
   "vendor/xterm.mjs": "text/javascript; charset=utf-8",
   "vendor/xterm.css": "text/css; charset=utf-8",

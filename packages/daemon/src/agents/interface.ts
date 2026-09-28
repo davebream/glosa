@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Managed execution is optional and separate from the external-session provider contract.
 
+import type { AgentCommand } from "../chats/references.ts";
 export type AuthState = "unknown" | "authenticated" | "needs_login" | "expired" | "probe_failed" | "identity_mismatch";
 export interface AccountObservation {
   state: AuthState;
@@ -22,6 +23,7 @@ export interface AgentProfile {
   auth: AccountObservation;
   removed: boolean;
   cleanup?: "signout" | "remove";
+  configuration?: { mode: "linked"; path: string };
   mcpServers?: AgentMcpServer[];
 }
 export type AgentMcpServer = { id: string; label: string; enabled: boolean } & (
@@ -83,6 +85,7 @@ export interface NativeDecision {
   questions?: NativeQuestion[];
 }
 export type AgentEvent =
+  | { type: "commands_changed" }
   | { type: "effective_settings"; model?: string; effort?: string }
   | { type: "session"; nativeId: string }
   | { type: "text"; id: string; text: string; reasoning?: boolean }
@@ -95,12 +98,14 @@ export type AgentEvent =
 
 export interface AgentInput {
   turnId: string;
+  commandId?: string;
   text: string;
   settings: TurnSettings;
   attachments: { name: string; mime: string; bytes: Uint8Array }[];
 }
 export interface ManagedConnection {
   capabilities: AgentCapabilities;
+  commands?(forceReload?: boolean): Promise<AgentCommand[]>;
   /** Configure the native thread and verify built-in tools before any user input is dispatched. */
   prepareTurn?(settings: TurnSettings): Promise<void>;
   startTurn(input: AgentInput): Promise<void>;
@@ -143,6 +148,8 @@ export interface ManagedAgentAdapter {
   loginArgs(): string[];
   mcpLoginArgs?(servers: AgentMcpServer[], serverId?: string): string[];
   logoutArgs(): string[];
+  defaultConfiguration?(): string;
+  configurationRevision?(configRoot: string, cwd: string): string;
   profileEnvironment(configRoot: string): Record<string, string>;
   preflight?(spec: ProfileLaunchSpec, launcher: ProcessLauncher): Promise<void>;
   probe(spec: ProfileLaunchSpec, launcher: ProcessLauncher): Promise<AccountObservation>;
@@ -172,6 +179,8 @@ export type ManagedAgentCode =
   | "event-too-large"
   | "idempotency-conflict"
   | "input-too-large"
+  | "invalid-reference"
+  | "stale-reference"
   | "invalid-answer"
   | "invalid-attachment"
   | "invalid-blob"

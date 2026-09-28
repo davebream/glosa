@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { commandSchema, referencesSchema, type ComposerReference } from "./references.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -89,6 +90,10 @@ const profileSchema = z
     auth,
     removed: z.boolean(),
     cleanup: z.enum(["signout", "remove"]).optional(),
+    configuration: z
+      .object({ mode: z.literal("linked"), path: z.string().min(1).max(4096) })
+      .strict()
+      .optional(),
     mcpServers: mcpServersSchema.optional(),
   })
   .strict();
@@ -114,6 +119,14 @@ const capabilitiesSchema = z
   })
   .strict();
 const controlSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("commands"),
+      scope: z.string().max(2048),
+      revision: z.string().max(256),
+      commands: z.array(commandSchema).max(2000),
+    })
+    .strict(),
   z
     .object({
       type: z.literal("mcp_override"),
@@ -164,7 +177,7 @@ const controlSchema = z.discriminatedUnion("type", [
       profileId: id,
       workspaceId: hash,
       workspaceEpoch: z.string().min(1),
-      version: z.literal(1),
+      version: z.union([z.literal(1), z.literal(2)]),
       granted: z.boolean(),
       mcpDigest: z.string().max(64).optional(),
     })
@@ -206,6 +219,7 @@ const turn = z
   .object({
     id,
     textHash: hash,
+    references: referencesSchema.optional(),
     attachments: z.array(attachment).max(10),
     settings,
     profileId: id.optional(),
@@ -313,6 +327,7 @@ export const chatEventSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("draft"),
       textHash: hash,
+      references: referencesSchema.optional(),
       attachments: z.array(attachment).max(10),
       revision: z.number().int().positive(),
     })
@@ -364,6 +379,7 @@ export interface ChatState extends z.infer<typeof created> {
   draftRevision: number;
   draftHash?: string;
   draftAttachments: Attachment[];
+  draftReferences: ComposerReference[];
   archived: boolean;
   pinned: boolean;
   deleted: boolean;
@@ -385,6 +401,7 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
       configRevision: 1,
       draftRevision: 0,
       draftAttachments: [],
+      draftReferences: [],
       archived: false,
       pinned: false,
       deleted: false,
@@ -410,6 +427,11 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
       break;
     }
     case "changed": {
+      if (
+        (event.provider && event.provider !== state.provider) ||
+        (event.profileId && event.profileId !== state.profileId)
+      )
+        state.draftReferences = [];
       if (state.turns.length && event.provider && event.provider !== state.provider)
         throw new Error("started chat provider cannot change");
       if (event.profileId && event.profileId !== state.profileId) {
@@ -429,6 +451,7 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
       if (event.revision !== state.draftRevision + 1) throw new Error("invalid draft sequence");
       state.draftHash = event.textHash;
       state.draftAttachments = event.attachments;
+      state.draftReferences = event.references ?? [];
       state.draftRevision = event.revision;
       break;
     case "turn":
@@ -440,6 +463,7 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
         state.draftRevision++;
         state.draftHash = undefined;
         state.draftAttachments = [];
+        state.draftReferences = [];
       }
       state.turns.push({
         ...event.turn,
@@ -571,6 +595,7 @@ export class AgentStore {
     }
   }
   readonly control: IntentJournal<z.infer<typeof controlSchema>>;
+  private readonly catalogs = new Map<string, { revision: string; commands: z.infer<typeof commandSchema>[] }>();
   private readonly profiles = new Map<string, AgentProfile>();
   private readonly capabilities = new Map<
     string,
@@ -608,6 +633,8 @@ export class AgentStore {
       this.consents.set(`${prefix}${event.mcpDigest ?? ""}`, event.granted);
     } else if (event.type === "mcp_override")
       this.mcpOverrides.set(`${event.profileId}:${event.workspaceId}:${event.workspaceEpoch}`, event);
+    else if (event.type === "commands")
+      this.catalogs.set(event.scope, { revision: event.revision, commands: event.commands });
     else if (event.type === "capabilities") this.capabilities.set(event.profileId, event);
     else if (event.type === "external")
       this.externals.set(`${event.workspaceId}:${event.workspaceEpoch}:${event.sessionId}`, event);
@@ -615,6 +642,14 @@ export class AgentStore {
     else if (event.type === "purge_planned")
       this.purges.set(`${event.workspaceId}:${event.workspaceEpoch}`, event.chatIds);
     else this.deletedChats.set(event.chatId, event);
+  }
+  savedCommands(scope: string) {
+    return structuredClone(this.catalogs.get(scope));
+  }
+  saveCommands(scope: string, revision: string, commands: z.infer<typeof commandSchema>[]): void {
+    const event = controlSchema.parse({ type: "commands", scope, revision, commands });
+    this.control.append(event);
+    this.applyControl(event);
   }
   savedCapabilities(profileId: string) {
     return structuredClone(this.capabilities.get(profileId));
@@ -657,7 +692,7 @@ export class AgentStore {
       profileId,
       workspaceId,
       workspaceEpoch,
-      version: 1,
+      version: this.profile(profileId).configuration ? 2 : 1,
       granted,
       mcpDigest,
     });
