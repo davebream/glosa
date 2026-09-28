@@ -72,8 +72,19 @@ those are cross-referenced, not duplicated.
   changes never touch the wire contract). Daemon and SPA ship from the same monorepo build, so
   version skew only happens when a browser tab stays open across a daemon restart onto a newer
   build (or, rarely, an older one after a rollback).
+- **A page runs one build (contract 1.23, #432).** `GET /` stamps the shell with the daemon's build
+  hash (`<meta name="glosa-build" content="<hash>">`) and every asset reference with
+  `/app/@<hash>/`; modules resolve their imports relative to that. `GET /app/@<hash>/<file>` for
+  another build's hash is `410 build-changed`, never another build's bytes; unscoped
+  `GET /app/<file>` keeps answering for pages loaded before scoping. An installed daemon serves
+  these bytes from memory, read at boot. A stream's `bye` frame carries `{"reason": "install-changed"}`
+  when the daemon retires because its install changed, otherwise `{"reason": "shutdown"}` (an older
+  daemon sends no data). On such a `bye`, a reconnect to another build, a 410 or a 409 the page shows
+  "glosa was updated. Reload to use the new version." and reloads only on a click
+  (`docs/design/2026-09-29-install-lifetime-and-restart.md`, R-L6).
 - The SPA sends `X-Contract-Version: <major>.<minor>` (the version it was built against) on
-  every request after handshake. The daemon compares:
+  every request after handshake (implemented with contract 1.23; before it the page sent none, and
+  the daemon treated it as a missing header). The daemon compares:
   - **Major mismatch** → `409 contract-mismatch`, all state-changing and read routes refuse.
     The SPA's handshake screen shows "contract mismatch — reload page" (R5's third failure
     screen) and reloads `/` to fetch fresh assets.
@@ -118,16 +129,18 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.22", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.23", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
-  "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
+  "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
 ```
 The first three fields are the SPA's; the rest are the daemon-lifecycle identity `ensureDaemon`
 matches against `daemon.lock`, which publishes the same values to any local reader (A5 §F13).
 Every one is deliberately non-secret — A3 §3.2's guarantee assumes they are public rather than
 resting on their being private. `install_id` is a hash and `serves_socket` a boolean for the same
-reason: no filesystem path may appear on a tokenless endpoint.
+reason: no filesystem path may appear on a tokenless endpoint. `install_changed` (1.23, #432) is
+true once the daemon's install changed under it; it retires itself when idle, and a client of the
+same install restarts it sooner (A5 §F13).
 
 `serves_socket` reports whether this daemon serves `<GLOSA_HOME>/run/api.sock`. A client that
 needs it treats an absent field as `false` and fails closed naming the recovery, rather than

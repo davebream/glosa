@@ -112,7 +112,9 @@ SOFTWARE.
 ## Desktop app runtime
 
 The desktop app (`packages/shell`, built by `scripts/package-app.ts`) redistributes two runtimes as
-binaries. Their license texts ship inside the app, in `glosa.app/Contents/Resources/licenses/`.
+binaries. Their license texts ship inside the app, in `glosa.app/Contents/Resources/licenses/` on
+macOS and `/opt/glosa/resources/licenses/` in the Linux pacman package (#432), which carries Bun's
+`bun-linux-x64-baseline` build.
 
 - **Electron 44** (MIT, copyright Electron contributors and GitHub Inc.), which includes Chromium and
   the components listed in Chromium's own license file. Shipped as `electron-LICENSE.txt` and
