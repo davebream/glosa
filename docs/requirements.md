@@ -70,7 +70,8 @@ plugin/SDK surface; telemetry; Windows, Linux ARM/musl, and released Linux app/n
              └──────────────────────────────────────────────────────────────────────────────┘
 ```
 Fixed stack: **Bun + TypeScript**; one process serves SPA + API; **no heavy frontend framework**
-(server-rendered HTML + small vanilla ES modules); **markdown-it** (+ `data-line` stamping),
+(server-rendered HTML + small vanilla ES modules, with the owner-approved React exception only
+inside image tabs, decisions.md 2026-09-28); **markdown-it** (+ `data-line` stamping),
 **idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), Bun's native
 recursive **`fs.watch`** (artifact watch; **chokidar v5** only for transcript tailing), system **git** (shadow repo), a vendored **transcript-event normalizer** (do NOT
 parse raw transcript JSONL directly — A2). Monorepo: `packages/{daemon, spa, providers/claude-code,
@@ -354,7 +355,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.21: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.22: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its

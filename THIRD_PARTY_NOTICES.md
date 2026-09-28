@@ -13,6 +13,9 @@ validated by the repository's production dependency license check.
 - markdown-it, copyright 2014 Vitaly Puzrin and Alex Kocharin
 - markdown-it dependencies bundled with the editor module
 - dockview-core 8.2.0, copyright https://github.com/mathuo
+- React and React DOM 19.3.0, Scheduler 0.28.0, copyright Meta Platforms, Inc. and affiliates
+- react-zoom-pan-pinch 4.2.0, copyright 2019 prc5
+- TypeScript runtime helpers bundled with react-zoom-pan-pinch, copyright Microsoft Corporation
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -151,3 +154,26 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+## Rebuilding the image viewer vendor bundle
+
+This is a maintainer vendoring step, not an installation or runtime build. Use the repository's
+pinned Bun. In a disposable directory, install exact `react@19.3.0`, `react-dom@19.3.0`,
+`scheduler@0.28.0` and `react-zoom-pan-pinch@4.2.0` with `bun add --exact`.
+From the latter package's `dist/index.esm.js`, extract the JSON string assigned to `css_248z`
+into `packages/spa/src/vendor/image-viewer.css` and remove the call `styleInject(css_248z);`.
+The app stylesheet imports that CSS locally. Use this entry module in the disposable directory:
+
+```js
+export * as React from "react";
+export { createRoot } from "react-dom/client";
+export { TransformWrapper, TransformComponent } from "./node_modules/react-zoom-pan-pinch/dist/index.esm.js";
+```
+
+Build it with `bun build entry.js --target=browser --minify --define
+'process.env.NODE_ENV="production"' --outfile image-viewer.js`. Prepend the MIT SPDX notice
+and version/license-reference comment already in the checked-in bundle, then copy to
+`packages/spa/src/vendor/image-viewer.js`. Verify that the output has no bare imports, external
+requests or injected stylesheet, and run the image-tab browser acceptance test and import-boundary
+suite. The bundle is loaded only by the image pane's dynamic import.
