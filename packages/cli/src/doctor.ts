@@ -22,7 +22,7 @@ import {
 } from "../../daemon/src/index.ts";
 import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
 import { classifyInstall, currentPackageRoot, targetsInstall } from "./install-kind.ts";
-import { type RecordedExecutable, readRecordedExecutable } from "./install-link.ts";
+import { type RecordedExecutable, readPackageType, readRecordedExecutable } from "./install-link.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -61,6 +61,9 @@ export interface DoctorDeps extends PlatformDeps {
   packageRoot?: () => string;
   /** What `<GLOSA_HOME>/bin/glosa` holds. Defaults to `readRecordedExecutable`. */
   readRecordedExecutable?: (home: string) => RecordedExecutable;
+  /** The Linux package's package-type marker beside a package root (#432). Defaults to
+   *  `readPackageType`. */
+  readPackageType?: (packageRoot: string) => string | null;
   /** `realpath`, or null when the path does not resolve. Also the existence probe for the other
    * glosa executables the `install` row lists. */
   realpath?: (path: string) => string | null;
@@ -103,6 +106,7 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     env: Bun.env,
     packageRoot: currentPackageRoot,
     readRecordedExecutable,
+    readPackageType,
     realpath: realRealpath,
   };
 }
@@ -577,12 +581,22 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   return checks;
 }
 
+/** The well-known places a terminal-visible `glosa` lives, per platform, for the `install` row's
+ *  "also visible" list. macOS keeps the three it always had (#371); Linux names the pacman
+ *  package's `/usr/bin/glosa` instead of Homebrew's prefix (#432). `which glosa` is added on top. */
+export function installCandidates(platform: NodeJS.Platform, home: string): string[] {
+  const bun = join(home, ".bun", "bin", "glosa");
+  if (platform === "linux") return [bun, "/usr/bin/glosa", "/usr/local/bin/glosa"];
+  return [bun, "/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+}
+
 /** The `install` row (#371). Reads nothing the deps do not hand it. */
 export function installCheck(deps: DoctorDeps): CheckResult {
   const realpath = deps.realpath ?? realRealpath;
   const rawRoot = (deps.packageRoot ?? currentPackageRoot)();
   const root = realpath(rawRoot) ?? rawRoot;
-  const kind = classifyInstall(root, realpath(join(root, ".git")) !== null).kind;
+  const packageType = (deps.readPackageType ?? readPackageType)(root);
+  const kind = classifyInstall(root, realpath(join(root, ".git")) !== null, packageType).kind;
   const recorded = (deps.readRecordedExecutable ?? readRecordedExecutable)(deps.glosaHome());
   const mine = (resolved: string) => targetsInstall(resolved, root);
 
@@ -611,7 +625,7 @@ export function installCheck(deps: DoctorDeps): CheckResult {
   }
 
   const home = deps.homeDir?.() ?? homedir();
-  const candidates = [join(home, ".bun", "bin", "glosa"), "/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+  const candidates = installCandidates(deps.platform(), home);
   const onPath = deps.which("glosa");
   if (onPath !== null && !candidates.includes(onPath)) candidates.push(onPath);
   const visible: string[] = [];

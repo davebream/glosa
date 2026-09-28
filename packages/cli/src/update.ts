@@ -22,6 +22,7 @@ import {
 } from "./envelope.ts";
 import { CLI_VERSION } from "./version.ts";
 import { classifyInstall, type InstallClassification, type InstallKind, PKG } from "./install-kind.ts";
+import { readPackageType } from "./install-link.ts";
 
 // Install classification lives in install-kind.ts so the entrypoint can classify its own install
 // without loading this module; re-exported here for callers and tests that import it from update.ts.
@@ -375,6 +376,9 @@ export interface UpdateDeps extends PlatformDeps {
    *  dep: it would provably return its own argument. */
   packageRoot: () => string;
   pathExists: (p: string) => boolean;
+  /** The package-type marker beside the package root (#432), or null. Optional so a harness that
+   *  does not care never reads the disk; `realUpdateDeps` supplies `readPackageType`. */
+  readPackageType?: (packageRoot: string) => string | null;
   /** EACCES preflight. */
   isWritable: (p: string) => boolean;
   env: (name: string) => string | undefined;
@@ -749,6 +753,7 @@ export function realUpdateDeps(): UpdateDeps {
   return {
     platform: () => process.platform,
     packageRoot: () => join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."),
+    readPackageType,
     pathExists: (p) => {
       try {
         accessSync(p, constants.F_OK);
@@ -963,7 +968,11 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
 
   // ---- 3. install classification (exit 2), still before the network -------------------------
   const root = deps.packageRoot();
-  const classification = classifyInstall(root, deps.pathExists(join(root, ".git")));
+  const classification = classifyInstall(
+    root,
+    deps.pathExists(join(root, ".git")),
+    deps.readPackageType?.(root) ?? null,
+  );
   data.install_kind = classification.kind;
   data.install_dir = classification.installDir;
   data.manual_command = classification.manualCommand;
