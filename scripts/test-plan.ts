@@ -30,6 +30,12 @@ export const LINUX_CORE_FILES = [
   "packages/daemon/test/lifecycle.test.ts",
   "packages/daemon/test/agents/managed-state.test.ts",
   "packages/daemon/test/agents/supervisor.test.ts",
+  // #432: the Linux package's install kind and recording, its packaging rules, and the install
+  // lifetime guard, whose filesystem and clock behaviour is exactly what differs on Linux.
+  "packages/cli/test/install-link.test.ts",
+  "packages/shell/test/package-app.test.ts",
+  "packages/daemon/test/install-guard.test.ts",
+  "packages/daemon/test/install-lifetime.test.ts",
 ];
 export const CI_PROFILES = ["ci-1", "ci-2", "ci-3"] as const;
 export type Profile =
@@ -192,7 +198,7 @@ export function classifyApp(event: string, paths: string[] | null, forced = fals
     path === "bun.lock" ||
     path.startsWith("glosa-plugin/") ||
     path.startsWith(".claude-plugin/") ||
-    /^packages\/cli\/src\/(main|install-kind|install-link|doctor)\.ts$/.test(path) ||
+    /^packages\/cli\/src\/(main|install-kind|install-link|doctor|update|platform)\.ts$/.test(path) ||
     path.startsWith("packages/daemon/src/lifecycle/") ||
     /^(LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md|README\.md|ROADMAP\.md|CHANGELOG\.md)$/.test(path);
   return paths.some(shaping);
@@ -207,6 +213,7 @@ export function expectedJobs(profile: ChangeProfile, whole: boolean): Record<str
     stability: profile === "full" ? "success" : "skipped",
     shell: profile === "full" ? "success" : "skipped",
     linux: profile === "full" ? "success" : "skipped",
+    pacman: profile === "full" ? "success" : "skipped",
     full: whole ? "success" : "skipped",
   };
 }
