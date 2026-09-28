@@ -280,6 +280,24 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   honours `GLOSA_SHELL_CONFIRM=yes`, which the real-Electron test uses to answer for it. A link reuses
   a window only when origin, folder and kind all match, so a companion link never turns a desk window
   into a companion. An unpackaged run never registers itself as the scheme's handler.
+- **Check for Updates… asks GitHub once, on click, from the main process (#424).** The item sits in
+  the app menu under About. Nothing checks at launch, on a timer or on focus (invariant 5, A6 §F33).
+  A click makes one GET to `https://api.github.com/repos/davebream/glosa/releases` with Node's
+  global `fetch`, never Electron's `net`: `net` requests pass the renderer's egress gate above and
+  are cancelled, and that gate is unchanged. A second click while one check runs starts nothing. The
+  headers are constant (User-Agent `glosa-update`, as `glosa update` sends, with no app version and
+  nothing about the machine). The request bypasses the HTTP cache and follows no redirect: a 3xx
+  answer fails the check, and its target is never asked. One 10-second timeout covers the headers
+  and the body together, and at most 2 MiB of the answer is read (the real list of 30 releases is
+  about 117 KB): a larger body is cancelled at the cap, and a larger declared `Content-Length` is
+  refused before reading, either one a failed check. Nothing is written to disk. The answer only
+  picks which dialog to show: Open Release Page opens `glosa.releases` from the app's
+  `package.json`, or its `/tag/<tag>` for a release found, with the tag validated as a version,
+  never a URL from the response. Copy Upgrade Command puts `brew upgrade --cask glosa` on the
+  clipboard; the app never installs anything, and the cask keeps `auto_updates false`. Only an
+  unpackaged app honours `GLOSA_SHELL_RELEASES_API`. The real-Electron suite sets it on every
+  launch, by default to a local endpoint of its own that answers 503, so a check that ran when it
+  should not stays on the machine and fails; the update tests name their own counting stubs.
 - **The main process reaches the daemon by IP.** Its own requests (the compatibility handshake) go to
   `http://127.0.0.1:<port>`, on the Host allowlist. Chromium resolves `glosa.localhost` internally, so
   the window loads that origin; Node's resolver in the main process may not (it did not on a macOS 14
@@ -290,12 +308,14 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   bundle is ever written into an agent's configuration.
   The shell delegates every spawn to `glosa open`, owns no
   daemon and stops none on quit (A5 §F13); it checks compatibility against a minimum daemon version and
-  shows the exact CLI command when the daemon is too old or speaks another contract major. It makes no
-  update check of its own; "Check for Updates…" opens the releases page on click (A6 §F33).
+  shows the exact CLI command when the daemon is too old or speaks another contract major. It never
+  updates or stops the CLI or the daemon; its update check (above) is about the app alone.
 - **Test:** `packages/shell/test/shell-real-engine.electron.ts` runs the §5 posture inside the shell's own
   renderer against a real daemon (pairing over the bridge, no secret in any URL or history, class-F
-  probe verdicts, denied navigation, daemon alive after quit, and a `glosa://` launch that opens a
-  paired companion window with the link's route); `packages/shell/test/policy.test.ts`
+  probe verdicts, denied navigation, daemon alive after quit, a `glosa://` launch that opens a
+  paired companion window with the link's route, and an update check that makes no request until
+  its menu item is clicked, then exactly one, and never asks a redirect's target);
+  `packages/shell/test/policy.test.ts`
   pins each rule as a pure function. CI runs the former in a dedicated `shell` job with Electron
   installed; a skip there is a failed gate.
 

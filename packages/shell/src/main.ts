@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -43,13 +44,17 @@ import {
   openArgsFor,
   parseGlosaUrl,
   parseOpenEnvelope,
+  RELEASES_API,
   RecentIds,
   type RoutedWindow,
   representedFile,
+  requestReleases,
   revealTarget,
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  updateDialog,
+  updateOutcome,
   windowFor,
   withRoute,
 } from "./policy.ts";
@@ -407,10 +412,76 @@ function revealIn(win: BrowserWindow | null): boolean {
   return true;
 }
 
+// ---------- Check for Updates…, on click only (#424) ----------
+
+/**
+ * Where the check asks. `GLOSA_SHELL_RELEASES_API` points it elsewhere and is read only by an
+ * unpackaged app: it is how the real-Electron test puts a local stub in GitHub's place, never a way
+ * to redirect a shipped app's check.
+ */
+function releasesApi(): string {
+  const override = process.env.GLOSA_SHELL_RELEASES_API;
+  return !app.isPackaged && override ? override : RELEASES_API;
+}
+
+/** The check in flight, dialog included, so a second click meanwhile starts nothing. */
+let updateCheck: Promise<void> | null = null;
+
+/**
+ * One GET to GitHub's Releases API when the person clicks, and never at launch, on a timer or on
+ * focus (invariant 5, A6 §F33). Node's global `fetch`, not Electron's `net`: `net` requests pass
+ * the renderer's egress gate (installEgressGate), which cancels them, and the gate stays as it is.
+ * Constant headers, no HTTP cache, no redirect followed, a bounded wait and a byte cap, and nothing
+ * written to disk.
+ */
+function checkForUpdates(): Promise<void> {
+  updateCheck ??= runUpdateCheck()
+    .catch((e) => log(`update check: ${(e as Error).message}`))
+    .finally(() => {
+      updateCheck = null;
+    });
+  return updateCheck;
+}
+
+async function runUpdateCheck(): Promise<void> {
+  const running = { current: pkg.version, arch: process.arch };
+  // Node's global fetch. One request: no redirect followed, the body capped, one timeout over both.
+  const response = await requestReleases(releasesApi(), fetch);
+  const outcome = updateOutcome(response, running);
+  if (outcome.kind === "newer") log(`update check: found ${outcome.version} for ${running.arch}`);
+  else if (outcome.kind === "current") log(`update check: up to date at ${running.current}`);
+  else log(`update check: failed: ${outcome.reason}`);
+  const { actions, ...options } = updateDialog(outcome, { current: pkg.version, releasesPage: pkg.glosa.releases });
+  const win = BrowserWindow.getFocusedWindow();
+  const answer = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  const action = actions[answer.response] ?? null;
+  // Both built in policy.ts: the URL from package.json's releases page, never from GitHub's answer.
+  if (action && "open" in action) await shell.openExternal(action.open);
+  else if (action && "copy" in action) clipboard.writeText(action.copy);
+}
+
 function buildMenu(): void {
   const focused = () => BrowserWindow.getFocusedWindow();
   const template: Electron.MenuItemConstructorOptions[] = [
-    { role: "appMenu" },
+    {
+      // The standard app menu, spelled out so Check for Updates… can sit under About, where macOS
+      // apps keep it. Explicit, on click, nothing scheduled: the app never checks on its own
+      // (invariant 5; A6 §F33). A click asks GitHub once from the main process and says in a
+      // dialog whether a newer app exists; it never installs one (checkForUpdates).
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { id: "check-for-updates", label: "Check for Updates…", click: () => void checkForUpdates() },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
     {
       label: "File",
       submenu: [
@@ -439,17 +510,8 @@ function buildMenu(): void {
       ],
     },
     { role: "windowMenu" },
-    {
-      role: "help",
-      submenu: [
-        {
-          // Explicit, on click, nothing scheduled: the app makes no update check on its own
-          // (invariant 5; A6 §F33). This opens the releases page in the user's browser.
-          label: "Check for Updates…",
-          click: () => void shell.openExternal(pkg.glosa.releases),
-        },
-      ],
-    },
+    // No items, but kept: the Help role is where macOS puts its menu search.
+    { role: "help", submenu: [] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

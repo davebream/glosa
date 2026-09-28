@@ -203,6 +203,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   of darkening it 12% toward black, so its dark-paper label gains contrast under the pointer rather
   than losing it: 4.6:1 to 7.2:1 in glosa dark and 4.7:1 to 7.5:1 in High contrast dark, where
   Rosé Pine's would have fallen to 4.4:1. The light appearance is unchanged (#410).
+- The desktop app's Check for Updates… now checks, and has moved from the Help menu to the glosa
+  menu, under About glosa. A click asks GitHub once for glosa's releases and says in a dialog either
+  "glosa 0.1.0-alpha.37 is available. You have 0.1.0-alpha.36." with Open Release Page, Copy
+  Upgrade Command (which copies `brew upgrade --cask glosa`) and Later, or that you have the newest
+  version, or that the check could not complete, with Open Release Page. A release counts only once
+  the app for your Mac's architecture is uploaded to it. Nothing is checked at launch or in the
+  background, the request carries neither glosa's version nor anything about your machine, and
+  nothing is saved. The app still installs no update itself (#424).
 
 ### Fixed
 

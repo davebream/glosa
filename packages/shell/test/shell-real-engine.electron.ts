@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tokenPath } from "../../daemon/src/security/token.ts";
 import { randomPort, superviseDaemonHome } from "../../daemon/test/helpers.ts";
@@ -16,12 +16,20 @@ import { PAPER } from "../src/policy.ts";
 
 const SHELL_DIR = fileURLToPath(new URL("..", import.meta.url));
 const REPO = fileURLToPath(new URL("../../..", import.meta.url));
-const ELECTRON = join(SHELL_DIR, "node_modules", ".bin", "electron");
+// The Electron binary itself (what `node_modules/electron/path.txt` names), not the `.bin/electron`
+// Node wrapper: a signal must reach the process the test means to stop, and a SIGKILL to the
+// wrapper would leave Electron running, orphaned.
+const ELECTRON_PACKAGE = join(SHELL_DIR, "node_modules", "electron");
+const ELECTRON = existsSync(join(ELECTRON_PACKAGE, "path.txt"))
+  ? join(ELECTRON_PACKAGE, "dist", readFileSync(join(ELECTRON_PACKAGE, "path.txt"), "utf8").trim())
+  : "";
 const MAIN_PATH = join(REPO, "packages", "cli", "src", "main.ts");
 const PROBE = join(REPO, "docs", "research", "spikes", "electron-classf-probe.html");
 const SHELL_PRELOAD = join(SHELL_DIR, "src", "preload.cjs");
 const TOKEN = "shell-test-durable-token-0123456789abcdef0123456789abcdef";
-const electronInstalled = existsSync(ELECTRON);
+const SHELL_VERSION = (JSON.parse(readFileSync(join(SHELL_DIR, "package.json"), "utf8")) as { version: string })
+  .version;
+const electronInstalled = ELECTRON !== "" && existsSync(ELECTRON);
 
 type Handshake = { instance_id: string; install_id: string };
 
@@ -96,6 +104,59 @@ class Cdp {
   close(): void {
     this.ws.close();
   }
+}
+
+/** A local stand-in for GitHub's Releases API on a port this test owns, recording every request.
+ * The shell reaches it through GLOSA_SHELL_RELEASES_API, which only an unpackaged app reads. */
+function releasesStub(answer: () => Response) {
+  const requests: Array<{ method: string; path: string; headers: Record<string, string> }> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      requests.push({ method: req.method, path: new URL(req.url).pathname, headers: req.headers.toJSON() });
+      return answer();
+    },
+  });
+  return {
+    url: `http://127.0.0.1:${server.port}/repos/davebream/glosa/releases`,
+    requests,
+    stop: () => server.stop(true),
+  };
+}
+
+/** Clicks Check for Updates… `times` times, back to back, from the main process, once the menu exists. */
+async function clickCheckForUpdates(main: Cdp, times: number): Promise<void> {
+  const clicked = await main.evaluateInMain<boolean>(`(async () => {
+    const { Menu } = require('electron');
+    // 5 s, well inside the CDP call's own 10 s, so a missing item fails the assertion below.
+    for (let i = 0; i < 50; i++) {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('check-for-updates');
+      if (item) {
+        for (let n = 0; n < ${times}; n++) item.click();
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  })()`);
+  expect(clicked, "the app menu has an item with id check-for-updates").toBe(true);
+}
+
+/**
+ * The pids of every process whose command line names `marker`. Electron passes the test's
+ * `--user-data-dir` to its GPU, network and renderer helpers as well as to its main process, and
+ * that directory's name is unique to one test, so the marker names exactly the processes a test
+ * owns (measured in Electron 44.4.5). The name, not the whole path, because the temp prefix may be
+ * spelled `/var/...` or `/private/var/...`.
+ */
+function ownedPids(marker: string): number[] {
+  const out = Bun.spawnSync(["ps", "-axo", "pid=,command="]).stdout.toString();
+  return out
+    .split("\n")
+    .filter((line) => line.includes(marker))
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((pid) => Number.isInteger(pid) && pid !== process.pid);
 }
 
 /** Every target seen on the last poll, for the failure message. */
@@ -173,12 +234,21 @@ describe.skipIf(!electronInstalled)(
     let cli: string;
     let stderrText = "";
     let env: Record<string, string>;
+    // Every launch's update check points here unless a test names its own stub: a local endpoint
+    // that answers 503, so a check that ran when it should not stays on this machine and fails.
+    let closedReleases: ReturnType<typeof releasesStub> | null = null;
 
     /** Starts the shell with `args` after the app directory, the way `open -a` or a link would. */
     const launchShell = (args: string[], extra: Record<string, string> = {}) => {
       electron = Bun.spawn({
         cmd: [ELECTRON, SHELL_DIR, ...args, `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userData}`],
-        env: { ...env, GLOSA_SHELL_CLI: cli, ANTHROPIC_API_KEY: "sk-must-never-reach-a-child", ...extra },
+        env: {
+          ...env,
+          GLOSA_SHELL_CLI: cli,
+          GLOSA_SHELL_RELEASES_API: closedReleases!.url,
+          ANTHROPIC_API_KEY: "sk-must-never-reach-a-child",
+          ...extra,
+        },
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
@@ -191,6 +261,7 @@ describe.skipIf(!electronInstalled)(
     };
 
     beforeEach(async () => {
+      closedReleases = releasesStub(() => new Response("releases are closed to this test", { status: 503 }));
       home = mkdtempSync(join(tmpdir(), "glosa-shell-home-"));
       userHome = mkdtempSync(join(tmpdir(), "glosa-shell-userhome-"));
       // Electron keeps localStorage under its userData directory, which it derives from the macOS
@@ -228,15 +299,37 @@ describe.skipIf(!electronInstalled)(
     }, 60_000);
 
     afterEach(async () => {
-      electron?.kill();
-      await electron?.exited;
+      if (electron) {
+        electron.kill();
+        // An update check's result dialog with no window to attach to is app-modal, and holds a
+        // graceful quit while it waits for a person. The process is this test's own, so it goes.
+        const quit = await Promise.race([electron.exited.then(() => true), Bun.sleep(3000).then(() => false)]);
+        if (!quit) electron.kill("SIGKILL");
+        await electron.exited;
+      }
+      // The main process exiting is not the whole tree: wait for every helper this test owns to go,
+      // then kill and report any that did not, so a survivor fails the suite instead of outliving it.
+      const marker = basename(userData);
+      const settled = Date.now() + 5_000;
+      while (ownedPids(marker).length > 0 && Date.now() < settled) await Bun.sleep(100);
+      const survivors = ownedPids(marker);
+      for (const pid of survivors) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
       daemon.kill();
       await daemon.exited;
       rmSync(home, { recursive: true, force: true });
       rmSync(workspace, { recursive: true, force: true });
       rmSync(userHome, { recursive: true, force: true });
       rmSync(userData, { recursive: true, force: true });
-    });
+      closedReleases?.stop();
+      closedReleases = null;
+      expect(survivors, `Electron processes outlived the test (${marker})`).toEqual([]);
+    }, 20_000);
 
     test("pairs over the bridge with no token in any URL, keeps class-F sandboxed, denies leaving the SPA origin, and leaves the daemon running on quit", async () => {
       launchShell([workspace, "classf/probe.html"]);
@@ -681,6 +774,126 @@ describe.skipIf(!electronInstalled)(
         expect(route.get("a")).toBe("readme.md");
       } finally {
         cdp.close();
+      }
+    }, 120_000);
+
+    test("Check for Updates… sits under About, asks nothing through launch and pairing, and one click makes one request with a constant User-Agent (#424)", async () => {
+      let arch = "";
+      const releases = releasesStub(() =>
+        Response.json([
+          {
+            tag_name: "v99.0.0",
+            draft: false,
+            prerelease: true,
+            html_url: "https://example.com/not-the-release-page",
+            assets: [{ name: `glosa-99.0.0-${arch}.dmg`, state: "uploaded" }],
+          },
+        ]),
+      );
+      const inspectPort = randomPort();
+      try {
+        launchShell([workspace, "readme.md", `--inspect=${inspectPort}`], { GLOSA_SHELL_RELEASES_API: releases.url });
+        const spaOrigin = `http://glosa.localhost:${port}`;
+        const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+        expect(page, `SPA page target; shell stderr:\n${stderrText}`).not.toBeNull();
+        const mainUrl = await mainInspectorUrl(inspectPort);
+        expect(mainUrl, `main-process inspector on ${inspectPort}; shell stderr:\n${stderrText}`).not.toBeNull();
+        const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
+        const main = await Cdp.connect(mainUrl!);
+        try {
+          let durable: string | null = null;
+          for (let i = 0; i < 100 && !durable; i++) {
+            try {
+              durable = await cdp.evaluate<string | null>("localStorage.getItem('glosa_token')");
+            } catch {
+              durable = null; // the page's context can be replaced while it loads
+            }
+            if (!durable) await Bun.sleep(200);
+          }
+          expect(durable, `paired via bridge; shell stderr:\n${stderrText}`).toBeString();
+          expect(releases.requests, "no update request through launch and pairing").toEqual([]);
+
+          const menu = await main.evaluateInMain<Array<{ label: string; role: string | null; items: string[] }>>(`(() =>
+            require('electron').Menu.getApplicationMenu().items.map((m) => ({ label: m.label, role: m.role || null,
+              items: m.submenu ? m.submenu.items.map((i) => i.role || (i.type === 'separator' ? 'separator' : i.label)) : [] })))()`);
+          expect(menu[0]?.items, "the app menu: About, then Check for Updates…, then the standard items").toEqual([
+            "about",
+            "Check for Updates…",
+            "separator",
+            "services",
+            "separator",
+            "hide",
+            "hideothers",
+            "unhide",
+            "separator",
+            "quit",
+          ]);
+          expect(menu.at(-1)).toEqual({ label: "Help", role: "help", items: [] });
+          expect(menu.slice(1).flatMap((m) => m.items)).not.toContain("Check for Updates…");
+
+          arch = await main.evaluateInMain<string>("process.arch");
+          // Two clicks back to back: the second finds the first in flight and starts nothing.
+          await clickCheckForUpdates(main, 2);
+          const deadline = Date.now() + 15_000;
+          while (!stderrText.includes("update check:") && Date.now() < deadline) await Bun.sleep(100);
+          expect(stderrText, "the shell read the stub's release list").toContain(
+            `update check: found 99.0.0 for ${arch}`,
+          );
+          expect(releases.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+            "GET /repos/davebream/glosa/releases",
+          ]);
+          const headers = releases.requests[0]?.headers ?? {};
+          expect(headers["user-agent"]).toBe("glosa-update");
+          for (const [name, value] of Object.entries(headers)) expect(value, name).not.toContain(SHELL_VERSION);
+          expect(closedReleases!.requests, "nothing reached the suite's closed default endpoint").toEqual([]);
+        } finally {
+          cdp.close();
+          main.close();
+        }
+      } finally {
+        // The result's dialog stays open until afterEach quits the shell: nothing here presses its
+        // buttons (Copy Upgrade Command would overwrite this machine's clipboard).
+        releases.stop();
+      }
+    }, 120_000);
+
+    test("Check for Updates… follows no redirect: a 302 fails the check, and its target is never asked (#424)", async () => {
+      // GitHub answers a renamed repository with a redirect; the check treats one as a failure.
+      const target = releasesStub(() =>
+        Response.json([
+          { tag_name: "v99.0.0", draft: false, assets: [{ name: "glosa-99.0.0-arm64.dmg", state: "uploaded" }] },
+        ]),
+      );
+      const redirecting = releasesStub(() => new Response(null, { status: 302, headers: { location: target.url } }));
+      const inspectPort = randomPort();
+      try {
+        launchShell([workspace, "readme.md", `--inspect=${inspectPort}`], {
+          GLOSA_SHELL_RELEASES_API: redirecting.url,
+        });
+        // A person clicks with a window open; the result dialog then attaches to it.
+        const spaOrigin = `http://glosa.localhost:${port}`;
+        const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+        expect(page, `SPA page target; shell stderr:\n${stderrText}`).not.toBeNull();
+        const mainUrl = await mainInspectorUrl(inspectPort);
+        expect(mainUrl, `main-process inspector on ${inspectPort}; shell stderr:\n${stderrText}`).not.toBeNull();
+        const main = await Cdp.connect(mainUrl!);
+        try {
+          await clickCheckForUpdates(main, 1);
+          const deadline = Date.now() + 15_000;
+          while (!stderrText.includes("update check:") && Date.now() < deadline) await Bun.sleep(100);
+          expect(target.requests, "the redirect's target received no request").toEqual([]);
+          expect(stderrText, "the check failed, so the dialog is the failure one").toContain(
+            "update check: failed: GitHub redirected the request (HTTP 302), and the check follows no redirect",
+          );
+          expect(redirecting.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+            "GET /repos/davebream/glosa/releases",
+          ]);
+        } finally {
+          main.close();
+        }
+      } finally {
+        target.stop();
+        redirecting.stop();
       }
     }, 120_000);
   },
