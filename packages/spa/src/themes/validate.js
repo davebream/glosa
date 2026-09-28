@@ -96,7 +96,10 @@ const LIVE_TEXT_ROLES = Object.freeze(["ink", "muted", "hand", "pencil", "sessio
  */
 export const HUE_RULES = Object.freeze({ handSessionDegrees: 90, handDangerLightness: 0.02 });
 
-const THEME_KEYS = new Set(["id", "name", "scheme", "contrast", "media", "slots"]);
+/** `upstream` is where a palette made by others comes from (#410): its source, the upstream colour
+ * each slot takes, and every colour moved to meet a floor, with both ratios. It is a record for a
+ * reviewer and is never painted; packages/spa/test/themes.test.ts holds it to the slots. */
+const THEME_KEYS = new Set(["id", "name", "scheme", "contrast", "media", "upstream", "slots"]);
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 const OKLCH = /^oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*(?:\/\s*([\d.]+%?)\s*)?\)$/;
 
@@ -255,6 +258,11 @@ export function checkTheme(theme) {
     refuse({ rule: "shape" }, "a print theme paints over any scheme and names none");
   if (theme.contrast !== undefined && theme.contrast !== "more")
     refuse({ rule: "shape" }, 'contrast is "more" or absent');
+  if (
+    theme.upstream !== undefined &&
+    (typeof theme.upstream !== "object" || theme.upstream === null || Array.isArray(theme.upstream))
+  )
+    refuse({ rule: "shape" }, "its upstream record is a JSON object");
 
   const slots = theme.slots;
   if (typeof slots !== "object" || slots === null || Array.isArray(slots)) {

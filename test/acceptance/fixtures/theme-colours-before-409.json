@@ -1,5 +1,5 @@
 {
-  "about": "Every colour token on <html> as Chrome 154 computed it from packages/spa/src at f645d3f (design/406-reading-scale), before #409 moved the palettes into theme files: the value each custom property computes to and the colour it resolves to, in glosa light and dark, on screen and in print. #409 must reproduce them exactly; a deliberate change updates this file and CHANGELOG.md together.",
+  "about": "Every colour token on <html> as Chrome 154 computed it from packages/spa/src at f645d3f (design/406-reading-scale), before #409 moved the palettes into theme files: the value each custom property computes to and the colour it resolves to, in glosa light and dark, on screen and in print. #409 must reproduce them exactly; a deliberate change updates this file and CHANGELOG.md together. #410 derives --primary-hover from each theme's own ink and paper (color-mix in OKLab), so its four entries were updated with that change and its CHANGELOG.md entry; every other token is still the pre-#409 value.",
   "cases": {
     "light/screen": {
       "theme": "light",
@@ -101,8 +101,8 @@
           "resolved": "oklch(0.2 0.012 60)"
         },
         "--primary-hover": {
-          "value": "oklch(0.34 0.012 60)",
-          "resolved": "oklch(0.34 0.012 60)"
+          "value": "color-mix(in oklab, oklch(0.2 0.012 60) 82%, oklch(0.99 0.007 85))",
+          "resolved": "oklab(0.3422 0.00502982 0.0097769)"
         },
         "--rule": {
           "value": "oklch(0.2 0.012 60)",
@@ -258,8 +258,8 @@
           "resolved": "rgb(32, 32, 32)"
         },
         "--primary-hover": {
-          "value": "oklch(0.34 0.012 60)",
-          "resolved": "oklch(0.34 0.012 60)"
+          "value": "color-mix(in oklab, #202020 82%, #fff)",
+          "resolved": "oklab(0.379696 0.0000173053 0.00000761122)"
         },
         "--rule": {
           "value": "#202020",
@@ -415,8 +415,8 @@
           "resolved": "oklch(0.93 0.01 80)"
         },
         "--primary-hover": {
-          "value": "oklch(0.84 0.01 80)",
-          "resolved": "oklch(0.84 0.01 80)"
+          "value": "color-mix(in oklab, oklch(0.93 0.01 80) 88%, oklch(0.205 0.008 60))",
+          "resolved": "oklab(0.843 0.0020081 0.00949769)"
         },
         "--rule": {
           "value": "oklch(0.74 0.01 80)",
@@ -572,8 +572,8 @@
           "resolved": "rgb(32, 32, 32)"
         },
         "--primary-hover": {
-          "value": "oklch(0.84 0.01 80)",
-          "resolved": "oklch(0.84 0.01 80)"
+          "value": "color-mix(in oklab, #202020 88%, #fff)",
+          "resolved": "oklab(0.334308 0.0000152373 0.00000669837)"
         },
         "--rule": {
           "value": "oklch(0.74 0.01 80)",

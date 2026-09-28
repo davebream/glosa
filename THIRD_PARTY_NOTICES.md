@@ -56,6 +56,51 @@ PERFORMANCE OF THIS SOFTWARE.
 
 The full license text for both families is in `packages/spa/src/fonts/OFL.txt`.
 
+## Colour palettes
+
+Settings > Appearance offers three palettes made by others, each in a light and a dark theme
+(`packages/spa/src/themes/`). glosa uses their colour values and adapts them: a colour below one of
+glosa's contrast floors is made darker (light) or lighter (dark) in its own hue until it passes. Each
+theme file records its source, the upstream colour every slot takes, and every colour it moved.
+
+- **Catppuccin**, Latte and Mocha, copyright 2021 Catppuccin (the Catppuccin Org), MIT. Source:
+  https://github.com/catppuccin/palette, `palette.json` at v1.8.0 (commit `07d02aa`).
+- **Rosé Pine**, Dawn and the main variant, copyright mvllow, MIT. Source:
+  https://github.com/rose-pine/palette, `palette.json` at commit `92af52b`, and the highlight colours
+  from `source/index.ts` at the same commit.
+- **Gruvbox**, the light and dark modes at medium contrast, by Pavel Pertsev (morhetz). Source:
+  https://github.com/morhetz/gruvbox, `colors/gruvbox.vim` at commit `ef8864b`. The repository has no
+  licence file. Its README states the licence as:
+
+  > License
+  > -------
+  > [MIT/X11][]
+  >
+  >    [MIT/X11]: https://en.wikipedia.org/wiki/MIT_License
+
+  and its `package.json` names the author "Pavel Pertsev" and the licence "MIT".
+
+The MIT licence text, as Catppuccin's and Rosé Pine's licence files give it under their copyright
+lines above, and as Gruvbox's README links to it:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## Managed chat rendering and native login
 
 - **xterm.js 6.0.0** (`@xterm/xterm`, MIT): unmodified published browser module and stylesheet in `packages/spa/src/vendor/`; license in `xterm-license.txt`. Used only for explicitly opened native login terminals. Source: https://github.com/xtermjs/xterm.js.

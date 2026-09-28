@@ -1,0 +1,74 @@
+{
+  "id": "rose-pine",
+  "name": "Rosé Pine, the main variant, adapted to glosa's contrast floors",
+  "scheme": "dark",
+  "upstream": {
+    "palette": "Rosé Pine",
+    "source": "rose-pine/palette (92af52b), palette.json, main; the highlights from source/index.ts",
+    "colours": {
+      "bg": "base #191724",
+      "surface": "surface #1f1d2e",
+      "surface-sunken": "overlay #26233a",
+      "ink": "text #e0def4",
+      "muted": "subtle #908caa",
+      "faint": "muted #6e6a86",
+      "border": "highlightHigh #524f67",
+      "border-strong": "muted #6e6a86",
+      "rule": "subtle #908caa",
+      "hand": "rose #ebbcba",
+      "pencil": "muted #6e6a86",
+      "session": "foam #9ccfd8",
+      "danger": "love #eb6f92",
+      "warn": "gold #f6c177",
+      "ok": "pine #31748f",
+      "scrim": "glosa's own, black at 45%"
+    },
+    "moved": {
+      "border-strong": {
+        "from": "oklch(0.538 0.044 291.4)",
+        "to": "#706c87",
+        "as": "line",
+        "on": "surface-sunken",
+        "floor": 3,
+        "was": 2.94,
+        "now": 3.01
+      },
+      "pencil": {
+        "from": "oklch(0.538 0.044 291.4)",
+        "to": "#87839f",
+        "as": "text",
+        "on": "elevated",
+        "floor": 4.5,
+        "was": 3.19,
+        "now": 4.51
+      },
+      "ok": {
+        "from": "oklch(0.528 0.079 227.7)",
+        "to": "#4c8eaa",
+        "as": "text",
+        "on": "surface",
+        "floor": 4.5,
+        "was": 3.16,
+        "now": 4.51
+      }
+    }
+  },
+  "slots": {
+    "bg": "#191724",
+    "surface": "#1f1d2e",
+    "surface-sunken": "#26233a",
+    "ink": "#e0def4",
+    "muted": "#908caa",
+    "faint": "#6e6a86",
+    "border": "#524f67",
+    "border-strong": "oklch(0.544 0.043 291.4)",
+    "rule": "#908caa",
+    "hand": "#ebbcba",
+    "pencil": "oklch(0.622 0.043 291.4)",
+    "session": "#9ccfd8",
+    "danger": "#eb6f92",
+    "warn": "#f6c177",
+    "ok": "oklch(0.614 0.079 227.7)",
+    "scrim": "oklch(0 0 0 / 0.45)"
+  }
+}

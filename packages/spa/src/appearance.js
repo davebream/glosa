@@ -16,7 +16,8 @@ export function appearanceList() {
   return globalThis.glosaAppearances.list;
 }
 
-/** The listed palettes, in chooser order: `{ id, label, credit, themes, moreContrast? }` (#409). */
+/** The listed palettes, in chooser order: `{ id, label, credit, source?, themes, moreContrast? }`
+ * (#409, #410). */
 export function paletteList() {
   return globalThis.glosaAppearances.palettes;
 }

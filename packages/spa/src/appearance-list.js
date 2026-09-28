@@ -14,11 +14,12 @@
 //   "light" or "dark"; the system entry has none and follows `prefers-color-scheme`. `label` is the
 //   popover's word, `settingsLabel` Settings > Appearance's. The stored ids ("system", "light",
 //   "dark") are the ones every earlier glosa stored.
-// - A palette (`palettes`) says which colours paint it: `{ id, label, credit, themes,
+// - A palette (`palettes`) says which colours paint it: `{ id, label, credit, source?, themes,
 //   moreContrast? }`. `themes` names the theme file (packages/spa/src/themes/<id>.json, rendered
-//   into themes.css) for each scheme; `credit` is its line in Settings. A palette with
-//   `moreContrast` is shown as that palette instead while the operating system asks for more
-//   contrast (`prefers-contrast: more`); a palette without it stays as chosen.
+//   into themes.css) for each scheme; `credit` is its line in Settings, and `source`, for a
+//   palette made by others, where its colours come from. A palette with `moreContrast` is shown
+//   as that palette instead while the operating system asks for more contrast
+//   (`prefers-contrast: more`); a palette without it stays as chosen.
 // Adding a palette is one entry here plus its two theme files.
 // The first entry of each list is the default when nothing, or something unlisted, is stored.
 (function defineAppearances(root) {
@@ -40,6 +41,31 @@
       label: "High contrast",
       credit: "glosa's own · stronger ink, marks and edges on the same paper",
       themes: Object.freeze({ light: "high-contrast-light", dark: "high-contrast-dark" }),
+    }),
+    // Palettes made by others (#410), each adapted to glosa's contrast floors: a colour below its
+    // floor moves in lightness within its own hue (every move is recorded in its theme file).
+    // `source` is where the colours come from, listed under Settings > Appearance's credits;
+    // THIRD_PARTY_NOTICES.md carries each licence.
+    Object.freeze({
+      id: "catppuccin",
+      label: "Catppuccin",
+      credit: "Catppuccin by the Catppuccin Org · MIT",
+      source: "github.com/catppuccin/palette",
+      themes: Object.freeze({ light: "catppuccin-latte", dark: "catppuccin-mocha" }),
+    }),
+    Object.freeze({
+      id: "gruvbox",
+      label: "Gruvbox",
+      credit: "Gruvbox by Pavel Pertsev · MIT/X11",
+      source: "github.com/morhetz/gruvbox",
+      themes: Object.freeze({ light: "gruvbox-light", dark: "gruvbox-dark" }),
+    }),
+    Object.freeze({
+      id: "rose-pine",
+      label: "Rosé Pine",
+      credit: "Rosé Pine by mvllow · MIT",
+      source: "github.com/rose-pine/palette",
+      themes: Object.freeze({ light: "rose-pine-dawn", dark: "rose-pine" }),
     }),
   ]);
 

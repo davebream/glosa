@@ -32,6 +32,48 @@
   --scrim: oklch(0.2 0.012 60 / 0.3);
 }
 
+/* Catppuccin Latte, adapted to glosa's contrast floors */
+:root[data-theme="catppuccin-latte"],
+[data-theme-swatch="catppuccin-latte"] {
+  --bg: #eff1f5;
+  --surface: #e6e9ef;
+  --surface-sunken: #dce0e8;
+  --ink: oklch(0.4 0.043 279.3);
+  --muted: #5c5f77;
+  --faint: #8c8fa1;
+  --border: #ccd0da;
+  --border-strong: oklch(0.599 0.03 278.7);
+  --rule: var(--ink);
+  --hand: oklch(0.517 0.154 42.4);
+  --pencil: oklch(0.54 0.034 279.1);
+  --session: oklch(0.533 0.225 262.1);
+  --danger: oklch(0.497 0.199 19.8);
+  --warn: oklch(0.528 0.116 67.8);
+  --ok: oklch(0.506 0.164 140.4);
+  --scrim: oklch(0.435 0.043 279.3 / 0.3);
+}
+
+/* Catppuccin Mocha, adapted to glosa's contrast floors */
+:root[data-theme="catppuccin-mocha"],
+[data-theme-swatch="catppuccin-mocha"] {
+  --bg: #1e1e2e;
+  --surface: #313244;
+  --surface-sunken: #45475a;
+  --ink: oklch(0.912 0.042 272.3);
+  --muted: #bac2de;
+  --faint: #6c7086;
+  --border: #45475a;
+  --border-strong: #9399b2;
+  --rule: #a6adc8;
+  --hand: #fab387;
+  --pencil: #a6adc8;
+  --session: #89b4fa;
+  --danger: oklch(0.793 0.127 2.8);
+  --warn: #f9e2af;
+  --ok: #a6e3a1;
+  --scrim: oklch(0 0 0 / 0.45);
+}
+
 /* glosa dark: the same desk under a reading lamp */
 :root[data-theme="dark"],
 [data-theme-swatch="dark"] {
@@ -51,6 +93,48 @@
   --warn: oklch(0.76 0.11 80);
   --ok: oklch(0.72 0.09 150);
   --scrim: oklch(0 0 0 / 0.45);
+}
+
+/* Gruvbox dark, adapted to glosa's contrast floors */
+:root[data-theme="gruvbox-dark"],
+[data-theme-swatch="gruvbox-dark"] {
+  --bg: #282828;
+  --surface: #32302f;
+  --surface-sunken: #3c3836;
+  --ink: #ebdbb2;
+  --muted: #bdae93;
+  --faint: #7c6f64;
+  --border: #504945;
+  --border-strong: #928374;
+  --rule: #d5c4a1;
+  --hand: #fe8019;
+  --pencil: #a89984;
+  --session: #83a598;
+  --danger: oklch(0.752 0.149 30.4);
+  --warn: #fabd2f;
+  --ok: #b8bb26;
+  --scrim: oklch(0 0 0 / 0.45);
+}
+
+/* Gruvbox light, adapted to glosa's contrast floors */
+:root[data-theme="gruvbox-light"],
+[data-theme-swatch="gruvbox-light"] {
+  --bg: #fbf1c7;
+  --surface: #f2e5bc;
+  --surface-sunken: #ebdbb2;
+  --ink: #3c3836;
+  --muted: #665c54;
+  --faint: #928374;
+  --border: #d5c4a1;
+  --border-strong: #7c6f64;
+  --rule: var(--ink);
+  --hand: oklch(0.51 0.161 39.3);
+  --pencil: oklch(0.539 0.023 62.6);
+  --session: #076678;
+  --danger: #9d0006;
+  --warn: oklch(0.519 0.111 70.7);
+  --ok: oklch(0.51 0.109 106.5);
+  --scrim: oklch(0.344 0.007 48.5 / 0.3);
 }
 
 /* glosa High contrast dark: the same lamplit paper, brighter ink, marks and edges */
@@ -93,6 +177,48 @@
   --warn: oklch(0.5 0.1 80);
   --ok: oklch(0.41 0.08 150);
   --scrim: oklch(0.16 0.012 60 / 0.4);
+}
+
+/* Rosé Pine Dawn, adapted to glosa's contrast floors */
+:root[data-theme="rose-pine-dawn"],
+[data-theme-swatch="rose-pine-dawn"] {
+  --bg: #faf4ed;
+  --surface: #fffaf3;
+  --surface-sunken: #f2e9e1;
+  --ink: #464261;
+  --muted: oklch(0.527 0.045 291);
+  --faint: #9893a5;
+  --border: #cecacd;
+  --border-strong: #797593;
+  --rule: var(--ink);
+  --hand: oklch(0.537 0.105 23);
+  --pencil: oklch(0.548 0.026 298.4);
+  --session: oklch(0.54 0.066 210.1);
+  --danger: oklch(0.517 0.107 2.7);
+  --warn: oklch(0.553 0.12 69.7);
+  --ok: #286983;
+  --scrim: oklch(0.396 0.052 289.7 / 0.3);
+}
+
+/* Rosé Pine, the main variant, adapted to glosa's contrast floors */
+:root[data-theme="rose-pine"],
+[data-theme-swatch="rose-pine"] {
+  --bg: #191724;
+  --surface: #1f1d2e;
+  --surface-sunken: #26233a;
+  --ink: #e0def4;
+  --muted: #908caa;
+  --faint: #6e6a86;
+  --border: #524f67;
+  --border-strong: oklch(0.544 0.043 291.4);
+  --rule: #908caa;
+  --hand: #ebbcba;
+  --pencil: oklch(0.622 0.043 291.4);
+  --session: #9ccfd8;
+  --danger: #eb6f92;
+  --warn: #f6c177;
+  --ok: oklch(0.614 0.079 227.7);
+  --scrim: oklch(0 0 0 / 0.45);
 }
 
 /* Print: white paper and near-black ink over whichever theme is showing.
