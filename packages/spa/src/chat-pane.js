@@ -824,19 +824,15 @@ export function createChatPane(
       : "Archive chat";
     if (document.activeElement !== title) title.value = state.title;
   }
-  function textRow(key, label, text, collapsible = false, markdown = false) {
+  function textRow(key, label, text, collapsible = false, markdown = false, rowKind) {
     wantedRows.add(key);
     let row = rows.get(key);
     if (!row) {
       const node = el(collapsible ? "details" : "article", {
         className: "glosa-chat-message",
-        "data-kind": key.startsWith("user:")
-          ? "human"
-          : key.startsWith("error:")
-            ? "error"
-            : collapsible
-              ? "detail"
-              : "agent",
+        "data-kind":
+          rowKind ??
+          (key.startsWith("user:") ? "human" : key.startsWith("error:") ? "error" : collapsible ? "detail" : "agent"),
       });
       const heading = el(collapsible ? "summary" : "h3", {
         textContent: label,
@@ -969,6 +965,7 @@ export function createChatPane(
           item.text + (item.truncated ? "\n\nDisplay shortened. Export the chat for the complete message." : ""),
           ["tool", "reasoning"].includes(item.kind),
           item.kind === "text",
+          item.kind === "reasoning" ? "reasoning" : undefined,
         );
       if (turn.error && (typeof turn.text === "string" || state.content.some((item) => item.turnId === turn.id)))
         textRow(`error:${turn.id}`, "Needs attention", turn.error);
