@@ -6,6 +6,7 @@ import { buildAppUrl } from "../../cli/src/open-presentation.ts";
 import {
   appearanceDecision,
   cliCandidates,
+  cliChoice,
   compareVersions,
   compatibility,
   contrastPush,
@@ -34,6 +35,7 @@ import {
   RecentIds,
   type RoutedWindow,
   readUpdateResponse,
+  reconnectOutcome,
   releaseAssetNames,
   requestReleases,
   representedFile,
@@ -1095,5 +1097,24 @@ describe("Linux launch arguments and the package marker (#432)", () => {
     expect(parsePackageType("Pac Man")).toBeNull();
     expect(parsePackageType("a".repeat(65))).toBeNull();
     expect(parsePackageType("")).toBeNull();
+  });
+});
+
+describe("a window whose daemon's install changed (#432, R-L8)", () => {
+  test("a packaged app whose own CLI is gone runs no other install's CLI", () => {
+    expect(cliChoice({ packaged: true, ownCliExists: false })).toBe("removed");
+    expect(cliChoice({ packaged: true, ownCliExists: true })).toBe("lookup");
+    // An unpackaged run never had its own CLI; it looks up candidates as it always did.
+    expect(cliChoice({ packaged: false, ownCliExists: false })).toBe("lookup");
+  });
+
+  test("a reconnect is only a success when the same install answers", () => {
+    expect(reconnectOutcome("install-a", "install-a")).toEqual({ ok: true });
+    expect(reconnectOutcome("install-a", "install-b")).toEqual({ ok: false, reason: "foreign" });
+    // A window paired with a daemon that published no install id cannot tell, and does not refuse.
+    expect(reconnectOutcome(null, "install-b")).toEqual({ ok: true });
+    const down = reconnectOutcome("install-a", null);
+    expect(down).toMatchObject({ ok: false, reason: "failed" });
+    expect(JSON.stringify(down)).not.toContain("\u2014");
   });
 });

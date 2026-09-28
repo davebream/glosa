@@ -2137,7 +2137,8 @@ input,
    would not make it truer. The marks notice is the same strip for the same reason: a browser
    without the highlight API cannot paint a mark in any pane. */
 .glosa-banner,
-.glosa-marks-notice {
+.glosa-marks-notice,
+.glosa-update-notice {
   background: color-mix(in oklch, var(--warn) 12%, var(--bg));
   color: var(--warn);
   border-bottom: 1px solid color-mix(in oklch, var(--warn) 35%, var(--bg));
@@ -2145,6 +2146,18 @@ input,
   font-weight: 600;
   text-align: center;
   padding: var(--space-1) var(--space-2);
+}
+
+/* The update notice (#432) is the same strip, with the one action it offers beside its sentence. */
+.glosa-update-notice button {
+  margin-inline-start: var(--space-2);
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-micro);
+  padding: 0 var(--space-2);
+  cursor: pointer;
 }
 
 /* ---------- 7. Manuscript ---------- */

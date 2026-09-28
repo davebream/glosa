@@ -38,6 +38,8 @@ export const SPA_ASSETS: Readonly<Record<string, string>> = {
   // Passage addresses ("§2.3"), derived from the rendered Markdown structure.
   "address.js": "text/javascript; charset=utf-8",
   "bootstrap.js": "text/javascript; charset=utf-8",
+  // What the page says when the daemon that served it changes (#432, R-L6/R-L8).
+  "update-notice.js": "text/javascript; charset=utf-8",
   // The theme slots (#409): packages/spa/src/themes/*.json, checked against their contrast floors
   // and rendered into one stylesheet, so a theme reaches the page under `style-src 'self'` rather
   // than as an injected <style>. The theme files themselves are not served.

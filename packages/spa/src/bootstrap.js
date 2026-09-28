@@ -19,6 +19,7 @@ export const CONTRACT_VERSION = "1.23";
 // touch `window`/`document` only inside function bodies, never at module load.
 import { mountApp } from "./viewer.js";
 import { createDataAccess } from "./data-access.js";
+import { createUpdateNotice } from "./update-notice.js";
 import { createAppearanceController, reportAppearanceToShell, shellContrastQuery } from "./appearance.js";
 import { createTextSizeStore } from "./text-size.js";
 
@@ -49,6 +50,8 @@ const MESSAGES = {
  * every tab reads the same pair (A5 §F13's `install_id`). Not a secret: it is a hash the tokenless
  * handshake already publishes to anyone who asks. */
 const INSTALL_KEY = "glosa_install";
+/** The build this tab already reloaded for once (#432), in session storage so a reload cannot loop. */
+const BUILD_RELOAD_KEY = "glosa_build_reload";
 
 /** How long to wait for a tab's own daemon to reclaim the port before giving up and asking the
  * user to re-pair. Long enough to cover a restart or an upgrade, short enough that a tab does not
@@ -301,6 +304,22 @@ export function selectScreen(handshake, token, pairedInstall = null) {
   return "ready";
 }
 
+/** The build hash this page was served with (`<meta name="glosa-build">`, #432 R-L6), or null for a
+ * page an older daemon served unstamped. */
+/** @param {Pick<Document, "querySelector">} doc @returns {string | null} */
+export function pageBuildIdFrom(doc) {
+  const value = doc.querySelector('meta[name="glosa-build"]')?.getAttribute("content") ?? null;
+  return value !== null && /^[0-9a-f]{16}$/.test(value) ? value : null;
+}
+
+/** Whether the daemon answering the first handshake is another build than the one that served this
+ * page: it restarted in between. A build id is `<version>-<hash>`. */
+/** @param {Handshake | null} handshake @param {string | null} pageBuildId */
+export function servedByAnotherBuild(handshake, pageBuildId) {
+  const build = /** @type {{ build_id?: unknown } | null} */ (handshake)?.build_id;
+  return pageBuildId !== null && typeof build === "string" && build.slice(build.lastIndexOf("-") + 1) !== pageBuildId;
+}
+
 /** Remember which daemon issued the credential this tab holds, so a later 401 can be attributed.
  * Only recorded alongside a token, and only when the daemon publishes an identity — a tab paired
  * before either existed simply has nothing to compare and behaves exactly as it did before. */
@@ -438,6 +457,13 @@ async function main() {
   const token = scrubSecrets(window.location, window.localStorage, window.history, route, redeemed);
   const pairedInstall = window.localStorage.getItem(INSTALL_KEY);
 
+  const pageBuildId = pageBuildIdFrom(document);
+  const updateNotice = createUpdateNotice({
+    document,
+    reload: () => window.location.reload(),
+    shell: /** @type {any} */ (window).glosaShell ?? null,
+  });
+
   /** @type {ReturnType<typeof createDataAccess> | null} */
   let dataAccess = null;
   dataAccess = createDataAccess({
@@ -445,11 +471,30 @@ async function main() {
     onForeignDaemon: () => {
       if (dataAccess && pairedInstall) void enterForeignDaemon(dataAccess, pairedInstall);
     },
+    contractVersion: CONTRACT_VERSION,
+    pageBuildId,
+    onDaemonChanged: (kind) => updateNotice.show(kind),
   });
 
   /** @type {Handshake | null} */
   const handshake = await dataAccess.daemonIdentity(); // null → daemon unreachable → "down" screen
   if (navigation.isNavigating()) return;
+  // The daemon restarted between serving this page and answering it (#432, R-L6). Nothing has been
+  // edited yet, so reload once to be served by it; a second mismatch only shows the notice.
+  if (servedByAnotherBuild(handshake, pageBuildId)) {
+    let reloaded = false;
+    try {
+      reloaded = window.sessionStorage.getItem(BUILD_RELOAD_KEY) === pageBuildId;
+      if (!reloaded) window.sessionStorage.setItem(BUILD_RELOAD_KEY, /** @type {string} */ (pageBuildId));
+    } catch {
+      reloaded = true; // no session storage: never risk a reload loop
+    }
+    if (!reloaded) {
+      window.location.reload();
+      return;
+    }
+    updateNotice.show("build-changed");
+  }
 
   const screen = selectScreen(handshake, token, pairedInstall);
   render(screen);

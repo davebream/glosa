@@ -151,6 +151,25 @@ describe("the install lifetime policy's asset rules (#432, R-L1 and R-L6)", () =
     expect(visited).toContain(`/app/@${HASH}/bootstrap.js`);
   });
 
+  test("no hand-written SPA module names an absolute /app/ path, which would escape the page's build scope", () => {
+    const dir = fileURLToPath(SPA_ROOT);
+    // Named exceptions, each with why its literal is not a load:
+    const exempt = new Map([
+      // Compares a provider's canonical `/app/…` route from the daemon, then scopes it (scopedModule)
+      // before loading, so what it imports is always under the page's own build.
+      ["dictation.js", "route comparison, scoped before import"],
+    ]);
+    const offenders: string[] = [];
+    for (const name of new Bun.Glob("*.js").scanSync({ cwd: dir })) {
+      if (exempt.has(name)) continue;
+      const source = readFileSync(join(dir, name), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      for (const match of source.matchAll(/["'`]\/app\//g)) offenders.push(`${name}@${match.index}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
   test("another build's scope is 410 build-changed; the unscoped form still answers for older pages", async () => {
     const spaAssets = pinnedSpaAssets({ buildHash: HASH, providerAssets: [] });
     const fetchFn = createApiFetch({ port: PORT, classFPort: PORT + 1, token: null, spaAssets } as ApiContext);

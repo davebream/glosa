@@ -327,6 +327,28 @@ export function cliCandidates(lookup: CliLookup): string[] {
   return candidates;
 }
 
+/**
+ * R-L8 (#432): whether a shell may look for a CLI at all. A packaged app whose own bundled CLI is gone
+ * was removed or replaced underneath it (`pacman -R`, an upgrade in progress); running another
+ * install's CLI then would silently select that install, so it runs none and says so. An unpackaged
+ * run, or a packaged app with its CLI in place, looks up candidates as usual.
+ */
+export function cliChoice(state: { packaged: boolean; ownCliExists: boolean }): "lookup" | "removed" {
+  return state.packaged && !state.ownCliExists ? "removed" : "lookup";
+}
+
+/** What asking the shell to bring a window's daemon back came to (R-L8). */
+export type ReconnectResult = { ok: true } | { ok: false; reason: "removed" | "foreign" | "failed"; message?: string };
+
+/** R-L8: after `glosa open` ran for the window's folder, is the daemon answering the one this window
+ * paired with? `paired` is the install id recorded when the window opened (null when the daemon
+ * published none); `answered` the one the handshake reports now. */
+export function reconnectOutcome(paired: string | null, answered: string | null): ReconnectResult {
+  if (answered === null) return { ok: false, reason: "failed", message: "The glosa daemon is not answering." };
+  if (paired !== null && answered !== paired) return { ok: false, reason: "foreign" };
+  return { ok: true };
+}
+
 // ---------- glosa:// links (#392) ----------
 
 /** What a `glosa://open?...` link asks for. Never a token: the shell mints its own by running

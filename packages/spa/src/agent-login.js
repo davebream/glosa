@@ -24,7 +24,12 @@ export async function mountAgentLogin(
   const { Terminal } = await import("./vendor/xterm.mjs");
   if (!document.querySelector("link[data-agent-terminal]")) {
     document.head.append(
-      el("link", { rel: "stylesheet", href: "/app/vendor/xterm.css", "data-agent-terminal": "true" }),
+      // Beside this module, so it inherits the page's build scope (#432, R-L6).
+      el("link", {
+        rel: "stylesheet",
+        href: new URL("./vendor/xterm.css", import.meta.url).href,
+        "data-agent-terminal": "true",
+      }),
     );
   }
   if (signal?.aborted) return { destroy: async () => {} };

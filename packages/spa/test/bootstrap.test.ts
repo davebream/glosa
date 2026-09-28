@@ -8,11 +8,13 @@ import { describe, expect, test } from "bun:test";
 import {
   CONTRACT_VERSION,
   focusHash,
+  pageBuildIdFrom,
   readRoute,
   rememberDaemonIdentity,
   resolvePresentationToken,
   scrubSecrets,
   selectScreen,
+  servedByAnotherBuild,
   waitForOwnDaemon,
   watchRouteChanges,
   writeFocus,
@@ -628,5 +630,29 @@ describe("surface kind (decision 2026-09-25: the face belongs to the surface)", 
     const storage = { getItem: () => null, setItem() {}, removeItem() {} };
     scrubSecrets(location, storage, history, readRoute(location), "durable");
     expect(location.hash).toBe("#w=x&kind=desk");
+  });
+});
+
+describe("the page's own build (#432, R-L6)", () => {
+  const docWith = (content: string | null) => ({
+    querySelector: (selector: string) =>
+      selector === 'meta[name="glosa-build"]' && content !== null ? { getAttribute: () => content } : null,
+  });
+
+  test("reads the build hash the daemon stamped, and nothing else", () => {
+    expect(pageBuildIdFrom(docWith("0123456789abcdef") as never)).toBe("0123456789abcdef");
+    expect(pageBuildIdFrom(docWith(null) as never)).toBeNull();
+    expect(pageBuildIdFrom(docWith("not-a-hash") as never)).toBeNull();
+  });
+
+  test("a first handshake from another build means the daemon restarted after serving this page", () => {
+    expect(servedByAnotherBuild({ build_id: "1.0.1-fedcba9876543210" } as never, "0123456789abcdef")).toBe(true);
+    expect(servedByAnotherBuild({ build_id: "1.0.0-alpha.3-0123456789abcdef" } as never, "0123456789abcdef")).toBe(
+      false,
+    );
+    // An unstamped page (served by an older daemon) and an older daemon's handshake prove nothing.
+    expect(servedByAnotherBuild({ build_id: "1.0.1-fedcba9876543210" } as never, null)).toBe(false);
+    expect(servedByAnotherBuild({} as never, "0123456789abcdef")).toBe(false);
+    expect(servedByAnotherBuild(null, "0123456789abcdef")).toBe(false);
   });
 });

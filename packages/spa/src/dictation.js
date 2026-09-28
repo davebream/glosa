@@ -8,6 +8,14 @@ export const DICTATION_MAX_DURATION_MS = 345_000;
 const ALLOWED_CLIENT_MODULES = new Map([["wispr-flow", "/app/providers/wispr-flow/browser.js"]]);
 const encoder = new TextEncoder();
 
+/** A provider's `/app/…` module, resolved beside this file so it inherits the page's build scope
+ *  (`/app/@<hash>/…`, #432 R-L6) and can never load another build's code. */
+function scopedModule(route) {
+  return typeof route === "string" && route.startsWith("/app/")
+    ? new URL(`.${route.slice("/app".length)}`, import.meta.url).href
+    : route;
+}
+
 function bytes(value) {
   return encoder.encode(value).length;
 }
@@ -301,7 +309,7 @@ export function createDictationController({
       }
       const [grant, module] = await Promise.all([
         dataAccess.createDictationSession(),
-        loadModule(availability.client_module),
+        loadModule(scopedModule(availability.client_module)),
       ]);
       if (active !== session) {
         for (const track of stream.getTracks()) track.stop();
