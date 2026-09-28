@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CONTRACT_VERSION,
+  claimBuildReload,
   focusHash,
   pageBuildIdFrom,
   readRoute,
@@ -654,5 +655,24 @@ describe("the page's own build (#432, R-L6)", () => {
     expect(servedByAnotherBuild({ build_id: "1.0.1-fedcba9876543210" } as never, null)).toBe(false);
     expect(servedByAnotherBuild({} as never, "0123456789abcdef")).toBe(false);
     expect(servedByAnotherBuild(null, "0123456789abcdef")).toBe(false);
+  });
+
+  test("a page reloads once per build, and never when the store refuses", () => {
+    const store = fakeStorage();
+    expect(claimBuildReload(store, "0123456789abcdef")).toBe(true);
+    // Served stale again after the reload, or a second tab of the same build: the notice, not a loop.
+    expect(claimBuildReload(store, "0123456789abcdef")).toBe(false);
+    // The next upgrade gets its own reload.
+    expect(claimBuildReload(store, "fedcba9876543210")).toBe(true);
+    const refusing = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("storage disabled");
+      },
+      removeItem: () => {},
+    };
+    expect(claimBuildReload(refusing as never, "0123456789abcdef")).toBe(false);
+    const forgetful = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    expect(claimBuildReload(forgetful as never, "0123456789abcdef")).toBe(false);
   });
 });

@@ -50,7 +50,7 @@ const MESSAGES = {
  * every tab reads the same pair (A5 §F13's `install_id`). Not a secret: it is a hash the tokenless
  * handshake already publishes to anyone who asks. */
 const INSTALL_KEY = "glosa_install";
-/** The build this tab already reloaded for once (#432), in session storage so a reload cannot loop. */
+/** The page build a tab on this origin already reloaded for once (#432), so a reload cannot loop. */
 const BUILD_RELOAD_KEY = "glosa_build_reload";
 
 /** How long to wait for a tab's own daemon to reclaim the port before giving up and asking the
@@ -320,6 +320,21 @@ export function servedByAnotherBuild(handshake, pageBuildId) {
   return pageBuildId !== null && typeof build === "string" && build.slice(build.lastIndexOf("-") + 1) !== pageBuildId;
 }
 
+/** Whether a page whose daemon restarted between serving it and answering it may reload, recording
+ * that it did (#432, R-L6). Once per page build on this origin: a page served stale again after
+ * reloading only shows the update notice, and so does a second tab of the same build. A store that
+ * cannot be read or written never allows a reload, so a reload can never loop. */
+/** @param {TokenStorage} storage @param {string} pageBuildId */
+export function claimBuildReload(storage, pageBuildId) {
+  try {
+    if (storage.getItem(BUILD_RELOAD_KEY) === pageBuildId) return false;
+    storage.setItem(BUILD_RELOAD_KEY, pageBuildId);
+    return storage.getItem(BUILD_RELOAD_KEY) === pageBuildId;
+  } catch {
+    return false;
+  }
+}
+
 /** Remember which daemon issued the credential this tab holds, so a later 401 can be attributed.
  * Only recorded alongside a token, and only when the daemon publishes an identity — a tab paired
  * before either existed simply has nothing to compare and behaves exactly as it did before. */
@@ -482,14 +497,7 @@ async function main() {
   // The daemon restarted between serving this page and answering it (#432, R-L6). Nothing has been
   // edited yet, so reload once to be served by it; a second mismatch only shows the notice.
   if (servedByAnotherBuild(handshake, pageBuildId)) {
-    let reloaded = false;
-    try {
-      reloaded = window.sessionStorage.getItem(BUILD_RELOAD_KEY) === pageBuildId;
-      if (!reloaded) window.sessionStorage.setItem(BUILD_RELOAD_KEY, /** @type {string} */ (pageBuildId));
-    } catch {
-      reloaded = true; // no session storage: never risk a reload loop
-    }
-    if (!reloaded) {
+    if (claimBuildReload(window.localStorage, /** @type {string} */ (pageBuildId))) {
       window.location.reload();
       return;
     }
