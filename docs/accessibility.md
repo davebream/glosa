@@ -100,5 +100,11 @@ establish practical screen-reader usability:
   should do the same through the shell: High contrast from the first frame of a new window and
   after View > Reload, a switch without a reload when the setting changes while glosa runs, and
   Settings > Appearance saying "Increase contrast is on for this Mac, so glosa shows High
-  contrast. glosa's own palette returns when it is off." Not yet observed on a Mac; the automated
-  checks above emulate the query in Chromium and override the shell's getter in Electron.
+  contrast. glosa's own palette returns when it is off." Last observed on 2026-09-28 (macOS 26.2,
+  Safari 26.2, `main` at a4319de): all of the above held in Safari and the desktop app. With
+  Reduce Motion on, the desktop app received it without a reload, and in Safari the navigator,
+  menus and tabs changed state at once and stayed clear. The notes tray was found still sliding
+  open and its chevron still turning; both were fixed that day, and
+  `test/acceptance/workbench-real-engine.test.ts` now holds that nothing in an open document
+  transitions a property that moves it under reduced motion. The automated checks above emulate
+  the query in Chromium and override the shell's getter in Electron.
