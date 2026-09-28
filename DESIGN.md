@@ -465,11 +465,13 @@ The chat has one style of its own, Conversation, whatever style the document bes
 | Headings | `h1` and `h2` 1.25em, `h3` 1.125em, all 620; `h4`–`h6` the body's size at 650; never larger than the document's `h3` (at the smallest steps that cap sets `h1` to `h3` alike) |
 | Tables | The page's ruled table in Source Sans 3 at 14px, 13px Muted head at 600 |
 | Code | 0.85em inline on Surface; blocks 13px / 1.6 on the page's code bed |
+| Reasoning summaries | Closed disclosure labelled in Source Sans 3; expanded prose in muted Source Serif 4, two steps under the document with a 15px floor, unboxed |
 
 - **The column:** in em of the reply, so a text size step keeps its line: about 72 characters of prose at the default step and 76 at the largest, a little shorter than the page's. Every turn sits in it; the person's bubble stops at 28em, well short of it, so even a long message keeps to the column's right edge.
 - **Headings:** a reply's `h1` and `h2` are one size, since a reply is a turn in a conversation, not a document with a title; weight and the space above them carry the rest.
 - **Colour:** a reply is ink, its quotes and table heads Muted as on the page, its links the page's. Session Ink never colours a session's words.
 - **Tables:** the Cell Break Rule holds in the chat too: a reply's table breaks words only when one is too long for any column, and then fits the column.
+- **Reasoning summaries:** reasoning starts closed under “Reasoning summary”. Its expanded words are session-authored prose, so they stay unboxed and use muted Source Serif 4 at the note size: 15px by default, 15px at the floor and 20px at the largest setting. Tool output remains a 12px monospace Surface box.
 
 ### The Reading Scale
 One text size per device sets every reading surface together: the document, its margin notes, the composer and the chat. The reader chooses it from a ladder of 15, 16, 18, 20, 22 and 24 (default 18) in the document's More menu or in Settings > Appearance; it is stored in the browser like the appearance and written on `<html>` before first paint (`--reading-step`, `--chat-step`, `--note-step`), so a page never reflows after it has painted. Sizes are rem values, so a browser's larger default font carries the whole page too.

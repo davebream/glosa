@@ -7998,10 +7998,10 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-message[data-kind="human"] .glosa-chat-text {
   text-wrap: pretty;
 }
-.glosa-chat-message[data-kind="detail"] {
+.glosa-chat-message:is([data-kind="detail"], [data-kind="reasoning"]) {
   margin-bottom: 10px;
 }
-.glosa-chat-message[data-kind="detail"] summary {
+.glosa-chat-message:is([data-kind="detail"], [data-kind="reasoning"]) summary {
   font-weight: 400;
 }
 .glosa-chat-message[data-kind="detail"] .glosa-chat-text {
@@ -8009,6 +8009,13 @@ nav.glosa-chat-actions[hidden] {
   padding: 10px 12px;
   background: var(--surface);
   border-radius: var(--radius-tool);
+}
+.glosa-chat-message[data-kind="reasoning"] .glosa-chat-text {
+  font: var(--note-size) / 1.62 var(--font-serif);
+  color: var(--muted);
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
 }
 .glosa-chat-message[data-kind="error"] {
   padding: 12px;
