@@ -274,8 +274,12 @@ generic.**
 
 **Managed-chat amendment (2026-09-23).** Companion sessions remain externally owned. An additional,
 explicitly selected managed topology may launch the unmodified Claude/Codex runtime through a
-provider adapter and an owned Bun guardian. It uses private account profiles, native subscription
-login, foreground versioned workspace/MCP consent and durable chat intent. Opening history never
+provider adapter and an owned Bun guardian. It uses private account profiles or explicitly linked
+native configuration directories, native subscription login, foreground versioned workspace/MCP
+consent and durable chat intent. Linked profiles use the native agent’s settings, skills, plugins,
+hooks and MCP servers after foreground approval; startup hooks can run before a prompt is sent.
+Unlinking never invokes native logout or deletes native configuration. Configuration authority changes
+invalidate workspace consent. Existing profiles remain private and isolated. Opening history never
 starts a runtime. No account fallback, API fallback, credential import or external-session takeover.
 Public managed execution stays unavailable until the joint Claude/Codex qualification and offering
 gates in the [implementation contract](design/2026-09-23-agent-chat-implementation.md) pass.
