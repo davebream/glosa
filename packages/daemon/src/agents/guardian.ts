@@ -152,18 +152,30 @@ async function start(spec: z.infer<typeof startSchema>): Promise<void> {
         },
       })
     : Bun.spawn(host, { ...options, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  // Verify the actual process group before ever signalling it (including the PTY case).
-  const probe = Bun.spawn(["/bin/ps", "-o", "pgid=", "-p", String(child.pid)], {
-    env: { PATH: "/usr/bin:/bin" },
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  const observed = Number((await new Response(probe.stdout).text()).trim());
-  await probe.exited;
-  if (observed !== child.pid) {
-    child.kill("SIGKILL");
-    await child.exited;
-    throw new Error("native process group ownership could not be established");
+  // No native launch has been sent yet. Linux can return an already-failed host handle
+  // where macOS throws from spawn, so every failed group probe must settle that owned handle.
+  try {
+    const probe = Bun.spawn(["/bin/ps", "-o", "pgid=", "-p", String(child.pid)], {
+      env: { PATH: "/usr/bin:/bin" },
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const observed = Number((await new Response(probe.stdout).text()).trim());
+    const probeCode = await probe.exited;
+    if (probeCode !== 0 || observed !== child.pid)
+      throw new Error("native process group ownership could not be established");
+  } catch (error) {
+    // Only this handle is ours; an unverified process group is never signalled. The host cannot
+    // have native descendants before its IPC launch message. Await exit before releasing capacity.
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* May already have exited. */
+    }
+    const code = await child.exited;
+    child.terminal?.close();
+    receipt(code, child.signalCode ?? null);
+    throw error;
   }
   group = child.pid;
   const pumps = [pump(child.stdout, "stdout"), pump(child.stderr, "stderr")];
