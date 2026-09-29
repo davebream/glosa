@@ -1146,3 +1146,8 @@ export function browserReadResult(
     truncated,
   };
 }
+
+/** The real-Electron suite may run without native UI, but a packaged app always shows its windows. */
+export function hiddenMode(state: { packaged: boolean; value: string | undefined }): boolean {
+  return !state.packaged && state.value === "yes";
+}

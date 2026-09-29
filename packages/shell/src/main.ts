@@ -48,6 +48,7 @@ import {
   egressDecision,
   externalLinkDecision,
   firstFrameColor,
+  hiddenMode,
   linkFromArgv,
   lockGuestPreferences,
   loopbackApiOrigin,
@@ -93,6 +94,10 @@ const PRELOAD = join(here, "preload.cjs");
 const log = (line: string): void => {
   process.stderr.write(`[glosa-shell] ${line}\n`);
 };
+
+// Test-only: a shipped app ignores this environment variable and always uses its normal UI.
+const hidden = hiddenMode({ packaged: app.isPackaged, value: process.env.GLOSA_SHELL_HIDDEN });
+if (hidden && process.platform === "darwin") app.setActivationPolicy("accessory");
 
 // ---------- the recorded executable is the install of truth (R-O1) ----------
 
@@ -288,6 +293,7 @@ function routedWindows(): RoutedWindow[] {
  */
 async function confirmOpen(path: string): Promise<boolean> {
   if (!app.isPackaged && process.env.GLOSA_SHELL_CONFIRM === "yes") return true;
+  if (hidden) return false;
   const answer = await dialog.showMessageBox({
     type: "question",
     buttons: ["Open", "Cancel"],
@@ -319,8 +325,10 @@ async function openLink(url: string): Promise<void> {
     },
     errorWindow: null,
   });
-  if (win.isMinimized()) win.restore();
-  win.focus();
+  if (!hidden) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
 }
 
 // ---------- the window follows glosa's appearance, the Dock follows macOS (#405) ----------
@@ -370,6 +378,8 @@ function createWindow(origin: string | null): BrowserWindow {
     width: 1280,
     height: 860,
     title: "glosa",
+    // Keep Electron's initial-paint default: a hidden window can then run animation frames.
+    ...(hidden ? { show: false } : {}),
     // The frame before the page paints: the last paper any window reported, else the paper of the
     // operating system's scheme, so a window opened while glosa is in Dark never flashes white.
     backgroundColor: firstFrameColor(lastReportedPaper, osIsDark()),
@@ -378,6 +388,8 @@ function createWindow(origin: string | null): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      // Ask Electron to keep frames running if a test window becomes backgrounded.
+      ...(hidden ? { backgroundThrottling: false } : {}),
       // The preload reads this to decide whether to expose anything at all (R-P3). It is the
       // origin the CLI links to, learned from `glosa open`; a window with no origin exposes nothing.
       additionalArguments: origin ? [`--glosa-spa-origin=${origin}`] : [],
@@ -418,6 +430,10 @@ function createWindow(origin: string | null): BrowserWindow {
   wc.on("did-attach-webview", (_event, guest) => wireBrowserTab(wc, guest));
   // A `beforeunload` guard in the SPA (unsaved edits) would otherwise cancel the close silently.
   wc.on("will-prevent-unload", (event) => {
+    if (hidden) {
+      event.preventDefault();
+      return;
+    }
     const choice = dialog.showMessageBoxSync(win, {
       type: "question",
       buttons: ["Stay", "Leave"],
@@ -569,6 +585,7 @@ function installBrowserSession(): void {
 }
 
 async function chooseFolder(win: BrowserWindow | null): Promise<string | null> {
+  if (hidden) return null;
   const opts = { properties: ["openDirectory" as const], message: "Choose a folder to open in glosa" };
   const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
   if (r.canceled || r.filePaths.length === 0) return null;
@@ -672,6 +689,7 @@ async function runUpdateCheck(): Promise<void> {
     channel: updateChannelFor(process.platform, packageType),
     arch: process.arch,
   });
+  if (hidden) return;
   const win = BrowserWindow.getFocusedWindow();
   const answer = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   const action = actions[answer.response] ?? null;
@@ -799,8 +817,8 @@ function installIpc(): void {
   ipcMain.handle("glosa:notify", (event, payload: unknown) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     const decision = notifyDecision(payload, shownNotifications);
-    if (decision.badge !== undefined) app.setBadgeCount(decision.badge);
-    if (decision.show && Notification.isSupported()) {
+    if (decision.badge !== undefined && !hidden) app.setBadgeCount(decision.badge);
+    if (decision.show && !hidden && Notification.isSupported()) {
       const note = new Notification(decision.show);
       liveNotifications.add(note);
       note.on("close", () => liveNotifications.delete(note));
@@ -877,7 +895,7 @@ app.on("second-instance", (_event, argv) => {
     return;
   }
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
+  if (win && !hidden) {
     if (win.isMinimized()) win.restore();
     win.focus();
   }
