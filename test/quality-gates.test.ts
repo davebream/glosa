@@ -173,6 +173,20 @@ describe("repository quality gates", () => {
       expect(ci).not.toContain(`secrets.${secret}`);
   });
 
+  // Bun can install Electron's package without its binary. The real-Electron suite then skips every
+  // test and the runner fails the job: the v0.1.0-alpha.37 release run did exactly that, because
+  // ci.yml gained this step (#439) and release.yml did not.
+  test("CI and release both install Electron's binary before the real-Electron suite", () => {
+    for (const [name, workflow] of [["ci.yml", workflows[0]!], ["release.yml", workflows[1]!]] as const) {
+      const shell = job(workflow, "shell");
+      const install = shell.indexOf("node packages/shell/node_modules/electron/install.js");
+      const suite = shell.indexOf("- name: Run the shell's renderer security suite in real Electron");
+      expect(install, `${name}: the shell job installs Electron's binary`).toBeGreaterThan(-1);
+      expect(suite, `${name}: the real-Electron suite step exists`).toBeGreaterThan(-1);
+      expect(install, `${name}: the binary is installed before the suite runs`).toBeLessThan(suite);
+    }
+  });
+
   // #371: the desktop app is built on every tag, but only a signed and notarized app may reach a
   // release (Homebrew 5.0 deprecated unsigned casks; macOS 15.1+ refuses unsigned downloads). A
   // job-level `if:` cannot read secrets, so one step decides and every publishing step is gated on
