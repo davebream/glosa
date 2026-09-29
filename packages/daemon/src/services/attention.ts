@@ -9,6 +9,7 @@ import {
   type AttentionTarget,
   type AttentionVerdict,
 } from "../bus/bus.ts";
+import { currentPayload } from "../bus/path-identity.ts";
 import { readInboxEntry } from "../bus/inbox.ts";
 import { type EntryKind, isTerminal } from "../bus/lifecycle.ts";
 import { isOpenAttention, peekJournal } from "../bus/peek.ts";
@@ -140,7 +141,7 @@ export function listAttention(deps: AttentionDependencies, slug: string) {
     .map(([id, item]) => {
       let payload: Record<string, unknown> = {};
       try {
-        const raw = readInboxEntry(workspace, id);
+        const raw = currentPayload(state, id, readInboxEntry(workspace, id));
         if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) payload = raw as Record<string, unknown>;
       } catch {
         // Journal state remains authoritative when immutable payload recovery fails.

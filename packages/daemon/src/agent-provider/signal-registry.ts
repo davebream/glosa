@@ -87,6 +87,23 @@ export function planSignals(event: JournalEvent, sessions: readonly string[]): P
   const resources = stringsOf(d.resources);
   const others = (except: string | undefined) => sessions.filter((session) => session !== except);
   switch (event.event) {
+    case "paths_renamed":
+      return stringsOf(d.holders).map((target) => ({
+        target,
+        kind: "info" as const,
+        resources: [`artifact:${d.to}`],
+        message: `A person renamed ${d.from} to ${d.to}. Re-read the new path before continuing.`,
+      }));
+    case "entry_created": {
+      const operation = d.file_operation as { op?: string; path?: string; holders?: string[] } | undefined;
+      if (operation?.op !== "trash") return [];
+      return stringsOf(operation.holders).map((target) => ({
+        target,
+        kind: "info" as const,
+        resources: [`artifact:${operation.path}`],
+        message: `A person moved ${operation.path} to the Trash. Do not recreate it at the old path.`,
+      }));
+    }
     case "claim_taken": {
       const actor = typeof d.session === "string" ? d.session : undefined;
       const mode = d.mode === "presence" ? "is looking at" : "is editing";

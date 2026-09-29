@@ -5,7 +5,7 @@
 // human as "a commit" — R1). Reads shadow-git history the same way checkpoint-diff.ts does (this
 // module only reads what git/shadow.ts's `checkpoint()` already produced).
 import { commitExists } from "./checkpoint-diff.ts";
-import { runGit } from "./git/shadow.ts";
+import { runGit, shadowJournalEvents } from "./git/shadow.ts";
 import type { WorkspaceTarget } from "./workspace.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { journalPath } from "./bus/paths.ts";
@@ -104,6 +104,21 @@ export async function checkpointArtifactPath(
   checkpoint: string,
   targetPath: string,
 ): Promise<string> {
+  const renames = shadowJournalEvents(root)
+    .filter((event) => event.event === "paths_renamed")
+    .reverse();
+  for (const event of renames) {
+    const d = event.detail;
+    if (typeof d?.from !== "string" || typeof d.to !== "string" || typeof d.checkpoint_after !== "string") continue;
+    if (targetPath !== d.to && !(d.scope === "folder" && targetPath.startsWith(`${d.to}/`))) continue;
+    const full = (await runGit(root, ["rev-parse", "--verify", checkpoint])).stdout.trim();
+    if (
+      full !== d.checkpoint_after &&
+      (await runGit(root, ["merge-base", "--is-ancestor", full, d.checkpoint_after], { allowExitCodes: [0, 1] }))
+        .exitCode === 0
+    )
+      targetPath = d.from + targetPath.slice(d.to.length);
+  }
   const refs = await lineageRefs(root);
   for (const lineage of attachedLineages(root)) {
     for (const source of lineage.sources) {

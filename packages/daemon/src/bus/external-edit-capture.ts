@@ -9,6 +9,7 @@
 // the git layer to ask what kind an entry is. The split keeps that true by construction.
 import { shadowJournalEvents, runGit, safePathspec } from "../git/shadow.ts";
 import type { WorkspaceTarget } from "../workspace.ts";
+import { historyPath, directoryFromHistoryKey } from "../versioned-files.ts";
 import {
   EXTERNAL_EDIT_CHECKPOINT_KIND,
   EXTERNAL_EDIT_KIND,
@@ -35,10 +36,12 @@ export async function externalEditPayloads(
 
   const payloads: ExternalEditPayload[] = [];
   for (const path of paths) {
-    const diff = (await runGit(workspace, ["diff", "-M", sinceSha, untilSha, "--", safePathspec(path)])).stdout;
+    const diff = directoryFromHistoryKey(path)
+      ? "Directory structure changed."
+      : (await runGit(workspace, ["diff", "-M", sinceSha, untilSha, "--", safePathspec(path)])).stdout;
     payloads.push({
       kind: EXTERNAL_EDIT_KIND,
-      path,
+      path: historyPath(path),
       diff,
       diff_bytes: Buffer.byteLength(diff, "utf8"),
       since_checkpoint: sinceSha,

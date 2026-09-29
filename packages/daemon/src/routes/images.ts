@@ -1,8 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 import { importImage, listImages, readImage, ImageError, MAX_IMAGE_BYTES } from "../images.ts";
 import { decodePathCapture } from "../security/confine-path.ts";
-import { findWorkspace, WorkspaceLookupError, type WorkspaceAccess } from "../services/workspace-access.ts";
-import { problem } from "../transport/problem.ts";
+import {
+  findWorkspace,
+  workspaceBus,
+  WorkspaceLookupError,
+  type WorkspaceAccess,
+} from "../services/workspace-access.ts";
+import { historicalImage } from "../services/file-history.ts";
+import { directoryHistoryKey } from "../versioned-files.ts";
+import { FileOperationError } from "../security/file-path-guard.ts";
+import { posix } from "node:path";
+import { workspaceTracking } from "../workspace.ts";
+import { problem, type ProblemSlug } from "../transport/problem.ts";
 import type { RouteMatch } from "./types.ts";
 
 export function imageRoutes(deps: WorkspaceAccess, method: string, pathname: string): RouteMatch | null {
@@ -21,7 +31,10 @@ export function imageRoutes(deps: WorkspaceAccess, method: string, pathname: str
         if (method === "GET") {
           const path = decodePathCapture(match[2]!);
           if (!path.ok) throw new ImageError(400, "invalid-image-path", "Invalid image path.");
-          const image = readImage(workspace, path.path);
+          const checkpoint = new URL(req.url).searchParams.get("checkpoint");
+          const image = checkpoint
+            ? { ...(await historicalImage(deps, slug.path, path.path, checkpoint)), version: checkpoint }
+            : readImage(workspace, path.path);
           return new Response(new Uint8Array(image.bytes), {
             headers: {
               "Content-Type": image.mime,
@@ -61,16 +74,47 @@ export function imageRoutes(deps: WorkspaceAccess, method: string, pathname: str
         if (authSignal?.aborted) throw new ImageError(401, "unauthorized", "This connection is no longer authorized.");
         // Revalidate after every asynchronous boundary, before a synchronous filesystem commit.
         workspace = findWorkspace(deps, slug.path);
-        return Response.json(
-          importImage(workspace, {
-            name: file.name,
-            bytes,
-            ...(typeof document === "string" ? { document } : {}),
-            ...(typeof directory === "string" ? { directory } : {}),
-          }),
-          { status: 201 },
-        );
+        const input = {
+          name: file.name,
+          bytes,
+          ...(typeof document === "string" ? { document } : {}),
+          ...(typeof directory === "string" ? { directory } : {}),
+        };
+        const imported =
+          workspaceTracking(workspace).mode === "bounded"
+            ? importImage(workspace, input)
+            : await (await workspaceBus(deps, workspace)).captureHumanFileOperation(() => ({
+                operation: {
+                  op: "import",
+                  path:
+                    typeof directory === "string" ? directory : posix.join(posix.dirname(document as string), "images"),
+                  scope: "folder",
+                },
+                mutate: () => {
+                  if (authSignal?.aborted)
+                    throw new ImageError(401, "unauthorized", "This connection is no longer authorized.");
+                  workspace = findWorkspace(deps, slug.path);
+                  return importImage(workspace, input);
+                },
+                historyFiles: (value) => {
+                  const files = new Map([[value.path, bytes]]);
+                  for (
+                    let directory = posix.dirname(value.path);
+                    directory !== ".";
+                    directory = posix.dirname(directory)
+                  )
+                    files.set(directoryHistoryKey(directory), new Uint8Array());
+                  return files;
+                },
+              }));
+        const response =
+          "value" in imported
+            ? { ...imported.value, checkpoint: imported.checkpoint, history_status: imported.history_status }
+            : imported;
+        return Response.json(response, { status: 201 });
       } catch (error) {
+        if (error instanceof FileOperationError)
+          return problem(error.status, error.code as ProblemSlug, error.message, undefined, pathname, error.data);
         if (error instanceof ImageError) return problem(error.status, error.code, error.message, undefined, pathname);
         if (error instanceof WorkspaceLookupError)
           return problem(

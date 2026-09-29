@@ -58,6 +58,7 @@ import { claimProblem, claimRoutes } from "../routes/claims.ts";
 import { composerRoutes } from "../routes/composer.ts";
 import { dictationRoutes } from "../routes/dictation.ts";
 import { imageRoutes } from "../routes/images.ts";
+import { fileRoutes } from "../routes/files.ts";
 import { chatRoutes } from "../routes/chats.ts";
 import type { ManagedChatService } from "../chats/service.ts";
 import { shadowRoutes } from "../routes/shadow.ts";
@@ -2954,6 +2955,8 @@ function sessionCandidates(records: ReturnType<SessionRegistry["forWorkspace"]>)
 
 function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMatch | null {
   const method = req.method;
+  const fileRoute = fileRoutes(ctx, method, pathname);
+  if (fileRoute) return fileRoute;
   const imageRoute = imageRoutes(ctx, method, pathname);
   if (imageRoute) return imageRoute;
   const managedRoute = chatRoutes({ ...ctx, service: ctx.managedChats }, method, pathname);

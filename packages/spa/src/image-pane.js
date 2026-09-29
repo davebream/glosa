@@ -12,6 +12,7 @@ export function createImagePane(host, { dataAccess, slug, path, onStateChange = 
   let libraries;
   let missing = false;
   let contentUrl = null;
+  let displayedImage = null;
   const ready = refresh();
 
   async function refresh() {
@@ -25,6 +26,7 @@ export function createImagePane(host, { dataAccess, slug, path, onStateChange = 
       missing = false;
       if (contentUrl === image.url && reactRoot) return;
       contentUrl = image.url;
+      displayedImage = image;
       reactRoot ??= lib.createRoot(element);
       reactRoot.render(lib.React.createElement(ImageView, { lib, image, path }));
       onStateChange();
@@ -47,8 +49,20 @@ export function createImagePane(host, { dataAccess, slug, path, onStateChange = 
   element.textContent = "Loading image…";
   return {
     kind: "image",
-    path,
-    title: path.split("/").pop(),
+    get path() {
+      return path;
+    },
+    get title() {
+      return path.split("/").pop();
+    },
+    retarget(nextPath) {
+      path = nextPath;
+      element.setAttribute("aria-label", `Image: ${path}`);
+      if (reactRoot && libraries && displayedImage)
+        void libraries.then((lib) => {
+          if (!disposed) reactRoot.render(lib.React.createElement(ImageView, { lib, image: displayedImage, path }));
+        });
+    },
     element,
     ready,
     isMissing: () => missing,

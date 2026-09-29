@@ -74,6 +74,7 @@ export const SPA_ASSETS: Readonly<Record<string, string>> = {
   "viewer-navigator.js": "text/javascript; charset=utf-8",
   "agent-feedback.js": "text/javascript; charset=utf-8",
   "artifact-tree.js": "text/javascript; charset=utf-8",
+  "file-actions.js": "text/javascript; charset=utf-8",
   "annotate.js": "text/javascript; charset=utf-8",
   // The agent's half of the Review margin: source→rendered quote resolution and card shaping.
   "agent-request.js": "text/javascript; charset=utf-8",

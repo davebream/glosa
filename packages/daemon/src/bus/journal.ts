@@ -21,6 +21,7 @@ export type EventBy = "daemon" | "watcher" | "human" | `session:${string}`;
 // transition_committed, journal_tail_truncated, line_quarantined — the rest are reserved type
 // names for later tasks (P2.3 apply-lease, P2.5 full lifecycle, P2.x checkpoints).
 export type EventType =
+  | "paths_renamed"
   | "entry_created"
   | "delivery_attempt"
   | "transition_committed"
@@ -102,6 +103,7 @@ const LIFECYCLE_CRITICAL_EVENTS: ReadonlySet<EventType> = new Set([
   "baseline_checkpoint",
   "adoption_sealed",
   "lineage_attached",
+  "paths_renamed",
   "entry_adopted",
   "forget_sealed",
 ]);

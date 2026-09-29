@@ -5,6 +5,16 @@
 import type { ManagedAgentCode } from "../agents/interface.ts";
 
 export type ProblemSlug =
+  | "path-exists"
+  | "claimed"
+  | "format-not-allowed"
+  | "tracking-would-change"
+  | "contains-repository"
+  | "protected-path"
+  | "not-manageable"
+  | "trash-unavailable"
+  | "undo-unavailable"
+  | "file-operation-uncertain"
   | "invalid-image-path"
   | "image-missing"
   | "image-too-large"

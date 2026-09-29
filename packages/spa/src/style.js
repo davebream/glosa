@@ -162,6 +162,25 @@ export function createStyleStore({ storage, loadFolderStyle, saveFolderStyle } =
 
   return {
     get,
+    rename(slug, from, to) {
+      const prefix = styleKey(slug, ""),
+        keys = new Set(session.keys());
+      try {
+        for (let i = 0; i < (targetStorage?.length ?? 0); i++) keys.add(targetStorage.key(i));
+      } catch {
+        /* Page-local choices still move when persistence is unavailable. */
+      }
+      for (const key of keys) {
+        if (typeof key !== "string" || !key.startsWith(prefix)) continue;
+        const path = key.slice(prefix.length);
+        if (path !== from && !path.startsWith(`${from}/`)) continue;
+        const value = own(slug, path);
+        // Cleared keys make replay of the same rename harmless.
+        if (value === null) continue;
+        keepOwn(slug, to + path.slice(from.length), value);
+        keepOwn(slug, path, null);
+      }
+    },
     /** The folder default as last read: `{ style, available }`. */
     folder: folderOf,
     /**

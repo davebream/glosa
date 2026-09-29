@@ -576,10 +576,14 @@ export class ArtifactWatcherRegistry {
       }
       if (!directory && IMAGE_EXTENSIONS.test(absPath)) {
         this.notify(state, { type: "image", data: { path: toRelPosixPath(root, absPath) } });
+        this.scheduleQuietWindow(state);
         return;
       }
       // Directory moves can add or remove an entire image subtree.
-      if (directory) state.pendingImageIndex = true;
+      if (directory) {
+        state.pendingImageIndex = true;
+        this.scheduleQuietWindow(state);
+      }
       state.pendingPaths.add(toRelPosixPath(root, absPath));
       this.scheduleReconcile(state);
     };
