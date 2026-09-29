@@ -656,14 +656,29 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       await openFromNavigator(tab, "source.ts");
       await wait(`document.querySelectorAll('.cm-line').length > 0`);
       expect(await tab.evaluate<number>(`document.querySelectorAll('.cm-line').length`)).toBeLessThan(500);
-      expect(
-        await tab.evaluate<boolean>(`(() => {
+      // Font metrics and CodeMirror's deferred measurement must settle before comparing bounds.
+      await tab.evaluate(
+        `document.fonts.ready.then(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))`,
+      );
+      const bounds = await tab.evaluate<{
+        footerHeight: number;
+        footerBottom: number;
+        footerTop: number;
+        editorHeight: number;
+        editorBottom: number;
+        viewport: number;
+      }>(`(() => {
         const pane = document.querySelector('.glosa-read-only-pane[aria-label="Read-only file: source.ts"]');
-        const metadata = pane.querySelector('.glosa-read-only-metadata').getBoundingClientRect();
+        const footer = pane.querySelector('.glosa-read-only-metadata').getBoundingClientRect();
         const editor = pane.querySelector('.cm-editor').getBoundingClientRect();
-        return metadata.height > 0 && metadata.bottom <= innerHeight && editor.height > 100 && editor.bottom <= metadata.top + 1;
-      })()`),
-      ).toBe(true);
+        return {footerHeight:footer.height, footerBottom:footer.bottom, footerTop:footer.top, editorHeight:editor.height, editorBottom:editor.bottom, viewport:innerHeight};
+      })()`);
+      const geometry = JSON.stringify(bounds);
+      expect(bounds.footerHeight, geometry).toBeGreaterThan(0);
+      // A physical pixel of rounding is harmless; losing the footer's row is not.
+      expect(bounds.footerBottom, geometry).toBeLessThanOrEqual(bounds.viewport + 1);
+      expect(bounds.editorHeight, geometry).toBeGreaterThan(100);
+      expect(bounds.editorBottom, geometry).toBeLessThanOrEqual(bounds.footerTop + 1);
       expect(
         await tab.evaluate<unknown>(`document.querySelector('.cm-content').getAttribute('contenteditable')`),
       ).not.toBe("true");
@@ -710,6 +725,8 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         origin: `http://127.0.0.1:${port}`,
         permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"],
       });
+      // Establish a different value so a stale clipboard cannot masquerade as a successful copy.
+      await tab.evaluate("navigator.clipboard.writeText('before-read-only-copy')");
       await tab.evaluate(`(() => {
       document.querySelector('.cm-content').focus();
       const line = document.querySelector('.cm-line'); const range = document.createRange();
