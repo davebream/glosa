@@ -1529,6 +1529,7 @@ describe("the restoration's size guard", () => {
       "docs/decisions.md",
     ];
     let worst = 0;
+    let worstBlock = "";
     let blockCount = 0;
     let unrestored = 0;
     for (const name of documents) {
@@ -1540,7 +1541,11 @@ describe("the restoration's size guard", () => {
         // Called WITHOUT source bytes this is the de-escape relaxation alone — the same string the
         // restoration diffs against the source, so this is the real matrix, not a proxy for it.
         const relaxed = serializeNodesFaithfully([node], referenceSuffix);
-        worst = Math.max(worst, (tokens(relaxed) + 1) * (tokens(body) + 1));
+        const matrix = (tokens(relaxed) + 1) * (tokens(body) + 1);
+        if (matrix > worst) {
+          worst = matrix;
+          worstBlock = `${name}, block ${index}: ${body.slice(0, 80)}`;
+        }
         blockCount += 1;
         if (serializeNodesFaithfully([node], referenceSuffix, body) !== body) unrestored += 1;
       }
@@ -1552,7 +1557,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(910);
+    ).toBe(916);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1575,7 +1580,7 @@ describe("the restoration's size guard", () => {
     // Asserted with headroom rather than bare inequality, so a document growing towards the budget
     // turns this red while there is still room to widen it — before it silently turns the fix off
     // for that block.
-    expect(worst * 1.5).toBeLessThan(budget);
+    expect(worst * 1.5, worstBlock).toBeLessThan(budget);
     // And the property the whole restoration rests on: handed a block's own bytes back, every block
     // in the corpus comes back as those bytes. Nothing the writer did not change can move.
     expect(unrestored).toBe(0);
@@ -2078,7 +2083,8 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // CHANGELOG Added bullet: 904 blocks / 825 edits. Numerators unmoved. Its agent tools: a
   // docs/decisions.md entry (a heading and six paragraphs), a sentence each in requirements and
   // AGENTS.md, a DESIGN.md bullet and a CHANGELOG bullet: 910 blocks / 831 edits. Numerators unmoved.
-  const BLOCKS = 910;
+  // #443 adds six blocks and six synthetic edits; loss numerators are unchanged.
+  const BLOCKS = 916;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -2114,7 +2120,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 54 of 910 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 54 of 916 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2176,7 +2182,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // to 4.9-5.1s run alone, and the unpartitioned CI suite runs it about three times slower than that:
   // 15.3s on main at d3a3626, which timed out against 15s. The measurements did not change; only the
   // runner's time limit did, and every edit is still swept.
-  test("metrics 2 and 3 — 1 dishonest write of 831; the guard fires on it and, ablated, on 49", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 837; the guard fires on it and, ablated, on 49", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2267,7 +2273,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // link definition, which the ablated path re-serializes and the shipped path restores, so
       // `shipped` held at 1/1 and metric 1's only per-cause move was the reference-link one.
     ).toEqual({
-      edits: 831,
+      edits: 837,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 49, fired: 49 },
     });

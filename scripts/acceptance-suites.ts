@@ -65,6 +65,8 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/registry/import-guard.test.ts",
   ],
   concurrency: [
+    // #443: file operations versus claims, external bytes and checkpoint/journal recovery.
+    "packages/daemon/test/http-routes.test.ts",
     "packages/daemon/test/registry/session-registry.test.ts",
     "packages/daemon/test/bus/concurrency.test.ts",
     "packages/daemon/test/bus/mutex.test.ts",

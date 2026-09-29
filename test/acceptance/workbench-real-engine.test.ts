@@ -610,6 +610,64 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   const paneFor = (state: PageState, path: string) => state.panes.find((pane) => pane.path === path);
 
   test(
+    "tree rename keeps a real source editor and its group, then saves at the new path",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, `${pairedUrl(ALPHA)}&kind=desk`);
+      await waitForReady(tab, "file actions ready");
+      await openFromNavigator(tab, BETA);
+      await moveActiveTabToNewGroup(tab, BETA);
+      await waitForArrangement(tab, "two file groups", 2);
+      await clickTab(tab, ALPHA);
+      await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
+      await clickInPane(tab, ALPHA, ".glosa-tools-edit-source");
+      await clickInPane(tab, ALPHA, ".glosa-face-source");
+      await tab.evaluate(`(() => {
+        const area = document.querySelector('.glosa-pane[aria-label="alpha.md"] .glosa-edit-area');
+        window.keptFileEditor = area; area.focus(); area.select();
+      })()`);
+      await tab.send("Input.insertText", { text: "Words kept across the rename." });
+      await tab.evaluate(`document.querySelector('[data-node-id="f:alpha.md"]').focus()`);
+      await tab.send("Input.dispatchKeyEvent", { type: "keyDown", key: "F2", code: "F2", windowsVirtualKeyCode: 113 });
+      await tab.send("Input.dispatchKeyEvent", { type: "keyUp", key: "F2", code: "F2", windowsVirtualKeyCode: 113 });
+      await tab.evaluate(`document.querySelector('.glosa-file-name-editor input').select()`);
+      await tab.send("Input.insertText", { text: "renamed.md" });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      const after = await waitForState(tab, "renamed editor retained", (state) =>
+        state.panes.some((pane) => pane.path === "renamed.md"),
+      );
+      expect(after.groups).toBe(2);
+      expect(paneFor(after, "renamed.md")?.mode).toBe("edit");
+      expect(
+        await tab.evaluate<boolean>(
+          `window.keptFileEditor === document.querySelector('.glosa-pane[aria-label="renamed.md"] .glosa-edit-area')`,
+        ),
+      ).toBe(true);
+      expect(await tab.evaluate<string>(`window.keptFileEditor.value`)).toBe("Words kept across the rename.");
+      await clickInPane(tab, "renamed.md", ".glosa-save");
+      await waitForState(
+        tab,
+        "renamed bytes saved",
+        () => readFileSync(join(workspaceRoot, "renamed.md"), "utf8") === "Words kept across the rename.",
+      );
+      expect(existsSync(join(workspaceRoot, ALPHA))).toBe(false);
+      await stillShot(tab, "file-tree-443-rename");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
     "§10: the arrangement AND every pane's state come back after a real reload",
     async () => {
       const { browser, cdpPort } = await launchBrowser();
