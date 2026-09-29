@@ -5,6 +5,7 @@
 import type { ManagedAgentCode } from "../agents/interface.ts";
 
 export type ProblemSlug =
+  | "read-only-unavailable"
   | "path-exists"
   | "claimed"
   | "format-not-allowed"

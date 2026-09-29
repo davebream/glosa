@@ -8,7 +8,7 @@
  *
  * @typedef {{
  *   path: string,
- *   kind?: "image",
+ *   kind?: "image" | "read-only",
  *   class?: "R" | "F",
  *   size_bytes?: number,
  *   mtime?: string,
@@ -348,6 +348,17 @@ export function createArtifactTreeNavigator(container, options) {
         openMark.setAttribute("aria-hidden", "true");
         row.prepend(openMark);
         row.setAttribute("aria-label", `${node.name}, ${isCurrent ? "open in the active pane" : "open in a pane"}`);
+      }
+      if (node.artifact.kind === "read-only") {
+        item.setAttribute("data-read-only", "true");
+        const lock = document.createElement("span");
+        lock.className = "glosa-tree-lock";
+        lock.setAttribute("aria-hidden", "true");
+        lock.innerHTML =
+          '<svg viewBox="0 0 16 16"><rect x="4" y="7" width="8" height="6" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>';
+        row.append(lock);
+        row.setAttribute("aria-label", `${row.getAttribute("aria-label") ?? node.name}, read-only`);
+        item.setAttribute("aria-label", `${node.name}, read-only${isOpen ? ", open in a pane" : ""}`);
       }
       if (node.artifact.stale) {
         const stale = document.createElement("span");

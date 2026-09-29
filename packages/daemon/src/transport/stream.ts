@@ -47,6 +47,9 @@ export interface StreamOptions {
   subscribeArtifacts?: (listener: (event: ArtifactWatcherEvent) => void) => () => void;
   shutdownSignal?: AbortSignal;
   subscribeMetadata?: (listener: () => void) => () => void;
+  /** Display-only desk invalidations, independent of document capture (#448). */
+  subscribeReadOnly?: (listener: () => void) => () => void;
+  subscribeFileView?: (listener: () => void) => () => void;
   /** This folder's default style changed (#407). */
   subscribeFolderStyle?: (listener: () => void) => () => void;
   /** Chat changes daemon-wide. `slug` names the workspace when known (#389). */
@@ -90,6 +93,8 @@ export function createJournalStreamResponse(
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let shutdownListener: (() => void) | null = null;
   let unsubscribeMetadata: (() => void) | null = null;
+  let unsubscribeReadOnly: (() => void) | null = null;
+  let unsubscribeFileView: (() => void) | null = null;
   let unsubscribeFolderStyle: (() => void) | null = null;
   let unsubscribeChats: (() => void) | null = null;
   let unsubscribeAttention: (() => void) | null = null;
@@ -106,6 +111,8 @@ export function createJournalStreamResponse(
     unsubscribe?.();
     unsubscribeMetadata?.();
     unsubscribeFolderStyle?.();
+    unsubscribeReadOnly?.();
+    unsubscribeFileView?.();
     unsubscribeChats?.();
     unsubscribeAttention?.();
     unsubscribeBrowser?.();
@@ -169,6 +176,11 @@ export function createJournalStreamResponse(
       // never leak that listener/the heartbeat timer/the watcher. `sinceSeq`'s own range is
       // guarded above so this catch is belt-and-suspenders, not the primary defense against #1.
       try {
+        unsubscribeReadOnly =
+          opts.subscribeReadOnly?.(() => send(encodeSseFrame({ event: "read_only_files", data: { changed: true } }))) ??
+          null;
+        unsubscribeFileView =
+          opts.subscribeFileView?.(() => send(encodeSseFrame({ event: "file_view", data: { changed: true } }))) ?? null;
         unsubscribeChats =
           opts.subscribeChats?.((change) => {
             if (closed) return;

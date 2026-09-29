@@ -17,6 +17,8 @@ export type SseEventType =
   | "artifact"
   | "artifact_index"
   | "metadata"
+  | "read_only_files"
+  | "file_view"
   | "folder_style"
   | "chats_changed"
   | "browser_request"

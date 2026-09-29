@@ -58,6 +58,7 @@ import { claimProblem, claimRoutes } from "../routes/claims.ts";
 import { composerRoutes } from "../routes/composer.ts";
 import { dictationRoutes } from "../routes/dictation.ts";
 import { imageRoutes } from "../routes/images.ts";
+import { readOnlyRoutes, readOnlyServices } from "../routes/read-only-files.ts";
 import { fileRoutes } from "../routes/files.ts";
 import { chatRoutes } from "../routes/chats.ts";
 import type { ManagedChatService } from "../chats/service.ts";
@@ -2847,8 +2848,16 @@ async function handleStream(
     subscribeMetadata: ctx.metadataRegistry
       ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry, listener)
       : undefined,
-    // #407: every window on this folder hears that its default style changed. Directory
-    // registrations only, the one kind that has a folder default.
+    // #448: display-only invalidations are opt-in for directory desks.
+    subscribeReadOnly:
+      resolved.entry.kind === "directory" && url.searchParams.get("read_only") === "1"
+        ? (listener) => readOnlyServices(ctx).files.subscribe(resolved.entry, listener)
+        : undefined,
+    subscribeFileView:
+      resolved.entry.kind === "directory" && url.searchParams.get("read_only") === "1"
+        ? (listener) => readOnlyServices(ctx).views.subscribe(resolved.entry.canonical_path, listener)
+        : undefined,
+    // #407: every window on this folder hears default-style changes.
     subscribeFolderStyle:
       resolved.entry.kind === "directory"
         ? (listener) => folderStyles(ctx).subscribe(resolved.entry.canonical_path, listener)
@@ -2957,6 +2966,8 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   const method = req.method;
   const fileRoute = fileRoutes(ctx, method, pathname);
   if (fileRoute) return fileRoute;
+  const readOnlyRoute = readOnlyRoutes(ctx, method, pathname);
+  if (readOnlyRoute) return readOnlyRoute;
   const imageRoute = imageRoutes(ctx, method, pathname);
   if (imageRoute) return imageRoute;
   const managedRoute = chatRoutes({ ...ctx, service: ctx.managedChats }, method, pathname);

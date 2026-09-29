@@ -259,7 +259,7 @@ export async function performFileOperation(
       kind = stat.isDirectory() ? "folder" : "file";
       if (kind === "folder") inspectFolder(source, protectedRoots(deps, workspace));
       else if (!documentAllowed(workspace, path) && !IMAGE_ASSET_EXTENSIONS.test(path))
-        throw new FileOperationError(409, "not-manageable", "This file is not shown by glosa.");
+        throw new FileOperationError(409, "not-manageable", "This file is read-only in glosa.");
       else if (
         stat.isFile() &&
         stat.size >

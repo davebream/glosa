@@ -14,6 +14,8 @@
 
 import { addressProblem, parseAddress } from "./browser-address.js";
 import { createBrowserPane } from "./browser-pane.js";
+import { createReadOnlyPane } from "./read-only-pane.js";
+import { createFileViewControls } from "./file-view.js";
 import { createImagePane } from "./image-pane.js";
 import { createFileActions } from "./file-actions.js";
 import { droppedImages } from "./image-insertion.js";
@@ -201,6 +203,11 @@ export function mountApp(
       : null;
   let dock = null;
   let knownImages = new Map();
+  let knownReadOnly = new Map(),
+    knownDirectories = [];
+  let fileView = { mode: "all", show_ignored: false };
+  let readOnlyGeneration = 0;
+
   let knownArtifacts = new Map(); // path → summary, for restore validation and tab state
   /** @type {Map<string, any>} */
   const panes = new Map(); // panel id → pane handle
@@ -1194,7 +1201,7 @@ export function mountApp(
   function tabLabels() {
     return disambiguateLabels(
       openPanelIds()
-        .filter((id) => ["artifact", "image"].includes(decodePanelId(id)[0]))
+        .filter((id) => ["artifact", "image", "read-only"].includes(decodePanelId(id)[0]))
         .map((id) => decodePanelId(id)[1]),
     );
   }
@@ -1202,11 +1209,11 @@ export function mountApp(
   function tabStateFor(id) {
     const pane = panes.get(id);
     if (!pane) return { label: id, tooltip: id };
-    if (pane.kind === "image")
+    if (pane.kind === "image" || pane.kind === "read-only")
       return {
-        kind: "image",
+        kind: pane.kind,
         label: tabLabels().get(pane.path) ?? pane.title,
-        tooltip: pane.path,
+        tooltip: `${pane.path}${pane.kind === "read-only" ? ", read-only" : ""}`,
         missing: pane.isMissing(),
       };
     if (pane.kind === "browser")
@@ -1270,6 +1277,10 @@ export function mountApp(
 
   function paneEmptyState() {
     const wrap = el("div", { className: "glosa-empty" });
+    if (knownReadOnly.size > 0 && knownArtifacts.size + knownImages.size === 0) {
+      wrap.append(el("p", { className: "glosa-empty-title", textContent: "Choose a file to read." }));
+      return wrap;
+    }
     if (knownArtifacts.size + knownImages.size === 0) {
       wrap.append(
         el("p", { className: "glosa-empty-title", textContent: "No documents yet." }),
@@ -1358,6 +1369,16 @@ export function mountApp(
       pane.releaseVisibility = () => visibility?.dispose?.();
       pane.element.setAttribute("data-active", String(id === activePanelId));
       panelApi?.setTitle?.(pane.title);
+      return pane;
+    }
+    if (params.kind === "read-only") {
+      const pane = createReadOnlyPane(host, {
+        dataAccess,
+        slug: currentSlug,
+        path: params.path,
+        onStateChange: refreshTabs,
+      });
+      panes.set(id, pane);
       return pane;
     }
     if (params.kind === "image") {
@@ -1540,9 +1561,9 @@ export function mountApp(
    * "one tab per file, no duplicates" needs no bookkeeping of its own. Opening a file that is
    * already visible focuses the pane that holds it; it never copies the file into another one.
    */
-  function openImage(path, group) {
+  function openImage(path, group, kind = "image") {
     if (!dock) return false;
-    const id = JSON.stringify(["image", path]);
+    const id = JSON.stringify([kind, path]);
     const existing = dock.api.getPanel(id);
     if (existing) {
       existing.api.setActive();
@@ -1553,7 +1574,7 @@ export function mountApp(
       component: "pane",
       tabComponent: "pane",
       title: path.split("/").pop(),
-      params: { kind: "image", path },
+      params: { kind, path },
       renderer: "always",
       minimumWidth: MIN_PANE_WIDTH,
       ...(group ? { position: { referenceGroup: group } } : {}),
@@ -1566,6 +1587,7 @@ export function mountApp(
   async function openArtifact(path, { mode, group } = {}) {
     if (!path || !currentSlug) return false;
     if (knownImages.has(path)) return openImage(path, group);
+    if (knownReadOnly.has(path)) return openImage(path, group, "read-only");
     if (mode) requestedMode = mode;
     const existing = dock?.api.getPanel(artifactPanelId(path));
     if (existing) {
@@ -1618,11 +1640,11 @@ export function mountApp(
   function markNavigatorOpenSet() {
     artifactNavigator.setOpenPaths?.(
       openPanelIds()
-        .filter((id) => ["artifact", "image"].includes(decodePanelId(id)[0]))
+        .filter((id) => ["artifact", "image", "read-only"].includes(decodePanelId(id)[0]))
         .map((id) => decodePanelId(id)[1]),
     );
     artifactNavigator.setCurrent(
-      activePanelId && ["artifact", "image"].includes(decodePanelId(activePanelId)[0])
+      activePanelId && ["artifact", "image", "read-only"].includes(decodePanelId(activePanelId)[0])
         ? decodePanelId(activePanelId)[1]
         : null,
       {
@@ -1726,6 +1748,14 @@ export function mountApp(
     dictationController,
   });
 
+  const fileViewControls = createFileViewControls(artifactList, {
+    change: async (view) => {
+      const slug = currentSlug;
+      await dataAccess.setFileView(slug, view);
+      if (slug === currentSlug) await refreshReadOnlyFiles();
+    },
+    retry: () => void refreshReadOnlyFiles(),
+  });
   const imageImportStatus = el("p", { className: "glosa-image-import-status", hidden: true, role: "status" });
   const within = (path, parent) => !parent || path === parent || path.startsWith(`${parent}/`);
   async function renameOpenPanes(from, to) {
@@ -1735,7 +1765,7 @@ export function mountApp(
     let nextActive = active;
     for (const [id, pane] of [...panes]) {
       const decoded = decodePanelId(id);
-      if (!["artifact", "image", "diff"].includes(decoded[0]) || !within(decoded[1], from)) continue;
+      if (!["artifact", "image", "read-only", "diff"].includes(decoded[0]) || !within(decoded[1], from)) continue;
       const nextPath = to + decoded[1].slice(from.length),
         nextId = JSON.stringify([decoded[0], nextPath, ...decoded.slice(2)]);
       const panel = dock?.api.getPanel(id);
@@ -1846,6 +1876,52 @@ export function mountApp(
 
   // ---------- workspace data ----------
 
+  function supportsReadOnly() {
+    return desk && !singlePane && currentWorkspace()?.kind === "directory" && !!dataAccess.getReadOnlyFiles;
+  }
+  function paintFileTree() {
+    const files = [
+      ...knownArtifacts.values(),
+      ...knownImages.values(),
+      ...(fileView.mode === "all" ? knownReadOnly.values() : []),
+    ];
+    artifactListEmpty.hidden = files.length > 0;
+    artifactNavigator.setArtifacts(files, knownDirectories);
+    markNavigatorOpenSet();
+    refreshTabs();
+  }
+  async function refreshReadOnlyFiles() {
+    const slug = currentSlug,
+      ticket = ++readOnlyGeneration;
+    const heading = root.querySelector(".glosa-artifact-list-toggle");
+    if (!supportsReadOnly()) {
+      knownReadOnly.clear();
+      fileViewControls.update(null, {});
+      return;
+    }
+    try {
+      const view = await dataAccess.getFileView(slug);
+      const listing = await dataAccess.getReadOnlyFiles(slug);
+      if (slug !== currentSlug || ticket !== readOnlyGeneration || unmounted) return;
+      fileView = view;
+      knownReadOnly = new Map(listing.files.map((file) => [file.path, file]));
+      fileViewControls.update(view, listing);
+      // Preserve the section toggle's disclosure glyph.
+      const label = heading?.querySelector(".glosa-sidebar-section-label");
+      if (label) label.textContent = "Files";
+      artifactListEmpty.textContent =
+        view.mode === "documents" ? "No documents or images in this folder." : "No files match this view.";
+      paintFileTree();
+      for (const pane of panes.values()) void pane.refreshReadOnly?.();
+    } catch (error) {
+      if (slug !== currentSlug || ticket !== readOnlyGeneration || unmounted) return;
+      if (error.status === 404) {
+        knownReadOnly.clear();
+        fileViewControls.update(null, {});
+        paintFileTree();
+      } else fileViewControls.fail(`Could not refresh files: ${error.message}`);
+    }
+  }
   async function refreshArtifactList() {
     const slug = currentSlug;
     const imageRequest = dataAccess.getImages?.(slug);
@@ -1854,10 +1930,11 @@ export function mountApp(
     if (slug !== currentSlug) return artifacts;
     knownImages = new Map(assets.images.map((image) => [image.path, image]));
     knownArtifacts = new Map(artifacts.map((artifact) => [artifact.path, artifact]));
-    artifactListEmpty.hidden = artifacts.length + assets.images.length > 0;
-    artifactNavigator.setArtifacts([...artifacts, ...assets.images], assets.directories);
-    markNavigatorOpenSet();
-    refreshTabs();
+    knownDirectories = assets.directories ?? [];
+    if (supportsReadOnly()) await refreshReadOnlyFiles();
+    else fileViewControls.update(null, {});
+    if (slug !== currentSlug) return artifacts;
+    paintFileTree();
     return artifacts;
   }
 
@@ -1922,6 +1999,7 @@ export function mountApp(
         attentionWatch?.handleFrame(frame);
         if (frame.event === "artifact" && frame.data?.path)
           fileActions.defer(() => refreshOpenArtifact(frame.data.path));
+        if (frame.event === "read_only_files" || frame.event === "file_view") void refreshReadOnlyFiles();
         if (frame.event === "image") {
           void refreshArtifactList();
           for (const pane of panes.values()) void pane.refreshImages?.();
@@ -1999,6 +2077,11 @@ export function mountApp(
     palette.close();
     stopChatsStream?.();
     currentSlug = slug;
+    readOnlyGeneration++;
+    knownReadOnly.clear();
+    const fileHeading = root.querySelector(".glosa-artifact-list-toggle .glosa-sidebar-section-label");
+    if (fileHeading) fileHeading.textContent = "Documents";
+    fileViewControls.update(null, {});
     imageImportStatus.hidden = true;
     imageImportStatus.textContent = "";
     chatList = [];
@@ -2039,6 +2122,7 @@ export function mountApp(
           params.kind === "agent-settings" ||
           (params.kind === "browser" && browserTabs) ||
           (params.kind === "image" && knownImages.has(params.path)) ||
+          (params.kind === "read-only" && supportsReadOnly() && typeof params.path === "string") ||
           (params.kind === "external-chat" &&
             externalSessions.some((session) => session.session_id === params.sessionId)) ||
           (params.kind === "chat" && chatList.some((chat) => chat.id === params.chatId)) ||
@@ -2326,6 +2410,7 @@ export function mountApp(
     window.removeEventListener("focus", onWindowFocus);
     sidebarNav.destroy();
     fileActions.destroy();
+    fileViewControls.destroy();
     feedbackController.destroy();
     stopStream?.();
     for (const pane of panes.values()) pane.destroy?.();

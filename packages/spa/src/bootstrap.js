@@ -9,7 +9,7 @@
 //
 // Kept in lockstep with the daemon's CONTRACT_VERSION (packages/daemon/src/contract.ts) — bump
 // alongside a real wire-contract change, not on every daemon restart.
-export const CONTRACT_VERSION = "1.25";
+export const CONTRACT_VERSION = "1.26";
 
 // P3.3 — the class-R viewer (workspace/artifact sidebar + Preview/Annotate/Edit). A static
 // top-level import, same as every other module here: no dynamic `import()` needed since this
@@ -489,6 +489,7 @@ async function main() {
     contractVersion: CONTRACT_VERSION,
     pageBuildId,
     onDaemonChanged: (kind) => updateNotice.show(kind),
+    readOnlyFiles: route.kind === "desk" && route.surface !== "document",
     // #440: a desk window in a desktop app whose shell hosts browser tabs takes the chat agents'
     // requests for them; no other page is ever sent one.
     browserHost:

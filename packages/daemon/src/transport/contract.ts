@@ -94,7 +94,8 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 // daemon ignores the parameter and never sends the frame.
 // v1.25 (#443): directory file actions, path identity, binary asset history and free-path
 // folder restore. Additive HTTP; writable upgraded buses require a path-identity-aware reader.
-export const CONTRACT_VERSION = "1.25";
+// v1.26 (#448): separate read-only inventory/content, per-folder views and ephemeral invalidations.
+export const CONTRACT_VERSION = "1.26";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };
