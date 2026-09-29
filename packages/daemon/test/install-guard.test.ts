@@ -26,6 +26,7 @@ import {
   InstallChangedError,
   InstallGuard,
   type InstallSnapshot,
+  linuxProcessStartNs,
   verifySnapshot,
 } from "../src/lifecycle/install-guard.ts";
 
@@ -147,6 +148,18 @@ describe("bootVerdict refuses a tree that changed while the process loaded (R-L2
       ok: false,
       why: "after-start",
     });
+  });
+
+  test("a Linux start time is the boot (now minus uptime) plus the kernel's start ticks, to 10 ms", () => {
+    // A process name may hold spaces and parentheses; the fields start after the last ")".
+    const selfStat = "4242 (bun (x) y) S 1 4242 4242 0 -1 4194560 1234 0 0 0 5 2 0 0 20 0 7 0 50000 123456789 2000";
+    const now = 2_000_000_000_500_000_000n; // 2e9 s and a half past the epoch
+    // Booted 1000.25 s ago; started 50000 ticks (500 s) after boot.
+    expect(linuxProcessStartNs(selfStat, "1000.25 3900.10\n", now)).toBe(1_999_999_500_250_000_000n);
+    // The boot's fraction of a second counts: /proc/stat's whole-second btime would drop it.
+    expect(linuxProcessStartNs(selfStat, "1000.99 3900.10\n", now)).toBe(1_999_999_499_510_000_000n);
+    expect(linuxProcessStartNs(selfStat, "garbage", now)).toBeNull();
+    expect(linuxProcessStartNs("4242 (bun) S 1", "1000.25 3900.10\n", now)).toBeNull();
   });
 
   test("the margin is 100 ms on Linux, 500 ms elsewhere, and overridable for tests", () => {

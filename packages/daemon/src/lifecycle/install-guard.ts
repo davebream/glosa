@@ -139,19 +139,30 @@ export function currentFingerprint(snapshot: InstallSnapshot, lstat: Lstat = rea
   return parts.join("|");
 }
 
+/** A Linux process's start in nanoseconds since the epoch: when the system booted, plus the
+ *  kernel's start time for the process (`/proc/<pid>/stat` field 22, in USER_HZ ticks, which is 100
+ *  on every Linux ABI glosa supports). The boot is `nowNs` minus `/proc/uptime`, both to 10 ms.
+ *  Not `/proc/stat`'s btime: that is whole seconds, which put the start up to a second early, so a
+ *  tree copied just before the daemon started counted as changed while it loaded. Null when either
+ *  file does not parse. */
+export function linuxProcessStartNs(selfStat: string, uptime: string, nowNs: bigint): bigint | null {
+  const ticks = selfStat.slice(selfStat.lastIndexOf(")") + 2).split(" ")[19];
+  const up = /^(\d+)\.(\d{1,9})\s/.exec(uptime);
+  if (ticks === undefined || !/^\d+$/.test(ticks) || !up) return null;
+  const uptimeNs = BigInt(up[1] as string) * 1_000_000_000n + BigInt((up[2] as string).padEnd(9, "0"));
+  return nowNs - uptimeNs + BigInt(ticks) * 10_000_000n;
+}
+
 /** When this process started, in nanoseconds since the epoch. On Linux the kernel's own record
- *  (`/proc/self/stat` field 22, in USER_HZ ticks, which is 100 on every Linux ABI glosa supports);
- *  elsewhere `performance.timeOrigin`, which trails the exec by Bun's own startup, hence the larger
- *  margin there (`bootMarginNs`). */
+ *  (`linuxProcessStartNs`); elsewhere `performance.timeOrigin`, which trails the exec by Bun's own
+ *  startup, hence the larger margin there (`bootMarginNs`). */
 export function processStartNs(platform: NodeJS.Platform = process.platform): bigint {
   if (platform === "linux") {
     try {
-      const btime = /^btime (\d+)$/m.exec(readFileSync("/proc/stat", "utf8"))?.[1];
-      const stat = readFileSync("/proc/self/stat", "utf8");
-      const ticks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-      if (btime !== undefined && ticks !== undefined && /^\d+$/.test(ticks)) {
-        return BigInt(btime) * 1_000_000_000n + BigInt(ticks) * 10_000_000n;
-      }
+      const selfStat = readFileSync("/proc/self/stat", "utf8");
+      const uptime = readFileSync("/proc/uptime", "utf8");
+      const start = linuxProcessStartNs(selfStat, uptime, BigInt(Date.now()) * 1_000_000n);
+      if (start !== null) return start;
     } catch {
       // fall through to timeOrigin
     }
