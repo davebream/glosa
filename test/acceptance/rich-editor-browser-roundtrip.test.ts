@@ -2171,7 +2171,9 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           dock.addPanel({id:'specimen',component:'document',params:{printing:true}});
           dock.addPanel({id:'other',component:'document',params:{printing:false},position:{referencePanel:'specimen',direction:'right'}});
           await Promise.all(panes.map(pane => pane.ready));
-          dock.layout(1400,750);
+          // Match the CSS-sized host so ResizeObserver cannot replace a synthetic
+          // baseline with the real container size during the print round trip.
+          dock.layout(host.clientWidth,host.clientHeight);
           await document.fonts.ready;
           await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
           window.printFixtureReady = true;
