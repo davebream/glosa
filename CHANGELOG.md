@@ -6,35 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.37] · 2026-09-29
+
 ### Added
 
-- Create, rename, Trash, undo and asset history from the file tree (#443).
-- Browser tabs on the desk in the desktop app: web pages open as dock tabs beside documents and
-  chats, from a link, ⌘T, Go to, or the new tools at the end of each tab strip. Pages run apart from
-  glosa and cannot reach it; restored internet tabs wait for Load page, and typed words are never
-  searched. In a plain browser, links open your own browser instead (#440).
-- Chat agents can open, move and read web pages in desk browser tabs while they answer you, marked
-  on the tab as theirs. Existing workspace permissions are asked for once more (#440).
-- The desktop app builds as an x86_64 pacman package for Arch Linux and Manjaro, experimental. It
-  carries its own Bun and the command line; pacman installs Git and the libraries it needs, owns
-  `/usr/bin/glosa` and every other file it installs, and removes exactly those, leaving `~/.glosa`
-  and your workspaces. `glosa doctor` names the install as `pacman`, and `glosa update` and the app's
-  Check for Updates… give the pacman command instead of Homebrew's. Built and tested in Arch Linux
-  containers; downloads and Manjaro desktop qualification follow in #435 (#432).
-- glosa handles an upgrade or removal while it runs, on every install channel. The background
-  process used to keep serving the new files with old code until some command restarted it, and
-  after a removal it held its port with its files gone. It now serves only what it started with,
-  starts nothing from a changed install, and restarts itself through its normal shutdown once it
-  is idle; an open window says "glosa was updated. Reload to use the new version." and reloads when
-  you click. A `glosa monitor` started before an upgrade keeps delivering instead of retrying
-  forever. API contract 1.23 (#432).
-- Local images in Markdown, paste/drop and Insert image, plus image tabs with zoom, pan and
-  live updates. Imports preserve bytes up to 20 MiB. Remote images stay blocked; missing or
-  refused local images show their description and path (#401).
-- Experimental Linux x86_64/glibc CLI and daemon support with Bun 1.4.2+, `xdg-open`, headless
-  URL output, Linux boot identity and MCP parent observation. Linux core and installed-package
-  checks now run in CI and release validation. Linux desktop packaging, native managed chats,
-  dictation and Manjaro release qualification remain pending (#431).
+#### Reading and appearance
+
 - A note delivered to a session now names its passage the way the page does: an `address: §2.3`
   line beside the quote and an `address` field in the entry's detail. glosa works the label out
   from the document at the moment of delivery and stores it nowhere, so after an edit that
@@ -111,6 +88,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (muted) `#6e6a86` to `#706c87`, pencil (muted) `#6e6a86` to `#87839f` and ok (pine) `#31748f` to
   `#4c8eaa`. Every other colour is the palette's own; each theme file records its source and both
   contrast ratios of every move (#410).
+
+#### Files, desk and platforms
+
+- Create, rename, Trash, undo and asset history from the file tree (#443).
+- Browser tabs on the desk in the desktop app: web pages open as dock tabs beside documents and
+  chats, from a link, ⌘T, Go to, or the new tools at the end of each tab strip. Pages run apart from
+  glosa and cannot reach it; restored internet tabs wait for Load page, and typed words are never
+  searched. In a plain browser, links open your own browser instead (#440).
+- Chat agents can open, move and read web pages in desk browser tabs while they answer you, marked
+  on the tab as theirs. Existing workspace permissions are asked for once more (#440).
+- The desktop app builds as an x86_64 pacman package for Arch Linux and Manjaro, experimental. It
+  carries its own Bun and the command line; pacman installs Git and the libraries it needs, owns
+  `/usr/bin/glosa` and every other file it installs, and removes exactly those, leaving `~/.glosa`
+  and your workspaces. `glosa doctor` names the install as `pacman`, and `glosa update` and the app's
+  Check for Updates… give the pacman command instead of Homebrew's. Built and tested in Arch Linux
+  containers; downloads and Manjaro desktop qualification follow in #435 (#432).
+- glosa handles an upgrade or removal while it runs, on every install channel. The background
+  process used to keep serving the new files with old code until some command restarted it, and
+  after a removal it held its port with its files gone. It now serves only what it started with,
+  starts nothing from a changed install, and restarts itself through its normal shutdown once it
+  is idle; an open window says "glosa was updated. Reload to use the new version." and reloads when
+  you click. A `glosa monitor` started before an upgrade keeps delivering instead of retrying
+  forever. API contract 1.23 (#432).
+- Local images in Markdown, paste/drop and Insert image, plus image tabs with zoom, pan and
+  live updates. Imports preserve bytes up to 20 MiB. Remote images stay blocked; missing or
+  refused local images show their description and path (#401).
+- Experimental Linux x86_64/glibc CLI and daemon support with Bun 1.4.2+, `xdg-open`, headless
+  URL output, Linux boot identity and MCP parent observation. Linux core and installed-package
+  checks now run in CI and release validation. Linux desktop packaging, native managed chats,
+  dictation and Manjaro release qualification remain pending (#431).
+- In a chat's composer, `@` picks a workspace file and `/` picks one of the selected agent's own
+  skills or commands. A skill shows as `/name` for Claude Code and Codex alike, and each agent
+  receives its own syntax. Valid references are highlighted in the draft and in the history, and a
+  reference that no longer resolves is held before sending. An account can also be linked to the
+  agent's native configuration, its skills, plugins, hooks and MCP servers, after explicit
+  permission for that workspace; unlinking never logs out or deletes that configuration (#427).
+- A folder's tree also lists the files glosa does not track, each with a lock and a read-only label.
+  Opening one shows its text in a read-only source tab with highlighting, line numbers, search,
+  wrapping and copy. The list respects workspace exclusions and `.gitignore`, stops at 10,000
+  files, and remembers "All files" or "Documents only" and "Show ignored files" per folder (#448).
 
 ### Changed
 
@@ -1681,7 +1698,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.36...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...HEAD
+[0.1.0-alpha.37]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.36...v0.1.0-alpha.37
 [0.1.0-alpha.36]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.35...v0.1.0-alpha.36
 [0.1.0-alpha.35]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.34...v0.1.0-alpha.35
 [0.1.0-alpha.34]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.33...v0.1.0-alpha.34
