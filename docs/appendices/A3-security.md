@@ -502,3 +502,19 @@ parents, reserves `.trashinfo` before the move and requires the name to be free 
 files. A relative XDG home is ignored in favor of the default. Symlinked Trash ancestors,
 cross-device moves and unsafe directories are refused. Neither provider falls back to copy or permanent deletion. Undo verifies the stored
 identity and a free original destination; its opaque receipt is scoped to one live workspace bus.
+
+### Read-only source previews (#448)
+
+The separate read-only routes use authenticated JSON, never executable HTML/SVG or raw source
+responses. The viewer renders text through a locally vendored CodeMirror module; the CSP is
+unchanged. Reads refuse traversal, all symlink components, special files, dot-directories, `.git`,
+workspace state and configured exclusions. Ordinary dotfiles are eligible. Root and nested ignore
+rules are read with the same descriptor-bound limits; unsafe/unreadable rules yield an incomplete
+listing rather than silently exposing ignored content. Show ignored files bypasses only ignore
+rules, never security or configured exclusions.
+
+Opening uses `O_NOFOLLOW`, regular-file `fstat`, bounded bytes, and a post-read parent/inode/size/time
+recheck. This follows the existing userspace confinement model; it does not claim a kernel-atomic
+walk across a concurrently renamed parent directory. A capped listing is admission, not authority:
+each content read repeats current eligibility and ignore checks. No read-only write route exists;
+existing document and direct file mutations retain their narrower membership guards.

@@ -1,5 +1,5 @@
-@import url("./vendor/image-viewer.css");
 /* SPDX-License-Identifier: Apache-2.0 */
+@import url("./vendor/image-viewer.css");
 /* @glosa/spa — the visual system (direction contract: packages/spa/.impeccable/surfaces/src-app-css.md).
    Served as /app/app.css (allowlisted in packages/daemon/src/transport/http.ts). Plain CSS, no build step.
 
@@ -9660,4 +9660,100 @@ button:is(
   .glosa-history-file {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Source previews use the desk's existing paper, ink and accessible muted tokens. */
+.glosa-read-only-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.glosa-read-only-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font: 13px var(--font-sans);
+}
+.glosa-read-only-toolbar > span {
+  color: var(--muted);
+  margin-right: auto;
+}
+.glosa-read-only-toolbar button,
+.glosa-file-view-notice button {
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+.glosa-read-only-toolbar button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--bg);
+}
+.glosa-read-only-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.glosa-read-only-status {
+  padding: 12px;
+  color: var(--muted);
+}
+.glosa-read-only-metadata {
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.glosa-file-view {
+  margin: 4px 12px 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.glosa-file-view summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.glosa-file-view label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+.glosa-file-view select {
+  min-width: 0;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 4px;
+}
+.glosa-file-view-notice {
+  margin: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.glosa-file-view-notice button {
+  display: block;
+  margin-top: 4px;
+}
+.glosa-tree-lock {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--muted);
+}
+.glosa-tree-lock svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+}
+[data-read-only="true"] > .glosa-tree-row {
+  color: var(--muted);
 }

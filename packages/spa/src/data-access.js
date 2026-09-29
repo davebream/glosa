@@ -31,7 +31,7 @@ const TOKEN_KEY = "glosa_token";
  *   sleepFn?: SleepFn,
  *   randFn?: () => number,
  * }} StreamOptions */
-/** @typedef {StreamOptions & { slug: string, browser?: boolean }} OpenStreamOptions */
+/** @typedef {StreamOptions & { slug: string, browser?: boolean, readOnly?: boolean }} OpenStreamOptions */
 /** @typedef {{ contract_version?: unknown, paired?: boolean, install_id?: unknown, build_id?: unknown }} Handshake */
 /** @typedef {{
  *   fetchFn?: FetchFn,
@@ -43,6 +43,7 @@ const TOKEN_KEY = "glosa_token";
  *   pageBuildId?: string | null,
  *   onDaemonChanged?: (kind: "install-changed" | "build-changed") => void,
  *   browserHost?: boolean,
+ *   readOnlyFiles?: boolean,
  * }} DataAccessDeps */
 /** @typedef {{ method?: string, headers?: Record<string, string>, body?: string | Blob | FormData, signal?: AbortSignal }} RequestOptions */
 
@@ -271,13 +272,17 @@ export function openStream({
   onUnauthorized,
   onBye,
   browser = false,
+  readOnly = false,
   backoffFn = computeBackoffMs,
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randFn = Math.random,
 }) {
   // `browser=1` (#440): this page is a desk window in the desktop app, so the daemon may send it the
   // chat agents' requests for its browser tabs on this stream.
-  return openEventStream(`/w/${encodeURIComponent(slug)}/stream${browser ? "?browser=1" : ""}`, {
+  const params = new URLSearchParams();
+  if (browser) params.set("browser", "1");
+  if (readOnly) params.set("read_only", "1");
+  return openEventStream(`/w/${encodeURIComponent(slug)}/stream${params.size ? `?${params}` : ""}`, {
     fetchFn,
     storage,
     onEvent,
@@ -496,6 +501,7 @@ export function createDataAccess(deps = {}) {
         storage,
         slug,
         browser: deps.browserHost === true,
+        readOnly: deps.readOnlyFiles === true,
         onUnauthorized: handleUnauthorized,
         onEvent: (frame) => {
           for (const listener of listeners) {
@@ -794,6 +800,26 @@ export function createDataAccess(deps = {}) {
      * rather than only from the next journal frame. @param {string} slug */
     getClaims(slug) {
       return requestJson(`/w/${encodeURIComponent(slug)}/claims`);
+    },
+    /** @param {string} slug */
+    getFileView(slug) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/file-view`);
+    },
+    /** @param {string} slug @param {{mode: string, show_ignored: boolean}} view */
+    setFileView(slug, view) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/file-view`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(view),
+      });
+    },
+    /** @param {string} slug */
+    getReadOnlyFiles(slug) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/read-only-files`);
+    },
+    /** @param {string} slug @param {string} path */
+    getReadOnlyFile(slug, path) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/read-only-files/${encodePathSegments(path)}`);
     },
     /** @param {string} slug */
     getImages(slug) {

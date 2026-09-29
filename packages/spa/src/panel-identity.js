@@ -24,6 +24,8 @@ export function comparisonPanelId(path, from, to) {
   return JSON.stringify(["diff", path, from, to]);
 }
 export function panelIdentity(id, params = {}) {
+  if (params.kind === "read-only" && typeof params.path === "string")
+    return { id: JSON.stringify(["read-only", params.path]), params: { ...params, kind: "read-only" } };
   if (params.kind === "image" && typeof params.path === "string")
     return { id: imagePanelId(params.path), params: { ...params, kind: "image" } };
   if (params.kind === "chat" && typeof params.chatId === "string")
@@ -56,7 +58,9 @@ export function decodePanelId(id) {
     const value = JSON.parse(id);
     if (
       Array.isArray(value) &&
-      ["artifact", "image", "diff", "chat", "external-chat", "agent-settings", "browser"].includes(value[0])
+      ["artifact", "image", "read-only", "diff", "chat", "external-chat", "agent-settings", "browser"].includes(
+        value[0],
+      )
     )
       return value;
   } catch {

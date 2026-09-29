@@ -59,6 +59,53 @@ describe("artifact tree navigator", () => {
     dom.teardown();
   });
 
+  test("read-only rows retain navigation and open labels but offer no rename or Trash shortcuts", async () => {
+    const tree = dom.document.createElement("ul");
+    dom.document.body.append(tree);
+    const opened: string[] = [];
+    const navigator = createArtifactTreeNavigator(tree as unknown as HTMLElement, {
+      storage: null,
+      onOpen: (path) => opened.push(path),
+    });
+    navigator.setArtifacts([
+      { path: "code.ts", kind: "read-only" },
+      { path: "notes.md" },
+      { path: "photo.png", kind: "image" },
+    ]);
+    navigator.setOpenPaths(new Set(["code.ts"]));
+    const actions = createFileActions({
+      tree,
+      navigator,
+      enabled: true,
+      getSlug: () => "ws",
+      dirty: () => false,
+      prepare: async () => () => {},
+      changed: async () => {},
+      open: async () => {},
+      dataAccess: {
+        getFileFormats: async () => ({ manageable: true, documents: [{ extension: ".md" }], default_extension: ".md" }),
+      },
+    });
+    try {
+      await actions.setWorkspace();
+      const row = tree.querySelector('[data-node-id="f:code.ts"]')!;
+      expect(row.getAttribute("aria-label")).toContain("read-only");
+      expect(row.getAttribute("aria-label")).toContain("open");
+      expect(row.querySelector(".glosa-tree-lock")).not.toBeNull();
+      row.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "F2", code: "F2", bubbles: true }));
+      row.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Delete", code: "Delete", bubbles: true }));
+      expect(tree.querySelector(".glosa-file-name-editor")).toBeNull();
+      row.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true }));
+      expect(tree.querySelector('[role="menu"]')!.textContent).not.toContain("Rename");
+      expect(tree.querySelector('[role="menu"]')!.textContent).not.toContain("Trash");
+      row.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+      expect(opened).toEqual(["code.ts"]);
+    } finally {
+      actions.destroy();
+      navigator.destroy();
+    }
+  });
+
   test("file menu is keyboard navigable, blur keeps the name draft, and AltGr never creates a file", async () => {
     const tree = dom.document.createElement("ul");
     dom.document.body.append(tree);

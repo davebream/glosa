@@ -1814,3 +1814,20 @@ contents. Image history uses byte-preserving Git reads and the same image valida
 A lightweight operation log alone was rejected because it would promise undoable asset operations
 without retaining the bytes. Folder replacement was rejected because it could silently discard
 untracked content. Filesystem mutations retain the existing bus mutex and honest provenance rules.
+
+## 2026-09-29: Read-only files in directory desks (#448)
+
+Show otherwise untracked regular files by default in directory desks, with a lock and accessible
+read-only label. Keep a separate metadata inventory and content route so broad visibility does not
+expand document hashing, capture, claims or provenance. Contrary to the issue's original image
+precedent, #443 already added image/directory history; that behavior remains intact.
+
+All files / Documents only and Show ignored files are personal folder preferences persisted in
+glosa home. Documents only retains today's documents, images and directories. Read-only rows have
+no direct rename/trash controls; existing parent-directory operations remain available. Open tabs
+survive filtering and parent renames, and missing/excluded files explain their unavailable state.
+
+Use CodeMirror 6 directly as a lazy, locally vendored ES module, with bounded text reads and
+virtualized rendering. This adds no framework, runtime build, egress, worker or CSP exception to
+the browser. Binary and oversized files show metadata. Root and nested `.gitignore` affect only
+the new tier. A visible 10,000-file cap and incomplete-scan warning avoid silent omissions.

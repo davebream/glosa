@@ -59,6 +59,10 @@ export const SPA_ASSETS: Readonly<Record<string, string>> = {
   // bare-specifier import).
   "document-images.js": "text/javascript; charset=utf-8",
   "image-insertion.js": "text/javascript; charset=utf-8",
+  "file-view.js": "text/javascript; charset=utf-8",
+  "read-only-pane.js": "text/javascript; charset=utf-8",
+  "code-viewer.js": "text/javascript; charset=utf-8",
+  "vendor/codemirror.js": "text/javascript; charset=utf-8",
   "image-pane.js": "text/javascript; charset=utf-8",
   // Desk browser tabs (#440): the pane and its address rules.
   "browser-pane.js": "text/javascript; charset=utf-8",

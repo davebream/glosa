@@ -337,6 +337,10 @@
     "packages/daemon/test/browser-relay.test.ts": {
       "seconds": 0.3,
       "reason": "Initial local Bun 1.4.2 estimate for #440's agent browser relay: its rules, the managed tools, and the stream and answer route over a real loopback server (14 tests, 0.17 s locally); replace with measured CI medians."
+    },
+    "packages/daemon/test/read-only-files.test.ts": {
+      "seconds": 0.4,
+      "reason": "Initial local estimate for real temporary filesystem, preference persistence and one bounded worker/watcher test; replace with CI medians."
     }
   }
 }

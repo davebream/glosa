@@ -51,7 +51,12 @@ export function createFileActions({ tree, navigator, dataAccess, enabled, getSlu
   function rowSelection(event) {
     const row = event.target.closest?.('[role="treeitem"]');
     if (!row) return null;
-    return { path: row.dataset.nodeId.slice(2), folder: row.dataset.kind === "directory", row };
+    return {
+      path: row.dataset.nodeId.slice(2),
+      folder: row.dataset.kind === "directory",
+      readOnly: row.dataset.readOnly === "true",
+      row,
+    };
   }
   function focus(path, folder = false) {
     navigator.focusPath(path, folder);
@@ -277,7 +282,7 @@ export function createFileActions({ tree, navigator, dataAccess, enabled, getSlu
       ["New file · ⌥⌘N", () => editName("create", "file", target)],
       ["New folder", () => editName("create", "folder", target)],
     ];
-    if (target)
+    if (target && !target.readOnly)
       items.push(
         ["Rename · F2", () => editName("rename", target.folder ? "folder" : "file", target)],
         ["Move to Trash · ⌘⌫", () => void trash(target)],
@@ -327,10 +332,11 @@ export function createFileActions({ tree, navigator, dataAccess, enabled, getSlu
       action = () => editName("create", "file", target);
     else if (event.code === "KeyZ" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey)
       action = undo;
-    else if (event.code === "F2" && target && !event.metaKey && !event.ctrlKey && !event.altKey)
+    else if (event.code === "F2" && target && !target.readOnly && !event.metaKey && !event.ctrlKey && !event.altKey)
       action = () => editName("rename", target.folder ? "folder" : "file", target);
     else if (
       target &&
+      !target.readOnly &&
       ((event.code === "Backspace" && event.metaKey) || (event.code === "Delete" && !event.metaKey)) &&
       !event.ctrlKey &&
       !event.altKey

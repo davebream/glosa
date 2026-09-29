@@ -49,6 +49,29 @@ describe("createDataAccess — request shape", () => {
     expect(JSON.parse(String(calls[5]![1].body))).toEqual({ receipt: "receipt" });
   });
 
+  test("read-only routes encode segments and keep view preferences in the authenticated module", async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const da = createDataAccess({
+      storage: fakeStorage({ glosa_token: "t" }),
+      fetchFn: async (path: string, init: RequestInit) => {
+        calls.push([path, init]);
+        return jsonResponse(200, {});
+      },
+    });
+    await da.getFileView("my ws");
+    await da.setFileView("my ws", { mode: "documents", show_ignored: true });
+    await da.getReadOnlyFiles("my ws");
+    await da.getReadOnlyFile("my ws", "src/a #.ts");
+    expect(calls.map(([path, init]) => [path, init.method ?? "GET"])).toEqual([
+      ["/w/my%20ws/file-view", "GET"],
+      ["/w/my%20ws/file-view", "PUT"],
+      ["/w/my%20ws/read-only-files", "GET"],
+      ["/w/my%20ws/read-only-files/src/a%20%23.ts", "GET"],
+    ]);
+    expect(JSON.parse(String(calls[1]![1].body))).toEqual({ mode: "documents", show_ignored: true });
+    expect(calls.every(([, init]) => new Headers(init.headers).get("Authorization") === "Bearer t")).toBe(true);
+  });
+
   test("getArtifacts sends the Bearer token from storage and hits the right path", async () => {
     const calls: Array<[string, RequestInit]> = [];
     const fetchFn = async (path: string, init: RequestInit) => {
@@ -906,13 +929,14 @@ async function waitFor(condition: () => boolean, deadlineMs = 2000): Promise<voi
 }
 
 describe("desk browser tabs for chat agents (#440)", () => {
-  function streamingDataAccess(browserHost: boolean) {
+  function streamingDataAccess(browserHost: boolean, readOnlyFiles = false) {
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
     const streams: string[] = [];
     const posts: [string, unknown][] = [];
     const da = createDataAccess({
       storage: fakeStorage({ glosa_token: "t" }),
       browserHost,
+      readOnlyFiles,
       fetchFn: async (path: string, init: RequestInit) => {
         if (path.includes("/stream")) {
           streams.push(path);
@@ -955,6 +979,20 @@ describe("desk browser tabs for chat agents (#440)", () => {
       stop();
     }
     expect(h.streams).toEqual(["/w/ws/stream?browser=1"]);
+  });
+
+  test("directory desk file invalidations compose with the desktop browser subscription", async () => {
+    const h = streamingDataAccess(true, true);
+    const frames: unknown[] = [];
+    const stop = h.da.openStream("ws", { onEvent: (frame: unknown) => frames.push(frame) });
+    try {
+      await h.opened();
+      h.push("event: file_view\ndata: {}\n\nevent: read_only_files\ndata: {}\n\n");
+      await waitFor(() => frames.length === 2);
+      expect(h.streams).toEqual(["/w/ws/stream?browser=1&read_only=1"]);
+    } finally {
+      stop();
+    }
   });
 
   test("any other page opens the plain stream, so the daemon never sends it a request", async () => {

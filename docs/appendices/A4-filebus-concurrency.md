@@ -285,3 +285,12 @@ restores eligible documents, images and empty directory structure, not excluded 
 contents. The OS Trash retains those contents. Restores are bounded to 20,000 entries, 256 MiB total,
 the current document size limit and the 20 MiB per-image limit. Image replacement requires explicit
 confirmation and refuses if its bytes or identity change while preparing the restore.
+
+### Display-only file inventory (#448)
+
+The read-only desk inventory is outside the file bus. It uses stat metadata, not document hashes,
+and never expands `resolveTrackedFiles`, `versionedInventory`, claimable paths, shadow Git or the
+4,096-document watcher budget. Its separately bounded/refcounted watcher emits ephemeral desk
+invalidations only. Reading, filtering and externally changing a read-only file write no journal
+event or checkpoint. Directory rename/trash remains governed by the existing whole-directory
+contracts; the new tier adds no direct mutation authorization.
