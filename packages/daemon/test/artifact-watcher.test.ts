@@ -93,6 +93,35 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
     cleanupWorkspace(root);
   });
 
+  test("a loose document follows new image references and newly created image parents", async () => {
+    const path = writeFile(root, "loose.md", "![image](images/a.svg)\n");
+    const workspace: WorkspaceLocation = {
+      registration_id: "loose-image",
+      kind: "loose-file",
+      canonical_path: path,
+      worktree_path: root,
+      bus_path: join(root, ".glosa-loose"),
+      tracking: { mode: "bounded", paths: ["loose.md"] },
+    };
+    const { watchFactory, fakes } = fakeFactory();
+    const events: ArtifactWatcherEvent[] = [];
+    const registry = new ArtifactWatcherRegistry({ watchFactory });
+    registries.push(registry);
+    registry.subscribe(workspace, (event) => events.push(event));
+    expect(fakes[0]!.request.files).toContain(join(root, "images/a.svg"));
+    writeFile(root, "images/a.svg", '<svg width="1" height="1"/>');
+    fakes[0]!.change(join(root, "images"));
+    await waitUntil(() => fakes.length === 2);
+    expect(fakes[0]!.closeCalls).toBe(1);
+    writeFileSync(path, "![image](figures/b.svg)\n");
+    fakes[1]!.change(path);
+    await waitUntil(() => fakes.length === 3);
+    expect(fakes[2]!.request.files).toContain(join(root, "figures/b.svg"));
+    fakes[2]!.change(join(root, "figures/b.svg"));
+    expect(events.some((event) => event.type === "image" && event.data.path === "figures/b.svg")).toBe(true);
+    expect(events.some((event) => event.type === "artifact" && event.data.path.endsWith(".svg"))).toBe(false);
+  });
+
   test("a directory workspace is one recursive watch on its root, and excluded churn produces no events", async () => {
     // The tracked note is moved in with its directory, never written under `root`. A new watch can
     // be handed a write made before it existed, seconds late under load (#349), so a write naming

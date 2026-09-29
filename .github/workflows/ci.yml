@@ -110,6 +110,91 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  linux:
+    needs: prepare
+    if: needs.prepare.outputs.profile == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run scripts/test-runner.ts linux-core
+      - name: Verify the installed Linux package
+        run: bun run package:check
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tests-linux-core
+          path: .context/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  pacman:
+    needs: prepare
+    if: needs.prepare.outputs.profile == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun install --cwd packages/shell --frozen-lockfile
+      - name: Record whether this change builds the package
+        run: |
+          mkdir -p .context/test-results/pacman
+          printf '{"app":"%s"}\n' "${{ needs.prepare.outputs.app }}" > .context/test-results/pacman/decision.json
+      # The Linux desktop app (#432): the x86_64 pacman package, built on this host with the same
+      # electron-builder stack as the Mac app (fpm and its Ruby are downloaded by electron-builder;
+      # bsdtar unpacks the Bun zip and reads the package). It is installed only inside fresh Arch
+      # Linux containers pinned by digest, which get nothing but the package files: the smoke checks
+      # the package, the CLI on the bundled Bun, and a running daemon across an upgrade, a removal
+      # and a reinstall. Container evidence does not qualify a Manjaro desktop (#435 does).
+      - name: Install the package build tools
+        if: needs.prepare.outputs.app == 'true'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools zstd
+      - name: Cache the Electron and Bun downloads for the pacman build
+        if: needs.prepare.outputs.app == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/.cache/glosa-package-app
+          key: pacman-electron-44.4.5-bun-1.4.2-x64
+      - name: Build the pacman package and smoke it in Arch containers
+        if: needs.prepare.outputs.app == 'true'
+        run: bun run --cwd packages/shell package -- --arch x64 --smoke
+      - name: Keep the pacman package for inspection
+        if: always() && needs.prepare.outputs.app == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pacman-package
+          path: packages/shell/dist/x64/*.pacman
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tests-pacman
+          path: .context/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
   tests:
     needs: prepare
     if: needs.prepare.outputs.profile == 'full'
@@ -247,6 +332,12 @@ jobs:
           path: packages/shell/dist/*/*.dmg
           if-no-files-found: warn
           retention-days: 7
+      # Bun can install Electron's package without its binary. The app build installs the binary
+      # when it runs, but source-only PRs skip that build and still require the renderer suite.
+      - name: Install Electron for the renderer suite
+        run: |
+          node packages/shell/node_modules/electron/install.js
+          bun run --cwd packages/shell brand
       - name: Run the shell's renderer security suite in real Electron
         run: bun run scripts/test-runner.ts shell
       - name: Preserve test evidence
@@ -262,7 +353,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [prepare, quality, docs, tests, stability, shell, full]
+    needs: [prepare, quality, docs, tests, stability, shell, linux, pacman, full]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

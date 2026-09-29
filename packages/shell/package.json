@@ -87,6 +87,45 @@
     },
     "dmg": {
       "sign": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "pacman",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "executableName": "glosa",
+      "category": "Office",
+      "synopsis": "Review and edit what AI coding agents draft",
+      "description": "A writing-first workspace for reviewing, annotating and editing what AI coding agents draft.",
+      "publish": null
+    },
+    "pacman": {
+      "packageName": "glosa",
+      "maintainer": "glosa project <https://github.com/davebream/glosa>",
+      "vendor": "glosa project",
+      "compression": "zstd",
+      "depends": [
+        "git",
+        "gtk3",
+        "nss",
+        "alsa-lib",
+        "libxss",
+        "libxtst",
+        "libxkbcommon",
+        "libdrm",
+        "mesa",
+        "libcups",
+        "at-spi2-core",
+        "xdg-utils",
+        "libnotify",
+        "hicolor-icon-theme"
+      ],
+      "afterInstall": "assets/linux/after-install.sh",
+      "afterRemove": "assets/linux/after-remove.sh"
     }
   }
 }

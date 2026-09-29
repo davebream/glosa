@@ -79,7 +79,7 @@ in the package manifest and both CI workflows; the application's older runtime f
 |---|---|
 | Editing a behavior | Explicit `bun test ./path/to/affected.test.ts`; related boundary tests and typecheck as needed |
 | Before submitting a code candidate | `bun run check`; includes lint, typecheck, one complete partitioned pass, version and format checks |
-| Code PR CI | Three disjoint duration-balanced partitions, independent stability, quality and security jobs |
+| Code PR CI | Three disjoint duration-balanced partitions, Linux core, independent stability, quality and security jobs |
 | Documentation-only PR CI | Defined docs consumers, package/format and security checks; not a T8 result |
 | Main, release or manual full validation | PR gates plus the unpartitioned `test:full` interaction check; T8 manual work remains separate |
 
@@ -134,3 +134,29 @@ this prose into a catalogue of brittle source-string assertions or waive a red c
 
 Keep timing reports, raw logs, expected-red runs and audit notes in ignored local evidence directories.
 Public descriptions contain a self-contained behavior/evidence summary, not private paths or fixtures.
+
+
+## Experimental Linux core
+
+`bun run scripts/test-runner.ts linux-core` runs the explicit CLI open/doctor/update, MCP protocol
+and real parent-lifetime, CLI/API integration, daemon lifecycle, managed-state and supervisor suites
+on Ubuntu 24.04 x86_64 with pinned Bun. The same report validation rejects missing, zero or skipped
+execution. CI and release aggregates require this job for code changes; macOS partitions remain
+complete. Linux also runs the installed npm tarball smoke, including token redemption and document
+retrieval. No desktop shell, native-provider or dictation qualification is implied by this subset.
+Since #432 it also runs the Linux package's install-kind and recording tests, its packaging rules,
+and the install lifetime guard (`install-guard`, and `install-lifetime` against real daemons on a
+staged install), whose filesystem and clock behaviour is exactly what differs on Linux.
+
+The `pacman` job builds the Linux pacman package and runs `packages/shell/scripts/linux-package-smoke.ts`:
+static checks of the package on the host, then fresh digest-pinned Arch Linux containers that get
+only the package files. Its stages are declared up front and a declared stage that did not run
+fails the job, the same rule as a skipped test. It covers installation and dependencies, the CLI
+and MCP on the bundled Bun, the recorded executable, doctor, the update refusal, a missing
+dependency failing without the network, and a running daemon across an upgrade, a removal and a
+reinstall. A second container adds a virtual display and runs the desktop app itself: the launcher
+opening a folder, Chromium's sandbox staying on, a `glosa://` link reaching the running app, and the
+daemon outliving the window.
+
+Local Linux containers must provide init, system Git/ps and executable temporary storage for the
+launcher fixtures so process-lifetime tests observe their intended topology. Container evidence does not qualify an installed Manjaro desktop app.

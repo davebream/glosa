@@ -11,7 +11,7 @@ describe("checkContractVersion", () => {
     expect(checkContractVersion(null)).toEqual({ status: "ok" });
   });
 
-  test("exact match (1.21) → ok", () => {
+  test("exact match (1.22) → ok", () => {
     expect(checkContractVersion(CONTRACT_VERSION)).toEqual({ status: "ok" });
   });
 
@@ -23,8 +23,8 @@ describe("checkContractVersion", () => {
     expect(checkContractVersion("1.0")).toEqual({ status: "stale-minor" });
   });
 
-  test("minor mismatch, same major (1.22) → stale-minor", () => {
-    expect(checkContractVersion("1.22")).toEqual({ status: "stale-minor" });
+  test("minor mismatch, same major (1.24) → stale-minor", () => {
+    expect(checkContractVersion("1.24")).toEqual({ status: "stale-minor" });
   });
 
   test("major mismatch (2.0) → mismatch", () => {

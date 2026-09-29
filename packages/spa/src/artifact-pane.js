@@ -1,3 +1,5 @@
+import { mountDocumentImages } from "./document-images.js";
+import { mountImageInsertion } from "./image-insertion.js";
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — one artifact, in one pane. Everything artifact-scoped that used to live in
 // mountApp's single closure lives here instead, once per open tab: the artifact bar, the
@@ -701,6 +703,12 @@ export function createArtifactPane(host, deps) {
   // screen read as two offers when only one of them is the one ⌘1/2/3 and the keyboard address —
   // but a pane in Preview and a pane in Annotate with nothing annotated yet look identical, so
   // the state still has to be legible. A quiet label states it without offering it.
+  const insertImageButton = el("button", {
+    type: "button",
+    className: "glosa-insert-image",
+    textContent: "Insert image",
+    hidden: true,
+  });
   const modeLabel = el("span", { className: "glosa-pane-mode-label" });
   // Three columns: the path at the left, the mode control centred over the manuscript (which is
   // itself centred in the pane), the artifact's own actions at the right.
@@ -708,7 +716,7 @@ export function createArtifactPane(host, deps) {
     artifactIdEl,
     modeLabel,
     modeBar,
-    el("div", { className: "glosa-artifact-actions" }, [historyToggle, tools]),
+    el("div", { className: "glosa-artifact-actions" }, [insertImageButton, historyToggle, tools]),
   ]);
 
   // ---------- pane body ----------
@@ -904,6 +912,117 @@ export function createArtifactPane(host, deps) {
   paneEl.setAttribute("data-mode", modeState.mode);
   paneEl.setAttribute("data-editor-face", "rich");
   host.append(paneEl);
+
+  const imageDisplay = mountDocumentImages(paneEl, { dataAccess, slug, documentPath: path });
+  let imageSourceDraft = null;
+  // Textareas normalize CRLF. Splice the changed range into its raw source so image
+  // insertion and subsequent typing leave every untouched byte alone.
+  function sourceText() {
+    const value = editArea.value;
+    const original = imageSourceDraft?.raw ?? baselineContent ?? currentArtifact?.content ?? value;
+    const normalized = original.replace(/\r\n/g, "\n");
+    let from = 0,
+      to = normalized.length,
+      end = value.length;
+    while (from < to && from < end && normalized[from] === value[from]) from++;
+    while (to > from && end > from && normalized[to - 1] === value[end - 1]) {
+      to--;
+      end--;
+    }
+    const rawAt = (index) => {
+      let raw = 0,
+        logical = 0;
+      while (logical < index) {
+        if (original[raw] === "\r" && original[raw + 1] === "\n") raw++;
+        raw++;
+        logical++;
+      }
+      return raw;
+    };
+    const raw =
+      original.slice(0, rawAt(from)) +
+      value.slice(from, end).replace(/\n/g, original.includes("\r\n") ? "\r\n" : "\n") +
+      original.slice(rawAt(to));
+    imageSourceDraft = { value, raw };
+    return raw;
+  }
+  const imageInsertion = mountImageInsertion({
+    root: paneEl,
+    dataAccess,
+    slug,
+    documentPath: path,
+    status: setEditStatus,
+    capture(coords, target) {
+      if (destroyed || readLock || applyPause || modeState.mode !== "edit") return null;
+      if (fullPageEditor && sourceFace) {
+        let from = editArea.selectionStart,
+          to = editArea.selectionEnd;
+        let previous = editArea.value;
+        const mapInput = () => {
+          const next = editArea.value;
+          let start = 0,
+            end = previous.length,
+            nextEnd = next.length;
+          while (start < end && start < nextEnd && previous[start] === next[start]) start++;
+          while (end > start && nextEnd > start && previous[end - 1] === next[nextEnd - 1]) {
+            end--;
+            nextEnd--;
+          }
+          const map = (at) => (at <= start ? at : at >= end ? at + nextEnd - end : nextEnd);
+          from = map(from);
+          to = map(to);
+          previous = next;
+        };
+        editArea.addEventListener("input", mapInput);
+        const insert = (markdown) => {
+          if (destroyed || modeState.mode !== "edit" || !sourceFace || !fullPageEditor) {
+            editArea.removeEventListener("input", mapInput);
+            return false;
+          }
+          const raw = sourceText();
+          const rawAt = (index) => {
+            let offset = 0,
+              logical = 0;
+            while (logical < index && offset < raw.length) {
+              if (raw[offset] === "\r" && raw[offset + 1] === "\n") offset++;
+              offset++;
+              logical++;
+            }
+            return offset;
+          };
+          const inserted = raw.slice(0, rawAt(from)) + markdown + raw.slice(rawAt(to));
+          editArea.focus();
+          editArea.setSelectionRange(from, to);
+          // The browser's editing command joins its native undo history.
+          if (!document.execCommand?.("insertText", false, markdown)) editArea.setRangeText(markdown, from, to, "end");
+          from = to = editArea.selectionEnd;
+          editArea.dispatchEvent(new Event("input", { bubbles: true }));
+          imageSourceDraft = { value: editArea.value, raw: inserted };
+          return true;
+        };
+        insert.release = () => editArea.removeEventListener("input", mapInput);
+        return insert;
+      }
+      if (coords && !fullPageEditor && !openRun) {
+        const block = blockAncestor(target);
+        const opened = block ? openRunEditor(block, coords) : openAppendEditor();
+        return opened.then(() => openRun?.editor?.captureImageInsertion?.(coords) ?? null);
+      }
+      return (fullPageEditor ? richEditor : openRun?.editor)?.captureImageInsertion?.(coords) ?? null;
+    },
+  });
+  async function insertImage() {
+    if (modeState.mode !== "edit") return;
+    if (!fullPageEditor && !openRun) await openAppendEditor();
+    if (!destroyed) imageInsertion.open();
+  }
+  insertImageButton.addEventListener("mousedown", (event) => event.preventDefault());
+  insertImageButton.addEventListener("click", () => void insertImage());
+  paneEl.addEventListener("glosa-image-layout", () => {
+    layoutMargin();
+    renderMarkers();
+    refreshOutline();
+  });
 
   // The document's style, stamped on the pane so every manuscript surface in it (rendered, rich
   // editor, the quotes that echo it) reads one set of variables (app.css §1).
@@ -2160,7 +2279,11 @@ export function createArtifactPane(host, deps) {
     // focusout too, and closing on that would end the edit on the first keystroke that moves the
     // caret across a node boundary.
     if (!openRun) return;
-    if (openRun.host.contains(event.relatedTarget)) return;
+    if (
+      openRun.host.contains(event.relatedTarget) ||
+      event.relatedTarget?.closest?.(".glosa-image-picker, .glosa-insert-image, .glosa-palette")
+    )
+      return;
     void closeRunEditor();
   });
   contentEl.addEventListener("keydown", (event) => {
@@ -2238,6 +2361,7 @@ export function createArtifactPane(host, deps) {
     editArea.hidden = !fullPage || richShown;
     editWrap.hidden = !fullPage;
     saveButton.hidden = !isEdit;
+    insertImageButton.hidden = !isEdit || isClassF || !/\.md$/i.test(path);
     renderFaceToggle();
     skeletonEl.hidden = !loading;
     emptyEl.hidden = Boolean(currentArtifact) || loading;
@@ -4383,7 +4507,7 @@ export function createArtifactPane(host, deps) {
       renderContent();
       return;
     }
-    const carried = editArea.value;
+    const carried = sourceText();
     // The rich face re-splices from this text, so it becomes the new baseline — which is exactly
     // when a report has to outlive its editor rather than being dropped.
     if (pendingReport?.text !== carried) pendingReport = null;
@@ -4411,7 +4535,7 @@ export function createArtifactPane(host, deps) {
       return { content: workingSource, report: null };
     }
     const live = !sourceFace && richEditor ? richEditor.getSave() : null;
-    const content = live ? live.markdown : editArea.value;
+    const content = live ? live.markdown : sourceText();
     if (live && (live.collateral.length || live.degraded)) return { content, report: live };
     return { content, report: pendingReport?.text === content ? pendingReport.report : null };
   }
@@ -5346,6 +5470,12 @@ export function createArtifactPane(host, deps) {
     },
     getMode: () => modeState.mode,
     setMode,
+    /** The pane's tab was left: the More menu closes so the tab comes back closed. Leaving a tab is
+     * not always a click the menu could read as outside (Ctrl+Tab is a key, and a tab press in
+     * Safari is not seen as one), so the workbench says so when the panel stops being visible. */
+    hidden() {
+      if (tools.getAttribute("data-open") === "true") setToolsOpen(false);
+    },
     /** Issue #155: the live claims covering this file, each with the sentence naming its holder.
      * Cards of notes whose entry is claimed say who is applying them. */
     setClaims(claims) {
@@ -5399,6 +5529,8 @@ export function createArtifactPane(host, deps) {
     artifactClass: () => currentArtifact?.class ?? null,
     focus: focusPreview,
     refreshArtifact,
+    refreshImages: () => imageDisplay.refresh(),
+    insertImage,
     /** The approval strip reads workspace-scoped attention entries, which change outside this
      * pane (a new request arrives, another pane approves one). The workspace calls this. */
     refreshApproval: renderApprovalStrip,
@@ -5438,6 +5570,8 @@ export function createArtifactPane(host, deps) {
     confirmClose: () => confirmDiscard(),
     destroy() {
       destroyed = true;
+      imageDisplay.destroy();
+      imageInsertion.destroy();
       document.fonts?.removeEventListener?.("loadingdone", onFontsLoaded);
       // Best effort, and the last chance this pane gets: a pending write outlives the element it
       // was typed into or it does not survive at all.

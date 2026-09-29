@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Native app-server stdio; no API client, credential extraction or terminal scraping.
-import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { configurationRevision } from "../../../daemon/src/agents/configuration.ts";
+import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
@@ -83,11 +85,20 @@ const nativePolicy = {
   allow_login_shell: false,
   project_root_markers: [".git"],
 };
-const nativeConfig = Object.entries(nativePolicy).flatMap(([key, value]) =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? Object.entries(value).flatMap(([child, item]) => ["-c", `${key}.${child}=${JSON.stringify(item)}`])
-    : ["-c", `${key}=${JSON.stringify(value)}`],
-);
+const linkedPolicy = {
+  model_provider: "openai",
+  otel: nativePolicy.otel,
+  analytics: nativePolicy.analytics,
+  feedback: nativePolicy.feedback,
+  check_for_update_on_startup: false,
+};
+const configArgs = (policy: object) =>
+  Object.entries(policy).flatMap(([key, value]) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? Object.entries(value).flatMap(([child, item]) => ["-c", `${key}.${child}=${JSON.stringify(item)}`])
+      : ["-c", `${key}=${JSON.stringify(value)}`],
+  );
+const nativeConfig = configArgs(nativePolicy);
 function policyConflict(): never {
   throw new ManagedAgentError(
     "provider-unavailable",
@@ -252,17 +263,19 @@ export class ManagedCodexRpc {
   private decoder = new TextDecoder();
   private closed = false;
   private sequence = 0;
+  private linked = false;
   constructor(
     private readonly receive: (frame: Frame) => void,
     private readonly failed: () => void,
   ) {}
   async open(spec: ProfileLaunchSpec, launcher: ProcessLauncher): Promise<void> {
-    checkProjectConfiguration(spec.cwd);
+    this.linked = !!spec.profile.configuration;
+    if (!this.linked) checkProjectConfiguration(spec.cwd);
     const launchCwd = spec.probeCwd ?? spec.configRoot;
-    checkProjectConfiguration(launchCwd);
+    if (!this.linked) checkProjectConfiguration(launchCwd);
     this.process = await launcher.spawn({
       command: spec.manifest.executable,
-      args: [...nativeConfig, "app-server", "--listen", "stdio://"],
+      args: [...(this.linked ? configArgs(linkedPolicy) : nativeConfig), "app-server", "--listen", "stdio://"],
       cwd: launchCwd,
       env: spec.env,
       onData: (channel, bytes) => {
@@ -287,8 +300,26 @@ export class ManagedCodexRpc {
     await this.audit(spec.cwd);
   }
   async audit(cwd: string): Promise<void> {
-    checkProjectConfiguration(cwd);
-    auditConfiguration(await this.request("config/read", { includeLayers: true, cwd }));
+    if (!this.linked) checkProjectConfiguration(cwd);
+    const result = await this.request("config/read", { includeLayers: true, cwd });
+    if (this.linked) {
+      const { config } = z.object({ config: z.record(z.string(), z.unknown()) }).parse(result);
+      if (
+        (config.otel as Record<string, unknown> | undefined)?.exporter !== "none" ||
+        (config.analytics as Record<string, unknown> | undefined)?.enabled !== false ||
+        (config.feedback as Record<string, unknown> | undefined)?.enabled !== false ||
+        config.check_for_update_on_startup !== false ||
+        config.openai_base_url ||
+        (config.chatgpt_base_url && config.chatgpt_base_url !== "https://chatgpt.com/backend-api/") ||
+        config.model_provider !== "openai" ||
+        (config.model_providers as Record<string, unknown> | undefined)?.openai ||
+        (config.mcp_servers as Record<string, unknown> | undefined)?.glosa
+      )
+        throw new ManagedAgentError(
+          "provider-unavailable",
+          "Native routing or the reserved glosa MCP name conflicts with this account.",
+        );
+    } else auditConfiguration(result);
   }
   private accept(bytes: Uint8Array): void {
     if (this.closed) return;
@@ -396,6 +427,17 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
   logoutArgs() {
     return [...nativeConfig, "logout"];
   }
+  defaultConfiguration(): string {
+    return process.env.CODEX_HOME || join(homedir(), ".codex");
+  }
+  configurationRevision(configRoot: string, cwd: string): string {
+    const paths = [join(configRoot, "config.toml"), join(configRoot, "hooks.json")];
+    for (let current = realpathSync(cwd); ; current = dirname(current)) {
+      paths.push(join(current, ".codex", "config.toml"));
+      if (current === dirname(current)) break;
+    }
+    return configurationRevision(paths);
+  }
   profileEnvironment(configRoot: string) {
     return { CODEX_HOME: configRoot };
   }
@@ -438,6 +480,10 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
     const rpc = new ManagedCodexRpc(
       (frame) => {
         const params = frame.params ?? {};
+        if (frame.method === "skills/changed") {
+          emit({ type: "commands_changed" });
+          return;
+        }
         if (frame.method === "account/rateLimits/updated") {
           const limits = params.rateLimits as
             | {
@@ -687,6 +733,52 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
         } while (cursor);
         return servers;
       };
+      const nativeSkills = new Map<string, { name: string; path: string }>();
+      const commands = async (forceReload = false) => {
+        const result = z
+          .object({
+            data: z.array(
+              z.object({
+                cwd: z.string(),
+                skills: z.array(
+                  z.object({
+                    name: z.string(),
+                    description: z.string(),
+                    path: z.string(),
+                    enabled: z.boolean().optional(),
+                    scope: z.string().optional(),
+                  }),
+                ),
+                errors: z.array(z.unknown()).optional(),
+              }),
+            ),
+          })
+          .parse(await rpc.request("skills/list", { cwds: [spec.cwd], forceReload }));
+        if (result.data.some((group) => group.cwd !== spec.cwd || group.errors?.length))
+          throw new ManagedAgentError(
+            "provider-unavailable",
+            "Some native skills could not be loaded. Review the agent configuration and refresh commands.",
+          );
+        const entries = [];
+        nativeSkills.clear();
+        for (const group of result.data)
+          for (const skill of group.skills) {
+            if (skill.enabled === false) continue;
+            const id = createHash("sha256").update(skill.path).update("\0").update(skill.name).digest("hex");
+            nativeSkills.set(id, { name: skill.name, path: skill.path });
+            entries.push({
+              id,
+              name: skill.name,
+              description: skill.description,
+              kind: "skill" as const,
+              source: skill.path,
+            });
+          }
+        return [
+          ...entries,
+          { id: "codex:compact", name: "compact", description: "Compact this conversation", kind: "command" as const },
+        ];
+      };
       let prepared: string | undefined;
       const prepareTurn = async (settings: TurnSettings) => {
         if (ended) throw new ManagedAgentError("run-fenced", "This run was stopped.");
@@ -758,6 +850,7 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
         prepared = JSON.stringify(settings);
       };
       return {
+        commands,
         capabilities: {
           models: models.map((m) => ({
             id: m.model,
@@ -785,7 +878,25 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
           prepared = undefined;
           const selected = models.find((model) => model.model === input.settings.model)!;
           const planning = input.settings.permissionMode === "plan";
-          const content: object[] = [{ type: "text", text: input.text }];
+          if (input.commandId === "codex:compact") {
+            if (input.text.trim() !== "/compact" || input.attachments.length)
+              throw new ManagedAgentError("invalid-reference", "Send /compact on its own.");
+            await rpc.request("thread/compact/start", { threadId });
+            emit({ type: "text", id: "compact", text: "Conversation compaction started." });
+            return;
+          }
+          const skill = input.commandId ? nativeSkills.get(input.commandId) : undefined;
+          if (input.commandId && !skill)
+            throw new ManagedAgentError("stale-reference", "This Codex skill is no longer available.");
+          const content: object[] = [
+            {
+              type: "text",
+              text: skill
+                ? input.text.replace(/^(\s*)\/[^\s]+/u, (_match, space) => `${space}$${skill.name}`)
+                : input.text,
+            },
+          ];
+          if (skill) content.push({ type: "skill", name: skill.name, path: skill.path });
           for (const attachment of input.attachments) {
             if (attachment.mime.startsWith("image/")) {
               if (!selected.inputModalities?.includes("image"))

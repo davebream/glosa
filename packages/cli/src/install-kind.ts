@@ -24,6 +24,7 @@ export type InstallKind =
   | "bun-global"
   | "npm-global"
   | "app-bundle"
+  | "pacman"
   | "homebrew"
   | "ephemeral"
   | "source-checkout"
@@ -67,6 +68,21 @@ export function isAppBundlePath(path: string): boolean {
   return APP_BUNDLE_RESOURCES.test(norm(path));
 }
 
+/** The file, beside the package root, in which the Linux desktop package names the package manager
+ *  that installed it (#432): `<resources>/package-type`, holding `pacman`. electron-updater reads a
+ *  file of the same name and meaning. The build writes it; nothing else does. */
+export const PACKAGE_TYPE_FILE = "package-type";
+
+/** Where the marker for the install at `packageRoot` lives: a sibling of the package root. */
+export function packageTypePath(packageRoot: string): string {
+  return join(packageRoot, "..", PACKAGE_TYPE_FILE);
+}
+
+/** The pacman package's refusal (#432). The package manager owns every file under /opt/glosa, so the
+ *  CLI never rewrites them; it names the channel the person actually used instead. */
+export const PACMAN_MANUAL_COMMAND =
+  "download glosa-<version>-x64.pacman from https://github.com/davebream/glosa/releases, then run: sudo pacman -U ./glosa-<version>-x64.pacman";
+
 /** The launcher the cask links and the bundled CLI records: `<Resources>/bin/glosa`, a sibling of
  *  the package root `<Resources>/glosa`. It runs the CLI on the Bun the app carries, which is why
  *  it, not `main.ts` (`#!/usr/bin/env bun`), is what the bundled CLI records. */
@@ -92,14 +108,19 @@ export function targetsInstall(resolvedTarget: string, packageRoot: string): boo
 }
 
 /** Pure over its arguments — zero filesystem access, so every branch is a table test.
- *  `hasGitMarker` is passed in (the caller does the `pathExists` check) for the same reason.
+ *  `hasGitMarker` is passed in (the caller does the `pathExists` check) for the same reason, and so
+ *  is `packageType`, the trimmed content of the package-type marker (`readPackageType`), or null.
  *
  *  Takes ONE path, not two. Bun's `import.meta.url` is already symlink-resolved — measured through
  *  a module symlink AND a symlinked ancestor — so a `logical` vs `realpath` comparison could never
  *  differ and would be dead code. A `bun link`ed dev copy therefore arrives here as the checkout
  *  root itself, which carries no package-path suffix and falls through to `unknown`; the caller's
  *  `.git` probe is what promotes it to `source-checkout`. */
-export function classifyInstall(packagePath: string, hasGitMarker = false): InstallClassification {
+export function classifyInstall(
+  packagePath: string,
+  hasGitMarker = false,
+  packageType: string | null = null,
+): InstallClassification {
   const p = norm(packagePath);
 
   const refuse = (kind: InstallKind, manualCommand: string): InstallClassification => ({
@@ -119,6 +140,11 @@ export function classifyInstall(packagePath: string, hasGitMarker = false): Inst
   //    brew; whatever it contains (a bundled node_modules can carry any suffix) is not ours to
   //    rewrite.
   if (isAppBundlePath(p)) return refuse("app-bundle", "brew upgrade --cask glosa");
+  // 2a. The Linux desktop package (#432), recognised by the marker its build wrote rather than by
+  //     where electron-builder happens to install it. After the macOS bundle, so a Mac path keeps
+  //     its rule whatever sits beside it; before every package-manager marker, for the same reason
+  //     as the bundle. A marker can only make an install refused, never managed.
+  if (packageType === "pacman") return refuse("pacman", PACMAN_MANUAL_COMMAND);
   // 2b. Homebrew formula, also BEFORE the package-manager markers (#371). The formula installs the
   //     npm package with `bun add --global` into its keg, so the path ends in the bun-global suffix;
   //     writing there would put the keg out of step with what brew recorded.
@@ -162,4 +188,19 @@ export function classifyInstall(packagePath: string, hasGitMarker = false): Inst
   // 8. project-local, 9. unknown.
   if (p.includes(`/node_modules/${PKG}`)) return refuse("project-local", `bun add --global ${PKG}@alpha`);
   return refuse("unknown", `bun add --global ${PKG}@alpha`);
+}
+
+/** What the running CLI records at `<GLOSA_HOME>/bin/glosa` (A6 "Recorded executable"). A CLI that
+ *  carries its own Bun (the macOS bundle, the Linux package) records its launcher, which supplies
+ *  that Bun, and only when nothing live is recorded, so a terminal install keeps ownership. Every
+ *  other CLI records its own entry point, and the last one to run wins. */
+export function recordingPlan(
+  kind: InstallKind,
+  packageRoot: string,
+  entryPath: string,
+): { executable: string; onlyWhenAbsent: boolean } {
+  if (kind === "app-bundle" || kind === "pacman") {
+    return { executable: bundledLauncherPath(packageRoot), onlyWhenAbsent: true };
+  }
+  return { executable: entryPath, onlyWhenAbsent: false };
 }

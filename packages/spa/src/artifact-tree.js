@@ -8,6 +8,7 @@
  *
  * @typedef {{
  *   path: string,
+ *   kind?: "image",
  *   class?: "R" | "F",
  *   size_bytes?: number,
  *   mtime?: string,
@@ -96,17 +97,21 @@ function fileId(path) {
  * were registered in, which is no order a reader can predict.
  *
  * @param {ArtifactSummary[]} artifacts
+ * @param {string[]} [folders]
  * @returns {DirectoryNode}
  */
-export function buildArtifactTree(artifacts) {
+export function buildArtifactTree(artifacts, folders = []) {
   /** @type {DirectoryNode} */
   const root = { kind: "directory", id: "d:", path: "", name: "", children: [] };
   /** @type {Map<string, DirectoryNode>} */
   const directories = new Map([[root.id, root]]);
 
-  for (const artifact of artifacts) {
+  for (const artifact of [
+    ...artifacts,
+    ...folders.filter(Boolean).map((path) => ({ path: `${path}/`, directoryOnly: true })),
+  ]) {
     const segments = artifact.path.split("/");
-    if (segments.length === 0 || segments.some((segment) => segment.length === 0)) continue;
+    if (segments.length === 0 || segments.slice(0, -1).some((segment) => segment.length === 0)) continue;
 
     let parent = root;
     let parentPath = "";
@@ -126,7 +131,7 @@ export function buildArtifactTree(artifacts) {
     }
 
     const name = segments.at(-1);
-    if (name === undefined) continue;
+    if (!name) continue;
     parent.children.push({ kind: "file", id: fileId(artifact.path), path: artifact.path, name, artifact });
   }
 
@@ -280,7 +285,11 @@ export function createArtifactTreeNavigator(container, options) {
     const disclosure = document.createElement("span");
     disclosure.className = "glosa-tree-disclosure";
     if (node.kind === "directory") disclosure.innerHTML = ICONS.folder;
-    else disclosure.setAttribute("aria-hidden", "true");
+    else if (node.artifact.kind === "image") {
+      disclosure.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 18 6-6 4 4 3-3 5 5"/></svg>';
+      item.setAttribute("data-file-kind", "image");
+    } else disclosure.setAttribute("aria-hidden", "true");
 
     // A folder row carries a folder glyph (closed, or open when expanded); a file is a row without
     // one, so the 15px slot is the only width the glyph costs a name in a 232px column.
@@ -471,9 +480,9 @@ export function createArtifactTreeNavigator(container, options) {
       render();
     },
 
-    /** @param {ArtifactSummary[]} artifacts */
-    setArtifacts(artifacts) {
-      root = buildArtifactTree(artifacts);
+    /** @param {ArtifactSummary[]} artifacts @param {string[]} [folders] */
+    setArtifacts(artifacts, folders = []) {
+      root = buildArtifactTree(artifacts, folders);
       const validDirectories = collectDirectoryIds(root);
       expanded = new Set([...expanded].filter((id) => validDirectories.has(id)));
       saveExpansion();

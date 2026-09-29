@@ -12,7 +12,7 @@
 // merely that the port was bound.
 import { describe, expect, test } from "bun:test";
 import { createServer, type Socket } from "node:net";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -215,9 +215,17 @@ async function readOneLine(stream: ReadableStream<Uint8Array>, timeoutMs: number
 async function spawnOrphanable(
   env: Record<string, string>,
   cwd: string,
+  preload?: string,
 ): Promise<{ childPid: number; holderPid: number; io: JsonRpcIo; killParent(): Promise<void> }> {
   const intermediary = Bun.spawn({
-    cmd: [process.execPath, INTERMEDIARY_PATH, process.execPath, MAIN_PATH, "mcp"],
+    cmd: [
+      process.execPath,
+      INTERMEDIARY_PATH,
+      process.execPath,
+      ...(preload ? ["--preload", preload] : []),
+      MAIN_PATH,
+      "mcp",
+    ],
     env,
     cwd,
     stdin: "pipe",
@@ -235,7 +243,7 @@ async function spawnOrphanable(
     // The holder is left running deliberately — it must outlive this call so the shim's stdin
     // stays open through the whole observation window. The caller kills it, after assertions.
     async killParent() {
-      intermediary.kill("SIGKILL");
+      if (intermediary.exitCode === null) intermediary.kill("SIGKILL");
       await intermediary.exited;
     },
   };
@@ -349,8 +357,10 @@ describe("MCP shim real-process lifetime (#140)", () => {
       resolveAccepted();
       socket.once("close", resolveClosed);
       socket.on("error", () => {});
-      // Hold the RFC 6455 handshake open. EOF must abort the pending attachment and close this
-      // accepted AF_UNIX socket; process exit alone would not prove that runtime.close owns it.
+      // Drain request bytes so EOF is observable on Linux as well as macOS, but withhold the
+      // RFC 6455 response. This proves eventual socket release alongside graceful bounded exit;
+      // the separate attachment-abort test owns explicit runtime cancellation.
+      socket.resume();
     });
     await new Promise<void>((resolve, reject) => {
       controlServer.once("error", reject);
@@ -800,82 +810,94 @@ describe("MCP shim real-process lifetime (#140)", () => {
     );
   }, 45_000);
 
-  // Bun/Node's own dynamic-import chain for `glosa mcp` (index.ts's lazy handler, then mcp.ts's
-  // own module graph) measurably dominates this process's observable startup — ~100-200ms in this
-  // environment, verified empirically while building this test (a signal sent at that point still
-  // hit the platform default; one sent past it reached the handler). No code-level fix can shorten
-  // that: it is Bun resolving and executing the module graph, before any of this issue's code has
-  // even started running. `STARTUP_MARGIN_MS` sits safely past that measured threshold so these
-  // two tests exercise the window they are meant to (this process's own code path, before any MCP
-  // handshake), not the unrelated, unfixable module-loading window that precedes it.
-  const STARTUP_MARGIN_MS = 400;
+  // Observe actual listener installation rather than guessing how long module loading takes.
+  // The unit suite separately proves both handlers precede the first await. This marker is
+  // emitted after the synchronous prefix and before any MCP protocol handshake is sent.
+  function startupObserver(home: string): { preload: string; ready: string } {
+    const preload = join(home, "startup-observer.ts");
+    const ready = join(home, "startup-ready");
+    writeFileSync(
+      preload,
+      `import { writeFileSync } from "node:fs";
+      const original = process.on;
+      process.on = function (...args) {
+        const result = original.apply(this, args);
+        if (args[0] === "SIGHUP") queueMicrotask(() => writeFileSync(${JSON.stringify(ready)}, "ready"));
+        return result;
+      };`,
+    );
+    return { preload, ready };
+  }
 
-  test("F-1: SIGHUP sent before any handshake, as early as this process's own code can be signalled, still exits gracefully", async () => {
-    // With the SIGHUP handler installed before `runMcpServer`'s first `await` (this fix), this is
-    // safe regardless of exactly when within its own code the signal lands. With it installed only
-    // after `connect()` (the prior bug) — a call that itself does no real I/O and returns almost
-    // immediately — the exploitable gap was already this narrow; the point of the fix is that no
-    // window remains at all, not that this test widens it.
+  test("F-1: SIGHUP after startup but before any handshake exits gracefully", async () => {
     const home = freshHome();
     const agentCwd = realDir("glosa-lifetime-f1-sighup-early-");
     writeFileSync(tokenPath(home), TOKEN, { mode: 0o600 });
     const port = randomPort();
     const daemon = spawnDaemon(home, port);
+    const observer = startupObserver(home);
+    let proc: ReturnType<typeof Bun.spawn> | undefined;
     await withCleanup(
       async () => {
         expect(await waitForHandshake(port, 15_000, daemon)).not.toBeNull();
         const env = baseEnv(home, port);
-        const proc = Bun.spawn({
-          cmd: [process.execPath, MAIN_PATH, "mcp"],
+        proc = Bun.spawn({
+          cmd: [process.execPath, "--preload", observer.preload, MAIN_PATH, "mcp"],
           env,
           cwd: agentCwd,
           stdin: "pipe",
           stdout: "pipe",
           stderr: "ignore",
         });
-        await Bun.sleep(STARTUP_MARGIN_MS);
+        expect(await waitUntil(() => existsSync(observer.ready) || proc!.exitCode !== null, 15_000)).toBe(true);
+        expect(proc.exitCode, "MCP exited before readiness").toBeNull();
+        expect(existsSync(observer.ready)).toBe(true);
         proc.kill("SIGHUP");
         const exitCode = await Promise.race([proc.exited, Bun.sleep(15_000).then(() => "TIMEOUT" as const)]);
         expect(exitCode).toBe(0);
         expect(proc.signalCode).toBeNull();
       },
       async () => {
+        if (proc?.exitCode === null) proc.kill("SIGKILL");
+        if (proc) await proc.exited;
         await stopDaemon(home, daemon);
         cleanupHome(home);
       },
     );
   }, 30_000);
 
-  test("F-1: the real parent exiting before any handshake, as early as this process's own code can observe it, is still detected", async () => {
-    // No handshake before killing the parent — the earliest window a black-box test can reach
-    // that is still inside this process's own code (see `STARTUP_MARGIN_MS`, above; killing
-    // immediately after spawn instead measures kernel-level reparenting racing the child's own
-    // process bootstrap, which no baseline captured in JS — old or new — can ever see around).
-    // The prior bug captured the parent-poll baseline via a fresh `getppid()` AFTER `connect()`;
-    // a parent that had already exited by then would be captured as launchd from the start, and
-    // the poll would never see a change again. Using Bun's own cached `process.ppid`, read before
-    // this function's first `await`, fixes that for any parent death after this process's own
-    // code has started running — which is the actual, reachable bug this issue is about.
+  test("F-1: parent exit after startup but before any handshake is detected", async () => {
     const home = freshHome();
     const agentCwd = realDir("glosa-lifetime-f1-parent-early-");
     writeFileSync(tokenPath(home), TOKEN, { mode: 0o600 });
     const port = randomPort();
     const daemon = spawnDaemon(home, port);
     let holderPid: number | undefined;
+    let harness: Awaited<ReturnType<typeof spawnOrphanable>> | undefined;
+    const observer = startupObserver(home);
     await withCleanup(
       async () => {
         expect(await waitForHandshake(port, 15_000, daemon)).not.toBeNull();
         const env = baseEnv(home, port, { CLAUDE_CODE_SESSION_ID: "f1-parent-early-session" });
-        const harness = await spawnOrphanable(env, agentCwd);
+        harness = await spawnOrphanable(env, agentCwd, observer.preload);
         holderPid = harness.holderPid;
-        await Bun.sleep(STARTUP_MARGIN_MS);
+        expect(await waitUntil(() => existsSync(observer.ready), 15_000)).toBe(true);
         await harness.killParent();
 
-        const exited = await waitUntil(() => !alive(harness.childPid), ORPHAN_DEADLINE_MS);
+        const exited = await waitUntil(() => !alive(harness!.childPid), ORPHAN_DEADLINE_MS);
         expect(exited).toBe(true);
         expect(alive(harness.childPid)).toBe(false);
       },
       async () => {
+        if (harness) {
+          await harness.killParent();
+          try {
+            process.kill(harness.childPid, "SIGKILL");
+          } catch {
+            /* Already exited. */
+          }
+          expect(await waitUntil(() => !alive(harness!.childPid), 5_000)).toBe(true);
+        }
         if (holderPid !== undefined) {
           try {
             process.kill(holderPid, "SIGKILL");

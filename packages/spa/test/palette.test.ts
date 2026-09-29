@@ -218,6 +218,48 @@ describe("the Go to palette", () => {
     expect(palette.isOpen()).toBe(false);
   });
 
+  test("a prompt asks one question in the palette's place, then gives Go to back (#440)", () => {
+    const palette = mount();
+    const submitted: string[] = [];
+    palette.prompt({
+      label: "Open a web page",
+      placeholder: "Web address, or localhost and a port",
+      hint: "Here, pages open in your own browser.",
+      describe: (text: string) =>
+        !text.trim()
+          ? null
+          : text.includes(" ")
+            ? { ok: false, message: `"${text}" isn't a web address.` }
+            : { ok: true, label: `Open ${text}`, detail: "in a new tab of this browser" },
+      submit: (text: string) => void submitted.push(text),
+    });
+    expect(palette.isOpen()).toBe(true);
+    expect(one(".glosa-palette").getAttribute("aria-label")).toBe("Open a web page");
+    expect(one(".glosa-palette-filters").hidden).toBe(true);
+    expect(one(".glosa-palette-hint").textContent).toBe("Here, pages open in your own browser.");
+    expect(all(".glosa-palette-item")).toHaveLength(0);
+
+    type("tide table");
+    expect(one(".glosa-palette-empty").textContent).toBe(`"tide table" isn't a web address.`);
+    expect(one(".glosa-palette-empty").dataset.tone).toBe("error");
+    key("Enter");
+    expect(submitted).toEqual([]);
+    expect(palette.isOpen()).toBe(true);
+
+    type("localhost:5173");
+    expect(labels()).toEqual(["Open localhost:5173"]);
+    key("Enter");
+    expect(submitted).toEqual(["localhost:5173"]);
+    expect(palette.isOpen()).toBe(false);
+
+    // Opening it again is Go to, as it was.
+    palette.open();
+    expect(one(".glosa-palette").getAttribute("aria-label")).toBe("Go to");
+    expect(one(".glosa-palette-input").placeholder).toBe("Search documents, chats and commands…");
+    expect(one(".glosa-palette-filters").hidden).toBe(false);
+    expect(one(".glosa-palette-empty").dataset.tone).toBeUndefined();
+  });
+
   test("destroy removes the sheet", () => {
     const palette = mount();
     palette.open();

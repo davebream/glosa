@@ -101,7 +101,11 @@ receives a preload.
 state is per token and unaffected by window count. Layout per window is decision 3 in the feature
 map and is not changed here.
 
-**R-P5. A daemon restart under an open window is a re-pair, not a crash.** The SPA already shows the
+**R-P5. A daemon restart under an open window is a re-pair, not a crash.** *(Amended 2026-09-29 by
+`2026-09-29-install-lifetime-and-restart.md` R-L8: a restart is a reconnect, because the pairing
+token persists across it; the window asks the shell to bring back its own install's daemon, and
+re-pairing happens only after a revocation. A packaged shell whose own CLI is gone runs no other
+install's CLI, which narrows R-O1's fall-through for that case.)* The SPA already shows the
 reconnecting banner; when the daemon answers again the window asks the main process for a new token
 and redeems it. The shell never keeps a window on a daemon it did not pair with.
 

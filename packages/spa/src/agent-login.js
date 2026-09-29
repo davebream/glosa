@@ -19,12 +19,27 @@ export function validLoginUrl(value, hosts, mcp = false) {
 
 export async function mountAgentLogin(
   host,
-  { dataAccess, profile, onFinished, signal, workspace = undefined, serverId = undefined },
+  {
+    dataAccess,
+    profile,
+    onFinished,
+    signal,
+    workspace = undefined,
+    serverId = undefined,
+    // Where an account's sign-in page opens: the person's own browser, always (#440). In the desktop
+    // app that is the shell's `openExternal`; a plain browser opens a tab of its own.
+    openLink = (url) => window.open(url, "_blank", "noopener,noreferrer"),
+  },
 ) {
   const { Terminal } = await import("./vendor/xterm.mjs");
   if (!document.querySelector("link[data-agent-terminal]")) {
     document.head.append(
-      el("link", { rel: "stylesheet", href: "/app/vendor/xterm.css", "data-agent-terminal": "true" }),
+      // Beside this module, so it inherits the page's build scope (#432, R-L6).
+      el("link", {
+        rel: "stylesheet",
+        href: new URL("./vendor/xterm.css", import.meta.url).href,
+        "data-agent-terminal": "true",
+      }),
     );
   }
   if (signal?.aborted) return { destroy: async () => {} };
@@ -122,7 +137,7 @@ export async function mountAgentLogin(
           browserLink.href = safe;
           browserLink.textContent = `Continue sign-in at ${new URL(safe).hostname}`;
           browserLink.hidden = false;
-        } else window.open(safe, "_blank", "noopener,noreferrer");
+        } else openLink(safe);
       }
     },
   };

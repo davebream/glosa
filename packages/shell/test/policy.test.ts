@@ -5,15 +5,25 @@ import { describe, expect, test } from "bun:test";
 import { buildAppUrl } from "../../cli/src/open-presentation.ts";
 import {
   appearanceDecision,
+  BROWSER_PARTITION,
+  browserContextMenu,
+  browserKeyAction,
+  browserNavigationDecision,
+  browserRequestDecision,
+  browserUserAgent,
   cliCandidates,
+  cliChoice,
   compareVersions,
   compatibility,
   contrastPush,
   contrastPushReaches,
   contrastReply,
+  downloadName,
   egressDecision,
+  externalLinkDecision,
   firstFrameColor,
   linkFromArgv,
+  lockGuestPreferences,
   loopbackApiOrigin,
   MAX_RESPONSE_BYTES,
   MAX_TAG_LENGTH,
@@ -25,7 +35,9 @@ import {
   PAPER,
   parseGlosaUrl,
   parseOpenEnvelope,
+  parsePackageType,
   parseVersion,
+  permissionNotice,
   plainPath,
   preloadShouldExpose,
   quitDecision,
@@ -33,15 +45,20 @@ import {
   RecentIds,
   type RoutedWindow,
   readUpdateResponse,
+  reconnectOutcome,
+  releaseAssetNames,
   requestReleases,
   representedFile,
   revealTarget,
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  targetFromArg,
   UPDATE_HEADERS,
   UPDATE_USER_AGENT,
   type UpdateOutcome,
+  updateChannelFor,
+  webviewAttachDecision,
   updateDialog,
   updateOutcome,
   windowFor,
@@ -384,6 +401,24 @@ describe("CLI lookup (R-O1, #371: the recorded executable first, the app's own C
     expect(candidates).toEqual(["/Users/u/.glosa/bin/glosa", ...WELL_KNOWN]);
     expect(candidates.some((c) => c.includes("/Contents/Resources/"))).toBe(false);
   });
+  test("on Linux the package's own CLI is second, and the well-known bins name /usr/bin, never Homebrew (#432)", () => {
+    const candidates = cliCandidates({ homeDir: "/home/u", resourcesPath: "/opt/glosa/resources", platform: "linux" });
+    expect(candidates).toEqual([
+      "/home/u/.glosa/bin/glosa",
+      "/opt/glosa/resources/bin/glosa",
+      "/home/u/.bun/bin/glosa",
+      "/usr/local/bin/glosa",
+      "/usr/bin/glosa",
+      "glosa",
+    ]);
+    expect(candidates.some((c) => c.includes("homebrew"))).toBe(false);
+  });
+  test("an explicit darwin platform keeps today's macOS list", () => {
+    expect(cliCandidates({ homeDir: HOME, resourcesPath: null, platform: "darwin" })).toEqual([
+      "/Users/u/.glosa/bin/glosa",
+      ...WELL_KNOWN,
+    ]);
+  });
   test("no candidate is a hard-coded /Applications path: the bundle is wherever it was launched from", () => {
     const moved = "/Users/u/Downloads/glosa.app/Contents/Resources";
     const candidates = cliCandidates({ homeDir: HOME, resourcesPath: moved });
@@ -684,6 +719,33 @@ describe("Check for Updates…: which release, and what the dialog offers (#424)
     expect(newestRelease([release("0.1.0-alpha.38", { arches: ["x64"] })], RUNNING)).toBeNull();
   });
 
+  test("release assets per platform: the DMG or ZIP on macOS, the pacman package on Linux (#432)", () => {
+    expect(releaseAssetNames("darwin", "0.1.0-alpha.37", "arm64")).toEqual([
+      "glosa-0.1.0-alpha.37-arm64.dmg",
+      "glosa-0.1.0-alpha.37-arm64.zip",
+    ]);
+    expect(releaseAssetNames("linux", "0.1.0-alpha.37", "x64")).toEqual(["glosa-0.1.0-alpha.37-x64.pacman"]);
+  });
+
+  test("on Linux only a release carrying the pacman package is an upgrade (#432)", () => {
+    const linux = { current: "0.1.0-alpha.36", arch: "x64", platform: "linux" as const };
+    const withPacman = (version: string) => ({
+      ...release(version),
+      assets: [...release(version).assets, { name: `glosa-${version}-x64.pacman`, state: "uploaded" }],
+    });
+    // A macOS-only release is not an upgrade for a Linux app, however new.
+    expect(newestRelease([release("0.1.0-alpha.38")], linux)).toBeNull();
+    expect(newestRelease([release("0.1.0-alpha.38"), withPacman("0.1.0-alpha.37")], linux)?.version).toBe(
+      "0.1.0-alpha.37",
+    );
+    // And a pacman-only release is not an upgrade for a Mac.
+    const pacmanOnly = {
+      ...bare("0.1.0-alpha.38"),
+      assets: [{ name: "glosa-0.1.0-alpha.38-x64.pacman", state: "uploaded" }],
+    };
+    expect(newestRelease([pacmanOnly], { ...RUNNING, arch: "x64" })).toBeNull();
+  });
+
   test("an asset still uploading, or a name that only looks like the app, does not count", () => {
     expect(newestRelease([release("0.1.0-alpha.38", { state: "new" })], RUNNING)).toBeNull();
     const nearMisses = {
@@ -882,15 +944,53 @@ describe("Check for Updates…: which release, and what the dialog offers (#424)
     expect(opened).toEqual(["https://github.com/davebream/glosa/releases/tag/v0.1.0-alpha.37"]);
   });
 
+  test("a pacman install: the release page, the pacman command for the exact file, or later (#432)", () => {
+    const outcome: UpdateOutcome = { kind: "newer", version: "0.1.0-alpha.37", tag: "v0.1.0-alpha.37" };
+    const shown = updateDialog(outcome, { ...context, channel: "pacman", arch: "x64" });
+    expect(shown.message).toBe("glosa 0.1.0-alpha.37 is available. You have 0.1.0-alpha.36.");
+    expect(shown.buttons).toEqual(["Open Release Page", "Copy Install Command", "Later"]);
+    expect(shown.actions).toEqual([
+      { open: "https://github.com/davebream/glosa/releases/tag/v0.1.0-alpha.37" },
+      { copy: "sudo pacman -U ./glosa-0.1.0-alpha.37-x64.pacman" },
+      null,
+    ]);
+    expect(shown.detail).toContain("glosa-0.1.0-alpha.37-x64.pacman");
+    expect(shown.cancelId).toBe(2);
+  });
+
+  test("a Linux app pacman did not install gets only the release page", () => {
+    const outcome: UpdateOutcome = { kind: "newer", version: "0.1.0-alpha.37", tag: "v0.1.0-alpha.37" };
+    const shown = updateDialog(outcome, { ...context, channel: "download" });
+    expect(shown.buttons).toEqual(["Open Release Page", "Later"]);
+    expect(shown.actions).toEqual([{ open: "https://github.com/davebream/glosa/releases/tag/v0.1.0-alpha.37" }, null]);
+    expect(shown.cancelId).toBe(1);
+  });
+
+  test("the channel follows the platform and the package's marker; Linux is never Homebrew", () => {
+    expect(updateChannelFor("darwin", null)).toBe("homebrew-cask");
+    expect(updateChannelFor("linux", "pacman")).toBe("pacman");
+    expect(updateChannelFor("linux", null)).toBe("download");
+    expect(updateChannelFor("linux", "deb")).toBe("download");
+    for (const channel of ["pacman", "download"] as const) {
+      const shown = updateDialog(
+        { kind: "newer", version: "0.1.0-alpha.37", tag: "v0.1.0-alpha.37" },
+        { ...context, channel },
+      );
+      expect(JSON.stringify(shown)).not.toMatch(/brew/i);
+    }
+  });
+
   test("no em dash in anything the dialog shows", () => {
     const outcomes: UpdateOutcome[] = [
       { kind: "newer", version: "0.1.0-alpha.37", tag: "v0.1.0-alpha.37" },
       { kind: "current" },
       updateOutcome({ error: "timeout" }, RUNNING),
     ];
-    for (const outcome of outcomes) {
-      const { message, detail, buttons } = updateDialog(outcome, context);
-      expect([message, detail, ...buttons].join("\n")).not.toContain("—");
+    for (const channel of ["homebrew-cask", "pacman", "download"] as const) {
+      for (const outcome of outcomes) {
+        const { message, detail, buttons } = updateDialog(outcome, { ...context, channel });
+        expect([message, detail, ...buttons].join("\n")).not.toContain("—");
+      }
     }
   });
 
@@ -988,5 +1088,216 @@ describe("more contrast: the page's read and the push (#425, A3 §4b)", () => {
     expect(contrastPushReaches(SPA, undefined)).toBe(false);
     // A window the shell created without an origin, or never recorded, gets nothing.
     for (const recorded of [null, undefined, ""]) expect(contrastPushReaches(recorded, SPA)).toBe(false);
+  });
+});
+
+describe("Linux launch arguments and the package marker (#432)", () => {
+  test("a desktop entry's file:// folder becomes a path; anything else passes through unchanged", () => {
+    expect(targetFromArg("file:///home/u/My%20Notes")).toBe("/home/u/My Notes");
+    expect(targetFromArg("file://localhost/home/u/ws")).toBe("/home/u/ws");
+    expect(targetFromArg("/home/u/ws")).toBe("/home/u/ws");
+    expect(targetFromArg("glosa://open?path=/home/u/ws")).toBe("glosa://open?path=/home/u/ws");
+    // A file URL naming another host is not a local folder, and is not ours to open.
+    expect(targetFromArg("file://server/share/ws")).toBe("file://server/share/ws");
+    expect(targetFromArg("file:")).toBe("file:");
+  });
+
+  test("the marker is one short lowercase word, or nothing", () => {
+    expect(parsePackageType("pacman\n")).toBe("pacman");
+    expect(parsePackageType(null)).toBeNull();
+    expect(parsePackageType("Pac Man")).toBeNull();
+    expect(parsePackageType("a".repeat(65))).toBeNull();
+    expect(parsePackageType("")).toBeNull();
+  });
+});
+
+describe("a window whose daemon's install changed (#432, R-L8)", () => {
+  test("a packaged app whose own CLI is gone runs no other install's CLI", () => {
+    expect(cliChoice({ packaged: true, ownCliExists: false })).toBe("removed");
+    expect(cliChoice({ packaged: true, ownCliExists: true })).toBe("lookup");
+    // An unpackaged run never had its own CLI; it looks up candidates as it always did.
+    expect(cliChoice({ packaged: false, ownCliExists: false })).toBe("lookup");
+  });
+
+  test("a reconnect is only a success when the same install answers", () => {
+    expect(reconnectOutcome("install-a", "install-a")).toEqual({ ok: true });
+    expect(reconnectOutcome("install-a", "install-b")).toEqual({ ok: false, reason: "foreign" });
+    // A window paired with a daemon that published no install id cannot tell, and does not refuse.
+    expect(reconnectOutcome(null, "install-b")).toEqual({ ok: true });
+    const down = reconnectOutcome("install-a", null);
+    expect(down).toMatchObject({ ok: false, reason: "failed" });
+    expect(JSON.stringify(down)).not.toContain("\u2014");
+  });
+});
+
+describe("desk browser tabs: what a page may reach, and what reaches it (#440, A3 §4b)", () => {
+  test("a page loads the web and what never leaves the process, and nothing else", () => {
+    for (const url of [
+      "https://example.org/a",
+      "http://example.org/",
+      "wss://example.org/s",
+      "ws://localhost:5173/hmr",
+    ])
+      expect(browserRequestDecision(url, [])).toBe("allow");
+    for (const url of ["data:text/plain,x", "blob:https://example.org/1"])
+      expect(browserRequestDecision(url, [])).toBe("allow");
+    for (const url of [
+      "file:///etc/passwd",
+      "glosa://open?path=/x",
+      "chrome://settings",
+      "javascript:alert(1)",
+      "not a url",
+    ])
+      expect(browserRequestDecision(url, [])).toBe("cancel");
+  });
+
+  test("a page never reaches the daemon's SPA or class-F port on any loopback name", () => {
+    const ports = [4646, 4647];
+    for (const url of [
+      "http://glosa.localhost:4646/api/handshake",
+      "http://127.0.0.1:4647/doc/x",
+      "http://localhost:4646/",
+      "http://[::1]:4646/",
+      "ws://127.0.0.1:4646/",
+    ])
+      expect(browserRequestDecision(url, ports)).toBe("cancel");
+    // Another local server, or the same port off this machine, is a page like any other.
+    expect(browserRequestDecision("http://localhost:5173/", ports)).toBe("allow");
+    expect(browserRequestDecision("http://example.org:4646/", ports)).toBe("allow");
+  });
+
+  test("a tab navigates only to web addresses or a blank page", () => {
+    expect(browserNavigationDecision("https://example.org/")).toBe("allow");
+    expect(browserNavigationDecision("http://localhost:3000/")).toBe("allow");
+    expect(browserNavigationDecision("about:blank")).toBe("allow");
+    for (const url of ["file:///Users/", "mailto:a@b.c", "glosa://open?path=/x", "data:text/html,x", "about:config"])
+      expect(browserNavigationDecision(url)).toBe("deny");
+  });
+
+  test("only a desk window's SPA frame may attach a tab, and only for a web address", () => {
+    const desk = {
+      kind: "desk" as const,
+      frameOrigin: "http://glosa.localhost:4646",
+      spaOrigin: "http://glosa.localhost:4646",
+    };
+    expect(webviewAttachDecision({ ...desk, src: "https://example.org/" })).toBe("allow");
+    expect(webviewAttachDecision({ ...desk, kind: "companion", src: "https://example.org/" })).toBe("deny");
+    expect(webviewAttachDecision({ ...desk, kind: null, src: "https://example.org/" })).toBe("deny");
+    expect(webviewAttachDecision({ ...desk, frameOrigin: "null", src: "https://example.org/" })).toBe("deny");
+    expect(webviewAttachDecision({ ...desk, frameOrigin: "http://127.0.0.1:4647", src: "https://example.org/" })).toBe(
+      "deny",
+    );
+    expect(webviewAttachDecision({ ...desk, src: "file:///etc/hosts" })).toBe("deny");
+  });
+
+  test("a guest's preferences are locked whatever the page asked for", () => {
+    const prefs: Record<string, unknown> = {
+      preload: "/evil.js",
+      preloadURL: "file:///evil.js",
+      nodeIntegration: true,
+      sandbox: false,
+      contextIsolation: false,
+      partition: "persist:elsewhere",
+      webSecurity: false,
+      enableBlinkFeatures: "X",
+    };
+    lockGuestPreferences(prefs);
+    expect(prefs).toMatchObject({
+      partition: BROWSER_PARTITION,
+      nodeIntegration: false,
+      sandbox: true,
+      contextIsolation: true,
+      webSecurity: true,
+      webviewTag: false,
+    });
+    expect(prefs).not.toHaveProperty("preload");
+    expect(prefs).not.toHaveProperty("preloadURL");
+    expect(prefs).not.toHaveProperty("enableBlinkFeatures");
+    expect(BROWSER_PARTITION.startsWith("persist:")).toBe(true);
+  });
+
+  test("the user agent names neither Electron nor glosa", () => {
+    const fallback =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) glosa/0.1.0-alpha.36 Chrome/152.0.7977.130 Electron/44.4.5 Safari/537.36";
+    const ua = browserUserAgent(fallback);
+    expect(ua).not.toMatch(/glosa|Electron/i);
+    expect(ua).toContain("Chrome/152.0.7977.130");
+    expect(ua).toContain("Safari/537.36");
+  });
+
+  test("glosa's chords work with a page focused; everything else is the page's", () => {
+    const mac = (key: string, extra = {}) => browserKeyAction({ type: "keyDown", key, meta: true, ...extra }, "darwin");
+    expect(mac("r")).toBe("reload");
+    expect(mac("[")).toBe("back");
+    expect(mac("]")).toBe("forward");
+    for (const key of ["w", "k", "t", "l", "W", "\\"]) expect(mac(key)).toBe("app");
+    expect(mac("ArrowRight", { alt: true })).toBe("app");
+    expect(browserKeyAction({ type: "keyDown", key: "Tab", control: true }, "darwin")).toBe("app");
+    // The page's own keys and edits stay the page's.
+    for (const key of ["c", "v", "a", "z", "f", "1"]) expect(mac(key)).toBe(null);
+    expect(browserKeyAction({ type: "keyDown", key: "w" }, "darwin")).toBe(null);
+    expect(browserKeyAction({ type: "keyUp", key: "w", meta: true }, "darwin")).toBe(null);
+    // Ctrl is the modifier off macOS, and ⌘ is not.
+    expect(browserKeyAction({ type: "keyDown", key: "w", control: true }, "linux")).toBe("app");
+    expect(browserKeyAction({ type: "keyDown", key: "w", meta: true }, "linux")).toBe(null);
+  });
+
+  test("Open in your browser leaves only for web and mail addresses", () => {
+    for (const url of ["https://example.org/", "http://localhost:3000/", "mailto:someone@example.org"])
+      expect(externalLinkDecision(url)).toBe("open");
+    for (const url of [
+      "file:///Applications/Calculator.app",
+      "glosa://open?path=/x",
+      "javascript:void 0",
+      "zoommtg://x",
+      42,
+      null,
+    ])
+      expect(externalLinkDecision(url)).toBe("refuse");
+    expect(externalLinkDecision(`https://example.org/${"a".repeat(9000)}`)).toBe("refuse");
+  });
+
+  test("refused permissions a person would miss are named; the rest stay quiet", () => {
+    expect(permissionNotice("media")).toBe("your camera or microphone");
+    expect(permissionNotice("geolocation")).toBe("your location");
+    expect(permissionNotice("fullscreen")).toBe(null);
+    expect(permissionNotice("clipboard-sanitized-write")).toBe(null);
+  });
+
+  test("a blocked download is named by its file alone, cut to a notice's length", () => {
+    expect(downloadName("tides-2026.pdf")).toBe("tides-2026.pdf");
+    expect(downloadName("../../etc/passwd")).toBe("passwd");
+    expect(downloadName("a\nb.txt")).toBe("ab.txt");
+    expect(downloadName("evil\u0000\u001b[2Jname.txt")).toBe("evil[2Jname.txt");
+    expect(downloadName("")).toBe("a file");
+    expect(downloadName(`${"x".repeat(100)}.pdf`)).toHaveLength(78);
+  });
+
+  test("the right-click menu offers link, editing and page actions where they apply", () => {
+    const labels = (items: ReturnType<typeof browserContextMenu>) =>
+      items.map((item) => ("label" in item ? item.label : "role" in item ? item.role : "-"));
+    expect(
+      labels(browserContextMenu({ linkURL: "https://example.org/", canGoBack: true, canGoForward: false })),
+    ).toEqual([
+      "Open Link in New Browser Tab",
+      "Open Link in Your Browser",
+      "Copy Link Address",
+      "-",
+      "Back",
+      "Reload",
+    ]);
+    expect(labels(browserContextMenu({ isEditable: true, canGoBack: false, canGoForward: true }))).toEqual([
+      "cut",
+      "copy",
+      "paste",
+      "selectAll",
+      "-",
+      "Forward",
+      "Reload",
+    ]);
+    // A link that is not a web address gets no link actions.
+    expect(labels(browserContextMenu({ linkURL: "file:///x", canGoBack: false, canGoForward: false }))).toEqual([
+      "Reload",
+    ]);
   });
 });

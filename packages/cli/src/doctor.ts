@@ -3,6 +3,7 @@
 // bun, git, claude-code, browser, daemon+proto, token/pairing, workspace, pending-delivery,
 // live-updates, orphaned-state, claude-monitor, transcript-root, claude-config-roots,
 // orphaned-entries, workspace-root, legacy-config, install.
+import { browserLauncher, platformProblem, runtimeFloor, type PlatformDeps } from "./platform.ts";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -19,9 +20,13 @@ import {
   resolveMatchedFiles,
   tokenPath,
 } from "../../daemon/src/index.ts";
+import { fetchHandshake, type HandshakeResponse } from "../../daemon/src/lifecycle/handshake.ts";
+import { lockPath } from "../../daemon/src/lifecycle/home.ts";
+import { readLock } from "../../daemon/src/lifecycle/lock.ts";
+import { glosaPort } from "../../daemon/src/lifecycle/port.ts";
 import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
 import { classifyInstall, currentPackageRoot, targetsInstall } from "./install-kind.ts";
-import { type RecordedExecutable, readRecordedExecutable } from "./install-link.ts";
+import { type RecordedExecutable, readPackageType, readRecordedExecutable } from "./install-link.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -36,7 +41,7 @@ export interface DoctorData {
   checks: CheckResult[];
 }
 
-export interface DoctorDeps {
+export interface DoctorDeps extends PlatformDeps {
   createClient: () => Promise<GlosaApiClient>;
   platform: () => NodeJS.Platform;
   bunVersion: () => string;
@@ -60,6 +65,12 @@ export interface DoctorDeps {
   packageRoot?: () => string;
   /** What `<GLOSA_HOME>/bin/glosa` holds. Defaults to `readRecordedExecutable`. */
   readRecordedExecutable?: (home: string) => RecordedExecutable;
+  /** The Linux package's package-type marker beside a package root (#432). Defaults to
+   *  `readPackageType`. */
+  readPackageType?: (packageRoot: string) => string | null;
+  /** The reachable daemon's tokenless handshake, for its install-lifetime state (#432). Optional
+   *  and supplied only by `realDoctorDeps`, so no unit test ever probes a real port. */
+  readHandshake?: (home: string) => Promise<HandshakeResponse | null>;
   /** `realpath`, or null when the path does not resolve. Also the existence probe for the other
    * glosa executables the `install` row lists. */
   realpath?: (path: string) => string | null;
@@ -102,6 +113,8 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     env: Bun.env,
     packageRoot: currentPackageRoot,
     readRecordedExecutable,
+    readPackageType,
+    readHandshake: (home) => fetchHandshake(readLock(lockPath(home))?.port ?? glosaPort(), 1000),
     realpath: realRealpath,
   };
 }
@@ -162,20 +175,19 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
 
   // 1. platform
   const platform = deps.platform();
-  checks.push(
-    platform === "darwin"
-      ? check("platform", "pass", `${platform} (macOS-only v1, A6 §F30)`)
-      : check("platform", "fail", `${platform} is not supported: glosa v1 is macOS-only`),
-  );
-  if (platform !== "darwin") return checks; // nothing else here is meaningful off-Darwin
+  const problem = platformProblem(deps, false);
+  checks.push(problem ? check("platform", "fail", problem) : check("platform", "pass", `${platform} (A6 §F30)`));
+  if (problem) return checks;
 
-  // 2. bun
-  const bunOk = meetsFloor(deps.bunVersion(), "1.2.7");
+  // Runtime failure stops before daemon discovery.
+  const floor = runtimeFloor(platform);
+  const runtimeProblem = platformProblem(deps);
   checks.push(
-    bunOk === true
-      ? check("bun", "pass", `Bun ${deps.bunVersion()} (floor 1.2.7)`)
-      : check("bun", "fail", `Bun ${deps.bunVersion()} is below the pinned floor 1.2.7`),
+    runtimeProblem
+      ? check("bun", "fail", runtimeProblem)
+      : check("bun", "pass", `Bun ${deps.bunVersion()} (floor ${floor})`),
   );
+  if (runtimeProblem) return checks;
 
   // 3. git
   const gitPath = deps.which("git");
@@ -215,22 +227,12 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     );
   }
 
-  // 5. browser — v1 has no generic way to enumerate/verify an actual Chromium≥111/Safari≥17.2
-  // install; this is a best-effort proxy ("can macOS's own `open` launcher hand off to SOMETHING")
-  // honestly labeled as such, not a fabricated pass of the real floor check.
-  const openPath = deps.which("open");
+  // Presence is only a launcher check, not proof of a graphical session or browser version.
+  const launcher = browserLauncher(platform);
   checks.push(
-    openPath
-      ? check(
-          "browser",
-          "pass",
-          "macOS `open` launcher is available (does not verify a specific browser/version floor)",
-        )
-      : check(
-          "browser",
-          "warn",
-          "macOS `open` launcher not found: `glosa open` will not be able to launch a browser automatically",
-        ),
+    deps.which(launcher)
+      ? check("browser", "pass", `${launcher} launcher is available (does not verify a specific browser/version floor)`)
+      : check("browser", "warn", `${launcher} launcher not found: use glosa open --url and open the URL in a browser`),
   );
 
   // 6. daemon+proto — `status` is hoisted for the pending-delivery/orphaned-state checks below,
@@ -241,18 +243,26 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     client = await deps.createClient();
     status = await client.getStatus();
     const compatible = protocolCompatible(PROTOCOL_VERSION, status.daemon.protocol_version);
+    // Review answer 6 (#432): a daemon fenced by a changed install is reported, not hidden. Reaching
+    // it here means ensureDaemon kept it, which it does only while managed chats are running.
+    const handshake = compatible ? await deps.readHandshake?.(deps.glosaHome()).catch(() => null) : null;
+    const reachable = `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`;
     checks.push(
-      compatible
+      compatible && handshake?.install_changed === true
         ? check(
             "daemon+proto",
-            "pass",
-            `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`,
+            "warn",
+            `${reachable}; its install changed while it ran, and it restarts itself ${
+              handshake.managed_busy === true ? "once its managed chats finish" : "once idle"
+            }`,
           )
-        : check(
-            "daemon+proto",
-            "fail",
-            `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`,
-          ),
+        : compatible
+          ? check("daemon+proto", "pass", reachable)
+          : check(
+              "daemon+proto",
+              "fail",
+              `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`,
+            ),
     );
   } catch (err) {
     // The reason `createClient` gives is what the client could prove within its own budget, which
@@ -587,12 +597,22 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   return checks;
 }
 
+/** The well-known places a terminal-visible `glosa` lives, per platform, for the `install` row's
+ *  "also visible" list. macOS keeps the three it always had (#371); Linux names the pacman
+ *  package's `/usr/bin/glosa` instead of Homebrew's prefix (#432). `which glosa` is added on top. */
+export function installCandidates(platform: NodeJS.Platform, home: string): string[] {
+  const bun = join(home, ".bun", "bin", "glosa");
+  if (platform === "linux") return [bun, "/usr/bin/glosa", "/usr/local/bin/glosa"];
+  return [bun, "/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+}
+
 /** The `install` row (#371). Reads nothing the deps do not hand it. */
 export function installCheck(deps: DoctorDeps): CheckResult {
   const realpath = deps.realpath ?? realRealpath;
   const rawRoot = (deps.packageRoot ?? currentPackageRoot)();
   const root = realpath(rawRoot) ?? rawRoot;
-  const kind = classifyInstall(root, realpath(join(root, ".git")) !== null).kind;
+  const packageType = (deps.readPackageType ?? readPackageType)(root);
+  const kind = classifyInstall(root, realpath(join(root, ".git")) !== null, packageType).kind;
   const recorded = (deps.readRecordedExecutable ?? readRecordedExecutable)(deps.glosaHome());
   const mine = (resolved: string) => targetsInstall(resolved, root);
 
@@ -621,7 +641,7 @@ export function installCheck(deps: DoctorDeps): CheckResult {
   }
 
   const home = deps.homeDir?.() ?? homedir();
-  const candidates = [join(home, ".bun", "bin", "glosa"), "/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+  const candidates = installCandidates(deps.platform(), home);
   const onPath = deps.which("glosa");
   if (onPath !== null && !candidates.includes(onPath)) candidates.push(onPath);
   const visible: string[] = [];
@@ -736,7 +756,7 @@ export async function runDoctor(
 ): Promise<CommandEnvelope<DoctorData>> {
   const checks = await runChecks(dir, deps, options);
   const anyFail = checks.some((c) => c.status === "fail");
-  const platformFail = checks[0]?.name === "platform" && checks[0].status === "fail";
+  const platformFail = checks.some((c) => ["platform", "bun"].includes(c.name) && c.status === "fail");
 
   const exitCode = platformFail ? EXIT_CODES.PLATFORM_UNSUPPORTED : anyFail ? EXIT_CODES.DEGRADED : EXIT_CODES.OK;
   return {

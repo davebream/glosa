@@ -7,8 +7,18 @@
 // - The CLI inside the desktop app records itself only when nothing is recorded
 //   (`onlyWhenAbsent`), where a dangling symlink counts as nothing. A live symlink to another
 //   install is left alone, so a terminal install keeps ownership.
-import { lstatSync, mkdirSync, readlinkSync, realpathSync, renameSync, symlinkSync, unlinkSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
+import { packageTypePath } from "./install-kind.ts";
 
 export type RecordedExecutable =
   | { path: string; state: "none" }
@@ -71,4 +81,19 @@ export function ensureRecordedExecutable(home: string, executable: string, optio
     throw error;
   }
   return destination;
+}
+
+/** The package manager the Linux desktop package names in its marker (#432), or null. Never throws:
+ *  a missing file, a directory, anything over 64 bytes, or content that is not one short lowercase
+ *  word reads as no marker at all, so a stray file can never change how an install is classified. */
+export function readPackageType(packageRoot: string): string | null {
+  const path = packageTypePath(packageRoot);
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > 64) return null;
+    const value = readFileSync(path, "utf8").trim();
+    return /^[a-z0-9-]{1,32}$/.test(value) ? value : null;
+  } catch {
+    return null;
+  }
 }

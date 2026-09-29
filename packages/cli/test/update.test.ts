@@ -27,7 +27,13 @@ import {
   validateTarballUrl,
   verifyIntegrity,
 } from "../src/update.ts";
-import { bundledLauncherPath, isAppBundlePath, targetsInstall } from "../src/install-kind.ts";
+import {
+  bundledLauncherPath,
+  isAppBundlePath,
+  PACMAN_MANUAL_COMMAND,
+  recordingPlan,
+  targetsInstall,
+} from "../src/install-kind.ts";
 import type { CommandEnvelope } from "../src/envelope.ts";
 import { captureStdout } from "./test-utils.ts";
 
@@ -52,6 +58,8 @@ const NPM = "/usr/local/lib/node_modules/@davebream/glosa";
 const VOLTA_PATH = "/Users/x/.volta/tools/image/packages/@davebream/glosa/lib/node_modules/@davebream/glosa";
 const APP = "/Applications/glosa.app/Contents/Resources/glosa";
 const KEG = "/opt/homebrew/Cellar/glosa/0.1.0-alpha.32/libexec/install/global/node_modules/@davebream/glosa";
+/** The Linux desktop package's package root (#432): electron-builder installs the app at /opt/glosa. */
+const PACMAN = "/opt/glosa/resources/glosa";
 
 describe("classifyInstall", () => {
   test.each([
@@ -110,6 +118,37 @@ describe("classifyInstall", () => {
     expect(classifyInstall(APP, true).kind).toBe("source-checkout");
   });
 
+  test("the Linux package is recognised by its package-type marker, not by where it is installed (#432)", () => {
+    expect(classifyInstall(PACMAN, false, "pacman").kind).toBe("pacman");
+    // Wherever the package sits, the marker decides.
+    expect(classifyInstall("/usr/lib/glosa/resources/glosa", false, "pacman").kind).toBe("pacman");
+    // Without the marker the same path is an unknown install, which is what #432 found on main.
+    expect(classifyInstall(PACMAN).kind).toBe("unknown");
+    // A marker naming anything else is not ours to interpret.
+    expect(classifyInstall(PACMAN, false, "deb").kind).toBe("unknown");
+  });
+
+  test("the pacman marker wins over any package-manager suffix, but never over .git or a Mac bundle", () => {
+    expect(classifyInstall(`${PACMAN}/install/global/node_modules/@davebream/glosa`, false, "pacman").kind).toBe(
+      "pacman",
+    );
+    expect(classifyInstall(PACMAN, true, "pacman").kind).toBe("source-checkout");
+    // macOS precedence is unchanged: a bundle path stays app-bundle whatever sits beside it.
+    expect(classifyInstall(APP, false, "pacman").kind).toBe("app-bundle");
+  });
+
+  test("pacman is refused with the pacman instruction and no install dir", () => {
+    expect(classifyInstall(PACMAN, false, "pacman")).toEqual({
+      kind: "pacman",
+      managed: false,
+      installDir: null,
+      manualCommand: PACMAN_MANUAL_COMMAND,
+      reshimHint: null,
+    });
+    expect(PACMAN_MANUAL_COMMAND).toContain("sudo pacman -U");
+    expect(PACMAN_MANUAL_COMMAND).not.toMatch(/brew/);
+  });
+
   test("homebrew wins over the bun-global suffix its keg carries", () => {
     // Without this check `glosa update` would rewrite files inside brew's keg.
     expect(classifyInstall(KEG).kind).toBe("homebrew");
@@ -162,6 +201,7 @@ describe("classifyInstall", () => {
       expect(c.managed).toBe(false);
       expect(c.manualCommand, `${p} needs a manual command`).toBeTruthy();
     }
+    expect(classifyInstall(PACMAN, false, "pacman").manualCommand).toBeTruthy();
     expect(classifyInstall("/Users/x/code/glosa", true).manualCommand).toBe("git pull && bun install");
     expect(classifyInstall(VOLTA_PATH).manualCommand).toBe("volta install @davebream/glosa");
   });
@@ -174,6 +214,18 @@ describe("classifyInstall", () => {
     expect(
       classifyInstall("/Users/x/.local/share/mise/installs/node/22.0.0/lib/node_modules/@davebream/glosa"),
     ).toMatchObject({ kind: "npm-global", reshimHint: "mise reshim" });
+  });
+});
+
+describe("recordingPlan (#371, #432)", () => {
+  test.each([
+    ["app-bundle", APP, "/Applications/glosa.app/Contents/Resources/bin/glosa", true],
+    ["pacman", PACMAN, "/opt/glosa/resources/bin/glosa", true],
+    ["bun-global", BUN, `${BUN}/packages/cli/src/main.ts`, false],
+    ["unknown", PACMAN, `${PACMAN}/packages/cli/src/main.ts`, false],
+    ["source-checkout", "/Users/x/code/glosa", "/Users/x/code/glosa/packages/cli/src/main.ts", false],
+  ] as const)("%s records %s's %s (onlyWhenAbsent %p)", (kind, root, executable, onlyWhenAbsent) => {
+    expect(recordingPlan(kind, root, `${root}/packages/cli/src/main.ts`)).toEqual({ executable, onlyWhenAbsent });
   });
 });
 
@@ -850,8 +902,8 @@ function makeDeps(overrides: Partial<UpdateDeps> = {}): Harness {
 }
 
 describe("runUpdate — evaluation order", () => {
-  test("non-darwin exits 5 before any network call", async () => {
-    const h = makeDeps({ platform: () => "linux" });
+  test("unsupported OS exits 5 before any network call", async () => {
+    const h = makeDeps({ platform: () => "win32" });
     const r = await runUpdate({}, h.deps);
     expect(r.exitCode).toBe(5);
     expect(h.calls.fetchPackument).toBe(0);
@@ -901,15 +953,43 @@ describe("runUpdate — evaluation order", () => {
     expect(h.calls.fetchPackument).toBe(0);
   });
 
-  test("an app-bundle install exits 2 with the brew command and never touches the network", async () => {
-    const h = makeDeps({ packageRoot: () => APP });
+  test.each([
+    ["app-bundle", "darwin", APP, null, "brew upgrade --cask glosa"],
+    ["pacman", "linux", PACMAN, "pacman", PACMAN_MANUAL_COMMAND],
+  ] as const)(
+    "a %s install exits 2 with its channel's instruction and never touches the network",
+    async (kind, platform, root, marker, command) => {
+      const h = makeDeps({
+        platform: () => platform,
+        arch: () => "x64",
+        glibcVersion: () => "2.39",
+        bunVersion: () => "1.4.2",
+        packageRoot: () => root,
+        readPackageType: () => marker,
+      });
+      const r = await runUpdate({}, h.deps);
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.code).toBe("update-unmanaged-install");
+      expect(r.data.install_kind).toBe(kind);
+      expect(r.data.manual_command).toBe(command);
+      expect(r.error?.hint).toBe(`Upgrade it manually: ${command}`);
+      expect(h.calls.fetchPackument).toBe(0);
+      expect(h.calls.downloadTarball).toBe(0);
+      expect(h.calls.spawnInstaller).toBe(0);
+    },
+  );
+
+  test("a Linux package never tells the person to use Homebrew (#432)", async () => {
+    const h = makeDeps({
+      platform: () => "linux",
+      arch: () => "x64",
+      glibcVersion: () => "2.39",
+      bunVersion: () => "1.4.2",
+      packageRoot: () => PACMAN,
+      readPackageType: () => "pacman",
+    });
     const r = await runUpdate({}, h.deps);
-    expect(r.exitCode).toBe(2);
-    expect(r.error?.code).toBe("update-unmanaged-install");
-    expect(r.data.install_kind).toBe("app-bundle");
-    expect(r.data.manual_command).toBe("brew upgrade --cask glosa");
-    expect(r.error?.hint).toBe("Upgrade it manually: brew upgrade --cask glosa");
-    expect(h.calls.fetchPackument).toBe(0);
+    expect(JSON.stringify(r)).not.toMatch(/brew/i);
   });
 
   test("a source checkout is refused — .git beats the managed marker", async () => {
@@ -985,7 +1065,7 @@ describe("runUpdate — envelope invariants", () => {
       () => runUpdate({ to: "0.1.0-alpha.0" }, makeDeps({ currentVersion: () => "0.1.0-alpha.3" }).deps),
     ],
     ["refused-volta", () => runUpdate({}, makeDeps({ packageRoot: () => VOLTA_PATH }).deps)],
-    ["platform", () => runUpdate({}, makeDeps({ platform: () => "linux" }).deps)],
+    ["platform", () => runUpdate({}, makeDeps({ platform: () => "win32" }).deps)],
     ["invalid-registry", () => runUpdate({ registry: "http://evil" }, makeDeps().deps)],
     ["flag-combo", () => runUpdate({ allowOffsiteTarball: true }, makeDeps().deps)],
     [
@@ -1042,7 +1122,7 @@ describe("runUpdate — envelope invariants", () => {
   // The platform check runs before classifyInstall, so install_kind has no honest value yet.
   // A fabricated "unknown" would be a lie a consumer branching on install_kind would act on.
   test("install_kind is null, not fabricated, when we exited before classifying", async () => {
-    const r = await runUpdate({}, makeDeps({ platform: () => "linux" }).deps);
+    const r = await runUpdate({}, makeDeps({ platform: () => "win32" }).deps);
     expect(r.exitCode).toBe(5);
     expect(r.data.install_kind).toBeNull();
   });
@@ -1258,7 +1338,7 @@ describe("runUpdate — daemon liveness is reported on EVERY path", () => {
       () =>
         runUpdate(
           {},
-          makeDeps({ platform: () => "linux", readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps,
+          makeDeps({ platform: () => "win32", readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps,
         ),
     ],
     [
@@ -1390,4 +1470,23 @@ describe("runUpdate — bun pre-install removal", () => {
     await runUpdate({}, h.deps);
     expect(h.stdout).not.toContain("briefly uninstalled");
   });
+});
+
+test("Linux update admits the supported runtime but still refuses unmanaged installs before network", async () => {
+  const linux = {
+    platform: () => "linux" as const,
+    arch: () => "x64",
+    glibcVersion: () => "2.35",
+    bunVersion: () => "1.4.2",
+  };
+  const managed = makeDeps(linux);
+  expect((await runUpdate({ check: true }, managed.deps)).ok).toBe(true);
+  expect(managed.calls.fetchPackument).toBe(1);
+  const source = makeDeps({ ...linux, pathExists: (path) => path.endsWith("/.git") });
+  expect((await runUpdate({}, source.deps)).data.install_kind).toBe("source-checkout");
+  expect(source.calls.fetchPackument).toBe(0);
+  expect(source.calls.spawnInstaller).toBe(0);
+  const old = makeDeps({ ...linux, bunVersion: () => "1.4.1" });
+  expect((await runUpdate({}, old.deps)).exitCode).toBe(5);
+  expect(old.calls.fetchPackument).toBe(0);
 });

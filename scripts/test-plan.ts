@@ -19,8 +19,33 @@ export const STABILITY_FILES = ["packages/daemon/test/lifecycle.test.ts", "packa
  * they are not in the partition inventory: a partition job without Electron would report a skip, and
  * a skip is a failed gate. The `shell` CI job runs them with Electron present. */
 export const SHELL_FILES = ["packages/shell/test/shell-real-engine.electron.ts"];
+/** Core Linux scope. Desktop shell, dictation and native provider qualification have separate gates. */
+export const LINUX_CORE_FILES = [
+  "packages/cli/test/open.test.ts",
+  "packages/cli/test/doctor.test.ts",
+  "packages/cli/test/update.test.ts",
+  "packages/cli/test/mcp.test.ts",
+  "packages/cli/test/mcp-lifetime-real-subprocess.test.ts",
+  "packages/cli/test/api-integration.test.ts",
+  "packages/daemon/test/lifecycle.test.ts",
+  "packages/daemon/test/agents/managed-state.test.ts",
+  "packages/daemon/test/agents/supervisor.test.ts",
+  // #432: the Linux package's install kind and recording, its packaging rules, and the install
+  // lifetime guard, whose filesystem and clock behaviour is exactly what differs on Linux.
+  "packages/cli/test/install-link.test.ts",
+  "packages/shell/test/package-app.test.ts",
+  "packages/daemon/test/install-guard.test.ts",
+  "packages/daemon/test/install-lifetime.test.ts",
+];
 export const CI_PROFILES = ["ci-1", "ci-2", "ci-3"] as const;
-export type Profile = "acceptance" | (typeof CI_PROFILES)[number] | "docs" | "stability" | "shell" | "full";
+export type Profile =
+  | "acceptance"
+  | (typeof CI_PROFILES)[number]
+  | "docs"
+  | "stability"
+  | "shell"
+  | "linux-core"
+  | "full";
 type Estimate = { seconds: number; reason: string };
 export function validateTimings(
   inventory: string[],
@@ -122,6 +147,7 @@ export function buildPlan(
     docs: [...DOC_FILES],
     stability: [...STABILITY_FILES],
     shell: [...SHELL_FILES],
+    "linux-core": [...LINUX_CORE_FILES],
     full: inventory,
   };
 }
@@ -172,7 +198,7 @@ export function classifyApp(event: string, paths: string[] | null, forced = fals
     path === "bun.lock" ||
     path.startsWith("glosa-plugin/") ||
     path.startsWith(".claude-plugin/") ||
-    /^packages\/cli\/src\/(main|install-kind|install-link|doctor)\.ts$/.test(path) ||
+    /^packages\/cli\/src\/(main|install-kind|install-link|doctor|update|platform)\.ts$/.test(path) ||
     path.startsWith("packages/daemon/src/lifecycle/") ||
     /^(LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md|README\.md|ROADMAP\.md|CHANGELOG\.md)$/.test(path);
   return paths.some(shaping);
@@ -186,6 +212,8 @@ export function expectedJobs(profile: ChangeProfile, whole: boolean): Record<str
     tests: profile === "full" ? "success" : "skipped",
     stability: profile === "full" ? "success" : "skipped",
     shell: profile === "full" ? "success" : "skipped",
+    linux: profile === "full" ? "success" : "skipped",
+    pacman: profile === "full" ? "success" : "skipped",
     full: whole ? "success" : "skipped",
   };
 }

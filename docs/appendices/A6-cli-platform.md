@@ -108,21 +108,28 @@
 - **Install detection.** `bun-global` (`…/install/global/node_modules/@davebream/glosa`, pinned with
   `BUN_INSTALL_GLOBAL_DIR`) and `npm-global` (`…/lib/node_modules/@davebream/glosa`, pinned with
   `--prefix=`) are upgradeable. `ephemeral`, `source-checkout`, `project-local`, `volta`, `pnpm`,
-  `yarn`, `app-bundle`, `homebrew`, and `unknown` are refused at exit 2 with an exact copy-pasteable manual
+  `yarn`, `app-bundle`, `pacman`, `homebrew`, and `unknown` are refused at exit 2 with an exact copy-pasteable manual
   command in `data.manual_command`. Volta is matched **before** the `/lib/node_modules/` marker: its layout
   matches, but writing there bypasses the shim, so a naive classification would report success while
   `glosa --version` still printed the old version. `app-bundle` is any package root under
   `<name>.app/Contents/Resources/`, matched before every package-manager marker because brew owns
-  that tree; its manual command is `brew upgrade --cask glosa` (#371). `homebrew` is the keg of the `glosa` formula, `<prefix>/Cellar/glosa/<version>/`, matched right after it for the same reason: the formula installs with `bun add --global`, so its path also ends in the bun-global suffix. Its manual command is `brew upgrade glosa`. A `.git` marker at the package
+  that tree; its manual command is `brew upgrade --cask glosa` (#371). `pacman` is the Linux desktop
+  package (#432), recognised by the marker its build writes beside the package root,
+  `<resources>/package-type` containing `pacman`, not by where electron-builder installs it; it is
+  matched right after `app-bundle` (a Mac bundle path keeps its rule whatever sits beside it) and
+  before every package-manager marker, because pacman owns every file under `/opt/glosa`. A marker
+  can only make an install refused, never managed. Its manual command names the download and
+  `sudo pacman -U ./glosa-<version>-x64.pacman`; nothing in the Linux path mentions Homebrew. `homebrew` is the keg of the `glosa` formula, `<prefix>/Cellar/glosa/<version>/`, matched right after it for the same reason: the formula installs with `bun add --global`, so its path also ends in the bun-global suffix. Its manual command is `brew upgrade glosa`. A `.git` marker at the package
   root beats every other signal.
 - **Recorded executable.** Every CLI entry, including `__daemon`, `mcp` and `monitor`, records
   itself as a symlink at `<GLOSA_HOME>/bin/glosa`, the path the Claude Code plugin launcher and the
   desktop shell run. The last CLI to run wins. Two exceptions. A regular file there is never
   touched: it is the escape hatch for pinning an install by hand. The CLI inside the desktop app
-  (`app-bundle`) records itself only when nothing is recorded, where a dangling symlink counts as
-  nothing, so a terminal install keeps ownership. The bundled CLI records the app's
-  `Resources/bin/glosa` launcher, never `main.ts`, because the launcher supplies the Bun the app
-  carries and `main.ts` needs `bun` on `PATH` (#371).
+  (`app-bundle` on macOS, `pacman` on Linux) records itself only when nothing is recorded, where a
+  dangling symlink counts as nothing, so a terminal install keeps ownership. The bundled CLI records
+  the app's `<resources>/bin/glosa` launcher, never `main.ts`, because the launcher supplies the Bun
+  the app carries and `main.ts` needs `bun` on `PATH` (#371, #432). `recordingPlan` in
+  `install-kind.ts` owns the rule; the entrypoint only wires it.
 - **Integrity.** glosa downloads the tarball itself into a mode-0700 temp directory, hashes it with
   sha512, and compares against the `dist.integrity` digest from the packument before handing the
   installer a local absolute path. A missing or non-sha512 digest is a **refusal**, never a pass.
@@ -181,8 +188,12 @@
   is not liveness, and a stale pid would otherwise produce a `kill <pid>` naming a recycled process.
   It never calls `ensureDaemon`, which would *start* a daemon as a side effect of asking whether one
   runs. A live daemon yields `data.daemon_running`, `data.daemon_pid`, and a
-  `daemon-restart-required` warning naming `glosa open`; normal upgrades self-heal because
-  `decideDaemonBuild` restarts an older or same-version-different-hash daemon. **The forced-downgrade
+  `daemon-restart-required` warning; normal upgrades self-heal. Since #432 an installed daemon
+  notices its install changed (a replaced or removed file under its package root), stops starting
+  anything from it, and retires through its own graceful drain once idle; the next glosa command
+  starts the new build (`docs/design/2026-09-29-install-lifetime-and-restart.md`, R-L1..R-L10). The
+  same holds for `brew upgrade --cask` and for `pacman -U` or `pacman -R`, which run no script that
+  signals a daemon. **The forced-downgrade
   case is the wedge:** a newer daemon is never downgraded by design (§F30, exit 10) and there is no
   `glosa stop`, so `update` prints the pid and the `kill` command in the pre-spawn block. There is a
   narrow window during the package-directory swap in which an in-flight `glosa hook …` child can
@@ -207,10 +218,23 @@
 
 ## F30 — platform
 - **Build/test toolchain:** Bun 1.4.2, pinned in `package.json`'s `packageManager` and both CI/release workflows (#230). JUnit reporting commands (`test:ci`, `test:acceptance`, `test:docs`, `test:full`, `test:stability`) require Bun >=1.4.2 and refuse older versions before starting a child. This is the verified tooling floor, not a claim about the first upstream fix. Bun 1.2.7 reproduces an isolated 10,000-passing-test reporter abort while the plain run succeeds; 1.4.2 emits a complete report. The reporter's internal error is not inferred from its out-of-memory message. Contributor checks and hooks use the toolchain pin. The application runtime floor below remains unchanged.
-- **macOS-only v1** (Apple Silicon + Intel); Linux/Windows out of scope (non-Darwin → exit5). Pinned floors: macOS 13 (Ventura), Bun 1.2.7, Git 2.30, Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥17.2. (No cmux — glosa is cmux-decoupled; the SPA runs in any browser over localhost.)
+- **macOS** (Apple Silicon + Intel) retains floors macOS 13, Bun 1.2.7, Git 2.30, Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), Chromium≥111/Safari≥17.2.
+- **Experimental Linux x86_64/glibc CLI and daemon** requires Bun 1.4.2 and Git 2.30, with Chromium≥111 for the browser. Windows, Linux ARM and musl are unsupported. Open, doctor, update and MCP startup reject unsupported combinations with exit 5 before daemon discovery or network access. The package manifest admits Linux; runtime checks enforce its narrower architecture/libc subset. The desktop app ships as an x86_64 pacman package (#432, below), built and verified in Arch Linux containers; native managed-chat qualification (#433), dictation (#434) and installed Manjaro desktop qualification and release publication (#435) remain pending. Companion support does not qualify native managed chats, whose floor and gates remain separate below.
+- **Browser launch:** macOS uses `open`; Linux uses `xdg-open` (normally supplied by `xdg-utils`). Wait at most five seconds for a successful launcher exit. Missing, failing or stalled launchers produce a warning while returning the registered workspace and paired URL with exit 0. Release the launcher handle without killing the browser. `--url` and MCP presentation never invoke a launcher. A presentation link expires after 60 seconds; rerun open for a fresh one. Doctor checks launcher presence, not graphical-session availability or browser version.
+
 - API `protocol_version` describes wire compatibility (same major and supported minor); content-derived `build_id` identifies the exact runtime source plus root package semver. Compatibility permits an older client to reuse a newer daemon, but identity policy can still refresh an older or same-semver-different daemon. An incompatible newer daemon is never downgraded (exit10).
 - "No build step / zero native deps" = no bundle/transpile (`bun run` direct, no dist/) AND no native addons (no node-gyp/C/Rust/.node/postinstall-compile). Does NOT mean zero prerequisites: Bun, system git (child process, not a module), and a browser are required host software validated by doctor.
 - **The desktop app is the one channel with no Bun prerequisite, because it carries Bun** (#371). `glosa.app/Contents/Resources/` holds `bin/bun` at the toolchain pin above, a `bin/glosa` launcher that runs the CLI on that Bun, and `glosa/` with the published npm file set plus production dependencies, all unbundled. Packaging, signing and notarization are the shell's sole exception to "no build step" (requirements §4). Signing precedes the first public app artifact: Homebrew 5.0 deprecated unsigned casks and the `--no-quarantine` flag, and macOS 15.1 refuses unsigned downloads. System git and a browser remain host prerequisites.
+- **The Linux desktop app is an x86_64 pacman package** (#432, experimental). It installs to
+  `/opt/glosa`; `/opt/glosa/resources/` holds the same `bin/bun` (Bun's baseline build, which runs on
+  every x86_64 CPU), `bin/glosa` launcher, `glosa/` tree and license texts, plus `package-type`.
+  The package owns every file it installs: `/usr/bin/glosa` is a package symlink to the launcher,
+  `chrome-sandbox` is root-owned 4755, `glosa.desktop` handles `glosa://`, and its install and
+  remove scripts do nothing. Git and the Electron libraries are declared dependencies, installed by
+  pacman. The package version joins a prerelease on (`0.1.0alpha.36`) so pacman orders it before its
+  release. It is installed explicitly with `sudo pacman -U`; there is no repository, AUR package or
+  automatic update. Downgrading with `pacman -U` to an older package is unsupported, as for
+  `glosa update --to`.
 
 ## F31 — checkpoint query & restore (USER CHOSE FULL/3.B — history: compare + restore)
 - `glosa checkpoints <path> [--since <when>] [--limit N] [--json]` — list; `<when>` = yesterday|today|ISO|<checkpoint-id>; day-boundary words resolve in HOST LOCAL TZ, ISO honors offset. Rows `{checkpoint_id, at, by:human|session:<id>|unknown, summary, bytes_changed, origin:workspace|lineage, lineage_id?}`. A directory adopted from loose files lists imported lineage commits alongside its active history.
@@ -228,7 +252,7 @@
 | cmd | args | does | exit |
 |---|---|---|---|
 | `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. An unowned tracked file inside a git repository registers the repo root as a directory workspace, not a loose file over its containing directory (issue #96) — never the user's home directory or an ancestor of it (issue #146: falls through to the bounded loose-file path instead), and an already-registered `directory` workspace naming home or an ancestor is never silently reused for a new file lookup either, surfaced by slug with remediation instead. An explicitly named file excluded by an existing parent workspace opens as a bounded loose document without entering the parent's file list; a directory's explicit focus remains strict. Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). Never writes agent configuration and emits no init/wiring warning (#152). With `--json`, the data also carries `app_url`: the same open as a `glosa://open?path=…` link the desktop app answers, carrying the kind, surface, mode and read lock but never a token (#392). | 0;2;3;5 |
-| `update` | `[--check\|--dry-run] [--force] [--channel <tag>] [--to <version>] [--registry <url>] [--allow-offsite-tarball]` | §F33 self-update: resolve the release over a config-independent HTTPS request, verify the tarball against the registry's published sha512, install through the detected package manager, then verify by probing the installed binary; an install inside the desktop app (`app-bundle`) is refused with `brew upgrade --cask glosa`, and a Homebrew formula install (`homebrew`) with `brew upgrade glosa` | 0;2;5;9;70 |
+| `update` | `[--check\|--dry-run] [--force] [--channel <tag>] [--to <version>] [--registry <url>] [--allow-offsite-tarball]` | §F33 self-update: resolve the release over a config-independent HTTPS request, verify the tarball against the registry's published sha512, install through the detected package manager, then verify by probing the installed binary; an install inside the desktop app (`app-bundle`) is refused with `brew upgrade --cask glosa`, the Linux desktop package (`pacman`) with its download and `sudo pacman -U` instruction, and a Homebrew formula install (`homebrew`) with `brew upgrade glosa` | 0;2;5;9;70 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note] [--workspace <path>]` | lifecycle transition (journal append) + close the session's claim (post-checkpoint of the claimed paths); a repeat of the session's own completed resolve replays without appending; another session's resolve is told who closed it or who holds it (issue #155); deferred = re-surface, not terminal. `--workspace` defaults to the cwd; an entry id names one workspace already, so an agent working elsewhere names it rather than being silently scoped to whatever directory it stands in | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid> [--workspace <path>]` | F05: exclusive claim on the entry (pre-checkpoint of its paths); prints the claim id as the lease token; the same session again renews; another session holding the paths → exit 12 naming the holder. `--workspace` as for `resolve` | 0;3;8;12;2 |
 | `claim` | `<entry:<id>\|artifact:<path>…> --session <sid> [--mode exclusive\|presence] [--workspace <path>]` | issue #155: claim resources so other sessions see who is working on them; prints the claim id; exclusive claims are disjoint over files between sessions, presence claims block nobody | 0;2;3;8;12 |
@@ -249,7 +273,7 @@
 | `complete <bash\|zsh\|fish\|powershell>` | shell utility | generate the selected shell's completion script on stdout | 0;2 |
 - `open` auto-creates the `.glosa/` scaffold and nothing else. A workspace can be opened+annotated with no agent connected (SPA-only); the SPA badge says "no session connected — annotations wait here" and `doctor`'s `pending-delivery` line says "N entries queued, no live session". Neither names an install step, because there is none (#152).
 - `open --url` performs the same token, daemon, registration, optional file deep-link, surface/mode,
-  and bind work without invoking the macOS browser launcher. Plain success output is exactly the URL
+  and bind work without invoking a browser launcher. Plain success output is exactly the URL
   plus a newline; `--json` retains the F26 envelope with
   `data:{slug,path,url,focus?,surface,mode,preview,bound_session?,state_dir?}`.
 - A document URL renders a single pane with the navigator hidden. Opening it in an already-mounted

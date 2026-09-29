@@ -7,6 +7,7 @@
 // F08 session-registration race: slug assignment happens under the SAME mutex critical section
 // as the upsert that records it, so two concurrent registrations for different workspaces can
 // never observe (or assign) a torn/duplicate slug.
+import { assertInstallUnchanged } from "../lifecycle/install-guard.ts";
 import { randomUUID } from "node:crypto";
 import {
   accessSync,
@@ -796,7 +797,13 @@ export class WorkspaceIndex {
           ? deps.aliasScanWorkerUrl.href
           : deps.aliasScanWorkerUrl
         : new URL("./hardlink-alias-worker.ts", import.meta.url).href;
-    this.aliasScanWorkerFactory = deps.aliasScanWorkerFactory ?? ((url) => new Worker(url));
+    this.aliasScanWorkerFactory =
+      deps.aliasScanWorkerFactory ??
+      ((url) => {
+        // R-L3 (#432): never start the worker from a tree that changed under this daemon.
+        assertInstallUnchanged("the hardlink alias worker");
+        return new Worker(url);
+      });
     this.aliasScanClock = deps.aliasScanClock ?? (() => performance.now());
     this.regularFileSnapshot = deps.regularFileSnapshot ?? regularFileSnapshot;
     this.realpath = deps.realpath ?? realpathSync;

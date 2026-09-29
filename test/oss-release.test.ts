@@ -41,7 +41,7 @@ describe("OSS release metadata", () => {
     expect(rootPackage.private).toBe(false);
     expect(rootPackage.license).toBe("Apache-2.0");
     expect(rootPackage.bin).toEqual({ glosa: "packages/cli/src/main.ts" });
-    expect(rootPackage.os).toEqual(["darwin"]);
+    expect(rootPackage.os).toEqual(["darwin", "linux"]);
     expect(rootPackage.cpu).toEqual(["arm64", "x64"]);
     expect(CLI_VERSION).toBe(rootPackage.version);
 

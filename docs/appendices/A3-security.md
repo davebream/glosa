@@ -110,7 +110,8 @@ the programmatic API now lives on a Unix socket instead.
 
 **What identity is.** A daemon publishes `instance_id`, `pid`, `port`, `protocol_version`,
 `build_id` and `install_id` in `<GLOSA_HOME>/daemon.lock`, and the tokenless `GET /api/handshake`
-republishes the same values. Agreement between the two is the readiness proof R1 requires. Every
+republishes the same values, plus `install_changed` (#432: the daemon's install changed under it and
+it will retire itself; a fact about the daemon, published like the rest). Agreement between the two is the readiness proof R1 requires. Every
 one of those values is **published**: the lock is world-readable (0644, `openSync(path,"wx")` with
 no mode) inside a `<GLOSA_HOME>` created with no mode either, and the handshake needs no
 credential. The pairing token beside them is 0600.
@@ -232,9 +233,12 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   equals the SPA origin exactly, and every `ipcMain` handler re-checks `event.senderFrame.origin`
   before acting; that handler check is the boundary (a class-F document reports a `null` origin under
   its CSP sandbox and is refused even by a deliberately unscoped preload). The class-F frame receives
-  no preload. The bridge carries six calls and one push: a one-shot presentation token, "open
-  folder", an OS notification, "reveal in Finder", the page's resolved appearance, and a
-  synchronous read of whether macOS asks for more contrast; the push is that value when it changes.
+  no preload. The bridge carries eight calls, two pushes and one constant: a one-shot presentation
+  token, "open folder", an OS notification, "reveal in Finder", "bring back this window's daemon"
+  (R-L8, #432), the page's resolved appearance, a synchronous read of whether macOS asks for more
+  contrast, and "open in your browser" (#440, below); the pushes are the contrast value when it
+  changes and what the shell saw in one of the window's browser tabs; the constant is the browser-tab
+  version (`browserTabs: 1`), so an SPA served by a newer daemon can tell an older shell apart.
   No call takes a path from the page. Reveal in Finder takes no argument at all: the main process
   derives the file from the window's own URL (`a=`) under the folder `glosa open` answered with (`data.path`, the workspace's
   absolute `worktree_path`), reveals nothing when the URL's workspace (`w=`) is not the one that
@@ -261,6 +265,31 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   whose top frame has committed that origin, so a blocking screen the shell loaded into one after a
   failed compatibility check gets nothing; the push carries one boolean, and the preload ignores
   anything else and exposes no way to set it.
+- **Desk browser tabs (#440; decision 2026-09-29).** A desk window hosts web pages as `<webview>`
+  guests in its dock. `webviewTag` is on for every window, because a window's kind is known only
+  after `glosa open` answers; `will-attach-webview` is the gate. It refuses a guest unless the window
+  is a desk, the frame asking is the window's SPA origin, and the source is a web address or
+  `about:blank`; a companion window never gets one. Whatever the page asked for, every guest's
+  preferences are rewritten before it attaches (`lockGuestPreferences`): the partition
+  `persist:glosa-browser`, no preload (so no `glosaShell`), sandboxed, context-isolated, no Node, web
+  security on, no nested guests. A child frame cannot create a guest at all (measured: neither a
+  sandboxed `srcdoc` frame nor a cross-origin frame produced an attach request). The partition is
+  never the default session, which holds the pairing credential in the SPA origin's storage and keeps
+  the egress gate above unchanged; it has its own rules, installed at launch: its request policy
+  (`browserRequestDecision`) loads http, https and their sockets and cancels files, custom schemes
+  and every open window's SPA port and the class-F port beside it on any loopback name; permission
+  requests, permission checks and device requests are refused, and the ones a person would miss are
+  reported to the tab (`permissionNotice`); downloads are cancelled and reported by file name alone;
+  the user agent drops Electron's and glosa's product tokens (`browserUserAgent`); outside macOS the
+  spellchecker is off, since Chromium downloads its dictionaries. Certificate errors keep Electron's
+  default and are refused. A guest may navigate only to a web address (`will-navigate`,
+  `will-redirect`); its new windows are refused, and a web address among them becomes a desk tab
+  beside it. glosa's chords pressed inside a page (⌘W, ⌘K, ⌘T, ⌘L, ⌘\, tab cycling and moving
+  between panes) are taken from the page by `before-input-event` and sent to the SPA; ⌘R, ⌘[ and ⌘]
+  act on the page itself. "Open in your browser" (`openExternal`) hands a web or mail address to
+  the system's handler and refuses any other scheme. What a tab may load, and when, is decided in the
+  SPA and `docs/decisions.md` (2026-09-29): only on a person's action, a restored internet tab waits
+  for a click, and nothing else loads for a tab.
 - **The pairing token never travels in a URL the shell loads.** The main process runs the same
   `glosa open <folder> --url --json` the CLI runs, strips `p=` from the fragment, loads the tokenless
   URL and hands the token to the page over the bridge once per window load; the page redeems it as it
@@ -314,7 +343,8 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   renderer against a real daemon (pairing over the bridge, no secret in any URL or history, class-F
   probe verdicts, denied navigation, daemon alive after quit, a `glosa://` launch that opens a
   paired companion window with the link's route, and an update check that makes no request until
-  its menu item is clicked, then exactly one, and never asks a redirect's target);
+  its menu item is clicked, then exactly one, and never asks a redirect's target; and desk browser
+  tabs in their partition, row 13 of §5);
   `packages/shell/test/policy.test.ts`
   pins each rule as a pure function. CI runs the former in a dedicated `shell` job with Electron
   installed; a skip there is a failed gate.
@@ -351,6 +381,20 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
     registration path → test (`packages/daemon/test/folder-styles.test.ts`): a `PUT` with a `path` in
     its body records the workspace's own path and nothing else; an unknown slug → 404 and nothing
     recorded; no Origin or a foreign one → 403 on `PUT` and `DELETE`; a loose-file registration → 422.
+13. A page in a desk browser tab (#440) tries to reach glosa: the daemon API, the class-F origin, the
+    bridge, the pairing credential, or a guest of its own choosing → the browser partition's own
+    request policy cancels every daemon and class-F port on any loopback name; guests never get the
+    preload; `will-attach-webview` forces the partition and locked preferences on every guest and
+    refuses a companion window; permissions and downloads are refused → test
+    (`packages/shell/test/shell-real-engine.electron.ts`, real Electron, real daemon): a probe page
+    in a browser tab finds no `glosaShell`, its `no-cors` fetches to the daemon and class-F ports
+    reject while the same fetch to another local server resolves, its notification request is
+    denied and the tab says so, a download is refused and named, its user agent names neither glosa
+    nor Electron, a guest sent to the SPA origin never commits there; a webview the SPA frame adds
+    with no partition still runs in `persist:glosa-browser`; the SPA's own `fetch` to a stand-in
+    internet host stays blocked while a browser tab loads it; after a reload the internet tab makes
+    no request until Load page; and a companion window's webview never attaches. The pure rules are
+    pinned in `packages/shell/test/policy.test.ts`.
 
 ### Explicit shadow repair (#226)
 
@@ -398,3 +442,19 @@ Glosa does not rewrite organizational configuration. Explicit CLI settings disab
 plugins, hooks, analytics, feedback, OpenTelemetry, update checks and login-shell startup.
 Claude uses empty settings sources, strict MCP configuration and disabled account-connected
 tools. Native startup egress and OS-managed policy behavior still require G2/G3 qualification.
+
+
+## Local image assets (#401)
+
+Image reads and imports use the authenticated daemon boundary in A1 §5.24. They apply the
+workspace's exclusions, prohibit every symlink component, and reject absolute/parent paths.
+Reads use a no-follow descriptor and bounded buffer; imports use exclusive temporary creation,
+fsync and atomic no-overwrite publication. A file must have a supported image signature and
+valid dimensions, not merely an allowed filename or client MIME. SVG must be well-formed XML
+without DTD/entity declarations. SVG is displayed only as an image, never injected markup;
+its byte response carries sandbox CSP and nosniff even through the shared response pipeline.
+
+Markdown images resolve relative to their document. Remote URLs remain inert placeholders;
+no remote request is attempted. The SPA obtains local bytes through its one data-access module
+and paints data URLs under the existing `img-src 'self' data:` policy. No egress or blob permission
+is added. Missing, unreadable and refused images retain their description and original path.

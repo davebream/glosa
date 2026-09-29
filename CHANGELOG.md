@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Browser tabs on the desk in the desktop app: web pages open as dock tabs beside documents and
+  chats, from a link, ⌘T, Go to, or the new tools at the end of each tab strip. Pages run apart from
+  glosa and cannot reach it; restored internet tabs wait for Load page, and typed words are never
+  searched. In a plain browser, links open your own browser instead (#440).
+- The desktop app builds as an x86_64 pacman package for Arch Linux and Manjaro, experimental. It
+  carries its own Bun and the command line; pacman installs Git and the libraries it needs, owns
+  `/usr/bin/glosa` and every other file it installs, and removes exactly those, leaving `~/.glosa`
+  and your workspaces. `glosa doctor` names the install as `pacman`, and `glosa update` and the app's
+  Check for Updates… give the pacman command instead of Homebrew's. Built and tested in Arch Linux
+  containers; downloads and Manjaro desktop qualification follow in #435 (#432).
+- glosa handles an upgrade or removal while it runs, on every install channel. The background
+  process used to keep serving the new files with old code until some command restarted it, and
+  after a removal it held its port with its files gone. It now serves only what it started with,
+  starts nothing from a changed install, and restarts itself through its normal shutdown once it
+  is idle; an open window says "glosa was updated. Reload to use the new version." and reloads when
+  you click. A `glosa monitor` started before an upgrade keeps delivering instead of retrying
+  forever. API contract 1.23 (#432).
+- Local images in Markdown, image paste/drop and an Insert image picker in block Edit, Rich and
+  Source, plus image files in the tree and docked image tabs with fit, zoom, pan and live updates.
+  Imports preserve original bytes up to 20 MiB and stay outside document checkpoints. Remote images
+  remain blocked; local missing/refused images show their description and path (#401).
+- Experimental Linux x86_64/glibc CLI and daemon support with Bun 1.4.2+, `xdg-open`, headless
+  URL output, Linux boot identity and MCP parent observation. Linux core and installed-package
+  checks now run in CI and release validation. Linux desktop packaging, native managed chats,
+  dictation and Manjaro release qualification remain pending (#431).
 - A note delivered to a session now names its passage the way the page does: an `address: §2.3`
   line beside the quote and an `address` field in the entry's detail. glosa works the label out
   from the document at the moment of delivery and stores it nowhere, so after an edit that
@@ -87,6 +112,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Reasoning summaries in chats remain collapsed under “Reasoning summary”, but their expanded prose is
+  now muted Source Serif 4 without a Surface box. It follows the reading scale two steps under the
+  document: 15px by default, 15px at the floor and 20px at the largest setting. Tool output remains
+  a 12px monospace Surface box (#426).
 - In Review, a paragraph's § address waits until the pointer has rested on it for 200ms before it
   fades in, so moving down the page no longer blinks a label beside every paragraph the pointer
   crosses. It still leaves as soon as the pointer does, keyboard focus still shows it at once, and
@@ -214,6 +243,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A document's More menu stayed open after its tab was left, so switching back showed the menu
+  still open. Leaving by Ctrl+Tab or Ctrl+Shift+Tab did it everywhere, and so did pressing another
+  tab in Safari. The menu now closes whenever its tab is left, however that happens.
+- With Reduce Motion on, the notes tray at the foot of a narrow document still slid open and
+  its chevron still turned. Both now change at once, like the rest of glosa under that setting;
+  colour fades on hover stay, since they do not move anything.
 - In the dark appearance, the button that confirms a destructive action (Delete chat, Discard
   edits, Restore version) set its label in near-white on the lifted crimson at 2.8:1, below the
   4.5:1 WCAG AA asks of a 13px label. It now uses the dark paper colour: 6.3:1 at rest and 7.2:1

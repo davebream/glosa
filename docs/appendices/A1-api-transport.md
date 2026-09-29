@@ -72,8 +72,19 @@ those are cross-referenced, not duplicated.
   changes never touch the wire contract). Daemon and SPA ship from the same monorepo build, so
   version skew only happens when a browser tab stays open across a daemon restart onto a newer
   build (or, rarely, an older one after a rollback).
+- **A page runs one build (contract 1.23, #432).** `GET /` stamps the shell with the daemon's build
+  hash (`<meta name="glosa-build" content="<hash>">`) and every asset reference with
+  `/app/@<hash>/`; modules resolve their imports relative to that. `GET /app/@<hash>/<file>` for
+  another build's hash is `410 build-changed`, never another build's bytes; unscoped
+  `GET /app/<file>` keeps answering for pages loaded before scoping. An installed daemon serves
+  these bytes from memory, read at boot. A stream's `bye` frame carries `{"reason": "install-changed"}`
+  when the daemon retires because its install changed, otherwise `{"reason": "shutdown"}` (an older
+  daemon sends no data). On such a `bye`, a reconnect to another build, a 410 or a 409 the page shows
+  "glosa was updated. Reload to use the new version." and reloads only on a click
+  (`docs/design/2026-09-29-install-lifetime-and-restart.md`, R-L6).
 - The SPA sends `X-Contract-Version: <major>.<minor>` (the version it was built against) on
-  every request after handshake. The daemon compares:
+  every request after handshake (implemented with contract 1.23; before it the page sent none, and
+  the daemon treated it as a missing header). The daemon compares:
   - **Major mismatch** → `409 contract-mismatch`, all state-changing and read routes refuse.
     The SPA's handshake screen shows "contract mismatch — reload page" (R5's third failure
     screen) and reloads `/` to fetch fresh assets.
@@ -118,16 +129,18 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.21", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.23", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
-  "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
+  "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
 ```
 The first three fields are the SPA's; the rest are the daemon-lifecycle identity `ensureDaemon`
 matches against `daemon.lock`, which publishes the same values to any local reader (A5 §F13).
 Every one is deliberately non-secret — A3 §3.2's guarantee assumes they are public rather than
 resting on their being private. `install_id` is a hash and `serves_socket` a boolean for the same
-reason: no filesystem path may appear on a tokenless endpoint.
+reason: no filesystem path may appear on a tokenless endpoint. `install_changed` (1.23, #432) is
+true once the daemon's install changed under it; it retires itself when idle, and a client of the
+same install restarts it sooner (A5 §F13).
 
 `serves_socket` reports whether this daemon serves `<GLOSA_HOME>/run/api.sock`. A client that
 needs it treats an absent field as `false` and fails closed naming the recovery, rather than
@@ -1398,3 +1411,37 @@ shell feature map §4, decision 4) without a second long-lived connection. Recon
 snapshots. The direct per-chat event endpoint remains available, but opening more UI tabs does
 not allocate more long-lived browser connections. Document-only surfaces do not subscribe to the
 chat list. This prevents chat streams from starving document requests at the browser connection limit.
+
+
+### 5.24 Local image assets (contract 1.22, issue #401)
+
+All routes use the normal bearer, Host, Origin, revocation and body-budget gates.
+`GET /w/:slug/images` returns `{images, directories, truncated}`. Each image has
+`kind: "image"`, workspace-relative `path`, `size_bytes`, advisory `version`, and `oversize`.
+The listing applies workspace exclusions and rejects symlinks. Directory workspaces are bounded
+at 10,000 candidate files; loose documents expose explicit references and adjacent imports only.
+
+`GET /w/:slug/images/:path` returns validated original bytes for PNG, JPEG, GIF, WebP, SVG or AVIF,
+with the detected MIME type, `Content-Length`, content-hash `ETag`, `Cache-Control: no-store`,
+`X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox; default-src 'none';
+frame-ancestors 'none'; base-uri 'none';`. Paths are decoded once. Absolute paths, parent segments,
+hidden paths, excluded paths and all symlinks are refused. The preview limit is 20 MiB.
+
+`POST /w/:slug/images` accepts multipart `file` and exactly one of `document_path` or
+`directory_path`. The former names a tracked Markdown document and imports into its adjacent
+`images/`; the latter names an existing permitted directory, with an empty string meaning the
+workspace root. Loose-document workspaces accept only `document_path`. Files keep their exact
+bytes and receive a readable sanitized name plus a random suffix and detected extension. An
+exclusive temporary file is flushed and atomically published without replacing an existing file.
+The 201 response includes `kind`, `path`, `mime`, `size_bytes`, content-hash `version`, `width`,
+`height`, and, for document imports, `relative_path`.
+
+Failures use problem JSON: `invalid-image-path` (400), `image-missing` (404), `image-too-large`
+(413), `invalid-image` (422, or 409 for a read raced by a write), `invalid-image-upload` (422).
+The multipart request budget is 20 MiB plus 64 KiB framing overhead. Malformed multipart and
+duplicate or unknown fields are refused. Revocation/workspace availability are rechecked after
+asynchronous body parsing, before the filesystem commit.
+
+The workspace stream emits advisory `image` frames with `{path}` (`null` for subtree changes).
+A page re-reads the listing and affected views; reconnect re-reads them too. The frame does not
+create a document checkpoint, claim, annotation or attribution record. Older clients ignore it.

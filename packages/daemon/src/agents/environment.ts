@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-import { join } from "node:path";
-import type { ManagedAgentAdapter } from "./interface.ts";
+import { realpathSync, statSync } from "node:fs";
+import { join, isAbsolute, relative } from "node:path";
+import { ManagedAgentError, type AgentProfile, type ManagedAgentAdapter } from "./interface.ts";
 import { privateDirectory } from "../chats/journal.ts";
 
 // Deliberately construct rather than blacklist the parent's environment. Provider auth,
@@ -30,10 +31,45 @@ export function managedEnvironment(
   delete result.ANTHROPIC_API_KEY;
   return result;
 }
-export function profileLocations(root: string, profileId: string, adapter: ManagedAgentAdapter) {
+export function linkedConfiguration(root: string, path: string): string {
+  if (!isAbsolute(path))
+    throw new ManagedAgentError("unsafe-state-path", "Choose an absolute native configuration directory.", 422);
+  let canonical: string;
+  try {
+    canonical = realpathSync(path);
+  } catch {
+    throw new ManagedAgentError(
+      "unsafe-state-path",
+      "The native configuration directory could not be opened. Check its path and permissions.",
+      422,
+    );
+  }
+  const owned = realpathSync(root);
+  const inside = relative(owned, canonical);
+  if (!statSync(canonical).isDirectory() || !inside || (!inside.startsWith("../") && !isAbsolute(inside)))
+    throw new ManagedAgentError(
+      "unsafe-state-path",
+      "Choose a native configuration directory outside Glosa storage.",
+      422,
+    );
+  return canonical;
+}
+export function profileLocations(
+  root: string,
+  profileId: string,
+  adapter: ManagedAgentAdapter,
+  configuration?: AgentProfile["configuration"],
+) {
   if (!/^[a-f0-9-]{36}$/.test(profileId)) throw new Error("invalid profile identity");
   const base = privateDirectory(join(root, "profiles", profileId));
-  const configRoot = privateDirectory(join(base, "native"));
+  const configRoot = configuration
+    ? linkedConfiguration(root, configuration.path)
+    : privateDirectory(join(base, "native"));
+  if (configuration && configRoot !== configuration.path)
+    throw new ManagedAgentError(
+      "unsafe-state-path",
+      "The linked configuration directory moved. Unlink it and select it again.",
+    );
   const neutralCwd = privateDirectory(join(base, "login"));
   return { configRoot, neutralCwd, env: managedEnvironment(process.env, adapter.profileEnvironment(configRoot)) };
 }

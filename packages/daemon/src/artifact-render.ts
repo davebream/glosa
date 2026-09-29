@@ -1,3 +1,4 @@
+import { installImageRules } from "../../spa/src/document-images.js";
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — class-R artifact content helpers for A1 §5.4: the canonical `source_sha256`
 // formula (A5 §F10 — SHA256 of the raw bytes after `\r\n`→`\n` only, no markdown processing) and
@@ -30,6 +31,7 @@ export function sourceSha256(raw: Buffer): string {
 // re-registering the plugin on every render.
 const renderer = new MarkdownIt(MARKDOWN_PRESET, { ...MARKDOWN_OPTIONS });
 renderer.use(installDataLineStamp);
+renderer.use(installImageRules);
 // #175 — issue title: "consistent non-manuscript markdown regions". Reading and Note must not show a
 // document's own metadata header or a `%%`-fenced authoring comment (block OR inline) as
 // manuscript; both stay recoverable in source editing, and the rich editor's Edit face carries

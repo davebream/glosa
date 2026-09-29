@@ -28,14 +28,24 @@ import {
 } from "electron";
 import {
   appearanceDecision,
+  BROWSER_PARTITION,
+  browserContextMenu,
+  browserKeyAction,
+  browserNavigationDecision,
+  browserRequestDecision,
+  browserUserAgent,
   cliCandidates,
+  cliChoice,
   compatibility,
   contrastPush,
   contrastPushReaches,
   contrastReply,
+  downloadName,
   egressDecision,
+  externalLinkDecision,
   firstFrameColor,
   linkFromArgv,
+  lockGuestPreferences,
   loopbackApiOrigin,
   navigationDecision,
   needsConfirmation,
@@ -43,9 +53,13 @@ import {
   type OpenedWorkspace,
   openArgsFor,
   parseGlosaUrl,
+  parsePackageType,
   parseOpenEnvelope,
+  permissionNotice,
   RELEASES_API,
   RecentIds,
+  type ReconnectResult,
+  reconnectOutcome,
   type RoutedWindow,
   representedFile,
   requestReleases,
@@ -53,8 +67,11 @@ import {
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  targetFromArg,
+  updateChannelFor,
   updateDialog,
   updateOutcome,
+  webviewAttachDecision,
   windowFor,
   withRoute,
 } from "./policy.ts";
@@ -75,13 +92,28 @@ const log = (line: string): void => {
 
 // ---------- the recorded executable is the install of truth (R-O1) ----------
 
+/** R-L8 (#432): the sentence a packaged app says when its own CLI is gone. */
+const REMOVED_MESSAGE = "glosa was removed or updated. Quit glosa and open it again.";
+
+/** True when this packaged app's own bundled CLI is gone (R-L8). Never for an unpackaged run or when
+ * the harness names the CLI it wants. */
+function ownCliRemoved(): boolean {
+  if (!app.isPackaged || process.env.GLOSA_SHELL_CLI) return false;
+  return (
+    cliChoice({ packaged: true, ownCliExists: existsSync(join(process.resourcesPath, "bin", "glosa")) }) === "removed"
+  );
+}
+
 /** Where the CLI is, also when the app was launched from the Dock with a bare PATH (#371). */
 function resolveCli(): string {
+  // A packaged app whose own CLI is gone runs no other install's (R-L8, #432).
+  if (ownCliRemoved()) throw new Error(REMOVED_MESSAGE);
   const candidates = cliCandidates({
     override: process.env.GLOSA_SHELL_CLI,
     glosaHome: process.env.GLOSA_HOME,
     homeDir: homedir(),
     resourcesPath: app.isPackaged ? process.resourcesPath : null,
+    platform: process.platform,
   });
   // existsSync follows symlinks, so a dangling recorded executable reads as absent. An override is
   // used as given: the harness names exactly what it wants run.
@@ -138,8 +170,28 @@ interface WindowState {
   folder: string | null;
   slug: string | null;
   kind: "desk" | "companion" | null;
+  /** The install whose daemon this window paired with (#432, R-L8), or null when none was published. */
+  installId: string | null;
 }
 const windows = new Map<number, WindowState>();
+
+/** At most one reconnect per window at a time (R-L8): a second ask shares the first's answer. */
+const reconnecting = new Map<number, Promise<ReconnectResult>>();
+
+/** R-L8: bring back the daemon a window was served by, by running `glosa open` for its folder (the
+ * CLI's own spawn-only-when-absent, R-O3), then check it is the same install. Never navigates. */
+async function ensureWindowDaemon(id: number): Promise<ReconnectResult> {
+  const state = windows.get(id);
+  if (!state?.folder) return { ok: false, reason: "failed", message: "This window has no folder to reconnect." };
+  if (ownCliRemoved()) return { ok: false, reason: "removed" };
+  try {
+    await runOpen([state.folder]);
+  } catch (e) {
+    return { ok: false, reason: "failed", message: (e as Error).message };
+  }
+  const answered = await handshake(loopbackApiOrigin(state.origin));
+  return reconnectOutcome(state.installId, typeof answered?.install_id === "string" ? answered.install_id : null);
+}
 
 function blockingScreen(title: string, command: string): string {
   const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string);
@@ -168,7 +220,7 @@ async function openWith(args: readonly string[], options: OpenOptions): Promise<
   try {
     opened = await runOpen(args);
   } catch (e) {
-    log(`glosa open failed after ${Date.now() - started} ms via ${resolveCli()}: ${(e as Error).message}`);
+    log(`glosa open failed after ${Date.now() - started} ms: ${(e as Error).message}`);
     const win = options.errorWindow ?? createWindow(null);
     await win.loadURL(blockingScreen("glosa could not open that folder", (e as Error).message));
     return win;
@@ -177,7 +229,8 @@ async function openWith(args: readonly string[], options: OpenOptions): Promise<
   const url = options.route ? options.route(opened.url) : opened.url;
   const origin = new URL(url).origin;
   const win = options.reuse(opened, origin) ?? createWindow(origin);
-  const compat = compatibility(await handshake(loopbackApiOrigin(origin)), pkg.glosa.minimumDaemon);
+  const answered = await handshake(loopbackApiOrigin(origin));
+  const compat = compatibility(answered, pkg.glosa.minimumDaemon);
   if (compat.state !== "ok") {
     log(`compatibility: ${compat.state}`);
     const titles = {
@@ -195,6 +248,7 @@ async function openWith(args: readonly string[], options: OpenOptions): Promise<
     folder: opened.path,
     slug: opened.slug,
     kind: surfaceKind(url),
+    installId: typeof answered?.install_id === "string" ? answered.install_id : null,
   });
   await win.loadURL(tokenlessUrl);
   return win;
@@ -323,10 +377,14 @@ function createWindow(origin: string | null): BrowserWindow {
       // The preload reads this to decide whether to expose anything at all (R-P3). It is the
       // origin the CLI links to, learned from `glosa open`; a window with no origin exposes nothing.
       additionalArguments: origin ? [`--glosa-spa-origin=${origin}`] : [],
+      // Desk browser tabs (#440) are `<webview>` guests in the dock. Enabled on every window because
+      // a window's kind is known only after `glosa open` answers; `will-attach-webview` below is
+      // the gate, and a companion window's request is refused there.
+      webviewTag: true,
     },
   });
   const wc = win.webContents;
-  if (origin) windows.set(wc.id, { origin, folder: null, slug: null, kind: null });
+  if (origin) windows.set(wc.id, { origin, folder: null, slug: null, kind: null, installId: null });
   // What Electron's defaults leave open for the TOP frame (readiness note §3).
   wc.setWindowOpenHandler(() => ({ action: "deny" }));
   wc.on("will-navigate", (event, url) => {
@@ -337,6 +395,23 @@ function createWindow(origin: string | null): BrowserWindow {
     }
   });
   wc.session.on("will-download", (event) => event.preventDefault());
+  // A guest attaches only to a desk window's SPA frame, for a web address, and always with the
+  // browser partition's locked preferences, whatever the page asked for (policy.ts, A3 §4b).
+  wc.on("will-attach-webview", (event, prefs, params) => {
+    const state = windows.get(wc.id);
+    lockGuestPreferences(prefs as unknown as Record<string, unknown>);
+    const decision = webviewAttachDecision({
+      kind: state?.kind,
+      frameOrigin: wc.mainFrame?.origin,
+      spaOrigin: state?.origin,
+      src: params.src ?? "",
+    });
+    if (decision === "deny") {
+      log("refused a browser tab: not a desk window's SPA frame, or not a web address");
+      event.preventDefault();
+    }
+  });
+  wc.on("did-attach-webview", (_event, guest) => wireBrowserTab(wc, guest));
   // A `beforeunload` guard in the SPA (unsaved edits) would otherwise cancel the close silently.
   wc.on("will-prevent-unload", (event) => {
     const choice = dialog.showMessageBoxSync(win, {
@@ -363,6 +438,127 @@ function createWindow(origin: string | null): BrowserWindow {
     windows.delete(wc.id);
   });
   return win;
+}
+
+// ---------- desk browser tabs (#440) ----------
+
+/** What the shell tells a desk window about one of its browser tabs. The SPA knows each tab by its
+ * guest's id (`<webview>.getWebContentsId()`). */
+function toHost(host: Electron.WebContents | null | undefined, guest: Electron.WebContents, event: object): void {
+  if (host && !host.isDestroyed()) host.send("glosa:browser-event", { guestId: guest.id, ...event });
+}
+
+/** The scheme of a refused address, for the log: never the address itself. */
+function schemeOf(url: string): string {
+  return /^[a-z][a-z0-9+.-]*:/i.exec(url)?.[0] ?? "malformed";
+}
+
+/** One guest, as it attaches: new windows become tabs beside it, only web addresses load in it,
+ * glosa's chords keep working inside it, and it gets a right-click menu. */
+function wireBrowserTab(host: Electron.WebContents, guest: Electron.WebContents): void {
+  guest.setWindowOpenHandler(({ url }) => {
+    if (url !== "about:blank" && browserNavigationDecision(url) === "allow")
+      toHost(host, guest, { type: "open-tab", url });
+    return { action: "deny" };
+  });
+  const refuse = (event: Electron.Event, url: string) => {
+    if (browserNavigationDecision(url) === "allow") return;
+    log(`browser tab: refused navigation to a ${schemeOf(url)} address`);
+    event.preventDefault();
+  };
+  guest.on("will-navigate", (event, url) => refuse(event, url));
+  guest.on("will-redirect", (event, url) => refuse(event, url));
+  const history = guest.navigationHistory;
+  guest.on("before-input-event", (event, input) => {
+    const action = browserKeyAction(input);
+    if (!action) return;
+    event.preventDefault();
+    if (action === "reload") guest.reload();
+    else if (action === "back") {
+      if (history.canGoBack()) history.goBack();
+    } else if (action === "forward") {
+      if (history.canGoForward()) history.goForward();
+    } else {
+      toHost(host, guest, {
+        type: "key",
+        key: input.key,
+        meta: input.meta,
+        control: input.control,
+        shift: input.shift,
+        alt: input.alt,
+      });
+    }
+  });
+  guest.on("context-menu", (_event, params) => {
+    const link = params.linkURL;
+    const run = (action: string) => {
+      if (action === "open-link-in-tab") toHost(host, guest, { type: "open-tab", url: link });
+      else if (action === "open-link-outside" && externalLinkDecision(link) === "open") void shell.openExternal(link);
+      else if (action === "copy-link") clipboard.writeText(link);
+      else if (action === "back" && history.canGoBack()) history.goBack();
+      else if (action === "forward" && history.canGoForward()) history.goForward();
+      else if (action === "reload") guest.reload();
+    };
+    const items = browserContextMenu({
+      linkURL: link,
+      selectionText: params.selectionText,
+      isEditable: params.isEditable,
+      canGoBack: history.canGoBack(),
+      canGoForward: history.canGoForward(),
+    });
+    const template = items.map(
+      (item): Electron.MenuItemConstructorOptions =>
+        "action" in item ? { label: item.label, click: () => run(item.action) } : item,
+    );
+    const win = BrowserWindow.fromWebContents(host);
+    Menu.buildFromTemplate(template).popup(win ? { window: win } : {});
+  });
+}
+
+/** Every daemon port an open window is served from, and the class-F port beside each (A3 §1). A
+ * page in a browser tab may not reach any of them on a loopback name. */
+function glosaPorts(): number[] {
+  const ports = new Set<number>();
+  for (const state of windows.values()) {
+    const port = Number(new URL(state.origin).port);
+    if (port) ports.add(port).add(port + 1);
+  }
+  return [...ports];
+}
+
+/**
+ * The browser partition's own rules (#440, A3 §4b), installed once at launch. Its request policy
+ * lets web pages load and cancels files, custom schemes and glosa's own ports; permissions and
+ * downloads are refused, and the ones a person would miss are said in the tab; the user agent
+ * names neither Electron nor glosa. The SPA's session and its egress gate are not touched.
+ */
+function installBrowserSession(): void {
+  const browser = session.fromPartition(BROWSER_PARTITION);
+  browser.setUserAgent(browserUserAgent(app.userAgentFallback));
+  browser.webRequest.onBeforeRequest((details, callback) => {
+    const decision = browserRequestDecision(details.url, glosaPorts());
+    if (decision === "cancel") log(`browser tab: cancelled a request to a ${schemeOf(details.url)} address`);
+    callback({ cancel: decision === "cancel" });
+  });
+  browser.setPermissionRequestHandler((wc, permission, callback) => {
+    callback(false);
+    const words = permissionNotice(permission);
+    if (words && wc) toHost(wc.hostWebContents, wc, { type: "permission-refused", words });
+  });
+  browser.setPermissionCheckHandler(() => false);
+  browser.setDevicePermissionHandler(() => false);
+  browser.on("will-download", (event, item, wc) => {
+    event.preventDefault();
+    const url = item.getURL();
+    toHost(wc?.hostWebContents, wc, {
+      type: "download-blocked",
+      name: downloadName(item.getFilename()),
+      url: externalLinkDecision(url) === "open" ? url : wc.getURL(),
+    });
+  });
+  // Outside macOS, Chromium's spellchecker downloads dictionaries on first use: an unasked-for
+  // request (invariant 5). macOS checks spelling with its own, local dictionaries.
+  browser.setSpellCheckerEnabled(process.platform === "darwin");
 }
 
 async function chooseFolder(win: BrowserWindow | null): Promise<string | null> {
@@ -414,6 +610,18 @@ function revealIn(win: BrowserWindow | null): boolean {
 
 // ---------- Check for Updates…, on click only (#424) ----------
 
+/** The package manager that installed this app, from the marker the Linux package's build writes
+ * beside its resources (#432), or null: macOS, an unpackaged run, or a Linux app pacman did not
+ * install. Read once; it cannot change while the app runs. */
+const packageType: string | null = (() => {
+  if (!app.isPackaged) return null;
+  try {
+    return parsePackageType(readFileSync(join(process.resourcesPath, "package-type"), "utf8"));
+  } catch {
+    return null;
+  }
+})();
+
 /**
  * Where the check asks. `GLOSA_SHELL_RELEASES_API` points it elsewhere and is read only by an
  * unpackaged app: it is how the real-Electron test puts a local stub in GitHub's place, never a way
@@ -444,14 +652,19 @@ function checkForUpdates(): Promise<void> {
 }
 
 async function runUpdateCheck(): Promise<void> {
-  const running = { current: pkg.version, arch: process.arch };
+  const running = { current: pkg.version, arch: process.arch, platform: process.platform };
   // Node's global fetch. One request: no redirect followed, the body capped, one timeout over both.
   const response = await requestReleases(releasesApi(), fetch);
   const outcome = updateOutcome(response, running);
   if (outcome.kind === "newer") log(`update check: found ${outcome.version} for ${running.arch}`);
   else if (outcome.kind === "current") log(`update check: up to date at ${running.current}`);
   else log(`update check: failed: ${outcome.reason}`);
-  const { actions, ...options } = updateDialog(outcome, { current: pkg.version, releasesPage: pkg.glosa.releases });
+  const { actions, ...options } = updateDialog(outcome, {
+    current: pkg.version,
+    releasesPage: pkg.glosa.releases,
+    channel: updateChannelFor(process.platform, packageType),
+    arch: process.arch,
+  });
   const win = BrowserWindow.getFocusedWindow();
   const answer = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   const action = actions[answer.response] ?? null;
@@ -534,6 +747,23 @@ function installIpc(): void {
     await openFolderFlow(BrowserWindow.fromWebContents(event.sender));
   });
   // Takes nothing from the page: which file is revealed is decided here (revealIn).
+  ipcMain.handle("glosa:ensure-daemon", (event) => {
+    if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
+    const id = event.sender.id;
+    const pending = reconnecting.get(id);
+    if (pending) return pending;
+    const attempt = ensureWindowDaemon(id).finally(() => reconnecting.delete(id));
+    reconnecting.set(id, attempt);
+    return attempt;
+  });
+  // "Open in your browser", and links that belong outside glosa (#440): the system's own handler,
+  // for web and mail addresses only (policy.ts). Any SPA window may ask; a companion window has
+  // links too.
+  ipcMain.handle("glosa:open-external", async (event, url: unknown) => {
+    if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
+    if (externalLinkDecision(url) !== "open") throw new Error("rejected: not a web or mail address");
+    await shell.openExternal(url as string);
+  });
   ipcMain.handle("glosa:reveal", (event) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     return revealIn(BrowserWindow.fromWebContents(event.sender));
@@ -658,6 +888,7 @@ app.whenReady().then(async () => {
   }
   dockIcon();
   installEgressGate();
+  installBrowserSession();
   installIpc();
   buildMenu();
   // A packaged app declares the scheme in its bundle (build.protocols); this makes it the default
@@ -676,7 +907,8 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) app.quit();
     return;
   }
-  const target = positionals[0] ?? null;
+  // A desktop entry's %U hands a folder over as file:///… on Linux (#432); the CLI wants a path.
+  const target = positionals[0] ? targetFromArg(positionals[0]) : null;
   if (target) {
     await openInWindow(target, null, positionals[1] ?? null);
     return;

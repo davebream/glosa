@@ -4,6 +4,7 @@
 // wiring layer. Contracts: docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md
 // (R-O1…R-O6, R-P1…R-P5) and docs/research/2026-09-25-desktop-shell-readiness.md §3.
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** The SPA contract major this shell was built against (A1: major mismatch → reload, never a fix). */
 export const SHELL_CONTRACT_MAJOR = "1";
@@ -298,6 +299,8 @@ export interface CliLookup {
   override?: string;
   /** GLOSA_HOME, when set; otherwise the recorded executable lives under `<homeDir>/.glosa`. */
   glosaHome?: string;
+  /** `process.platform`. Decides the well-known bin directories; macOS when omitted (#432). */
+  platform?: NodeJS.Platform;
   homeDir: string;
   /** Electron's `process.resourcesPath` when the app is packaged, else null. */
   resourcesPath: string | null;
@@ -315,13 +318,35 @@ export function cliCandidates(lookup: CliLookup): string[] {
   if (lookup.override) return [lookup.override];
   const candidates = [join(lookup.glosaHome ?? join(lookup.homeDir, ".glosa"), "bin", "glosa")];
   if (lookup.resourcesPath !== null) candidates.push(join(lookup.resourcesPath, "bin", "glosa"));
-  candidates.push(
-    join(lookup.homeDir, ".bun", "bin", "glosa"),
-    "/opt/homebrew/bin/glosa",
-    "/usr/local/bin/glosa",
-    "glosa",
-  );
+  // Linux has no Homebrew prefix to look in; the pacman package links /usr/bin/glosa (#432).
+  const wellKnown =
+    lookup.platform === "linux"
+      ? ["/usr/local/bin/glosa", "/usr/bin/glosa"]
+      : ["/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+  candidates.push(join(lookup.homeDir, ".bun", "bin", "glosa"), ...wellKnown, "glosa");
   return candidates;
+}
+
+/**
+ * R-L8 (#432): whether a shell may look for a CLI at all. A packaged app whose own bundled CLI is gone
+ * was removed or replaced underneath it (`pacman -R`, an upgrade in progress); running another
+ * install's CLI then would silently select that install, so it runs none and says so. An unpackaged
+ * run, or a packaged app with its CLI in place, looks up candidates as usual.
+ */
+export function cliChoice(state: { packaged: boolean; ownCliExists: boolean }): "lookup" | "removed" {
+  return state.packaged && !state.ownCliExists ? "removed" : "lookup";
+}
+
+/** What asking the shell to bring a window's daemon back came to (R-L8). */
+export type ReconnectResult = { ok: true } | { ok: false; reason: "removed" | "foreign" | "failed"; message?: string };
+
+/** R-L8: after `glosa open` ran for the window's folder, is the daemon answering the one this window
+ * paired with? `paired` is the install id recorded when the window opened (null when the daemon
+ * published none); `answered` the one the handshake reports now. */
+export function reconnectOutcome(paired: string | null, answered: string | null): ReconnectResult {
+  if (answered === null) return { ok: false, reason: "failed", message: "The glosa daemon is not answering." };
+  if (paired !== null && answered !== paired) return { ok: false, reason: "foreign" };
+  return { ok: true };
 }
 
 // ---------- glosa:// links (#392) ----------
@@ -574,13 +599,56 @@ export const UPDATE_HEADERS = Object.freeze({
   "x-github-api-version": "2022-11-28",
 });
 
-/** The command the dialog copies. The app never installs itself: Homebrew owns the bundle. */
+/** The command the dialog copies on macOS. The app never installs itself: Homebrew owns the bundle. */
 export const UPGRADE_COMMAND = "brew upgrade --cask glosa";
 
-/** What the running app is: its `package.json` version and `process.arch`. */
+/** What the running app is: its `package.json` version, `process.arch` and `process.platform`
+ * (macOS when omitted). */
 export interface RunningApp {
   current: string;
   arch: string;
+  platform?: NodeJS.Platform;
+}
+
+/** The release assets that make a version installable on this platform: the DMG or ZIP on macOS
+ * (#371), the pacman package on Linux (#432), all named `glosa-<version>-<arch>.<ext>`. */
+export function releaseAssetNames(platform: NodeJS.Platform, version: string, arch: string): string[] {
+  if (platform === "linux") return [`glosa-${version}-${arch}.pacman`];
+  return [`glosa-${version}-${arch}.dmg`, `glosa-${version}-${arch}.zip`];
+}
+
+/** How this copy of the app was installed, which decides what the update dialog offers. */
+export type UpdateChannel = "homebrew-cask" | "pacman" | "download";
+
+/** The channel for a platform and the package manager the Linux package names in its
+ * `resources/package-type` marker. A Linux app without the marker was not installed by pacman,
+ * so it only gets the release page, and a Linux app is never told to use Homebrew. */
+export function updateChannelFor(platform: NodeJS.Platform, packageType: string | null): UpdateChannel {
+  if (platform === "darwin") return "homebrew-cask";
+  if (platform === "linux" && packageType === "pacman") return "pacman";
+  return "download";
+}
+
+/** The package-type marker's content, or null when it is not one short lowercase word. */
+export function parsePackageType(text: string | null): string | null {
+  if (text === null || text.length > 64) return null;
+  const value = text.trim();
+  return /^[a-z0-9-]{1,32}$/.test(value) ? value : null;
+}
+
+/** A launcher argument as a path the CLI understands. A desktop entry's `%U` hands a folder over as
+ * `file:///…` (#432); a local file URL becomes its path, and anything else is returned unchanged,
+ * including a `file:` URL naming another host, which is not ours to open. */
+export function targetFromArg(arg: string): string {
+  // Only a URL with an authority part (`file://…`): a bare `file:` would otherwise parse as the root.
+  if (!arg.startsWith("file://")) return arg;
+  try {
+    const url = new URL(arg);
+    if (url.protocol !== "file:" || (url.hostname !== "" && url.hostname !== "localhost")) return arg;
+    return fileURLToPath(url);
+  } catch {
+    return arg;
+  }
 }
 
 /** A release the running app could move to, with the tag it was published under. */
@@ -596,8 +664,8 @@ export const MAX_TAG_LENGTH = 64;
 /**
  * The newest release this app could upgrade to, or null. A release counts when its `draft` is
  * exactly `false`, its tag is `v` plus a SemVer version (or the bare version) no longer than
- * `MAX_TAG_LENGTH`, that version is above the running one, and it has `glosa-<version>-<arch>.dmg`
- * or `.zip` fully uploaded for the running architecture: a published release with no app on it (as
+ * `MAX_TAG_LENGTH`, that version is above the running one, and it has one of `releaseAssetNames`
+ * fully uploaded for the running platform and architecture: a published release with no app on it (as
  * `v0.1.0-alpha.32` and `33` are) is not one. The API lists releases by creation, so this takes the
  * maximum by version, never the first. Entries that do not have that shape are skipped, including
  * one whose `draft` is missing or not a boolean.
@@ -612,7 +680,7 @@ export function newestRelease(releases: readonly unknown[], running: RunningApp)
     if (tag.length > MAX_TAG_LENGTH) continue;
     const version = tag.startsWith("v") ? tag.slice(1) : tag;
     if (parseVersion(version) === null || compareVersions(version, running.current) <= 0) continue;
-    const names = [`glosa-${version}-${running.arch}.dmg`, `glosa-${version}-${running.arch}.zip`];
+    const names = releaseAssetNames(running.platform ?? "darwin", version, running.arch);
     const installable = release.assets.some((asset: unknown) => {
       if (typeof asset !== "object" || asset === null) return false;
       const { name, state } = asset as { name?: unknown; state?: unknown };
@@ -758,8 +826,41 @@ export interface UpdateDialog {
  * release found it is `<releasesPage>/tag/<tag>`, the tag already validated as a version, and
  * otherwise the releases page itself.
  */
-export function updateDialog(outcome: UpdateOutcome, context: { current: string; releasesPage: string }): UpdateDialog {
+export function updateDialog(
+  outcome: UpdateOutcome,
+  context: { current: string; releasesPage: string; channel?: UpdateChannel; arch?: string },
+): UpdateDialog {
   const releases = context.releasesPage.replace(/\/+$/, "");
+  const channel = context.channel ?? "homebrew-cask";
+  if (outcome.kind === "newer" && channel === "pacman") {
+    // pacman owns every file this app installed (#432): the app names the package and the command,
+    // built from the validated version and the running architecture, never from GitHub's answer.
+    const file = `glosa-${outcome.version}-${context.arch ?? "x64"}.pacman`;
+    return {
+      type: "info",
+      message: `glosa ${outcome.version} is available. You have ${context.current}.`,
+      detail: `pacman installed this copy of glosa, so pacman updates it. Download ${file} from the release page, then run the command Copy Install Command copies, from the folder you saved it to.`,
+      buttons: ["Open Release Page", "Copy Install Command", "Later"],
+      defaultId: 0,
+      cancelId: 2,
+      actions: [
+        { open: `${releases}/tag/${encodeURIComponent(outcome.tag)}` },
+        { copy: `sudo pacman -U ./${file}` },
+        null,
+      ],
+    };
+  }
+  if (outcome.kind === "newer" && channel === "download") {
+    return {
+      type: "info",
+      message: `glosa ${outcome.version} is available. You have ${context.current}.`,
+      detail: "Download it from the release page.",
+      buttons: ["Open Release Page", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      actions: [{ open: `${releases}/tag/${encodeURIComponent(outcome.tag)}` }, null],
+    };
+  }
   if (outcome.kind === "newer") {
     return {
       type: "info",
@@ -824,4 +925,195 @@ export function contrastPush(lastPushed: boolean, reading: unknown): boolean | n
  */
 export function contrastPushReaches(recordedOrigin: string | null | undefined, frameOrigin: unknown): boolean {
   return typeof recordedOrigin === "string" && recordedOrigin !== "" && frameOrigin === recordedOrigin;
+}
+
+// ---------- desk browser tabs (#440) ----------
+//
+// A desk window hosts web pages as `<webview>` guests inside its dock (docs/research/2026-09-29-
+// browser-tab-rendering.md). Every guest runs in one persistent partition of its own, with its own
+// request policy; the SPA's session, its egress gate and its CSP are untouched (A3 §4b).
+
+/** The one saved cookie and storage store every desk browser tab shares, across workspaces and
+ * relaunches (maintainer decision 2026-09-28). Never the SPA's default session: that one holds the
+ * pairing credential in the SPA origin's storage. */
+export const BROWSER_PARTITION = "persist:glosa-browser";
+
+/** What a page in a browser tab may request: the web (http, https and their sockets) and what never
+ * leaves the process. Never a file, a custom scheme, or a daemon port on this machine: `glosaPorts`
+ * holds each open window's SPA port and the class-F port beside it, on every loopback name. */
+export function browserRequestDecision(url: string, glosaPorts: readonly number[]): "allow" | "cancel" {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "cancel";
+  }
+  if (parsed.protocol === "data:" || parsed.protocol === "blob:") return "allow";
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) return "cancel";
+  const hostname = parsed.hostname.replace(/^\[(.*)\]$/, "$1");
+  const loopback = isLoopbackHost(parsed.hostname) || hostname === "::1" || /^127\./.test(hostname);
+  const port = Number(parsed.port || (parsed.protocol === "https:" || parsed.protocol === "wss:" ? 443 : 80));
+  return loopback && glosaPorts.includes(port) ? "cancel" : "allow";
+}
+
+/** Where a page in a browser tab may take its tab: a web address or a blank page, nothing else. */
+export function browserNavigationDecision(url: string): "allow" | "deny" {
+  if (url === "about:blank") return "allow";
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:" ? "allow" : "deny";
+  } catch {
+    return "deny";
+  }
+}
+
+/** Whether a window may attach a browser tab: a desk window, from its SPA frame, for a web address
+ * or a blank page. A companion window never gets one (maintainer decision 2026-09-28). */
+export function webviewAttachDecision(input: {
+  kind: "desk" | "companion" | null | undefined;
+  frameOrigin: unknown;
+  spaOrigin: string | null | undefined;
+  src: string;
+}): "allow" | "deny" {
+  if (input.kind !== "desk") return "deny";
+  if (typeof input.spaOrigin !== "string" || input.spaOrigin === "" || input.frameOrigin !== input.spaOrigin) {
+    return "deny";
+  }
+  return browserNavigationDecision(input.src) === "allow" ? "allow" : "deny";
+}
+
+/** Rewrites a guest's preferences before it attaches, whatever the page asked for: the browser
+ * partition, no preload, sandboxed, isolated, no Node, web security on. Mutates, because Electron
+ * reads the object it passed to `will-attach-webview`. */
+export function lockGuestPreferences(prefs: Record<string, unknown>): void {
+  for (const key of ["preload", "preloadURL", "enableBlinkFeatures", "additionalArguments"]) delete prefs[key];
+  Object.assign(prefs, {
+    partition: BROWSER_PARTITION,
+    sandbox: true,
+    contextIsolation: true,
+    nodeIntegration: false,
+    nodeIntegrationInSubFrames: false,
+    nodeIntegrationInWorker: false,
+    webSecurity: true,
+    allowRunningInsecureContent: false,
+    experimentalFeatures: false,
+    webviewTag: false,
+    navigateOnDragDrop: false,
+  });
+}
+
+/** The user agent a browser tab sends: the Chromium one without Electron's or glosa's product
+ * tokens, so no site learns that glosa, or which version of it, is asking (invariant 5 keeps glosa
+ * from beaconing its version). */
+export function browserUserAgent(fallback: string): string {
+  return fallback
+    .replace(/\s(?:glosa|Electron)\/\S+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/** What a key pressed inside a browser tab does. The page gets it unless it is one of glosa's own
+ * chords: reload, back and forward act on the page from here; the rest go to the SPA ("app"), so
+ * ⌘W, ⌘K, ⌘T, ⌘L and tab cycling work the same with a page focused. `mod` is ⌘ on macOS, Ctrl
+ * elsewhere. */
+export function browserKeyAction(
+  input: { type: string; key: string; meta?: boolean; control?: boolean; shift?: boolean; alt?: boolean },
+  platform: NodeJS.Platform = process.platform,
+): "reload" | "back" | "forward" | "app" | null {
+  if (input.type !== "keyDown") return null;
+  const mod = platform === "darwin" ? Boolean(input.meta) : Boolean(input.control);
+  const key = input.key.length === 1 ? input.key.toLowerCase() : input.key;
+  if (input.control && !input.meta && !input.alt && key === "Tab") return "app";
+  if (!mod) return null;
+  if (input.alt) return key === "ArrowLeft" || key === "ArrowRight" ? "app" : null;
+  if (key === "r") return "reload";
+  if (key === "[" && !input.shift) return "back";
+  if (key === "]" && !input.shift) return "forward";
+  if (key === "\\") return "app";
+  if (!input.shift && ["w", "k", "t", "l"].includes(key)) return "app";
+  return null;
+}
+
+/** Whether "Open in your browser" (and a link that belongs outside glosa) may leave for the
+ * system's handler: web addresses and mail links only, never a file or an app's own scheme. */
+export function externalLinkDecision(url: unknown): "open" | "refuse" {
+  if (typeof url !== "string" || url.length > 8192) return "refuse";
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:" || protocol === "mailto:" ? "open" : "refuse";
+  } catch {
+    return "refuse";
+  }
+}
+
+/** The permissions a page is refused out loud, as words for the notice under the address row. Every
+ * other permission is refused quietly: pages ask for some of them all the time, and a notice for
+ * each would be noise. */
+export function permissionNotice(permission: string): string | null {
+  const words: Record<string, string> = {
+    media: "your camera or microphone",
+    geolocation: "your location",
+    notifications: "to show notifications",
+    "clipboard-read": "to read your clipboard",
+    midi: "your MIDI devices",
+    midiSysex: "your MIDI devices",
+    openExternal: "to open another app",
+    hid: "a connected device",
+    serial: "a connected device",
+    usb: "a connected device",
+    "display-capture": "to record your screen",
+  };
+  return words[permission] ?? null;
+}
+
+/** A download a page started, as the SPA's notice names it: the file's own name, cut to a length a
+ * notice can hold, never a path. */
+export function downloadName(name: unknown): string {
+  const base = typeof name === "string" ? (name.split(/[\\/]/).pop() ?? "") : "";
+  // Control characters out, so a name cannot break the notice's line.
+  const clean = Array.from(base)
+    .filter((c) => {
+      const code = c.codePointAt(0) ?? 0;
+      return code > 0x1f && code !== 0x7f;
+    })
+    .join("")
+    .trim();
+  if (!clean) return "a file";
+  return clean.length > 80 ? `${clean.slice(0, 77)}…` : clean;
+}
+
+/** One row of a page's right-click menu, before Electron builds it. `action` names what the main
+ * process does; `role` is Electron's own edit role. */
+export type BrowserMenuItem =
+  | { label: string; action: "open-link-in-tab" | "open-link-outside" | "copy-link" | "back" | "forward" | "reload" }
+  | { role: "cut" | "copy" | "paste" | "selectAll" }
+  | { type: "separator" };
+
+/** The right-click menu of a page in a browser tab: link actions over a link, editing over a field
+ * or a selection, and the page's own back, forward and reload. */
+export function browserContextMenu(params: {
+  linkURL?: string;
+  selectionText?: string;
+  isEditable?: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}): BrowserMenuItem[] {
+  const items: BrowserMenuItem[] = [];
+  if (params.linkURL && browserNavigationDecision(params.linkURL) === "allow" && params.linkURL !== "about:blank") {
+    items.push(
+      { label: "Open Link in New Browser Tab", action: "open-link-in-tab" },
+      { label: "Open Link in Your Browser", action: "open-link-outside" },
+      { label: "Copy Link Address", action: "copy-link" },
+      { type: "separator" },
+    );
+  }
+  if (params.isEditable) {
+    items.push({ role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }, { type: "separator" });
+  } else if (params.selectionText) {
+    items.push({ role: "copy" }, { type: "separator" });
+  }
+  if (params.canGoBack) items.push({ label: "Back", action: "back" });
+  if (params.canGoForward) items.push({ label: "Forward", action: "forward" });
+  items.push({ label: "Reload", action: "reload" });
+  return items;
 }

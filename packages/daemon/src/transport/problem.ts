@@ -5,6 +5,11 @@
 import type { ManagedAgentCode } from "../agents/interface.ts";
 
 export type ProblemSlug =
+  | "invalid-image-path"
+  | "image-missing"
+  | "image-too-large"
+  | "invalid-image"
+  | "invalid-image-upload"
   | ManagedAgentCode
   | "invalid-agent-request"
   | "managed-operation-failed"
@@ -38,6 +43,9 @@ export type ProblemSlug =
   // aliasing within its bounded deadline and refuses to risk creating a duplicate registration for
   // an inode another registration may already own. Expected to clear on retry.
   | "alias-discovery-unavailable"
+  // #432 (R-L6) — a page asked for an asset scoped to another build's hash. 410: this daemon will
+  // never serve that build's bytes; the page has to reload to get its own.
+  | "build-changed"
   | "not-found"
   | "payload-too-large"
   | "validation-failed"

@@ -19,6 +19,7 @@ import {
   PARK_PROBE_JITTER_MS,
   PARK_PROBE_REQUEST_TIMEOUT_MS,
   STREAM_FAILURE_DEADLINE_MS,
+  monitorAcceptsBuild,
   monitorRetryDelay,
   parkProbeDelay,
   registeredWorkspaceForProject,
@@ -1044,5 +1045,49 @@ describe("monitor singleton lock", () => {
       const outcome = acquireMonitorLock(home, "session-a");
       expect(outcome).toMatchObject({ held: false, reason: "unavailable" });
     });
+  });
+});
+
+describe("which daemon build a monitor accepts (#432, R-L7 applying R-O2)", () => {
+  const mine = { buildId: "1.0.0-aaaaaaaaaaaaaaaa", installId: "install-mine" };
+  let hashed = 0;
+  const onDisk = (build: string | undefined) => () => {
+    hashed++;
+    return build;
+  };
+
+  test("the same build of the same install, without hashing the tree", () => {
+    hashed = 0;
+    expect(monitorAcceptsBuild({ buildId: mine.buildId, installId: mine.installId }, mine, onDisk(undefined))).toBe(
+      "same",
+    );
+    expect(hashed).toBe(0);
+  });
+
+  test("a newer build of this install that is the one on disk: the monitor is the stale side", () => {
+    const newer = "1.0.1-bbbbbbbbbbbbbbbb";
+    expect(monitorAcceptsBuild({ buildId: newer, installId: mine.installId }, mine, onDisk(newer))).toBe("on-disk");
+  });
+
+  test("a build that is neither this monitor's nor the one on disk is refused", () => {
+    expect(
+      monitorAcceptsBuild(
+        { buildId: "1.0.1-cccccccccccccccc", installId: mine.installId },
+        mine,
+        onDisk("1.0.1-bbbbbbbbbbbbbbbb"),
+      ),
+    ).toBeNull();
+    expect(
+      monitorAcceptsBuild({ buildId: "1.0.1-cccccccccccccccc", installId: mine.installId }, mine, () => {
+        throw new Error("unreadable tree");
+      }),
+    ).toBeNull();
+  });
+
+  test("another install's daemon is never accepted, whatever its build", () => {
+    expect(
+      monitorAcceptsBuild({ buildId: mine.buildId, installId: "install-other" }, mine, onDisk(mine.buildId)),
+    ).toBeNull();
+    expect(monitorAcceptsBuild({ buildId: mine.buildId, installId: undefined }, mine, onDisk(mine.buildId))).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+@import url("./vendor/image-viewer.css");
 /* SPDX-License-Identifier: Apache-2.0 */
 /* @glosa/spa — the visual system (direction contract: packages/spa/.impeccable/surfaces/src-app-css.md).
    Served as /app/app.css (allowlisted in packages/daemon/src/transport/http.ts). Plain CSS, no build step.
@@ -2136,7 +2137,8 @@ input,
    would not make it truer. The marks notice is the same strip for the same reason: a browser
    without the highlight API cannot paint a mark in any pane. */
 .glosa-banner,
-.glosa-marks-notice {
+.glosa-marks-notice,
+.glosa-update-notice {
   background: color-mix(in oklch, var(--warn) 12%, var(--bg));
   color: var(--warn);
   border-bottom: 1px solid color-mix(in oklch, var(--warn) 35%, var(--bg));
@@ -2144,6 +2146,18 @@ input,
   font-weight: 600;
   text-align: center;
   padding: var(--space-1) var(--space-2);
+}
+
+/* The update notice (#432) is the same strip, with the one action it offers beside its sentence. */
+.glosa-update-notice button {
+  margin-inline-start: var(--space-2);
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-micro);
+  padding: 0 var(--space-2);
+  cursor: pointer;
 }
 
 /* ---------- 7. Manuscript ---------- */
@@ -6945,6 +6959,13 @@ input,
     transition: none;
   }
 
+  /* The notes tray opens and its chevron turns at once; the count strip and the open list still
+     say which state it is in. */
+  .glosa-annotations-tray,
+  .glosa-tray-chevron {
+    transition: none;
+  }
+
   .glosa-composer,
   .glosa-ask-layer .glosa-agent-card,
   .glosa-session-bracket[data-arrived],
@@ -7990,10 +8011,10 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-message[data-kind="human"] .glosa-chat-text {
   text-wrap: pretty;
 }
-.glosa-chat-message[data-kind="detail"] {
+.glosa-chat-message:is([data-kind="detail"], [data-kind="reasoning"]) {
   margin-bottom: 10px;
 }
-.glosa-chat-message[data-kind="detail"] summary {
+.glosa-chat-message:is([data-kind="detail"], [data-kind="reasoning"]) summary {
   font-weight: 400;
 }
 .glosa-chat-message[data-kind="detail"] .glosa-chat-text {
@@ -8001,6 +8022,13 @@ nav.glosa-chat-actions[hidden] {
   padding: 10px 12px;
   background: var(--surface);
   border-radius: var(--radius-tool);
+}
+.glosa-chat-message[data-kind="reasoning"] .glosa-chat-text {
+  font: var(--note-size) / 1.62 var(--font-serif);
+  color: var(--muted);
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
 }
 .glosa-chat-message[data-kind="error"] {
   padding: 12px;
@@ -8058,7 +8086,8 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-composer:focus-within {
   border-color: var(--ink);
 }
-.glosa-chat-pane .glosa-chat-draft {
+.glosa-chat-pane .glosa-chat-draft,
+.glosa-chat-pane .glosa-chat-reference-mirror {
   width: 100%;
   display: block;
   border: 0;
@@ -8729,4 +8758,769 @@ button:is(
   position: absolute;
   right: 4px;
   bottom: -26px;
+}
+
+/* Composer references share the native textarea's exact metrics. Text stays opaque. */
+.glosa-chat-input-wrap {
+  position: relative;
+  min-width: 0;
+}
+.glosa-chat-input-wrap > textarea {
+  position: relative;
+  z-index: 1;
+}
+.glosa-chat-reference-mirror {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  color: transparent;
+  border: 0;
+}
+.glosa-chat-reference-mirror mark {
+  color: transparent;
+  background: var(--surface-sunken);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+}
+.glosa-composer-picker {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 4px;
+  box-sizing: border-box;
+  overflow: auto;
+  overscroll-behavior: contain;
+  z-index: var(--z-tooltip, 60);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  font: 1rem / 1.4 var(--font-sans);
+}
+.glosa-composer-picker[hidden] {
+  display: none;
+}
+.glosa-composer-option {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.glosa-composer-option[aria-selected="true"] {
+  background: var(--surface-sunken);
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+}
+.glosa-composer-name {
+  font-weight: 600;
+  min-width: 0;
+}
+.glosa-composer-description {
+  flex: 1 1 15em;
+  min-width: 0;
+}
+.glosa-composer-source {
+  flex-basis: 100%;
+  font-size: 0.875em;
+}
+.glosa-composer-group,
+.glosa-composer-empty {
+  padding: 8px 10px;
+  font-size: 0.875em;
+}
+.glosa-composer-group {
+  border-top: 1px solid var(--border);
+}
+.glosa-composer-group:first-child {
+  border-top: 0;
+}
+@media (forced-colors: active) {
+  .glosa-composer-option[aria-selected="true"] {
+    outline-color: Highlight;
+  }
+  .glosa-chat-reference-mirror mark {
+    text-decoration-color: CanvasText;
+  }
+}
+.glosa-chat-reference {
+  background: var(--surface-sunken);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+}
+
+/* Local image assets: retain the document measure and the desk's existing tokens. */
+.glosa-image {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.glosa-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.glosa-image-placeholder {
+  display: inline-block;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font: 0.8125rem / 1.5 var(--font-sans);
+  overflow-wrap: anywhere;
+}
+.glosa-image-pane {
+  display: block;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.glosa-image-view {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.glosa-image-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+.glosa-image-toolbar button,
+.glosa-insert-image {
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+}
+.glosa-image-toolbar button:focus-visible,
+.glosa-image-canvas:focus-visible,
+.glosa-insert-image:focus-visible {
+  outline: 2px solid var(--hand);
+  outline-offset: 2px;
+}
+.glosa-image-canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background-color: var(--bg);
+  background-image: conic-gradient(
+    var(--surface-sunken) 25%,
+    transparent 0 50%,
+    var(--surface-sunken) 0 75%,
+    transparent 0
+  );
+  background-size: 20px 20px;
+}
+.glosa-image-canvas .glosa-image-transform {
+  width: 100%;
+  height: 100%;
+}
+.glosa-image-transform-content img {
+  max-width: none;
+  max-height: none;
+}
+.glosa-image-metadata {
+  padding: 0.5rem;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.glosa-image-picker {
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: min(30rem, 90vw);
+}
+.glosa-image-picker::backdrop {
+  background: var(--scrim, #0006);
+}
+.glosa-image-picker label {
+  display: block;
+  margin-block: 1rem;
+}
+.glosa-image-picker input,
+.glosa-image-picker select {
+  display: block;
+  width: 100%;
+  color: var(--ink);
+  background: var(--bg);
+}
+.glosa-image-picker button {
+  margin: 0.25rem;
+}
+
+.glosa-image-import-status {
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Desk browser tabs (#440) ----------
+   A web page beside the documents and chats, in the desktop app. The page is someone else's
+   design: glosa draws the row above it and the frame around it and never reaches inside. The row is
+   the artifact bar's idiom (a transparent row on the paper, the address field centred as the row's
+   one object, navigation left, actions right), so a browser tab reads as the same kind of sheet as
+   a document. A flex column, not a grid: a hidden notice must never shift the page into its row. */
+.glosa-browser {
+  container-type: inline-size;
+  container-name: browser;
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.glosa-browser-bar {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, 34rem) minmax(max-content, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  width: calc(100% - 2 * var(--space-4));
+  height: var(--artifact-bar-height);
+  margin: var(--space-2) auto;
+}
+
+.glosa-browser-nav {
+  justify-self: start;
+  display: flex;
+  gap: 2px;
+}
+
+.glosa-browser-actions {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.glosa-browser-tool {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-browser-tool:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-browser-tool:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.glosa-browser-tool svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The More trigger is the shared action menu's; its dots are filled like every other More. */
+.glosa-browser-more.glosa-agent-menu-trigger svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  stroke: none;
+}
+
+/* The address: the Go to trigger's quiet field at rest, the hand's ring while it is edited. The
+   host is printed in ink and the rest of the address muted; the input holds the whole address and
+   shows it only while it is being edited, so what is read and what is typed never disagree. */
+.glosa-browser-address {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-size: var(--text-sm);
+  cursor: text;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-browser-address:hover {
+  background: var(--bg);
+  border-color: var(--border-strong);
+}
+
+.glosa-browser-address:focus-within {
+  background: var(--bg);
+  border-color: var(--hand);
+  box-shadow: 0 0 0 3px var(--hand-wash);
+}
+
+.glosa-browser-address:has(.glosa-browser-field[data-error="true"]) {
+  background: var(--bg);
+  border-color: var(--danger);
+}
+
+.glosa-browser-where {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.glosa-browser-where-warn {
+  color: var(--warn);
+}
+
+.glosa-browser-where svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.glosa-browser-field {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+}
+
+.glosa-browser-display {
+  position: absolute;
+  inset: 0;
+  line-height: 28px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.glosa-browser-host {
+  color: var(--ink);
+}
+
+.glosa-browser-rest {
+  color: var(--muted);
+}
+
+.glosa-browser-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: transparent;
+  caret-color: transparent;
+}
+
+.glosa-browser-input:focus-visible {
+  outline: none;
+}
+
+.glosa-browser-input::placeholder {
+  color: var(--muted);
+}
+
+.glosa-browser-address:focus-within .glosa-browser-input,
+.glosa-browser-field[data-empty="true"] .glosa-browser-input,
+.glosa-browser-field[data-error="true"] .glosa-browser-input {
+  color: var(--ink);
+  caret-color: var(--hand);
+}
+
+.glosa-browser-address:focus-within .glosa-browser-display,
+.glosa-browser-field[data-error="true"] .glosa-browser-display {
+  visibility: hidden;
+}
+
+.glosa-browser-helper {
+  flex: none;
+  width: min(34rem, calc(100% - 2 * var(--space-4)));
+  margin: calc(-1 * var(--space-1)) auto var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--danger);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* One sentence under the row when the shell refused something the page asked for. */
+.glosa-browser-notice {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 34px;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+  border-top: 1px solid var(--rule);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.glosa-browser-notice-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.glosa-browser-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.glosa-browser-notice-text b {
+  font-weight: 600;
+}
+
+.glosa-browser-notice-end {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.glosa-browser-notice-close {
+  width: 26px;
+  height: 26px;
+}
+
+.glosa-browser-notice-close svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Loading: a 2px ink line under the row, the only motion in the tab. Still under reduced motion. */
+.glosa-browser-progress {
+  flex: none;
+  position: relative;
+  z-index: 1;
+  height: 2px;
+  margin-bottom: -2px;
+  overflow: hidden;
+}
+
+.glosa-browser-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  background: var(--ink);
+  animation: glosa-browser-loading 1.4s var(--ease-out) infinite;
+}
+
+@keyframes glosa-browser-loading {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(270%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glosa-browser-progress::after {
+    animation: none;
+    width: 100%;
+    background: var(--border-strong);
+  }
+}
+
+.glosa-browser-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* A guest is transparent where its page paints nothing, which let glosa's own paper, dark under the
+   lamp, show through a page that assumes the browser's white canvas. The page gets the canvas every
+   browser gives it; its own colours, dark ones included, paint over it. */
+.glosa-browser-view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  background: white;
+}
+
+.glosa-browser-view-covered {
+  visibility: hidden;
+}
+
+/* While a tab is being dragged, pages let the pointer through to the dock's drop targets. */
+.glosa-dock-dragging .glosa-browser-view {
+  pointer-events: none;
+}
+
+.glosa-browser-cover {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  display: grid;
+}
+
+.glosa-browser-intro,
+.glosa-browser-message {
+  align-self: center;
+  justify-self: start;
+  padding: var(--space-6) var(--space-8);
+  max-width: 44rem;
+}
+
+/* A blank tab's hint belongs to the field it explains, so it sits under the row, not mid-page. */
+.glosa-browser-intro {
+  align-self: start;
+  padding-top: var(--space-8);
+}
+
+.glosa-browser-intro p {
+  margin: 0;
+  max-width: 44ch;
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.glosa-browser-intro code,
+.glosa-browser-sheet-url {
+  font-family: var(--font-mono);
+}
+
+.glosa-browser-intro code {
+  font-size: 0.9em;
+  color: var(--ink);
+}
+
+.glosa-browser-message-title,
+.glosa-browser-sheet-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.glosa-browser-message-body {
+  margin: 0 0 var(--space-4);
+  max-width: 44ch;
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+/* A tab that came back without loading (brief B1): what it is, why nothing loaded, and Load. */
+.glosa-browser-sheet {
+  place-self: center;
+  width: min(30rem, calc(100% - 2 * var(--space-6)));
+  padding: var(--space-6) 0;
+}
+
+.glosa-browser-sheet-title {
+  margin-bottom: var(--space-1);
+}
+
+.glosa-browser-sheet-url {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.glosa-browser-sheet-why {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--ink);
+  text-wrap: pretty;
+}
+
+.glosa-browser-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.glosa-browser-primary,
+.glosa-browser-secondary,
+.glosa-browser-notice-action {
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.glosa-browser-primary {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.glosa-browser-primary:hover {
+  background: var(--primary-hover);
+}
+
+.glosa-browser-secondary,
+.glosa-browser-notice-action {
+  background: var(--bg);
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.glosa-browser-secondary:hover,
+.glosa-browser-notice-action:hover {
+  background: var(--surface);
+}
+
+.glosa-browser-notice-action {
+  height: 26px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+}
+
+/* The More menu's rows: an icon, the words, and the chord where there is one. */
+.glosa-agent-menu .glosa-browser-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.glosa-browser-menu-icon {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.glosa-browser-menu-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glosa-browser-menu-label {
+  flex: 1 1 auto;
+}
+
+.glosa-browser-menu-key {
+  font: 600 var(--text-2xs) / 16px var(--font-sans);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-micro);
+  padding: 0 4px;
+}
+
+.glosa-browser-menu-heading {
+  margin: var(--space-1) var(--space-2) 2px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* A narrow pane keeps back, reload, the address and More; forward and Open in your browser move
+   into More, where the address still has the room it needs. */
+@container browser (max-width: 460px) {
+  .glosa-browser-bar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: var(--space-2);
+  }
+
+  .glosa-browser-forward,
+  .glosa-browser-outside {
+    display: none;
+  }
+}
+
+/* The tools at the right end of every desk tab strip (brief E3b): a new chat and a new browser tab,
+   each opening in that group. The navigator's header-tool style, in the strip's own band. */
+.glosa-strip-tools-host {
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.glosa-strip-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 var(--space-1) 0 var(--space-2);
+}
+
+.glosa-strip-tool {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-tool);
+  color: var(--muted);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-strip-tool:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-strip-tool svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }

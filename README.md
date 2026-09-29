@@ -130,10 +130,19 @@ command. Without `--wait`, the request waits in the inbox for later.
 | Platform | Status |
 |---|---|
 | macOS 13 or newer, Apple Silicon and Intel | Supported. Every release is tested here. |
-| Linux | Not supported yet. Most of glosa is portable; the parts that are not (the agent runtimes glosa installs for its managed chats, and the macOS Keychain that optional Wispr Flow dictation uses) are being measured before a target is stated. See "Later" in [the roadmap](ROADMAP.md). |
+| Linux x86_64 with glibc | Experimental CLI and daemon. Requires Bun 1.4.2+ and Git 2.30+. A pacman package of the desktop app for Arch and Manjaro is built and tested in containers; releasing it, managed chats and dictation remain pending ([#430](https://github.com/davebream/glosa/issues/430)). |
 | Windows | Not supported and not planned for now. The local API socket, the file permission model and the Claude Code plugin launcher are POSIX only. |
 
-`glosa open`, `glosa doctor` and `glosa update` refuse other platforms with exit code 5 instead of failing halfway.
+`glosa open`, `glosa doctor`, `glosa update` and MCP startup refuse unsupported OS/architecture,
+libc or Bun versions with exit code 5 before daemon startup or network access. macOS keeps its
+Bun 1.2.7 minimum; Linux requires Bun 1.4.2. Windows, Linux ARM and musl are not supported.
+
+On Linux, install the source package with Bun and use `glosa open` as below. Browser launch uses
+`xdg-open`; install your distribution's `xdg-utils` package for desktop use. If launch fails or
+cannot be confirmed within five seconds, glosa keeps the workspace registered and prints its URL
+with a warning. `glosa open --url <path>` works without a graphical session or opener. Open the
+link within 60 seconds; run the command again for a fresh link. The Ubuntu Linux checks cover core
+CLI and process behavior; installed-app qualification on Manjaro remains pending.
 
 Install the alpha CLI globally:
 
@@ -246,6 +255,22 @@ The plugin step is the same, and the cask writes nothing into your agent's confi
 Install either the cask or the `glosa` formula, not both. Each links `glosa` into Homebrew's bin,
 so the second one fails to link. The cask already carries the command line.
 
+On Arch Linux or Manjaro (x86_64), the desktop app is a pacman package. It carries its own Bun and
+the command line, and pacman installs Git and the libraries it needs. Release downloads arrive with
+[#435](https://github.com/davebream/glosa/issues/435); until then, build it from a checkout as
+described in `packages/shell/README.md`, then:
+
+```sh
+sudo pacman -U ./glosa-<version>-x64.pacman   # install, or upgrade to a newer package
+sudo pacman -R glosa                          # remove; ~/.glosa and your workspaces stay
+```
+
+The package links `/usr/bin/glosa`, so the terminal, the plugin and the app see one install. If you
+already installed glosa with bun or npm, that install stays the one the plugin uses, and
+`glosa doctor` says which one is recorded. An upgrade or removal while glosa runs is fine: its
+background process notices, finishes what it is doing and restarts itself, and an open window says
+"glosa was updated. Reload to use the new version."
+
 ### Updating
 
 ```sh
@@ -255,7 +280,8 @@ glosa update --check   # report what would change, install nothing
 
 `glosa update` fetches the release over a plain HTTPS request that reads no npm configuration, checks
 the downloaded tarball against the registry's published sha512, and installs it through whichever
-package manager owns your glosa install. It runs only when you invoke it and sends no identifying
+package manager owns your glosa install; the desktop app on macOS and the pacman package on Linux
+are updated by Homebrew and pacman instead, and `glosa update` says the exact command. It runs only when you invoke it and sends no identifying
 data. The desktop app's Check for Updates…, in the glosa menu, makes the same kind of request only
 when you click it, asking GitHub which app releases exist; it tells you whether a newer one is out
 and installs nothing. The other optional external action is configured dictation, which starts only
@@ -320,7 +346,7 @@ honestly attributed across many files and agent sessions?
 
 ## Local by design
 
-- glosa listens only on your Mac. `glosa open` pairs your browser tab with the local API at `http://glosa.localhost:4646`, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)). Browsers and macOS answer `.localhost` names locally without a DNS lookup. Set `GLOSA_OPEN_HOST=127.0.0.1` for `http://127.0.0.1:4646` links instead; the daemon accepts both.
+- glosa listens only on your computer. `glosa open` pairs your browser tab with the local API at `http://glosa.localhost:4646`, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)). Browsers and supported systems answer `.localhost` names locally without a DNS lookup. Set `GLOSA_OPEN_HOST=127.0.0.1` for `http://127.0.0.1:4646` links instead; the daemon accepts both.
 - glosa has no telemetry, cloud sync, background checks, warm-ups, or unconfigured external calls.
   It looks for updates only when you run `glosa update` or click Check for Updates… in the app.
   The page's fonts ship inside glosa, so opening a document fetches nothing from outside your Mac.

@@ -1,3 +1,4 @@
+import { installImageRules } from "./document-images.js";
 // SPDX-License-Identifier: Apache-2.0
 // @ts-check
 // The browser's shared markdown tokenizer. ProseMirror is already loaded by the rich editor.
@@ -34,6 +35,7 @@ export function renderMarkdown(source) {
 
 const browserRenderer = new defaultMarkdownParser.tokenizer.constructor(MARKDOWN_PRESET, { ...MARKDOWN_OPTIONS });
 browserRenderer.use(installDataLineStamp);
+browserRenderer.use(installImageRules);
 browserRenderer.use(installNonManuscriptRules);
 
 /** @param {string} source */

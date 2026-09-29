@@ -313,6 +313,26 @@
     "test/acceptance/workbench-real-engine.test.ts": {
       "seconds": 22.0,
       "reason": "Measured 9.00038 s in CI before #409; #409 adds one real-engine test (a daemon, a browser, a document, Settings) that takes about 10 s of the file's 26 s locally, and #410 one more (three palettes, each reloaded and painted in light, dark and more contrast, then Settings) that takes about 12 s, 33.4 s for the file locally, so about 22 s in CI; replace with measured CI medians."
+    },
+    "packages/spa/test/composer-real-engine.test.ts": {
+      "seconds": 4.0,
+      "reason": "New composer layout witness: one isolated headless Chromium, native undo, IME, top-layer placement and narrow viewport. Replace with measured CI median."
+    },
+    "packages/daemon/test/install-guard.test.ts": {
+      "seconds": 0.3,
+      "reason": "Initial local Bun 1.4.2 estimate for the install lifetime guard's unit tests (temp dirs and lstat only, no subprocess); replace with measured CI medians."
+    },
+    "packages/daemon/test/install-lifetime.test.ts": {
+      "seconds": 9,
+      "reason": "Initial local Bun 1.4.2 estimate for four real daemons started from a staged copy of the sources (about 6 MB copied per test) plus their graceful retirement; replace with measured CI medians."
+    },
+    "packages/spa/test/update-notice.test.ts": {
+      "seconds": 0.1,
+      "reason": "Initial local Bun 1.4.2 estimate for the update notice's happy-dom tests (manual timers, fake shell, no network); replace with measured CI medians."
+    },
+    "packages/spa/test/browser-tab.test.ts": {
+      "seconds": 0.2,
+      "reason": "Initial local Bun 1.4.2 estimate for the browser tab address rules and pane states (pure corpus plus happy-dom with a stand-in webview, measured 0.13 s); replace with measured CI medians."
     }
   }
 }

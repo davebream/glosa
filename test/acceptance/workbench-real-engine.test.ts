@@ -757,6 +757,101 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   );
 
   test(
+    "under reduced motion nothing in an open document transitions a property that moves it, the notes tray and its chevron included",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "initial open");
+      // Colour, background and opacity fades are not motion and may stay. These move or resize
+      // something on the page, which a reduced-motion request asks to happen at once.
+      const sweep = () =>
+        tab.evaluate<string[]>(`(()=>{
+          const MOVES=/^(all|transform|translate|rotate|scale|inset|top|right|bottom|left|width|height|max-height|min-height|margin.*|grid-template-rows|grid-template-columns)$/;
+          const seconds=(time)=>time.endsWith('ms')?Number.parseFloat(time)/1000:Number.parseFloat(time);
+          const found=new Set();
+          for(const element of document.querySelectorAll('*')){
+            const style=getComputedStyle(element);
+            const properties=style.transitionProperty.split(',').map(p=>p.trim());
+            const durations=style.transitionDuration.split(',').map(d=>seconds(d.trim()));
+            properties.forEach((property,index)=>{
+              const duration=durations[index%durations.length];
+              if(duration>0&&MOVES.test(property)) found.add(String(element.className).split(' ')[0]+' '+property);
+            });
+          }
+          return [...found].sort();
+        })()`);
+      const prefer = async (value: "no-preference" | "reduce") => {
+        await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value }] });
+        await tab.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      };
+      // The positive control: without the request, the sweep sees the tray open and its chevron turn,
+      // so a clean sweep below means the rule removed them, not that the sweep cannot see them.
+      await prefer("no-preference");
+      const moving = await sweep();
+      expect(moving, "the tray and its chevron move when motion is allowed").toEqual(
+        expect.arrayContaining([
+          "glosa-annotations-tray grid-template-rows",
+          "glosa-tray-chevron rotate",
+          "glosa-tray-chevron translate",
+        ]),
+      );
+      await prefer("reduce");
+      expect(await sweep(), "nothing moves under reduced motion").toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a document's More menu is closed when its tab comes back, whether the tab was left by a pointer press or by the keyboard",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "initial open");
+      await openFromNavigator(tab, BETA);
+      await waitForState(tab, "beta opened", (state) => state.panes.length === 2);
+      const menuOpen = (path: string) =>
+        tab.evaluate<boolean>(`(()=>{
+          const pane=[...document.querySelectorAll('.glosa-pane')].find(p=>p.getAttribute('aria-label')===${JSON.stringify(path)});
+          return pane?.querySelector('.glosa-pane-tools')?.getAttribute('data-open')==='true';
+        })()`);
+      // Ctrl+Tab steps to the next tab and Ctrl+Shift+Tab to the previous one; neither wraps.
+      const ctrlTab = async (shift = false) => {
+        for (const type of ["keyDown", "keyUp"] as const)
+          await tab.send("Input.dispatchKeyEvent", {
+            type,
+            key: "Tab",
+            code: "Tab",
+            modifiers: shift ? 10 : 2,
+            windowsVirtualKeyCode: 9,
+            nativeVirtualKeyCode: 9,
+          });
+      };
+
+      // Left by a real pointer press on the other tab: dockview runs on pointer events, so the
+      // press never reaches the page as a click the menu could read as "outside".
+      await clickTab(tab, ALPHA);
+      await waitForState(tab, "alpha focused", (state) => paneFor(state, ALPHA)?.active === true);
+      await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
+      expect(await menuOpen(ALPHA), "the menu opened").toBe(true);
+      await clickTab(tab, BETA);
+      await waitForState(tab, "beta focused", (state) => paneFor(state, BETA)?.active === true);
+      await clickTab(tab, ALPHA);
+      await waitForState(tab, "alpha back", (state) => paneFor(state, ALPHA)?.active === true);
+      expect(await menuOpen(ALPHA), "closed after the tab was left by a pointer press").toBe(false);
+
+      // Left by the keyboard, from inside the open menu, which is where its focus is.
+      await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
+      expect(await menuOpen(ALPHA), "the menu opened again").toBe(true);
+      await ctrlTab();
+      await waitForState(tab, "beta by Ctrl+Tab", (state) => paneFor(state, BETA)?.active === true);
+      await ctrlTab(true);
+      await waitForState(tab, "alpha by Ctrl+Shift+Tab", (state) => paneFor(state, ALPHA)?.active === true);
+      expect(await menuOpen(ALPHA), "closed after the tab was left by Ctrl+Tab").toBe(false);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
     "§11: a class-F pane's iframe survives a tab switch and a tab move — same frame, no reload, no re-mint",
     async () => {
       const { browser, cdpPort } = await launchBrowser();

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { platformProblem, type PlatformDeps } from "./platform.ts";
 // @glosa/cli — `glosa update` (A6 §F26). The ONE documented exception to invariant 5's "zero
 // external runtime calls": explicitly invoked only, never a background or passive check, and it
 // sends no identifying data (static User-Agent, no version beacon, no cache file that could become
@@ -21,6 +22,7 @@ import {
 } from "./envelope.ts";
 import { CLI_VERSION } from "./version.ts";
 import { classifyInstall, type InstallClassification, type InstallKind, PKG } from "./install-kind.ts";
+import { readPackageType } from "./install-link.ts";
 
 // Install classification lives in install-kind.ts so the entrypoint can classify its own install
 // without loading this module; re-exported here for callers and tests that import it from update.ts.
@@ -368,12 +370,15 @@ export type DownloadResult =
     }
   | { ok: false; kind: "timeout" | "network" | "http" | "too-large" | "io"; message: string };
 
-export interface UpdateDeps {
+export interface UpdateDeps extends PlatformDeps {
   platform: () => NodeJS.Platform;
   /** From `import.meta.url` — already symlink-resolved by Bun. There is deliberately NO `realpath`
    *  dep: it would provably return its own argument. */
   packageRoot: () => string;
   pathExists: (p: string) => boolean;
+  /** The package-type marker beside the package root (#432), or null. Optional so a harness that
+   *  does not care never reads the disk; `realUpdateDeps` supplies `readPackageType`. */
+  readPackageType?: (packageRoot: string) => string | null;
   /** EACCES preflight. */
   isWritable: (p: string) => boolean;
   env: (name: string) => string | undefined;
@@ -748,6 +753,7 @@ export function realUpdateDeps(): UpdateDeps {
   return {
     platform: () => process.platform,
     packageRoot: () => join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."),
+    readPackageType,
     pathExists: (p) => {
       try {
         accessSync(p, constants.F_OK);
@@ -914,12 +920,13 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   data.daemon_pid = daemonLock?.pid ?? null;
 
   // ---- 1. platform (exit 5), before anything can touch the network -------------------------
-  if (deps.platform() !== "darwin") {
+  const problem = platformProblem(deps);
+  if (problem) {
     return fail(data, warnings, EXIT_CODES.PLATFORM_UNSUPPORTED, {
       code: "platform-unsupported",
       kind: "platform",
-      message: `${deps.platform()} is not supported: glosa v1 is macOS-only`,
-      hint: "See A6 §F30. Linux and Windows are out of scope for v1.",
+      message: problem,
+      hint: "See A6 §F30 for supported platforms and runtime requirements.",
     });
   }
 
@@ -961,7 +968,11 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
 
   // ---- 3. install classification (exit 2), still before the network -------------------------
   const root = deps.packageRoot();
-  const classification = classifyInstall(root, deps.pathExists(join(root, ".git")));
+  const classification = classifyInstall(
+    root,
+    deps.pathExists(join(root, ".git")),
+    deps.readPackageType?.(root) ?? null,
+  );
   data.install_kind = classification.kind;
   data.install_dir = classification.installDir;
   data.manual_command = classification.manualCommand;
@@ -1072,7 +1083,9 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   if (daemonLock) {
     warnings.push({
       code: "daemon-restart-required",
-      message: `A glosa daemon (pid ${daemonLock.pid}) is running the old build: run \`glosa open\` to restart it.`,
+      // R-L4 (#432): the daemon notices its install changed and restarts itself once idle; the next
+      // glosa command starts the new build.
+      message: `A glosa daemon (pid ${daemonLock.pid}) is running the old build. It restarts itself once idle, and the next glosa command starts the new one.`,
     });
   }
 

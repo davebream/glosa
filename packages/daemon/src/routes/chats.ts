@@ -192,6 +192,10 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
           if (!id && method === "POST") return json(service.create(workspace, await req.json()));
           if (id && !action && method === "GET") return json(service.snapshot(workspace, id, historyCursor(req)));
           if (id && !action && method === "POST") return json(service.change(workspace, id, await req.json()));
+          if (id && action === "commands")
+            return json(
+              method === "GET" ? service.commandCatalog(workspace, id) : await service.refreshCommands(workspace, id),
+            );
           if (id && action === "draft" && method === "POST")
             return json(service.saveDraft(workspace, id, await req.json()));
           if (id && action === "move-draft" && method === "POST")

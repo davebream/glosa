@@ -5,6 +5,7 @@ import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { validateReferences } from "../../src/chats/references.ts";
 import { managedEnvironment } from "../../src/agents/environment.ts";
 import { IntentJournal } from "../../src/chats/journal.ts";
 import { AgentStore, newProfile } from "../../src/chats/store.ts";
@@ -90,6 +91,17 @@ test("chat/profile replay preserves model resolution, logical identity, frozen t
   const requestId = randomUUID();
   const chat = store.create(input, requestId);
   expect(store.create(input, requestId).state.id).toBe(chatId);
+  const references = [{ kind: "command" as const, id: "review", text: "/review", start: 0, end: 7 }];
+  store.saveCommands("workspace-account", "revision-1", [
+    { id: "review", name: "review", description: "Review writing", kind: "skill" },
+  ]);
+  chat.append({
+    type: "draft",
+    textHash: chat.blob(Buffer.from("/review draft")),
+    attachments: [],
+    references,
+    revision: 1,
+  });
   const textHash = chat.blob(Buffer.from("first prompt"));
   const turnId = randomUUID();
   chat.append({
@@ -107,12 +119,14 @@ test("chat/profile replay preserves model resolution, logical identity, frozen t
     },
   });
   chat.append({ type: "content", content: { id: "answer", turnId, role: "assistant", kind: "text", text: "Hello" } });
-  expect(chat.state.draftRevision).toBe(0);
+  expect(chat.state.draftRevision).toBe(1);
   expect(() => chat.append({ type: "changed", profileId: randomUUID() })).toThrow(
     "active chat subscription cannot change",
   );
   store.close();
   const replay = new AgentStore(dir);
+  expect(replay.chat(chatId).state.draftReferences).toEqual(references);
+  expect(replay.savedCommands("workspace-account")?.commands[0]?.id).toBe("review");
   expect(replay.savedCapabilities(profile.id)?.capabilities).toEqual(refreshedCapabilities);
   expect(replay.chat(chatId).state.sessionId).toBe(sessionId);
   expect(replay.chat(chatId).text(replay.chat(chatId).state.turns[0]?.textHash)).toBe("first prompt");
@@ -196,4 +210,18 @@ test("workspace purge uses durable ownership without opening another workspace's
   const again = new AgentStore(dir);
   again.purge(workspaceId, "e");
   again.close();
+});
+
+test("reference validation rejects overlapping ranges, forged file labels and split Unicode characters", () => {
+  expect(() => validateReferences("@a", [{ kind: "file", id: "other", text: "@a", start: 0, end: 2 }])).toThrow(
+    "Select the file again",
+  );
+  const reference = { kind: "file" as const, id: "a", text: "@a", start: 0, end: 2 };
+  expect(() => validateReferences("@a", [reference, reference])).toThrow("selected reference changed");
+  expect(() => validateReferences("/😀", [{ kind: "command", id: "a", text: "/\ud83d", start: 0, end: 2 }])).toThrow(
+    "selected reference changed",
+  );
+  expect(() =>
+    validateReferences("ask /review", [{ kind: "command", id: "a", text: "/review", start: 4, end: 11 }]),
+  ).toThrow("first word");
 });

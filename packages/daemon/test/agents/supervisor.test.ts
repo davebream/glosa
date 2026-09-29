@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ManagedAgentError } from "../../src/agents/interface.ts";
 import { RuntimeSupervisor } from "../../src/agents/supervisor.ts";
+import { activateInstallGuard, captureInstallSnapshot, InstallGuard } from "../../src/lifecycle/install-guard.ts";
 
 test("an acknowledged guardian fence rejects subsequent native input and stop confirms ownership", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "glosa-supervisor-")));
@@ -33,6 +35,39 @@ test("an acknowledged guardian fence rejects subsequent native input and stop co
     expect(output).not.toContain("seen:second");
     expect(supervisor.activeCount).toBe(0);
   } finally {
+    await supervisor.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 10_000);
+
+test("a changed install starts no managed run: refused with install-changed, no guardian, no ownership (#432)", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "glosa-supervisor-install-")));
+  const tree = join(dir, "install");
+  mkdirSync(tree, { recursive: true });
+  writeFileSync(join(tree, "guardian.ts"), "// boot bytes\n");
+  const runtimeRoot = join(dir, "runtime");
+  mkdirSync(runtimeRoot, { recursive: true });
+  const guard = new InstallGuard({
+    snapshot: captureInstallSnapshot({ root: tree, files: [join(tree, "guardian.ts")], execPath: process.execPath }),
+    canRetire: () => false,
+    retire: () => {},
+    log: () => {},
+  });
+  activateInstallGuard(guard);
+  const supervisor = new RuntimeSupervisor(runtimeRoot, 1);
+  const options = { command: "/bin/sleep", args: ["30"], cwd: dir, env: { PATH: "/usr/bin:/bin" }, onData() {} };
+  try {
+    rmSync(join(tree, "guardian.ts"));
+    const refused = await supervisor.spawn(options).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(ManagedAgentError);
+    expect((refused as ManagedAgentError).code).toBe("install-changed");
+    expect((refused as ManagedAgentError).status).toBe(503);
+    expect(readdirSync(runtimeRoot)).toEqual([]);
+  } finally {
+    activateInstallGuard(null);
     await supervisor.close();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -188,3 +223,37 @@ test("revocation between chunks closes partial native input before a cancellatio
     rmSync(dir, { recursive: true, force: true });
   }
 }, 10_000);
+
+test("only confirmed exit or two valid different boot identities release persisted uncertainty", async () => {
+  const { bootIdentity, unresolvedOwnership } = await import("../../src/agents/ownership.ts");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-boot-ownership-")));
+  const nonce = crypto.randomUUID();
+  const dir = join(root, "runs", nonce);
+  const current = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  mkdirSync(dir, { recursive: true });
+  try {
+    expect(bootIdentity()).toMatch(/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/);
+    for (const saved of [undefined, "corrupt", "-".repeat(36), current, current.toUpperCase()]) {
+      writeFileSync(
+        join(dir, "prepared.json"),
+        JSON.stringify({ schema: 1, nonce, at: new Date().toISOString(), bootId: saved }),
+      );
+      expect(unresolvedOwnership(root, current).has(nonce), String(saved)).toBe(true);
+    }
+    writeFileSync(
+      join(dir, "prepared.json"),
+      JSON.stringify({ schema: 1, nonce, at: new Date().toISOString(), bootId: crypto.randomUUID() }),
+    );
+    expect(unresolvedOwnership(root, current).has(nonce)).toBe(false);
+    for (const unknown of ["", "invalid"]) expect(unresolvedOwnership(root, unknown).has(nonce)).toBe(true);
+    writeFileSync(join(dir, "prepared.json"), "corrupt");
+    expect(unresolvedOwnership(root, current).has(nonce)).toBe(true);
+    writeFileSync(
+      join(dir, "exit.json"),
+      JSON.stringify({ schema: 1, nonce, code: 0, signal: null, groupEmpty: true, at: new Date().toISOString() }),
+    );
+    expect(unresolvedOwnership(root, "").has(nonce)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

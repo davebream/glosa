@@ -465,11 +465,13 @@ The chat has one style of its own, Conversation, whatever style the document bes
 | Headings | `h1` and `h2` 1.25em, `h3` 1.125em, all 620; `h4`–`h6` the body's size at 650; never larger than the document's `h3` (at the smallest steps that cap sets `h1` to `h3` alike) |
 | Tables | The page's ruled table in Source Sans 3 at 14px, 13px Muted head at 600 |
 | Code | 0.85em inline on Surface; blocks 13px / 1.6 on the page's code bed |
+| Reasoning summaries | Closed disclosure labelled in Source Sans 3; expanded prose in muted Source Serif 4, two steps under the document with a 15px floor, unboxed |
 
 - **The column:** in em of the reply, so a text size step keeps its line: about 72 characters of prose at the default step and 76 at the largest, a little shorter than the page's. Every turn sits in it; the person's bubble stops at 28em, well short of it, so even a long message keeps to the column's right edge.
 - **Headings:** a reply's `h1` and `h2` are one size, since a reply is a turn in a conversation, not a document with a title; weight and the space above them carry the rest.
 - **Colour:** a reply is ink, its quotes and table heads Muted as on the page, its links the page's. Session Ink never colours a session's words.
 - **Tables:** the Cell Break Rule holds in the chat too: a reply's table breaks words only when one is too long for any column, and then fits the column.
+- **Reasoning summaries:** reasoning starts closed under “Reasoning summary”. Its expanded words are session-authored prose, so they stay unboxed and use muted Source Serif 4 at the note size: 15px by default, 15px at the floor and 20px at the largest setting. Tool output remains a 12px monospace Surface box.
 
 ### The Reading Scale
 One text size per device sets every reading surface together: the document, its margin notes, the composer and the chat. The reader chooses it from a ladder of 15, 16, 18, 20, 22 and 24 (default 18) in the document's More menu or in Settings > Appearance; it is stored in the browser like the appearance and written on `<html>` before first paint (`--reading-step`, `--chat-step`, `--note-step`), so a page never reflows after it has painted. Sizes are rem values, so a browser's larger default font carries the whole page too.
@@ -638,6 +640,17 @@ A comparison, in its own tab or in Version history, sits on the page in both app
 
 ### The Desktop Window
 The desktop app's window follows the appearance the page resolved, through one bridge call that carries only `{ source, scheme, background }` (A3 §4b): its background before the page paints is the page's paper (the last paper any window reported, else the paper of macOS's own scheme), so a window opened in Dark never flashes white; and its native UI (dialogs, menus, the title bar) follows glosa's Light or Dark rather than macOS's. The Dock icon is macOS's surface and follows macOS's appearance, whatever glosa shows.
+
+### Browser Tab (desk, desktop app; #440)
+A web page beside the documents and chats. The page is someone else's design: glosa draws the row above it and the frame around it, and never reaches inside.
+- **The row:** the artifact bar's idiom, so a browser tab reads as the same kind of sheet as a document: a transparent 40px row on the paper, inset like the artifact bar, in three columns. Back, Forward and Reload (Stop while loading) at left as 32px drawn tools in Muted, hover to a Sunken bed; the address field centred as the row's one object, at most 34rem; Open in your browser and More at right. In a pane of 460px or less, Forward and Open in your browser leave the row (More holds them).
+- **The address:** the Go to trigger's quiet field at rest (30px, Surface, Quiet Border, 6px radius; hover to paper and Strong Border), the hand's border and 3px halo while it is edited, Danger's border when what was typed will not do. At rest it prints where the page lives in 12px 600 ("Local" in Muted for this machine; "Not secure" in Warning with a drawn triangle for plain http anywhere else; nothing for https), then the host in ink and the rest of the address in Muted, with no scheme. Edited, it holds the whole address. An address that will not do is said in 12px 600 Danger under the row ("… isn't a web address. glosa doesn't search the web.").
+- **The frame:** the page runs to the pane's edges under a Quiet Border rule, on a white canvas (the one every browser gives a page), whatever glosa's appearance. What glosa says in the frame sits on paper over the page: a blank tab's hint under the row; a failed or refused load as a 19px 600 title, a Muted line and one secondary action; a tab that came back without loading as a centred sheet (the host in 19px 600, the full address in 12px mono Muted, why nothing loaded, and **Load page** as the one primary action beside Open in your browser).
+- **The notice:** one row under the address on paper over the Region Rule when the shell refused something the page asked for: an 8px Warning dot, what happened, Open in your browser as a small secondary button, and a drawn dismiss.
+- **Loading:** a 2px ink line running under the row, the tab's only motion; under reduced motion it stands still, full width, in Strong Border.
+- **The tab:** the drawn globe and the page's title (its host until the page names itself; "New browser tab" when blank).
+- **The strip tools:** every desk group's tab strip ends in New chat and New browser tab, 28px drawn tools in the navigator's header-tool style, Muted, hover to a Sunken bed and ink; each opens its tab in that group. Tabs overflow before the tools move. A companion strip has none.
+- **Menus over the page:** More is the shared native popover, so it, Go to and every dialog draw over the page. While a tab is dragged, pages let the pointer through to the drop targets.
 
 ### Motion
 One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms for position. Menus and the palette fade in with a short 4–6px slide; the composer rises 6px into place under its passage. The product's one authored moment is the send: a copy of the new entry glides from the draft to its place in the rail in 280ms while the real entry waits invisible beneath it. Under reduced motion transitions and animations are removed; a passage address revealed on hover keeps its short wait and appears without a fade.

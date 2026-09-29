@@ -21,6 +21,7 @@ import type { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts
 import type { DictationProviderRegistry } from "../dictation/interface.ts";
 import { createHash } from "node:crypto";
 import { sourceSha256 } from "../artifact-render.ts";
+import { liveSpaAssets, type SpaAssetSource } from "./spa-assets.ts";
 import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
 import { WorkspaceAdoptedError, type WorkspaceBus } from "../bus/bus.ts";
 import { type DeliveryVia, isTerminal } from "../bus/lifecycle.ts";
@@ -55,6 +56,7 @@ import { attentionRoutes } from "../routes/attention.ts";
 import { claimProblem, claimRoutes } from "../routes/claims.ts";
 import { composerRoutes } from "../routes/composer.ts";
 import { dictationRoutes } from "../routes/dictation.ts";
+import { imageRoutes } from "../routes/images.ts";
 import { chatRoutes } from "../routes/chats.ts";
 import type { ManagedChatService } from "../chats/service.ts";
 import { shadowRoutes } from "../routes/shadow.ts";
@@ -90,108 +92,6 @@ const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
  * directly (no real bound `Bun.serve`, e.g. http-routes.test.ts) don't have to fabricate one —
  * only the stream route (P3.2) actually needs it, for `server.timeout(req, 0)` (A1 §8.3). */
 export type { BunServer } from "../routes/types.ts";
-
-// The SPA's static source dir (`packages/spa/src/`), resolved relative to this file rather than
-// `process.cwd()` so it's correct regardless of where `glosa` is invoked from (P1.4).
-const SPA_SRC_DIR = fileURLToPath(new URL("../../../spa/src/", import.meta.url));
-
-// Fixed allowlist of files servable under `GET /app/<file>` (A3 §3: no path traversal — a
-// basename check alone isn't enough, so every servable file is named here explicitly; anything
-// not in this map 404s regardless of what else lives on disk under SPA_SRC_DIR).
-const SPA_ASSETS: Record<string, string> = {
-  // Appearance preload is classic/blocking to apply a persisted override before CSS paints;
-  // appearance.js owns the page-lifetime controller and workspace popover. Both read the one list
-  // of appearances, a classic script the preload needs before any module loads (#405).
-  "appearance-list.js": "text/javascript; charset=utf-8",
-  "appearance-preload.js": "text/javascript; charset=utf-8",
-  "appearance.js": "text/javascript; charset=utf-8",
-  // A document's style (Editorial, Spec, Mono): its per-document choice, the folder default it
-  // falls back to, and the menu rows that choose them (#407).
-  "style.js": "text/javascript; charset=utf-8",
-  // The text size step (#406): a classic, blocking preload that holds the ladder and applies the
-  // stored step before CSS paints, and the store and stepper that text-size.js builds on it.
-  "text-size-preload.js": "text/javascript; charset=utf-8",
-  "text-size.js": "text/javascript; charset=utf-8",
-  // Passage addresses ("§2.3"), derived from the rendered Markdown structure.
-  "address.js": "text/javascript; charset=utf-8",
-  "bootstrap.js": "text/javascript; charset=utf-8",
-  // The theme slots (#409): packages/spa/src/themes/*.json, checked against their contrast floors
-  // and rendered into one stylesheet, so a theme reaches the page under `style-src 'self'` rather
-  // than as an injected <style>. The theme files themselves are not served.
-  "themes.css": "text/css; charset=utf-8",
-  // The SPA's visual system (design brief docs/design/2026-07-21-workspace-review-surface-brief.md).
-  "app.css": "text/css; charset=utf-8",
-  // The product mark is a fixed, self-adapting SVG used by the shell and browser chrome.
-  "glosa-mark.svg": "image/svg+xml",
-  // The two faces of the visual system, vendored so the runtime never reaches a font service
-  // (A3: no external calls). Licences: src/fonts/OFL.txt. Served as bytes, never decoded as text.
-  "fonts/source-serif-4-roman.woff2": "font/woff2",
-  "fonts/source-serif-4-italic.woff2": "font/woff2",
-  "fonts/source-sans-3-roman.woff2": "font/woff2",
-  "fonts/source-sans-3-italic.woff2": "font/woff2",
-  // P3.3 additions — the class-R viewer + its ONE data-access module (R6), and idiomorph
-  // vendored under src/vendor/ (see that file's own header for why it's vendored rather than a
-  // bare-specifier import).
-  "data-access.js": "text/javascript; charset=utf-8",
-  "dictation.js": "text/javascript; charset=utf-8",
-  "viewer.js": "text/javascript; charset=utf-8",
-  "viewer-shell.js": "text/javascript; charset=utf-8",
-  "viewer-context-surfaces.js": "text/javascript; charset=utf-8",
-  "viewer-feedback.js": "text/javascript; charset=utf-8",
-  "viewer-navigator.js": "text/javascript; charset=utf-8",
-  "agent-feedback.js": "text/javascript; charset=utf-8",
-  "artifact-tree.js": "text/javascript; charset=utf-8",
-  "annotate.js": "text/javascript; charset=utf-8",
-  // The agent's half of the Review margin: source→rendered quote resolution and card shaping.
-  "agent-request.js": "text/javascript; charset=utf-8",
-  // The desktop shell's Dock badge and notifications (#391); loaded only inside the shell.
-  "attention-watch.js": "text/javascript; charset=utf-8",
-  "vendor/idiomorph.js": "text/javascript; charset=utf-8",
-  // P3.5 additions — the checkpoint/diff timeline pane and its ONE vendored rendering dependency.
-  "history.js": "text/javascript; charset=utf-8",
-  "vendor/diff2html.js": "text/javascript; charset=utf-8",
-  "vendor/diff2html.min.css": "text/css; charset=utf-8",
-  // P4.1 addition — the class-F viewer's iframe/handshake/message-validation logic.
-  "classf-viewer.js": "text/javascript; charset=utf-8",
-  // P4.2 addition — the read-only conversation mirror + out-of-band composer (R6/F32).
-  "conversation.js": "text/javascript; charset=utf-8",
-  "attention-tray.js": "text/javascript; charset=utf-8",
-  // Which bytes a run of top-level blocks owns (#271). Statically imported by artifact-pane.js —
-  // it is pure arithmetic with no imports of its own, so it stays outside the lazy editor bundle
-  // and has to be served with the reading modules rather than beside the editor below.
-  "run-spans.js": "text/javascript; charset=utf-8",
-  // Rich markdown editor (the byte-exact source view) + its vendored ProseMirror bundle.
-  "rich-editor.js": "text/javascript; charset=utf-8",
-  "markdown-parser.js": "text/javascript; charset=utf-8",
-  "markdown-non-manuscript.js": "text/javascript; charset=utf-8",
-  "vendor/prosemirror.js": "text/javascript; charset=utf-8",
-  // Shared confirm dialog (discard-edits and restore guards).
-  "dialog.js": "text/javascript; charset=utf-8",
-  // Multi-artifact workbench (design brief docs/design/2026-09-04-multi-artifact-workbench-brief.md):
-  // the dock engine and its stylesheet, one pane per artifact, and a comparison as a pane.
-  "dock.js": "text/javascript; charset=utf-8",
-  "agent-mcp-settings.js": "text/javascript; charset=utf-8",
-  "agent-ui.js": "text/javascript; charset=utf-8",
-  "agent-settings.js": "text/javascript; charset=utf-8",
-  "agent-login.js": "text/javascript; charset=utf-8",
-  "chat-markdown.js": "text/javascript; charset=utf-8",
-  "vendor/markdown-it.js": "text/javascript; charset=utf-8",
-  "chat-pane.js": "text/javascript; charset=utf-8",
-  "vendor/xterm.mjs": "text/javascript; charset=utf-8",
-  "vendor/xterm.css": "text/css; charset=utf-8",
-  "panel-identity.js": "text/javascript; charset=utf-8",
-  "artifact-pane.js": "text/javascript; charset=utf-8",
-  // #182 — the pure three-way merge behind Keep mine, imported by artifact-pane.js.
-  "merge-markdown.js": "text/javascript; charset=utf-8",
-  // The document outline as data (headings, depths, the current section), and the Go to palette
-  // (⌘K) that lists it beside the workspace's files. Pure DOM — no transport of their own.
-  "outline.js": "text/javascript; charset=utf-8",
-  "palette.js": "text/javascript; charset=utf-8",
-  "diff-pane.js": "text/javascript; charset=utf-8",
-  "vendor/dockview.js": "text/javascript; charset=utf-8",
-  // Served as a real stylesheet rather than injected inline, so it lands under `style-src 'self'`.
-  "vendor/dockview.css": "text/css; charset=utf-8",
-};
 
 export interface ApiContext {
   port: number;
@@ -267,6 +167,11 @@ export interface ApiContext {
   artifactWatcherRegistry?: ArtifactWatcherRegistry;
   /** Lifecycle signal used to send `event: bye` and close long-lived streams on SIGTERM. */
   shutdownSignal?: AbortSignal;
+  /** Where the SPA's bytes come from (#432, R-L1/R-L6): pinned at boot for an installed daemon, read
+   *  per request for a checkout. Hand-built test contexts omit it and get the unstamped live source. */
+  spaAssets?: SpaAssetSource;
+  /** True once this daemon's install has been seen to change (R-L3), published by the handshake. */
+  installChanged?: () => boolean;
   /** Throttled 401 diagnostics (A3 §4). Optional so every hand-built test context keeps compiling;
    * production wires `createRejectionRecorder` over the daemon log in lifecycle.ts. Scoped to the
    * SPA/API listener — class-F carries its capability in the URL path and must never reach a
@@ -340,6 +245,8 @@ export interface HandshakeBody {
   serves_socket: boolean;
   managed_control?: boolean;
   managed_busy?: boolean;
+  /** R-L4 (#432): this daemon's install changed under it; it restarts itself once idle. */
+  install_changed?: boolean;
 }
 
 function checkHost(req: Request, port: number, hostnames: readonly string[]): boolean {
@@ -409,7 +316,10 @@ function lifecycleSignal(
 
 function withHeaders(res: Response, extra: Record<string, string>): Response {
   const headers = new Headers(res.headers);
-  for (const [key, value] of Object.entries(extra)) headers.set(key, value);
+  for (const [key, value] of Object.entries(extra)) {
+    if (key === "Content-Security-Policy" && headers.has(key)) continue;
+    headers.set(key, value);
+  }
   return new Response(res.body, { status: res.status, headers });
 }
 
@@ -462,44 +372,59 @@ function handleHandshake(ctx: ApiContext): () => Response {
       serves_socket: ctx.servesSocket === true,
       managed_control: ctx.managedChats?.requiresReplacementFence === true,
       managed_busy: ctx.managedChats?.busy === true,
+      install_changed: ctx.installChanged?.() === true,
     };
     return Response.json(body);
   };
 }
 
+/** The context's SPA source, or today's unstamped per-request reads for a hand-built context. */
+function spaSource(ctx: ApiContext): SpaAssetSource {
+  return (ctx.spaAssets ??= liveSpaAssets({
+    buildHash: null,
+    providerAsset: (route) => ctx.dictationRegistry?.browserAsset(route),
+  }));
+}
+
 /** `GET /` — the SPA shell (P1.4). Navigation route class: the SPA hasn't read the pairing
  * fragment yet at this point, so this response carries no Bearer and must be non-sensitive
  * (A3 §4's navigation row) — it's static HTML, and the token arrives client-side via `#t=`. */
-function serveShell(): Response {
-  const html = readFileSync(join(SPA_SRC_DIR, "shell.html"), "utf8");
-  return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+function serveShell(ctx: ApiContext): Response {
+  return new Response(spaSource(ctx).shell(), { headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 
-/** `GET /app/<file>` — the SPA's static ES modules (P1.4). `name` is checked against the fixed
- * allowlist, not just sanitized, so a request can never read anything else under SPA_SRC_DIR. */
+/** A scoped asset URL: `/app/@<build hash>/<file>` (R-L6, #432). */
+const SCOPED_ASSET = /^\/app\/@([0-9a-f]{16})\/(.+)$/;
+
+/** `GET /app/<file>` and `GET /app/@<hash>/<file>` — the SPA's static ES modules (P1.4). The name
+ * is checked against the fixed allowlist (or a provider's declared browser asset), not just
+ * sanitized, so a request can never read anything else under the SPA's directory. A scoped request
+ * for another build's hash is refused with 410 rather than answered with this build's bytes: a page
+ * never runs modules from two builds (R-L6). The unscoped form keeps answering for pages loaded
+ * before scoping existed (review answer 3). */
 function serveSpaAsset(ctx: ApiContext, req: Request, pathname: string): Response {
-  const name = pathname.slice("/app/".length);
-  // Object.hasOwn, not a bare `SPA_ASSETS[name]` lookup: a prototype key like `__proto__` or
-  // `constructor` would otherwise resolve to a truthy inherited value, slip past the `undefined`
-  // guard, and fall through to readFileSync (→ 500 instead of a clean 404). Own-keys only.
-  const builtInContentType = Object.hasOwn(SPA_ASSETS, name) ? SPA_ASSETS[name] : undefined;
-  const providerAsset = builtInContentType === undefined ? ctx.dictationRegistry?.browserAsset(pathname) : undefined;
-  const contentType = builtInContentType ?? providerAsset?.contentType;
-  if (contentType === undefined) {
+  const source = spaSource(ctx);
+  let route = pathname;
+  const scoped = SCOPED_ASSET.exec(pathname);
+  if (scoped) {
+    if (source.buildHash === null || scoped[1] !== source.buildHash) {
+      return problem(410, "build-changed", "this page belongs to another glosa build; reload it", undefined, pathname);
+    }
+    route = `/app/${scoped[2]}`;
+  }
+  const asset = source.asset(route);
+  if (asset === null) {
     return problem(404, "not-found", "no such static asset", undefined, pathname);
   }
-  // Read bytes, not text: a font decoded as UTF-8 and re-encoded would reach the browser corrupt.
-  const body = readFileSync(providerAsset?.filePath ?? join(SPA_SRC_DIR, name));
-  const etag = `"${contentType.startsWith("font/") ? createHash("sha256").update(body).digest("hex") : sourceSha256(body)}"`;
   const headers = {
-    "Content-Type": contentType,
+    "Content-Type": asset.contentType,
     "Cache-Control": "private, no-cache",
-    ETag: etag,
+    ETag: asset.etag,
   };
-  if (req.headers.get("If-None-Match") === etag) {
+  if (req.headers.get("If-None-Match") === asset.etag) {
     return new Response(null, { status: 304, headers });
   }
-  return new Response(body, { headers });
+  return new Response(asset.body, { headers });
 }
 
 // -------------------------------------------------------------------------------------------
@@ -3000,13 +2925,15 @@ function sessionCandidates(records: ReturnType<SessionRegistry["forWorkspace"]>)
 
 function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMatch | null {
   const method = req.method;
+  const imageRoute = imageRoutes(ctx, method, pathname);
+  if (imageRoute) return imageRoute;
   const managedRoute = chatRoutes({ ...ctx, service: ctx.managedChats }, method, pathname);
   if (managedRoute) return managedRoute;
   if (method === "GET" && pathname === "/api/handshake") {
     return { routeClass: "tokenless-handshake", handle: handleHandshake(ctx) };
   }
   if (method === "GET" && pathname === "/") {
-    return { routeClass: "navigation", handle: () => serveShell() };
+    return { routeClass: "navigation", handle: () => serveShell(ctx) };
   }
   if (method === "GET" && pathname.startsWith("/app/")) {
     return { routeClass: "navigation", handle: () => serveSpaAsset(ctx, req, pathname) };

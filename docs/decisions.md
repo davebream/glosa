@@ -1658,3 +1658,109 @@ updates or stops the CLI or the daemon.
 passes that gate and fails `net::ERR_BLOCKED_BY_CLIENT`, while the main process's global `fetch` is
 Node's and does not. Widening the gate for one host would weaken the renderer's boundary to serve
 the main process, so the gate stays as it is.
+
+
+## Local images and a scoped React viewer (2026-09-28, #401)
+
+The owner approved these choices during planning for #401, including image insertion in block
+Edit and full-page Rich and Source. This records the stack exception before the viewer lands.
+
+- Images are assets, listed separately from tracked documents. They never enter shadow Git,
+  document checkpoints, document attribution or agent claims. Saving inserted Markdown is an
+  ordinary human document edit. Undo and discard remove the reference, not the imported file.
+- Imported PNG, JPEG, GIF, WebP, SVG and AVIF keep their original bytes, up to 20 MiB per file.
+  There is no automatic downscaling. Document imports use a fixed adjacent `images/` directory
+  and a readable filename with a collision-resistant suffix. A workspace image outside the
+  document's directory is copied alongside it rather than inserting a parent-traversal reference.
+- The tree accepts file drops into an existing folder (blank space means root). Loose-document
+  workspaces list explicit image references and adjacent imports without scanning siblings.
+- React is allowed only inside an image tab. React, React DOM and react-zoom-pan-pinch are
+  vendored as prebuilt ES modules and loaded when an image tab opens. There is no runtime build,
+  JSX, CDN or network provider. Document editing and the rest of the SPA remain vanilla modules.
+- Local paths are relative to the document. Absolute paths, every parent segment, exclusions
+  and all symlinks are refused. Remote images stay inert. SVG is never inline markup and its
+  response has sandbox CSP and nosniff. Existing external-network permissions do not widen.
+
+**Component choice.** react-zoom-pan-pinch 4.2.0 provides the gesture engine while glosa owns the
+controls, keyboard handling, labels and theme. It and React use MIT licenses. Its published engine
+is approximately 32 KiB gzip; the vendored production bundle including React DOM is about 269 KB
+uncompressed. Yet Another React Lightbox 3.32.2 was considered (roughly 23 KiB gzip for core,
+inline and zoom), but its lightbox/gallery model adds a second UI model to a docked single image.
+react-quick-pinch-zoom was rejected because its repository is archived. These measurements are
+selection estimates, not runtime performance guarantees.
+
+
+## The Linux desktop app is a pacman package that owns its files (2026-09-29, #432)
+
+The maintainer approved these choices while planning #432. A Phase 0 build on an x86_64 Arch
+container (electron-builder 26.15.3, fpm 1.17.0, pacman 7.1) confirmed each one.
+
+- **Format and channel.** An x86_64 pacman package built by the existing electron-builder stack,
+  installed explicitly with `pacman -U`. No distribution repository, AUR package or other format.
+- **The package owns every file it installs.** `/usr/bin/glosa` is a package-owned symlink to
+  `/opt/glosa/resources/bin/glosa` (the CLI launcher), so `pacman -Qo` names it and `pacman -R`
+  removes it. `chrome-sandbox` ships root-owned with mode 4755, as Google Chrome's own packages do,
+  so the SUID fallback survives upgrades and a kernel without unprivileged user namespaces never
+  pushes anyone toward `--no-sandbox`. The install and remove scriptlets are deliberate no-ops:
+  electron-builder's defaults would link `/usr/bin/glosa` to the Electron binary and decide the
+  sandbox mode as root, and nothing runs on `pacman -U` anyway.
+- **The install kind comes from a marker, not a path.** The build writes
+  `resources/package-type` containing `pacman` (electron-updater's convention), and the CLI
+  classifies itself as `pacman` from it. A path rule would bake in electron-builder's install
+  location and still not name the channel the update text needs. The marker can only make an
+  install refused, never managed, so a forged one grants nothing. macOS keeps its `.app` path rule.
+- **Package version.** electron-builder turns `0.1.0-alpha.36` into `0.1.0_alpha.36`, which pacman
+  ranks above `0.1.0`. The build passes `0.1.0alpha.36` instead; pacman then orders
+  `alpha < beta < rc < release` and `alpha.9 < alpha.10`. Artifact names keep the semver form.
+- **Bun is `bun-linux-x64-baseline`**, verified against Bun's `SHASUMS256.txt`. It runs on CPUs and
+  virtual machines without AVX2; the cost is irrelevant for this workload.
+- **A running daemon and a changing install** follow
+  `docs/design/2026-09-29-install-lifetime-and-restart.md` (R-L1..R-L10) on every channel.
+
+
+## Desk browser tabs load web pages, in their own partition, only when a person asks (2026-09-29, #440)
+
+The maintainer decided on 2026-09-28 that a desk surface in the desktop app gets browser tabs:
+web pages in the dock beside documents and chats, loading any address, internet included, with one
+saved cookie store for every tab and workspace. A companion surface gets none of it, and a plain
+browser hands the address to the person's own browser. This records how glosa keeps its privacy
+posture (invariant 5, `requirements.md` Privacy) while doing so; A3 §4b holds the rules and §5 the
+tests.
+
+**What may load, and when.** A browser tab fetches only on a person's action: typing an address and
+pressing Return, clicking a link in a chat, a document or a page, clicking Load on a restored tab,
+or reload, back and forward. A tab restored after a relaunch or a reload loads at once only when its
+address is on this machine (loopback); an internet address shows the address and a Load button and
+fetches nothing, because reopening glosa is not choosing to visit that site again. glosa makes no
+other loads for a tab: no search (typed words are refused, never sent to a search engine), no
+suggestions, no prefetch, no favicon or preview for a tab that has not loaded, and the partition's
+spellchecker is off outside macOS, where Chromium would download dictionaries. Agent-initiated
+navigation is not part of this entry; it arrives with the agent's browser tools and is recorded
+with them.
+
+**Where pages run.** Every tab is a `<webview>` guest in one persistent partition,
+`persist:glosa-browser`, never the SPA's default session: that session holds the pairing credential
+in the SPA origin's storage and keeps its loopback-only egress gate exactly as it was. The
+partition has its own request policy: http, https and their sockets load; files, custom schemes and
+the daemon's own ports on any loopback name are cancelled. Permission requests and downloads are
+refused, and the ones a person would miss are said in the tab with a way out to their own browser.
+The user agent drops Electron's and glosa's tokens, so no site learns that glosa, or which version,
+is asking. Certificate errors are not overridable in glosa; the tab offers the person's own browser.
+
+**Why `<webview>`.** `docs/research/2026-09-29-browser-tab-rendering.md`: inside the dock's
+always-render mode the page survives every move the dock makes, and every overlay glosa draws
+(menus, Go to, dialogs, drag targets) lands over the page with no extra work. A `WebContentsView`
+would need a still image under each overlay and bounds kept in step with the panel. Electron
+discourages `<webview>`; the mitigation is the main process: `webviewTag` is on for every window,
+`will-attach-webview` refuses anything but a desk window's SPA frame asking for a web address, and
+rewrites every guest's preferences (the browser partition, no preload, sandboxed, isolated, no Node,
+no nested guests), whatever the page asked for.
+
+**Why one shared store.** Signing in again per project is friction with little benefit for a
+single-person local tool (maintainer, 2026-09-28). The accepted cost: a page opened in one workspace
+can see cookies set while working in another.
+
+**Rejected.** An iframe (most sites refuse framing, and the SPA's CSP frames only class-F); a local
+proxy that strips framing headers (it weakens the site's own protection); loopback only; per-workspace
+or forgetful stores; restoring and loading every tab on launch; a browser on the companion face;
+driving cmux's browser (invariant 4).

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "bun:test";
 import type {
   AgentEvent,
@@ -230,6 +233,11 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
       });
       process.on("error", () => {});
       return {
+        supportedCommands: async () => [
+          { name: "review", description: "Review writing", argumentHint: "document" },
+          { name: "login", description: "Login", builtin: true },
+          { name: "compact", description: "Compact", builtin: true },
+        ],
         supportedModels: async () => [
           { value: "model", displayName: "Model", resolvedModel: "claude-sonnet-5", supportedEffortLevels: ["high"] },
         ],
@@ -321,6 +329,12 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
   } as SessionLaunchSpec;
   const connection = await adapter.connect(spec, launcher, (event) => events.push(event));
   try {
+    expect((await connection.commands!())[0]).toMatchObject({
+      name: "review",
+      kind: "skill",
+      argumentHint: "document",
+    });
+    expect((await connection.commands!()).map((entry) => entry.name)).toEqual(["review", "compact"]);
     expect(connection.capabilities.models[0]?.resolvedModel).toBe("claude-sonnet-5");
     expect(configured.options.systemPrompt).toEqual({
       type: "preset",
@@ -365,4 +379,96 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
   }
   for (let i = 0; i < 10; i++) await Promise.resolve();
   expect(stopped).toBeGreaterThanOrEqual(2);
+});
+
+test("Claude local command results are visible once without duplicating assistant output", () => {
+  const events: AgentEvent[] = [],
+    normalizer = new ClaudeEventNormalizer((event) => events.push(event));
+  normalizer.accept({ type: "result", subtype: "success", result: "Context usage" });
+  expect(events.filter((event) => event.type === "text")).toHaveLength(1);
+  normalizer.accept({ type: "assistant", message: { id: "message", content: [{ type: "text", text: "Reply" }] } });
+  normalizer.accept({ type: "result", subtype: "success", result: "Reply" });
+  expect(events.filter((event) => event.type === "text")).toHaveLength(2);
+});
+
+test("linked Claude loads enabled native plugins and tracks their authority without tracking skill descriptions", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-linked-claude-"))),
+    configRoot = join(root, "native"),
+    cwd = join(root, "workspace"),
+    plugin = join(root, "plugin");
+  mkdirSync(join(configRoot, "plugins"), { recursive: true });
+  mkdirSync(cwd);
+  mkdirSync(join(plugin, "hooks"), { recursive: true });
+  mkdirSync(join(plugin, "skills"));
+  writeFileSync(join(configRoot, "settings.json"), JSON.stringify({ enabledPlugins: { "writing@local": true } }));
+  writeFileSync(
+    join(configRoot, "plugins", "installed_plugins.json"),
+    JSON.stringify({ version: 2, plugins: { "writing@local": [{ scope: "user", installPath: plugin }] } }),
+  );
+  writeFileSync(join(plugin, "hooks", "hooks.json"), JSON.stringify({ hooks: {} }));
+  let configured: Parameters<ClaudeSdk["query"]>[0] | undefined;
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const adapter = new ClaudeManagedAdapter(async () => ({
+    query(options) {
+      configured = options;
+      return {
+        supportedModels: async () => [],
+        supportedCommands: async () => [],
+        accountInfo: async () => ({
+          email: "writer@example.test",
+          organization: "org",
+          apiProvider: "firstParty",
+          apiKeySource: "none",
+        }),
+        interrupt: async () => {},
+        close: finish,
+        async *[Symbol.asyncIterator]() {
+          await closed;
+          yield { type: "system", subtype: "closed" };
+        },
+      };
+    },
+  }));
+  adapter.probe = async () => ({
+    state: "authenticated",
+    identity: "org:writer@example.test",
+    label: "writer@example.test",
+    observedAt: new Date().toISOString(),
+  });
+  try {
+    const before = adapter.configurationRevision(configRoot, cwd);
+    writeFileSync(join(plugin, "skills", "SKILL.md"), "Changed description");
+    expect(adapter.configurationRevision(configRoot, cwd)).toBe(before);
+    writeFileSync(join(plugin, "hooks", "hooks.json"), JSON.stringify({ hooks: { SessionStart: [] } }));
+    expect(adapter.configurationRevision(configRoot, cwd)).not.toBe(before);
+    const spec = {
+      configRoot,
+      cwd,
+      env: adapter.profileEnvironment(configRoot),
+      profile: { configuration: { mode: "linked", path: configRoot }, auth: { identity: "org:writer@example.test" } },
+      settings: { model: "", effort: "", permissionMode: "default" },
+      manifest: { sdkModule: "/fixture-sdk", executable: "/fixture-cli" },
+    } as SessionLaunchSpec;
+    const connection = await adapter.connect(
+      spec,
+      {
+        spawn: async () => {
+          throw new Error("Unexpected process");
+        },
+      },
+      () => {},
+    );
+    expect(configured!.options.settingSources).toEqual(["user", "project", "local"]);
+    expect(configured!.options.strictMcpConfig).toBe(false);
+    expect(configured!.options.plugins).toEqual([{ type: "local", path: plugin }]);
+    await connection.close();
+    writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { glosa: { command: "conflict" } } }));
+    expect(() => adapter.configurationRevision(configRoot, cwd)).toThrow("reserved glosa");
+  } finally {
+    finish();
+    rmSync(root, { recursive: true, force: true });
+  }
 });

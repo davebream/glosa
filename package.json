@@ -32,7 +32,8 @@
     "packages/providers/*"
   ],
   "os": [
-    "darwin"
+    "darwin",
+    "linux"
   ],
   "cpu": [
     "arm64",
@@ -87,7 +88,6 @@
     "@types/bun": "^1.4.0",
     "@types/markdown-it": "^14.2.0",
     "@types/picomatch": "^4.0.3",
-    "fast-xml-parser": "5.11.1",
     "happy-dom": "^20.13.2",
     "lefthook": "^2.1.12",
     "license-checker-rseidelsohn": "5.0.1",
@@ -98,8 +98,10 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "chokidar": "^5",
     "diff2html": "^3.4.56",
+    "fast-xml-parser": "5.11.1",
     "gunshi": "0.37.3",
     "idiomorph": "^0.8.0",
+    "image-size": "2.0.4",
     "markdown-it": "^14.3.1",
     "picomatch": "^4.0.7",
     "zod": "^4.6.5"
@@ -107,11 +109,11 @@
   "overrides": {
     "@hono/node-server": "2.0.10",
     "brace-expansion": "5.0.9",
-    "fast-uri": "3.1.6",
+    "fast-uri": "3.1.7",
     "qs": "6.16.0",
     "hono": "4.13.5",
-    "ip-address": "10.3.1",
+    "ip-address": "10.5.1",
     "tar": "7.5.22",
-    "undici": "6.28.0"
+    "undici": "6.28.1"
   }
 }

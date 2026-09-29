@@ -422,6 +422,8 @@ interface ChatFixture {
   reply: string;
   person: string;
   draft: string;
+  reasoning?: string;
+  tool?: string;
   /** Decisions waiting on the person, in the shape the daemon's chat store keeps them. */
   decisions?: unknown[];
 }
@@ -454,7 +456,11 @@ const mountChat = (
     draft:fixture.draft,draftAttachments:[],archived:false,
     settings:{model:'model',effort:'high',permissionMode:'default'},
     turns:[{id:'first',text:fixture.person,status:'completed'}],
-    content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:fixture.reply}],
+    content:[
+      {id:'reply',turnId:'first',kind:'text',role:'assistant',text:fixture.reply},
+      ...(fixture.reasoning?[{id:'reasoning',turnId:'first',kind:'reasoning',role:'assistant',text:fixture.reasoning}]:[]),
+      ...(fixture.tool?[{id:'tool',turnId:'first',kind:'tool',role:'assistant',name:'Read',status:'completed',text:fixture.tool}]:[]),
+    ],
     decisions:(fixture.decisions??[]).map(d=>({...d,expiresAt:new Date(Date.now()+9*60000).toISOString()}))};
   const access={
     getAgentStatus:async()=>({available:true,profiles:[{id:'a',provider:'claude-code',label:'Personal',enabled:true}],capabilities:{a:{models:[{id:'model',name:'Model',efforts:['high']}]}}}),
@@ -1923,6 +1929,9 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     person:
       "Review my outline, and say where the argument is weakest. The second section feels thin, and I am not sure the example in it earns its place, so tell me whether to cut it or move it.",
     draft: "A draft that runs long enough to wrap across two lines of the composer before it is sent.",
+    reasoning:
+      "The outline promises a comparison before it establishes the two choices. I should separate that structural diagnosis from the concrete revision advice.",
+    tool: "Read packages/spa/src/chat-pane.js\nCompleted without changing the workspace.",
     // A question Claude Code's AskUserQuestion raises, as its provider maps it: the questions as the
     // detail, two questions with the longest labels and descriptions a reply like this one invites,
     // and "Submit answers", the longest button a provider sends.
@@ -2012,9 +2021,15 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       | "th"
       | "td"
       | "person"
-      | "draft",
+      | "draft"
+      | "reasoning"
+      | "tool",
       Type
     >;
+    secondary: {
+      reasoning: { padding: string; background: string; radius: string };
+      tool: { padding: string; background: string; radius: string };
+    };
     gap: number;
     link: { reply: string; document: string };
     /** Characters on each full line of the opening paragraph, the reply's column and that paragraph. */
@@ -2035,7 +2050,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     const q=(selector)=>reply.querySelector(selector);
     const paint=(css)=>{const s=document.createElement('span');s.style.color=css;reply.append(s);
       const c=getComputedStyle(s).color;s.remove();return c;};
-    const ink=paint('var(--ink)'),muted=paint('var(--muted)');
+    const ink=paint('var(--ink)'),muted=paint('var(--muted)'),surface=paint('var(--surface)');
     const box=(el)=>{const s=getComputedStyle(el),size=parseFloat(s.fontSize);
       return {family:s.fontFamily.split(',')[0].replace(/["']/g,'').trim(),size:r2(size),weight:Number(s.fontWeight),
         leading:r2(parseFloat(s.lineHeight)/size),italic:s.fontStyle==='italic',
@@ -2051,6 +2066,11 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       const at=Math.floor((r.top+r.height/2-top)/line);counts[at]=(counts[at]??0)+1;}
     const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r2(r.left),right:r2(r.right),width:r2(r.width)};};
     const human=document.querySelector('.glosa-chat-message[data-kind="human"]');
+    const reasoning=document.querySelector('.glosa-chat-message[data-kind="reasoning"] .glosa-chat-text');
+    const tool=document.querySelector('.glosa-chat-message[data-kind="detail"] .glosa-chat-text');
+    const treatment=(el)=>{const s=getComputedStyle(el);return {
+      padding:[s.paddingTop,s.paddingRight,s.paddingBottom,s.paddingLeft].join(' '),
+      background:s.backgroundColor===surface?'surface':s.backgroundColor,radius:s.borderRadius};};
     const tables=[...reply.querySelectorAll('table')];
     return {fonts:document.fonts.check('16px "Source Serif 4"')&&document.fonts.check('16px "Source Sans 3"'),
       step:Number(document.documentElement.dataset.textSize),
@@ -2058,7 +2078,9 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       type:{p:box(first),li:box(q('ul > li')),ol:box(q('ol > li')),h1:box(q('h1')),h2:box(q('h2')),h3:box(q('h3')),
         h4:box(q('h4')),h5:box(q('h5')),h6:box(q('h6')),strong:box(q('strong')),quote:box(q('blockquote > p')),
         code:box(q('p code')),pre:box(q('pre')),preCode:box(q('pre code')),table:box(q('table')),th:box(q('th')),
-        td:box(q('td')),person:box(human.querySelector('.glosa-chat-text')),draft:box(document.querySelector('.glosa-chat-draft'))},
+        td:box(q('td')),person:box(human.querySelector('.glosa-chat-text')),draft:box(document.querySelector('.glosa-chat-draft')),
+        reasoning:box(reasoning),tool:box(tool)},
+      secondary:{reasoning:treatment(reasoning),tool:treatment(tool)},
       gap:r2(parseFloat(getComputedStyle(first).marginBottom)),
       link:{reply:getComputedStyle(q('a')).color,document:documentLink},
       line:{chars:counts.slice(0,-1),column:rect(reply.closest('.glosa-chat-message')),paragraph:rect(first)},
@@ -2112,6 +2134,8 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       td: { ...serif(table, 400, 1.62), family: "Source Sans 3" },
       person: serif(size, 400, 1.62),
       draft: serif(size, 400, 1.62),
+      reasoning: { ...serif(NOTE_UNDER[step] ?? Number.NaN, 400, 1.62), colour: "muted" },
+      tool: { ...serif(12, 400, 1.6), family: "ui-monospace" },
     };
   }
   interface DecisionReading {
@@ -2162,15 +2186,29 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       await openDocument(page, STYLES_DOC, STYLES_NOTED, 1);
       await page.evaluate(mountChat("beside", CONVERSATION, 720));
       await page.evaluate(SETTLE);
+      expect(
+        await page.evaluate<Array<{ kind: string; tag: string; open: boolean }>>(
+          `([...document.querySelectorAll('.glosa-chat-message:is([data-kind="reasoning"],[data-kind="detail"])')]
+          .map(row=>({kind:row.dataset.kind,tag:row.tagName.toLowerCase(),open:row.open})))`,
+        ),
+        "reasoning and tool output begin as closed disclosures with distinct row kinds",
+      ).toEqual([
+        { kind: "reasoning", tag: "details", open: false },
+        { kind: "detail", tag: "details", open: false },
+      ]);
+      await page.evaluate(`document.querySelectorAll('.glosa-chat-message:is([data-kind="reasoning"],[data-kind="detail"])')
+        .forEach(row=>row.open=true)`);
       const DECISIONS = "document.querySelector('.glosa-chat-decisions')";
       const decisions: Record<number, DecisionReading> = {
         18: await page.evaluate<DecisionReading>(DECISION_READING),
       };
       const audits: Record<number, Audit> = { 18: await page.evaluate<Audit>(AUDIT) };
       await shot(page, "chat-light", CHAT, 0);
+      await shot(page, "chat-reasoning-light", CHAT, 0);
       await shot(page, "decision-card-light", DECISIONS, 120);
       await scheme(page, "dark");
       await shot(page, "chat-dark", CHAT, 0);
+      await shot(page, "chat-reasoning-dark", CHAT, 0);
       await shot(page, "decision-card-dark", DECISIONS, 120);
       await scheme(page, "light");
       const styles: Partial<Record<StyleName, ChatReading>> = {};
@@ -2208,6 +2246,16 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
         const where = `at step ${step}`;
         expect(seen.step, where).toBe(step);
         expect(seen.type, `${where}: the Conversation style`).toEqual(conversation(step));
+        expect(seen.secondary.reasoning, `${where}: reasoning is prose without a tool surface`).toEqual({
+          padding: "0px 0px 0px 0px",
+          background: "rgba(0, 0, 0, 0)",
+          radius: "0px",
+        });
+        expect(seen.secondary.tool, `${where}: tool output keeps its compact Surface box`).toEqual({
+          padding: "10px 12px 10px 12px",
+          background: "surface",
+          radius: "5px",
+        });
         // The invariants, whatever the values: writing in the serif and in ink, no heading over the
         // document's h3, and links as the document draws them.
         for (const key of WRITING) {

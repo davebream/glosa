@@ -78,7 +78,15 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * on `GET /w/:slug/stream` when the folder's default changes. No route takes a path (A3 §4).
  * Additive, N/N-1 safe: an N-1 page never calls the routes and ignores the frame, and an N-1 daemon
  * answers the routes 404, which the page reads as a folder with no default. */
-export const CONTRACT_VERSION = "1.21";
+// v1.22 (#401): authenticated local image listing/read/import and image invalidation frames.
+// Assets remain outside document checkpoints. Older clients ignore the additive routes/frame.
+// v1.23 (#432): the install lifetime policy (docs/design/2026-09-29-install-lifetime-and-restart.md).
+// The handshake gains `install_changed`; the page is stamped with its build hash and fetches assets
+// under `/app/@<hash>/`, answered 410 `build-changed` for another build's hash; a stream's `bye`
+// frame carries `{reason}` (`install-changed` or `shutdown`). Additive, N/N-1 safe: an N-1 page
+// keeps requesting unscoped `/app/<file>`, which still answers, and ignores the new data; an N-1
+// daemon omits the field and never stamps the page.
+export const CONTRACT_VERSION = "1.23";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

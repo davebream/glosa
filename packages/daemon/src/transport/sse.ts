@@ -11,6 +11,7 @@
 // 500 or a dropped connection, A2 §F16 "Failure Recovery") — same wire mechanics as every other
 // frame type, just a separate cursor space (A1 §8.1's "two independent cursor spaces").
 export type SseEventType =
+  | "image"
   | "snapshot"
   | "journal"
   | "artifact"
@@ -33,6 +34,12 @@ export interface SseFrame {
   id?: number | string;
   event: SseEventType;
   data?: unknown;
+}
+
+/** Why a stream is closing, for its `bye` frame's data (#432): `install-changed` when the daemon
+ *  retires because its install changed (R-L4), otherwise `shutdown`. */
+export function byeReason(signal: AbortSignal | undefined): string {
+  return typeof signal?.reason === "string" ? signal.reason : "shutdown";
 }
 
 /** Standard SSE framing: `id: <cursor>\nevent: <type>\ndata: <json>\n\n`. `data:` is always

@@ -7,12 +7,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   CONTRACT_VERSION,
+  claimBuildReload,
   focusHash,
+  pageBuildIdFrom,
   readRoute,
   rememberDaemonIdentity,
   resolvePresentationToken,
   scrubSecrets,
   selectScreen,
+  servedByAnotherBuild,
   waitForOwnDaemon,
   watchRouteChanges,
   writeFocus,
@@ -406,8 +409,8 @@ describe("scrubSecrets — preserves non-secret route state", () => {
 });
 
 describe("selectScreen", () => {
-  test("the bundled SPA advertises contract 1.21", () => {
-    expect(CONTRACT_VERSION).toBe("1.21");
+  test("the bundled SPA advertises contract 1.23", () => {
+    expect(CONTRACT_VERSION).toBe("1.23");
   });
 
   test("handshake null (fetch failed/threw) → down", () => {
@@ -628,5 +631,48 @@ describe("surface kind (decision 2026-09-25: the face belongs to the surface)", 
     const storage = { getItem: () => null, setItem() {}, removeItem() {} };
     scrubSecrets(location, storage, history, readRoute(location), "durable");
     expect(location.hash).toBe("#w=x&kind=desk");
+  });
+});
+
+describe("the page's own build (#432, R-L6)", () => {
+  const docWith = (content: string | null) => ({
+    querySelector: (selector: string) =>
+      selector === 'meta[name="glosa-build"]' && content !== null ? { getAttribute: () => content } : null,
+  });
+
+  test("reads the build hash the daemon stamped, and nothing else", () => {
+    expect(pageBuildIdFrom(docWith("0123456789abcdef") as never)).toBe("0123456789abcdef");
+    expect(pageBuildIdFrom(docWith(null) as never)).toBeNull();
+    expect(pageBuildIdFrom(docWith("not-a-hash") as never)).toBeNull();
+  });
+
+  test("a first handshake from another build means the daemon restarted after serving this page", () => {
+    expect(servedByAnotherBuild({ build_id: "1.0.1-fedcba9876543210" } as never, "0123456789abcdef")).toBe(true);
+    expect(servedByAnotherBuild({ build_id: "1.0.0-alpha.3-0123456789abcdef" } as never, "0123456789abcdef")).toBe(
+      false,
+    );
+    // An unstamped page (served by an older daemon) and an older daemon's handshake prove nothing.
+    expect(servedByAnotherBuild({ build_id: "1.0.1-fedcba9876543210" } as never, null)).toBe(false);
+    expect(servedByAnotherBuild({} as never, "0123456789abcdef")).toBe(false);
+    expect(servedByAnotherBuild(null, "0123456789abcdef")).toBe(false);
+  });
+
+  test("a page reloads once per build, and never when the store refuses", () => {
+    const store = fakeStorage();
+    expect(claimBuildReload(store, "0123456789abcdef")).toBe(true);
+    // Served stale again after the reload, or a second tab of the same build: the notice, not a loop.
+    expect(claimBuildReload(store, "0123456789abcdef")).toBe(false);
+    // The next upgrade gets its own reload.
+    expect(claimBuildReload(store, "fedcba9876543210")).toBe(true);
+    const refusing = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("storage disabled");
+      },
+      removeItem: () => {},
+    };
+    expect(claimBuildReload(refusing as never, "0123456789abcdef")).toBe(false);
+    const forgetful = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    expect(claimBuildReload(forgetful as never, "0123456789abcdef")).toBe(false);
   });
 });

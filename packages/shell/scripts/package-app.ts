@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Builds glosa.app: the Electron shell plus, under Contents/Resources, the Bun runtime at the
+// Builds glosa.app on macOS, or the x86_64 pacman package on Linux (#432): the Electron shell plus, under
+// Contents/Resources (macOS) or /opt/glosa/resources (Linux), the Bun runtime at the
 // repository's packageManager pin, the CLI/daemon/SPA/providers exactly as npm publishes them with
 // their production dependencies, and a launcher that runs the one on the other (#371).
 //
@@ -15,6 +16,9 @@
 // (requirements §4 exception). Node APIs only: the shell's tsconfig typechecks this file with Node
 // types. It still runs under `bun` (`bun run --cwd packages/shell package`).
 //
+// On Linux the package also carries resources/package-type (`pacman`, the install-kind marker), a
+// package-owned /usr/bin/glosa -> /opt/glosa/resources/bin/glosa, and chrome-sandbox root-owned 4755.
+//
 // Usage: bun scripts/package-app.ts [--arch arm64|x64|all] [--unsigned] [--smoke] [--stage-only]
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
@@ -23,6 +27,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  symlinkSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -37,6 +42,8 @@ import { fileURLToPath } from "node:url";
 import { packContentProblems } from "../../../scripts/package-manifest.ts";
 
 export type Arch = "arm64" | "x64";
+/** The two platforms the desktop app is built on: macOS (glosa.app) and Linux (the pacman package). */
+export type Platform = "darwin" | "linux";
 
 /** The launcher at Contents/Resources/bin/glosa. It follows symlinks by hand (Homebrew links it into
  *  its bin; `readlink -f` only reached macOS in 12.3 and the floor is 13, and this also handles a
@@ -66,9 +73,47 @@ exec "$resources/bin/bun" --no-install "$resources/glosa/packages/cli/src/main.t
  *  without it: for 1.4.2, `bun-darwin-x64-baseline.zip` carries a byte-identical binary. Every Intel
  *  Mac that runs macOS 13 has AVX2. Rosetta on macOS 14 cannot execute AVX, so the Intel app is
  *  smoked on a macOS 15 runner, whose Rosetta can (v0.1.0-alpha.33 crashed on macos-14, #371). */
-export function bunAsset(arch: Arch): { asset: string; folder: string } {
+export function bunAsset(arch: Arch, platform: Platform = "darwin"): { asset: string; folder: string } {
+  // Linux (#432): the baseline build, which runs on every x86_64 CPU, including virtual machines whose
+  // CPU model hides AVX2 (QEMU's default does); the non-baseline build dies there with SIGILL.
+  if (platform === "linux") {
+    if (arch !== "x64") throw new Error(`the Linux package is x86_64 only, not ${arch}`);
+    return { asset: "bun-linux-x64-baseline.zip", folder: "bun-linux-x64-baseline" };
+  }
   const folder = arch === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
   return { asset: `${folder}.zip`, folder };
+}
+
+/** Why `header` (the first bytes of the staged Bun) is not the platform's executable, or null. macOS
+ *  wants a 64-bit Mach-O; Linux a 64-bit little-endian x86-64 ELF (e_machine 0x3e at offset 18). */
+export function binaryFormatProblem(header: Buffer, platform: Platform): string | null {
+  const magic = header.subarray(0, 4).toString("hex");
+  if (platform === "darwin") return magic === "cffaedfe" ? null : `not a 64-bit Mach-O binary (magic ${magic})`;
+  if (magic !== "7f454c46") return `not an ELF binary (magic ${magic})`;
+  if (header[4] !== 2 || header[5] !== 1) return "not a 64-bit little-endian ELF binary";
+  const machine = header.length >= 20 ? header.readUInt16LE(18) : -1;
+  return machine === 0x3e ? null : `not an x86-64 ELF binary (machine ${machine})`;
+}
+
+/** Where downloaded Bun releases and license texts are cached: `GLOSA_BUN_CACHE`, else the
+ *  platform's cache directory (`~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux). */
+export function packageCacheDir(platform: Platform, env: NodeJS.ProcessEnv, home: string): string {
+  if (env.GLOSA_BUN_CACHE) return env.GLOSA_BUN_CACHE;
+  if (platform === "darwin") return join(home, "Library", "Caches", "glosa-package-app");
+  return join(env.XDG_CACHE_HOME || join(home, ".cache"), "glosa-package-app");
+}
+
+/** How a Bun zip is unpacked: `ditto` on macOS; `bsdtar`, which reads zip and is on every Arch and
+ *  Manjaro system (libarchive), on Linux. */
+export function unzipCommand(platform: Platform, zip: string, dir: string): [string, string[]] {
+  return platform === "darwin" ? ["ditto", ["-x", "-k", zip, dir]] : ["bsdtar", ["-xf", zip, "-C", dir]];
+}
+
+/** The pacman `pkgver` for a glosa version (#432). electron-builder turns `0.1.0-alpha.36` into
+ *  `0.1.0_alpha.36`, which pacman's vercmp ranks ABOVE `0.1.0` (a separator followed by letters sorts
+ *  after the release); with the prerelease joined on, `0.1.0alpha.36 < 0.1.0` and alpha < beta < rc. */
+export function pacmanVersion(version: string): string {
+  return version.replace(/^(\d+\.\d+\.\d+)-/, "$1");
 }
 
 /** The sha256 SHASUMS256.txt lists for exactly `asset`. A missing line is a failure, never a pass:
@@ -163,6 +208,9 @@ export interface RenderOptions {
  */
 export function renderBuilderConfig(build: Record<string, unknown>, options: RenderOptions): Record<string, unknown> {
   const config = JSON.parse(JSON.stringify(build)) as Record<string, unknown>;
+  // The Linux blocks (#432) are the pacman package's; a Mac build renders exactly what it did before.
+  delete config.linux;
+  delete config.pacman;
   const mac = { ...((config.mac as Record<string, unknown> | undefined) ?? {}) };
   const targets = (mac.target as Array<{ target: string }> | undefined) ?? [{ target: "dmg" }, { target: "zip" }];
   mac.target = targets.map((target) => ({ target: target.target, arch: [options.arch] }));
@@ -196,6 +244,69 @@ export function builderEnvironment(base: NodeJS.ProcessEnv, unsigned: boolean): 
     delete env.CSC_FOR_PULL_REQUEST;
   }
   return env;
+}
+
+/**
+ * The electron-builder config for the x86_64 pacman package (#432), from the same `build` block. It
+ * drops the Mac sections, supplies the metadata fpm requires (homepage, license), and passes fpm the
+ * mapped package version and the package-owned `/usr/bin/glosa` symlink, which electron-builder has
+ * no option for. The artifact keeps the semver name: `glosa-<version>-x64.pacman`.
+ */
+export function renderLinuxBuilderConfig(
+  build: Record<string, unknown>,
+  options: { version: string; shellRoot: string; output?: string },
+): Record<string, unknown> {
+  const config = JSON.parse(JSON.stringify(build)) as Record<string, unknown>;
+  delete config.mac;
+  delete config.dmg;
+  const directories = { ...((config.directories as Record<string, unknown> | undefined) ?? {}) };
+  directories.output = options.output ?? "dist/x64";
+  config.directories = directories;
+  config.extraMetadata = { homepage: "https://github.com/davebream/glosa", license: "Apache-2.0" };
+  const pacman = { ...((config.pacman as Record<string, unknown> | undefined) ?? {}) };
+  pacman.fpm = [
+    "--version",
+    pacmanVersion(options.version),
+    `${join(options.shellRoot, "build", "linux", "usr-bin-glosa")}=/usr/bin/glosa`,
+  ];
+  config.pacman = pacman;
+  return config;
+}
+
+/** The environment the pacman build runs in: without the CI build-number variables electron-builder
+ *  turns into the package release (`pkgrel` must stay 1), and without any GitHub token, which would
+ *  switch on its update metadata (`app-update.yml`) inside the package. */
+export function linuxBuilderEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const name of [
+    "BUILD_NUMBER",
+    "TRAVIS_BUILD_NUMBER",
+    "APPVEYOR_BUILD_NUMBER",
+    "CIRCLE_BUILD_NUM",
+    "BUILD_BUILDNUMBER",
+    "CI_PIPELINE_IID",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+  ])
+    delete env[name];
+  return env;
+}
+
+/** The version of the smoke's test-only upgrade package (#432): newer than `version` in both glosa's
+ *  and pacman's ordering. A prerelease gets one more numeric part (`0.1.0-alpha.36` then
+ *  `0.1.0-alpha.36.1`); a release gets the next patch as a `smoke` prerelease. Never published. */
+export function upgradeFixtureVersion(version: string): string {
+  if (version.includes("-")) return `${version}.1`;
+  const [major, minor, patch] = version.split(".").map(Number) as [number, number, number];
+  return `${major}.${minor}.${patch + 1}-smoke.1`;
+}
+
+/** Where electron-builder leaves the unpacked Linux app, and the package, for x86_64. */
+export function unpackedPathFor(shellRoot: string): string {
+  return join(shellRoot, "dist", "x64", "linux-unpacked");
+}
+export function pacmanArtifactPath(shellRoot: string, version: string): string {
+  return join(shellRoot, "dist", "x64", `glosa-${version}-x64.pacman`);
 }
 
 /** Where electron-builder leaves the .app for an architecture on an arm64 or x64 host. */
@@ -300,11 +411,8 @@ function stageSources(rootDependencies: string[]): void {
   if (report.problems.length > 0) fail(`the staged tree is not shippable:\n${report.problems.join("\n")}`);
 }
 
-async function fetchBun(arch: Arch, version: string): Promise<void> {
-  const cache = join(
-    process.env.GLOSA_BUN_CACHE ?? join(homedir(), "Library", "Caches", "glosa-package-app"),
-    `bun-v${version}`,
-  );
+async function fetchBun(arch: Arch, version: string, platform: Platform = "darwin"): Promise<void> {
+  const cache = join(packageCacheDir(platform, process.env, homedir()), `bun-v${version}`);
   mkdirSync(cache, { recursive: true });
   const base = `https://github.com/oven-sh/bun/releases/download/bun-v${version}`;
   const download = async (name: string): Promise<string> => {
@@ -316,7 +424,7 @@ async function fetchBun(arch: Arch, version: string): Promise<void> {
     }
     return path;
   };
-  const { asset, folder } = bunAsset(arch);
+  const { asset, folder } = bunAsset(arch, platform);
   const sums = await download("SHASUMS256.txt");
   const zip = await download(asset);
   // Verified on every build, cached or not: a sha256 over ~30 MB is cheap and a stale cache is not
@@ -330,15 +438,15 @@ async function fetchBun(arch: Arch, version: string): Promise<void> {
   const unpacked = join(buildDir, `bun-${arch}`);
   rmSync(unpacked, { recursive: true, force: true });
   mkdirSync(unpacked, { recursive: true });
-  run("ditto", ["-x", "-k", zip, unpacked]);
+  run(...unzipCommand(platform, zip, unpacked));
   mkdirSync(stageBin, { recursive: true });
   const target = join(stageBin, "bun");
   rmSync(target, { force: true });
   cpSync(join(unpacked, folder, "bun"), target);
   chmodSync(target, 0o755);
-  const magic = readFileSync(target).subarray(0, 4).toString("hex");
-  if (magic !== "cffaedfe") fail(`${target} is not a 64-bit Mach-O binary (magic ${magic})`);
-  if (arch === process.arch) {
+  const problem = binaryFormatProblem(readFileSync(target).subarray(0, 64), platform);
+  if (problem) fail(`${target} is ${problem}`);
+  if (arch === process.arch && platform === process.platform) {
     const printed = run(target, ["--version"]).trim();
     if (printed !== version) fail(`${target} --version printed ${printed}, expected ${version}`);
   }
@@ -347,16 +455,13 @@ async function fetchBun(arch: Arch, version: string): Promise<void> {
 /** The app redistributes Electron (with Chromium) and Bun as binaries, so their license texts ride
  *  along in Contents/Resources/licenses. glosa's own LICENSE, NOTICE and THIRD_PARTY_NOTICES.md are
  *  already in Resources/glosa, because npm ships them. */
-async function stageLicenses(bunVersion: string): Promise<void> {
+async function stageLicenses(bunVersion: string, platform: Platform = "darwin"): Promise<void> {
   const licenses = join(stageDir, "licenses");
   mkdirSync(licenses, { recursive: true });
   const electronDist = join(shellRoot, "node_modules", "electron", "dist");
   cpSync(join(electronDist, "LICENSE"), join(licenses, "electron-LICENSE.txt"));
   cpSync(join(electronDist, "LICENSES.chromium.html"), join(licenses, "chromium-LICENSES.html"));
-  const cache = join(
-    process.env.GLOSA_BUN_CACHE ?? join(homedir(), "Library", "Caches", "glosa-package-app"),
-    `bun-v${bunVersion}`,
-  );
+  const cache = join(packageCacheDir(platform, process.env, homedir()), `bun-v${bunVersion}`);
   mkdirSync(cache, { recursive: true });
   const cached = join(cache, "LICENSE.md");
   if (!existsSync(cached)) {
@@ -373,6 +478,54 @@ function writeLauncher(): void {
   const launcher = join(stageBin, "glosa");
   writeFileSync(launcher, LAUNCHER);
   chmodSync(launcher, 0o755);
+}
+
+/** The Linux package's extra staged files (#432): the install-kind marker the CLI classifies itself by
+ *  (after-pack copies it into resources/), and the symlink fpm ships as /usr/bin/glosa. The link
+ *  dangles here on purpose; it resolves once installed. */
+function writeLinuxExtras(): void {
+  writeFileSync(join(stageDir, "package-type"), "pacman\n");
+  const linux = join(buildDir, "linux");
+  mkdirSync(linux, { recursive: true });
+  symlinkSync("/opt/glosa/resources/bin/glosa", join(linux, "usr-bin-glosa"));
+}
+
+/** Runs electron-builder for the pacman target. `prepackaged` repackages an already unpacked app (the
+ *  smoke's upgrade fixture), and `version` overrides the package version for it. */
+function buildPacman(
+  build: Record<string, unknown>,
+  options: { version: string; prepackaged?: string; output?: string },
+): string {
+  const config = renderLinuxBuilderConfig(build, { version: options.version, shellRoot, output: options.output });
+  const configPath = join(buildDir, `electron-builder.linux${options.prepackaged ? ".prepackaged" : ""}.json`);
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const args = [
+    join(shellRoot, "node_modules", "electron-builder", "cli.js"),
+    "--linux",
+    "pacman",
+    "--x64",
+    "--config",
+    configPath,
+    "--publish",
+    "never",
+    ...(options.prepackaged ? ["--prepackaged", options.prepackaged] : []),
+  ];
+  const result = spawnSync("node", args, {
+    cwd: shellRoot,
+    env: linuxBuilderEnvironment(process.env),
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  process.stdout.write(String(result.stdout ?? ""));
+  process.stderr.write(String(result.stderr ?? ""));
+  if (result.status !== 0) fail(`electron-builder ${args.slice(1).join(" ")} exited ${result.status}`);
+  const name = `glosa-${String(readJson(join(shellRoot, "package.json")).version)}-x64.pacman`;
+  const artifact = options.output
+    ? join(shellRoot, options.output, name)
+    : pacmanArtifactPath(shellRoot, options.version);
+  if (!existsSync(artifact)) fail(`electron-builder did not produce ${artifact}`);
+  process.stdout.write(`package-app: ${artifact} (${(statSync(artifact).size / 1e6).toFixed(1)} MB)\n`);
+  return artifact;
 }
 
 function buildApp(arch: Arch, build: Record<string, unknown>, unsigned: boolean): void {
@@ -446,7 +599,10 @@ function ensureElectronBinary(): void {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  if (process.platform !== "darwin") fail("glosa.app is built on macOS only");
+  const platform = process.platform;
+  if (platform !== "darwin" && platform !== "linux") fail("the desktop app is built on macOS or Linux only");
+  if (platform === "linux" && options.arches.some((arch) => arch !== "x64"))
+    fail("the Linux package is x86_64 only: pass --arch x64");
 
   const rootManifest = readJson(join(repoRoot, "package.json"));
   const pin = String(rootManifest.packageManager ?? "").replace(/^bun@/, "");
@@ -471,14 +627,61 @@ async function main(): Promise<void> {
   const rootDependencies = Object.keys((rootManifest.dependencies as Record<string, string> | undefined) ?? {});
   stageSources(rootDependencies);
   writeLauncher();
-  await stageLicenses(pin);
+  await stageLicenses(pin, platform);
+  const build = shellManifest.build as Record<string, unknown>;
+
+  if (platform === "linux") {
+    writeLinuxExtras();
+    await fetchBun("x64", pin, "linux");
+    if (options.stageOnly) {
+      process.stdout.write(`package-app: staged ${stageDir}; stopping (--stage-only)\n`);
+      return;
+    }
+    const artifact = buildPacman(build, { version });
+    if (options.smoke) {
+      // The upgrade the smoke installs over a running daemon: the same unpacked app with a newer
+      // version in resources/glosa (so a new build id), repackaged without re-running afterPack.
+      const fixture = join(buildDir, "upgrade-unpacked");
+      run("cp", ["-a", unpackedPathFor(shellRoot), fixture]);
+      const manifest = join(fixture, "resources", "glosa", "package.json");
+      const bumped = { ...readJson(manifest), version: upgradeFixtureVersion(version) };
+      writeFileSync(manifest, `${JSON.stringify(bumped, null, 2)}\n`);
+      const upgrade = buildPacman(build, {
+        version: upgradeFixtureVersion(version),
+        prepackaged: fixture,
+        output: "dist/x64-upgrade",
+      });
+      // Both packages in one directory: the smoke mounts it, read-only, and nothing else.
+      const packages = join(buildDir, "smoke-packages");
+      mkdirSync(packages, { recursive: true });
+      cpSync(artifact, join(packages, "glosa.pacman"));
+      cpSync(upgrade, join(packages, "glosa-upgrade.pacman"));
+      const smoke = join(here, "linux-package-smoke.ts");
+      run(
+        process.execPath,
+        [
+          smoke,
+          "--package",
+          join(packages, "glosa.pacman"),
+          "--upgrade",
+          join(packages, "glosa-upgrade.pacman"),
+          "--stage",
+          stageDir,
+          "--unpacked",
+          unpackedPathFor(shellRoot),
+        ],
+        { stdio: "inherit", cwd: shellRoot },
+      );
+    }
+    return;
+  }
+
   if (options.stageOnly) {
     await fetchBun(options.arches[0] as Arch, pin);
     process.stdout.write(`package-app: staged ${stageDir}; stopping (--stage-only)\n`);
     return;
   }
 
-  const build = shellManifest.build as Record<string, unknown>;
   for (const arch of options.arches) {
     await fetchBun(arch, pin);
     buildApp(arch, build, options.unsigned);

@@ -699,6 +699,211 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(calls).toEqual([[]]);
   });
 
+  // ---------- desk browser tabs (#440) ----------
+
+  /** A document with one web link, as the daemon renders it. */
+  const linkedArtifact = (href: string) =>
+    fakeDataAccess({
+      getArtifact: async (_slug: string, path: string) => ({
+        source_path: path,
+        source_sha256: "sha-1",
+        class: "R",
+        content: `# Title\n\n[the docs](${href})\n`,
+        rendered_html: `<h1 data-line="0">Title</h1><p data-line="2"><a href="${href}">the docs</a></p>`,
+      }),
+    });
+  /** The desktop shell's bridge as the preload exposes it, recording what the page asks of it. */
+  const browserShell = () => {
+    const external: string[] = [];
+    let listener: ((event: any) => void) | null = null;
+    return {
+      external,
+      emit: (event: any) => listener?.(event),
+      bridge: {
+        browserTabs: 1,
+        openExternal: async (url: string) => void external.push(url),
+        onBrowserEvent: (fn: (event: any) => void) => {
+          listener = fn;
+          return () => {
+            listener = null;
+          };
+        },
+      },
+    };
+  };
+  /** Microtasks, one timer turn (a new tab focuses on the next frame), then microtasks again. */
+  const settleTabs = async () => {
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
+  };
+  const openNotes = async (root: any) => {
+    await settleTabs();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    await settleTabs();
+  };
+  const clickLink = (root: any) =>
+    (root.querySelector(".glosa-content a") as any).dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    );
+
+  test("a web link in a document opens a browser tab on a desk in the desktop app, and outside glosa everywhere else", async () => {
+    const href = "https://example.org/popover";
+    // A desk in the desktop app: a tab beside the document, and nothing leaves glosa.
+    const shell = browserShell();
+    const desk = dom.document.createElement("div");
+    dom.document.body.append(desk);
+    const unmountDesk = mountApp(desk, {
+      dataAccess: linkedArtifact(href),
+      surfaceKind: "desk",
+      shell: shell.bridge as any,
+    });
+    await openNotes(desk);
+    clickLink(desk);
+    await settleTabs();
+    expect((desk.querySelector(".glosa-browser webview") as any)?.getAttribute("src")).toBe(href);
+    expect(shell.external).toEqual([]);
+    unmountDesk();
+    desk.remove();
+
+    // A desk in a plain browser: a tab of the person's own browser; glosa's page stays.
+    const opened: unknown[][] = [];
+    (dom.window as any).open = (...args: unknown[]) => void opened.push(args);
+    const plain = dom.document.createElement("div");
+    dom.document.body.append(plain);
+    const unmountPlain = mountApp(plain, { dataAccess: linkedArtifact(href), surfaceKind: "desk" });
+    await openNotes(plain);
+    clickLink(plain);
+    await settleTabs();
+    expect(opened).toEqual([[href, "_blank", "noopener,noreferrer"]]);
+    expect(plain.querySelector(".glosa-browser")).toBeNull();
+    unmountPlain();
+    plain.remove();
+
+    // A companion surface, even in the desktop app: never a browser tab, the system's browser.
+    const companionShell = browserShell();
+    const companion = dom.document.createElement("div");
+    dom.document.body.append(companion);
+    mountApp(companion, { dataAccess: linkedArtifact(href), shell: companionShell.bridge as any });
+    await openNotes(companion);
+    clickLink(companion);
+    await settleTabs();
+    expect(companionShell.external).toEqual([href]);
+    expect(companion.querySelector(".glosa-browser")).toBeNull();
+  });
+
+  test("the strip's browser tool opens a blank tab in the desktop app and the address prompt in a plain browser; a companion has no tools", async () => {
+    const shell = browserShell();
+    const desk = dom.document.createElement("div");
+    dom.document.body.append(desk);
+    const unmountDesk = mountApp(desk, {
+      dataAccess: fakeDataAccess(),
+      surfaceKind: "desk",
+      shell: shell.bridge as any,
+    });
+    await openNotes(desk);
+    const tool = desk.querySelector(".glosa-strip-new-browser") as any;
+    expect(tool.getAttribute("aria-label")).toBe("New browser tab (⌘T)");
+    tool.click();
+    await settleTabs();
+    expect((desk.querySelector(".glosa-browser") as any)?.dataset.state).toBe("empty");
+    unmountDesk();
+    desk.remove();
+
+    const plain = dom.document.createElement("div");
+    dom.document.body.append(plain);
+    const unmountPlain = mountApp(plain, { dataAccess: fakeDataAccess(), surfaceKind: "desk" });
+    await openNotes(plain);
+    (plain.querySelector(".glosa-strip-new-browser") as any).click();
+    await settleTabs();
+    expect(plain.querySelector(".glosa-browser")).toBeNull();
+    expect((plain.querySelector(".glosa-palette") as any).getAttribute("aria-label")).toBe("Open a web page");
+    unmountPlain();
+    plain.remove();
+
+    const companion = dom.document.createElement("div");
+    dom.document.body.append(companion);
+    mountApp(companion, { dataAccess: fakeDataAccess(), shell: shell.bridge as any });
+    await openNotes(companion);
+    expect(companion.querySelector(".glosa-strip-tools")).toBeNull();
+  });
+
+  test("a page's new window becomes a tab beside it, and glosa's chords work from inside a page", async () => {
+    const shell = browserShell();
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, {
+      dataAccess: linkedArtifact("http://localhost:5173/"),
+      surfaceKind: "desk",
+      shell: shell.bridge as any,
+    });
+    await openNotes(root);
+    clickLink(root);
+    await settleTabs();
+    const view = root.querySelector(".glosa-browser webview") as any;
+    view.getWebContentsId = () => 11;
+    view.dispatchEvent(new dom.window.Event("dom-ready"));
+    shell.emit({ guestId: 11, type: "open-tab", url: "https://example.org/" });
+    await settleTabs();
+    const sources = () =>
+      Array.from(root.querySelectorAll(".glosa-browser webview")).map((v: any) => v.getAttribute("src"));
+    expect(sources()).toEqual(["http://localhost:5173/", "https://example.org/"]);
+    // ⌘T pressed with a page focused reaches the desk as ⌘T.
+    shell.emit({ guestId: 11, type: "key", key: "t", meta: true });
+    await settleTabs();
+    expect(root.querySelectorAll(".glosa-browser")).toHaveLength(3);
+    // A guest this window does not know is ignored.
+    shell.emit({ guestId: 99, type: "open-tab", url: "https://elsewhere.example/" });
+    await settleTabs();
+    expect(root.querySelectorAll(".glosa-browser")).toHaveLength(3);
+  });
+
+  test("a saved internet tab comes back without loading; a plain browser does not restore browser tabs", async () => {
+    const saved = new Map<string, string>();
+    const layoutStorage = {
+      getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => void saved.set(key, value),
+      removeItem: (key: string) => void saved.delete(key),
+    };
+    const first = dom.document.createElement("div");
+    dom.document.body.append(first);
+    const unmountFirst = mountApp(first, {
+      dataAccess: linkedArtifact("https://example.org/popover"),
+      surfaceKind: "desk",
+      shell: browserShell().bridge as any,
+      layoutStorage,
+    });
+    await openNotes(first);
+    clickLink(first);
+    await settleTabs();
+    expect(first.querySelector(".glosa-browser webview")).not.toBeNull();
+    unmountFirst();
+    first.remove();
+
+    const again = dom.document.createElement("div");
+    dom.document.body.append(again);
+    const unmountAgain = mountApp(again, {
+      dataAccess: linkedArtifact("https://example.org/popover"),
+      surfaceKind: "desk",
+      shell: browserShell().bridge as any,
+      layoutStorage,
+    });
+    await settleTabs();
+    await settleTabs();
+    const restored = again.querySelector(".glosa-browser") as any;
+    expect(restored?.dataset.state).toBe("unloaded");
+    expect(again.querySelector(".glosa-browser webview")).toBeNull();
+    unmountAgain();
+    again.remove();
+
+    const plain = dom.document.createElement("div");
+    dom.document.body.append(plain);
+    mountApp(plain, { dataAccess: linkedArtifact("https://example.org/popover"), surfaceKind: "desk", layoutStorage });
+    await settleTabs();
+    await settleTabs();
+    expect(plain.querySelector(".glosa-browser")).toBeNull();
+  });
+
   test("the Dock badge is reported only in the desktop shell; a browser tab builds no watcher (#391)", async () => {
     // A tab: no bridge, so nothing reads attention across workspaces or talks to a shell.
     const browserRoot = dom.document.createElement("div");

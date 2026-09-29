@@ -35,7 +35,7 @@ normative product contract.
   integration describes artifacts through the public CLI or MCP contract; glosa owns no integration
   package or workflow logic.
 - **Multi-agent**: Claude Code deep + Codex built to the same provider interface; provider interface is a first-class deliverable.
-- **History = full** (compare + restore). **Platform = macOS-only, pinned versions.**
+- **History = full** (compare + restore). **Platform = macOS plus experimental Linux x86_64/glibc CLI and daemon, pinned versions.**
 - **Dictation is an optional input method.** It is hidden until a user configures a provider and
   accepts versioned disclosure; it inserts drafts into prose fields and never submits them.
 - Durability, auth, daemon lifecycle, anchoring, security, CLI all hardened per appendices A1–A6.
@@ -53,7 +53,7 @@ private input and signs the sanitized report; an agent never signs on the mainta
 **Non-goals (v1)**: a packaged desktop app (v1 is daemon + browser; the unpackaged shell skeleton
 in `packages/shell` is a development surface, not a release);
 mobile/remote access; cloud sync; a second-agent provider *beyond* Claude Code + Codex; a public
-plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a non-Claude *idle* agent
+plugin/SDK surface; telemetry; Windows, Linux ARM/musl, and released Linux app/native-provider/dictation support (tracked by #433–#435; the Linux package itself is #432); instant-wake of a non-Claude *idle* agent
 (honest limit — see R4).
 
 ## 2. Architecture (fixed)
@@ -70,7 +70,8 @@ plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a no
              └──────────────────────────────────────────────────────────────────────────────┘
 ```
 Fixed stack: **Bun + TypeScript**; one process serves SPA + API; **no heavy frontend framework**
-(server-rendered HTML + small vanilla ES modules); **markdown-it** (+ `data-line` stamping),
+(server-rendered HTML + small vanilla ES modules, with the owner-approved React exception only
+inside image tabs, decisions.md 2026-09-28); **markdown-it** (+ `data-line` stamping),
 **idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), Bun's native
 recursive **`fs.watch`** (artifact watch; **chokidar v5** only for transcript tailing), system **git** (shadow repo), a vendored **transcript-event normalizer** (do NOT
 parse raw transcript JSONL directly — A2). Monorepo: `packages/{daemon, spa, providers/claude-code,
@@ -274,8 +275,12 @@ generic.**
 
 **Managed-chat amendment (2026-09-23).** Companion sessions remain externally owned. An additional,
 explicitly selected managed topology may launch the unmodified Claude/Codex runtime through a
-provider adapter and an owned Bun guardian. It uses private account profiles, native subscription
-login, foreground versioned workspace/MCP consent and durable chat intent. Opening history never
+provider adapter and an owned Bun guardian. It uses private account profiles or explicitly linked
+native configuration directories, native subscription login, foreground versioned workspace/MCP
+consent and durable chat intent. Linked profiles use the native agent’s settings, skills, plugins,
+hooks and MCP servers after foreground approval; startup hooks can run before a prompt is sent.
+Unlinking never invokes native logout or deletes native configuration. Configuration authority changes
+invalidate workspace consent. Existing profiles remain private and isolated. Opening history never
 starts a runtime. No account fallback, API fallback, credential import or external-session takeover.
 Public managed execution stays unavailable until the joint Claude/Codex qualification and offering
 gates in the [implementation contract](design/2026-09-23-agent-chat-implementation.md) pass.
@@ -350,7 +355,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.21: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.23: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -358,8 +363,10 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   deletion (`glosa forget`, issue #156), starred workspaces (star, unstar, reopen by star id),
   provider-neutral dictation status/session grants, daemon-wide attention counts with an
   `attention_changed` stream frame, issue #389, the passage address on annotation
-  presentations, issue #411, and a folder's default style with a `folder_style` stream frame,
-  issue #407) — schemas, status codes, 1 MiB body cap,
+  presentations, issue #411, a folder's default style with a `folder_style` stream frame,
+  issue #407, and install-change handling: the handshake's `install_changed`, build-scoped
+  `/app/@<hash>/` assets that answer 410 `build-changed` for another build, and a reason on a
+  stream's `bye` frame, issue #432) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
 
@@ -556,14 +563,26 @@ registration epochs prevent filename collisions and restoration into a replaceme
   mutate or revoke that revision-bound verdict.
 
 ## 4. Non-functional  (detail: A6 §F30)
-- **Platform: macOS-only v1** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
-  Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥17.2. Non-Darwin →
-  exit 5.
+- **Platform: macOS** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
+  Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥17.2.
+  **Experimental Linux x86_64/glibc CLI and daemon** requires Bun 1.4.2 and Git 2.30; Chromium≥111
+  is the browser floor. Unsupported OS/architecture, libc or Bun versions exit 5 before daemon
+  discovery or network access in open, doctor, update and MCP startup. Linux uses `xdg-open` with
+  a five-second confirmation deadline; failure preserves the workspace and URL with a warning.
+  URL-only and MCP presentation never launch a browser. The desktop app builds as an x86_64 pacman
+  package verified in Arch Linux containers (#432); native managed-chat qualification (#433),
+  dictation (#434) and installed Manjaro desktop qualification and publication (#435) remain
+  pending, and no installed Manjaro release is claimed.
 - **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
-  unconfigured external runtime calls. The two update actions are explicit exceptions: `glosa update`
+  unconfigured external runtime calls. The two update actions and desk browser tabs are explicit exceptions: `glosa update`
   (A6 §F33) and the desktop app's Check for Updates… (A3 §4b) reach out only when the person runs or
   clicks them, send no glosa version or machine data, and keep no cache that could become a
-  heartbeat; the app's check installs nothing. After versioned consent, a configured provider may
+  heartbeat; the app's check installs nothing. In the desktop app's desk browser tabs
+  (#440), a web page loads only when the person asks for it (an address typed, a link clicked, Load
+  on a restored tab, reload, back or forward), in a partition of its own, never the SPA's session,
+  whose loopback-only gate is unchanged; a tab restored with an internet address waits for a click,
+  and glosa makes no other load for a tab: no search, suggestions, prefetch or favicon (A3 §4b,
+  `docs/decisions.md` 2026-09-29). After versioned consent, a configured provider may
   receive only its disclosed data following a foreground user action. Class-F network egress remains
   blocked by CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
 - **Robustness**: daemon crash loses nothing (journal-as-truth + fsync-before-ACK + replay; SSE
@@ -574,7 +593,10 @@ registration epochs prevent filename collisions and restoration into a replaceme
   the desktop shell in `packages/shell` is packaged (asar, `.app`, signing, notarization) when it
   ships; that is a build. It still needs no transpile, because Electron's Node strips types from the
   unbundled main process. It packages itself plus a copy of the CLI, daemon, SPA and a Bun
-  runtime under `Contents/Resources`, all unbundled and run with `bun run` direct (#371). The daemon
+  runtime under `Contents/Resources`, all unbundled and run with `bun run` direct (#371). The same
+  exception covers the Linux pacman package (#432): the same unbundled tree under
+  `/opt/glosa/resources`, packaged by the same electron-builder stack, with no transpiler and no
+  native addon. The daemon
   it shows is still whatever the recorded executable (`GLOSA_HOME/bin/glosa`) is; the app's own copy
   is used, and records itself, only when nothing is recorded. The app is therefore the one channel
   with no host prerequisite. The shell is not a root workspace member so Electron is

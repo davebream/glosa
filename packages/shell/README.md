@@ -72,3 +72,43 @@ bun run --cwd packages/shell smoke -- --app dist/arm64/mac-arm64/glosa.app
   notarized build needs a Developer ID (`CSC_LINK`, `CSC_KEY_PASSWORD`) and `APPLE_ID`,
   `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. Bun is re-signed under that identity with
   `assets/entitlements.mac.plist`, which keeps its JIT.
+
+### Linux: the pacman package (#432, experimental)
+
+On an x86_64 Linux host the same script builds `dist/x64/glosa-<version>-x64.pacman` from the same
+staged tree. It installs to `/opt/glosa`:
+
+```
+/opt/glosa/
+├── glosa               Electron, named glosa so the desktop file is glosa.desktop
+├── chrome-sandbox      root-owned, mode 4755 (the SUID fallback when user namespaces are off)
+└── resources/
+    ├── app.asar
+    ├── bin/bun         Bun's baseline build (every x86_64 CPU), checked against SHASUMS256.txt
+    ├── bin/glosa       the same launcher
+    ├── glosa/          exactly what npm publishes, plus production node_modules
+    ├── licenses/
+    └── package-type    "pacman": the marker the CLI classifies its install kind from
+/usr/bin/glosa          a package-owned symlink to resources/bin/glosa
+/usr/share/applications/glosa.desktop   Exec=/opt/glosa/glosa %U, handles glosa://
+```
+
+```sh
+sudo apt-get install -y libarchive-tools zstd                   # Ubuntu; Arch and Manjaro already have both
+bun run --cwd packages/shell package -- --arch x64 --smoke      # what CI runs; needs Docker for the smoke
+sudo pacman -U ./dist/x64/glosa-<version>-x64.pacman            # install it on Arch or Manjaro
+```
+
+- The package owns every file it installs, and its install and remove scripts do nothing
+  (`assets/linux/`): nothing to drift across upgrades, and `pacman -R` removes exactly what it
+  installed. Your `~/.glosa` and every workspace's `.glosa` stay.
+- The version is mapped for pacman (`0.1.0-alpha.36` becomes `0.1.0alpha.36`), so a prerelease sorts
+  before its release. Git and the Electron libraries are declared dependencies.
+- `scripts/linux-package-smoke.ts` checks the built package on the host, then installs it in fresh,
+  digest-pinned Arch Linux containers that get nothing but the package files. It runs the CLI and
+  MCP on the bundled Bun, the recorded-executable rules, doctor, the update refusal, a missing
+  dependency failing without the network, and a running daemon across an upgrade, a removal and a
+  reinstall (`docs/design/2026-09-29-install-lifetime-and-restart.md`). A second container runs the
+  desktop app on a virtual display: opening a folder, the Chromium sandbox, a `glosa://` link to the
+  running app, and reopening onto the same daemon. Container evidence does not qualify a Manjaro
+  desktop; that is #435's.
