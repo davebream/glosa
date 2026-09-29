@@ -177,7 +177,10 @@ describe("repository quality gates", () => {
   // test and the runner fails the job: the v0.1.0-alpha.37 release run did exactly that, because
   // ci.yml gained this step (#439) and release.yml did not.
   test("CI and release both install Electron's binary before the real-Electron suite", () => {
-    for (const [name, workflow] of [["ci.yml", workflows[0]!], ["release.yml", workflows[1]!]] as const) {
+    for (const [name, workflow] of [
+      ["ci.yml", workflows[0]!],
+      ["release.yml", workflows[1]!],
+    ] as const) {
       const shell = job(workflow, "shell");
       const install = shell.indexOf("node packages/shell/node_modules/electron/install.js");
       const suite = shell.indexOf("- name: Run the shell's renderer security suite in real Electron");
