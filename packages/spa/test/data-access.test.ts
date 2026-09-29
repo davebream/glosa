@@ -18,6 +18,37 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe("createDataAccess — request shape", () => {
+  test("file actions encode workspace identity and carry paths and takeover ids in JSON", async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const da = createDataAccess({
+      fetchFn: async (path: string, init: RequestInit) => {
+        calls.push([path, init]);
+        return jsonResponse(200, {});
+      },
+      storage: fakeStorage({ glosa_token: "tok" }),
+    });
+    await da.getFileFormats("my ws");
+    await da.inspectPath("my ws", "a #.md");
+    await da.createPath("my ws", { path: "new.md", kind: "file" });
+    await da.renamePath("my ws", { from: "a #.md", to: "b.md", take_over: ["claim-1"] });
+    await da.trashPath("my ws", { path: "b.md" });
+    await da.undoFileOperation("my ws", "receipt");
+    await da.getCheckpointContents("my ws", { checkpoint: "abcd123", cursor: "100" });
+    await da.restoreFileHistory("my ws", { path: "drafts", to: "abcd123", destination_path: "recovered" });
+    expect(calls.map(([path, init]) => [path, init.method ?? "GET"])).toEqual([
+      ["/w/my%20ws/files/formats", "GET"],
+      ["/w/my%20ws/files/inspect?path=a+%23.md", "GET"],
+      ["/w/my%20ws/files/create", "POST"],
+      ["/w/my%20ws/files/rename", "POST"],
+      ["/w/my%20ws/files/trash", "POST"],
+      ["/w/my%20ws/files/undo", "POST"],
+      ["/w/my%20ws/files/history?checkpoint=abcd123&cursor=100", "GET"],
+      ["/w/my%20ws/files/restore", "POST"],
+    ]);
+    expect(JSON.parse(String(calls[3]![1].body))).toEqual({ from: "a #.md", to: "b.md", take_over: ["claim-1"] });
+    expect(JSON.parse(String(calls[5]![1].body))).toEqual({ receipt: "receipt" });
+  });
+
   test("getArtifacts sends the Bearer token from storage and hits the right path", async () => {
     const calls: Array<[string, RequestInit]> = [];
     const fetchFn = async (path: string, init: RequestInit) => {

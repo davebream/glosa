@@ -92,7 +92,9 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 // route takes an optional `disclosure`, and a grant below disclosure 2 is asked for once more.
 // Additive, N/N-1 safe: an N-1 page never asks to host, so the tools refuse with a reason; an N-1
 // daemon ignores the parameter and never sends the frame.
-export const CONTRACT_VERSION = "1.24";
+// v1.25 (#443): directory file actions, path identity, binary asset history and free-path
+// folder restore. Additive HTTP; writable upgraded buses require a path-identity-aware reader.
+export const CONTRACT_VERSION = "1.25";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

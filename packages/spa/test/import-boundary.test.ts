@@ -291,6 +291,7 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./viewer-feedback.js",
     "./viewer-navigator.js",
     "./artifact-pane.js",
+    "./file-actions.js",
     "./diff-pane.js",
     "./dock.js",
     "./panel-identity.js",

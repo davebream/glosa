@@ -28,8 +28,10 @@ import { type Claim, type ClaimsState, entryIdOfResource, ENTRY_RESOURCE_PREFIX,
 import type { EventBy, EventType, JournalEvent } from "./journal.ts";
 import { appendEvent, isJournalEvent, parseJournalEventLine, type JournalWriter } from "./journal.ts";
 import { quarantineLine } from "./quarantine.ts";
+import type { PathRename } from "./path-identity.ts";
 
 export interface DerivedEntryState {
+  renames_seen_at_creation?: number;
   status: string;
   /** Additive `entry_created.detail` facts used to prove approval uniqueness without reopening
    * the immutable inbox payload. Absent on legacy events, which callers must handle explicitly. */
@@ -86,6 +88,7 @@ export interface AppliedInterval {
 }
 
 export interface DerivedState {
+  renames: PathRename[];
   entries: Record<string, DerivedEntryState>;
   /** Per-resource claims (issue #155) — the generalization of `applyLease` from one lease per
    * workspace to one exclusive claim per resource, plus non-blocking `presence` claims. Folded by
@@ -110,6 +113,7 @@ export interface DerivedState {
 
 export function createEmptyState(): DerivedState {
   return {
+    renames: [],
     entries: {},
     claims: {},
     adoptionSeal: null,
@@ -222,7 +226,33 @@ export function applyEvent(state: DerivedState, event: JournalEvent, reducer: Re
   if (state.appliedEventIds.has(event.event_id)) return; // duplicate event_id -> ignore
   if (event.idem !== undefined && state.appliedIdemKeys.has(event.idem)) return; // idem already applied -> no-op
 
+  const newEntry = event.entry && !state.entries[event.entry];
+  if (event.event === "paths_renamed") {
+    const d = event.detail;
+    if (
+      typeof d?.from === "string" &&
+      typeof d.to === "string" &&
+      (d.scope === "file" || d.scope === "folder") &&
+      typeof d.checkpoint_after === "string"
+    ) {
+      state.renames.push({
+        from: d.from,
+        to: d.to,
+        scope: d.scope,
+        checkpoint_after: d.checkpoint_after,
+        entry: event.entry ?? "",
+      });
+    }
+  }
   reducer(state, event);
+  if (
+    newEntry &&
+    event.entry &&
+    state.entries[event.entry] &&
+    ["entry_created", "entry_adopted"].includes(event.event)
+  ) {
+    state.entries[event.entry]!.renames_seen_at_creation = state.renames.length;
+  }
 
   state.appliedEventIds.add(event.event_id);
   if (event.idem !== undefined) state.appliedIdemKeys.add(event.idem);

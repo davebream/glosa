@@ -803,8 +803,11 @@ export function createDataAccess(deps = {}) {
       });
     },
     /** @param {string} slug @param {string} path */
-    async getImage(slug, path) {
-      const response = await request(`/w/${encodeURIComponent(slug)}/images/${encodePathSegments(path)}`);
+    /** @param {string} slug @param {string} path @param {{checkpoint?: string}} [options] */
+    async getImage(slug, path, { checkpoint } = {}) {
+      const response = await request(
+        `/w/${encodeURIComponent(slug)}/images/${encodePathSegments(path)}${checkpoint ? `?checkpoint=${encodeURIComponent(checkpoint)}` : ""}`,
+      );
       const blob = await response.blob();
       const url = await new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -866,6 +869,24 @@ export function createDataAccess(deps = {}) {
         body: content,
       });
     },
+    /** @param {string} slug */
+    getFileFormats: (slug) => requestJson(`/w/${encodeURIComponent(slug)}/files/formats`),
+    /** @param {string} slug @param {string} path */
+    inspectPath: (slug, path) =>
+      requestJson(`/w/${encodeURIComponent(slug)}/files/inspect?${new URLSearchParams({ path })}`),
+    /** @param {string} slug @param {Record<string, unknown>} body */
+    createPath: (slug, body) => postJson(`/w/${encodeURIComponent(slug)}/files/create`, body),
+    /** @param {string} slug @param {Record<string, unknown>} body */
+    renamePath: (slug, body) => postJson(`/w/${encodeURIComponent(slug)}/files/rename`, body),
+    /** @param {string} slug @param {Record<string, unknown>} body */
+    trashPath: (slug, body) => postJson(`/w/${encodeURIComponent(slug)}/files/trash`, body),
+    /** @param {string} slug @param {string} receipt */
+    undoFileOperation: (slug, receipt) => postJson(`/w/${encodeURIComponent(slug)}/files/undo`, { receipt }),
+    /** @param {string} slug @param {Record<string, string>} options */
+    getCheckpointContents: (slug, options) =>
+      requestJson(`/w/${encodeURIComponent(slug)}/files/history?${new URLSearchParams(options)}`),
+    /** @param {string} slug @param {Record<string, unknown>} body */
+    restoreFileHistory: (slug, body) => postJson(`/w/${encodeURIComponent(slug)}/files/restore`, body),
     /** `GET /w/:slug/checkpoints` (A6 §F31, P3.5) — the history/timeline listing. `since` is one
      * of `yesterday|today|<ISO>|<checkpoint-id>` (resolved daemon-side, host-local TZ); `limit`
      * caps the row count. Omitting both fetches full history. */

@@ -1797,3 +1797,20 @@ it works, "Opened by Claude" after, until the person takes the tab elsewhere.
 read a page the person is signed in to); loading in a hidden window when no desk window is open;
 letting an agent drive a tab the person opened (the person's tab is theirs; the agent opens its
 own); keeping the old consent with a copy change only.
+
+
+## 2026-09-29: Desk file actions retain identity and version assets (#443)
+
+Directory desks can create files/folders, rename within a parent, move items to OS Trash and undo
+recent operations. Notes belong to the document through a rename. An append-only path-identity fact
+projects immutable inbox payloads rather than rewriting them. Entries created later at the old name
+start a new identity. Dirty panes retain their live editor while the dock replaces their path key;
+saves are paused and drained before a local mutation.
+
+History includes supported images and directory structure, including imports, external edits and
+empty folders. Assets remain outside document rendering. Folder restore requires a free destination
+and reconstructs glosa-visible content; OS Trash is the recovery route for unsupported/excluded
+contents. Image history uses byte-preserving Git reads and the same image validation as live reads.
+A lightweight operation log alone was rejected because it would promise undoable asset operations
+without retaining the bytes. Folder replacement was rejected because it could silently discard
+untracked content. Filesystem mutations retain the existing bus mutex and honest provenance rules.

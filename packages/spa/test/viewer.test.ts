@@ -1264,6 +1264,78 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(root.querySelector(".glosa-tab-dirty")).toBeNull();
   });
 
+  test("tree rename retains the dirty editor when the index arrives before the response and saves only to the new path", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const flush = async () => {
+      for (let i = 0; i < 30; i++) await Promise.resolve();
+    };
+    let path = "notes.md",
+      complete: ((value: unknown) => void) | undefined;
+    const da = fakeDataAccess({
+      getFileFormats: async () => ({ manageable: true, documents: [{ extension: ".md" }], default_extension: ".md" }),
+      getArtifacts: async () => [{ path, class: "R" }],
+      renamePath: async (_slug: string, body: { from: string; to: string }) => {
+        path = body.to;
+        da.stream.handlers?.onEvent?.({ event: "artifact_index", data: {} });
+        da.stream.handlers?.onEvent?.({
+          event: "journal",
+          data: { event: "paths_renamed", detail: { from: body.from, to: body.to } },
+        });
+        return new Promise((resolve) => {
+          complete = resolve;
+        });
+      },
+    });
+    const unmount = mountApp(root, { dataAccess: da, surfaceKind: "desk" });
+    try {
+      await flush();
+      (root.querySelector('.glosa-tree-row[data-tree-action="open"]') as any).click();
+      await flush();
+      inPane(root, ".glosa-tools-edit-source").click();
+      inPane(root, ".glosa-face-source").click();
+      const textarea = inPane(root, ".glosa-edit-area");
+      textarea.value = "My unsaved paragraph.";
+      textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      const row = root.querySelector('[role="treeitem"]') as any;
+      row.focus();
+      row.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "F2", code: "F2", bubbles: true }));
+      const name = root.querySelector(".glosa-file-name-editor input") as any;
+      expect(name).not.toBeNull();
+      name.value = "renamed.md";
+      name.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+      await flush();
+      expect(complete).toBeDefined();
+      expect(textarea.value).toBe("My unsaved paragraph.");
+      expect(da.put).toEqual([]);
+      complete?.({ path, from: "notes.md", to: path, receipt: "rename-receipt", history_status: "recorded" });
+      await flush();
+      expect(inPane(root, ".glosa-edit-area")).toBe(textarea);
+      expect(root.querySelector(".glosa-tab-dirty")).not.toBeNull();
+      inPane(root, ".glosa-save").click();
+      await flush();
+      expect(da.put).toEqual([{ path: "renamed.md", content: "My unsaved paragraph." }]);
+    } finally {
+      unmount();
+    }
+  });
+
+  test("file actions stay out of companion and loose-file surfaces", async () => {
+    for (const [surfaceKind, manageable] of [
+      ["companion", true],
+      ["desk", false],
+    ] as const) {
+      const root = dom.document.createElement("div");
+      dom.document.body.append(root);
+      const da = fakeDataAccess({ getFileFormats: async () => ({ manageable, documents: [] }) });
+      const unmount = mountApp(root, { dataAccess: da, surfaceKind });
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect((root.querySelector(".glosa-file-actions") as any).hidden).toBe(true);
+      unmount();
+      root.remove();
+    }
+  });
+
   test("matching approval request renders the contextual strip and clean confirmation approves without saving", async () => {
     const responses: unknown[] = [];
     const root = dom.document.createElement("div");

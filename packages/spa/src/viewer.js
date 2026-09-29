@@ -15,6 +15,7 @@
 import { addressProblem, parseAddress } from "./browser-address.js";
 import { createBrowserPane } from "./browser-pane.js";
 import { createImagePane } from "./image-pane.js";
+import { createFileActions } from "./file-actions.js";
 import { droppedImages } from "./image-insertion.js";
 import { mountAgentFeedback } from "./agent-feedback.js";
 import { isQuestion, selectArrivals } from "./agent-request.js";
@@ -1312,7 +1313,17 @@ export function mountApp(
     dock?.saveLayout();
   }
 
+  const paneTransfers = new Map();
+  const retainedPanes = new Set();
   function createPane(id, params, host, panelApi, { restoring = false } = {}) {
+    const transferred = paneTransfers.get(id);
+    if (transferred) {
+      paneTransfers.delete(id);
+      host.append(transferred.element);
+      transferred.rebindPanel(id, panelApi);
+      panes.set(id, transferred);
+      return transferred;
+    }
     if (params.kind === "browser") {
       /** @type {any} */ let pane = null;
       let savedUrl = typeof params.url === "string" ? params.url : "";
@@ -1356,6 +1367,7 @@ export function mountApp(
         path: params.path,
         onStateChange: refreshTabs,
       });
+      pane.rebindPanel = () => {};
       panes.set(id, pane);
       void pane.ready.then(refreshTabs);
       return pane;
@@ -1473,6 +1485,15 @@ export function mountApp(
       },
     });
     pane.kind = "artifact";
+    pane.rebindPanel = (nextId, nextApi) => {
+      id = nextId;
+      panelApi = nextApi;
+      const visibility = panelApi?.onDidVisibilityChange?.((event) => {
+        if (!event.isVisible) pane.hidden?.();
+      });
+      pane.releaseVisibility = () => visibility?.dispose?.();
+      persistedModes.set(id, pane.getMode());
+    };
     panes.set(id, pane);
     // A tab that is left, by any means, tells its pane, which closes its More menu.
     const visibility = panelApi?.onDidVisibilityChange?.((event) => {
@@ -1494,7 +1515,7 @@ export function mountApp(
 
   function destroyPane(id, pane) {
     pane?.releaseVisibility?.();
-    pane?.destroy?.();
+    if (!retainedPanes.has(pane)) pane?.destroy?.();
     panes.delete(id);
     persistedModes.delete(id);
     if (activePanelId === id) activePanelId = null;
@@ -1706,6 +1727,88 @@ export function mountApp(
   });
 
   const imageImportStatus = el("p", { className: "glosa-image-import-status", hidden: true, role: "status" });
+  const within = (path, parent) => !parent || path === parent || path.startsWith(`${parent}/`);
+  async function renameOpenPanes(from, to) {
+    if (!from || !to || from === to) return;
+    styleStore.rename(currentSlug, from, to);
+    const active = activePanelId;
+    let nextActive = active;
+    for (const [id, pane] of [...panes]) {
+      const decoded = decodePanelId(id);
+      if (!["artifact", "image", "diff"].includes(decoded[0]) || !within(decoded[1], from)) continue;
+      const nextPath = to + decoded[1].slice(from.length),
+        nextId = JSON.stringify([decoded[0], nextPath, ...decoded.slice(2)]);
+      const panel = dock?.api.getPanel(id);
+      if (!panel || dock.api.getPanel(nextId)) continue;
+      await pane.pauseFileOperation?.();
+      const group = panel.api.group,
+        index = group.panels.indexOf(panel);
+      if (id === active) nextActive = nextId;
+      if (pane.retarget) {
+        pane.retarget(nextPath);
+        retainedPanes.add(pane);
+        paneTransfers.set(nextId, pane);
+      }
+      // Insert next to the old panel first: removing the last panel must not destroy its group.
+      dock.api.addPanel({
+        id: nextId,
+        component: "pane",
+        tabComponent: "pane",
+        title: nextPath.split("/").pop(),
+        params: { ...panel.params, kind: decoded[0], path: nextPath },
+        renderer: "always",
+        minimumWidth: MIN_PANE_WIDTH,
+        position: { referencePanel: id, direction: "within", index },
+      });
+      dock.api.removePanel(panel);
+      retainedPanes.delete(pane);
+      pane.resumeFileOperation?.();
+    }
+    if (nextActive) dock?.api.getPanel(nextActive)?.api.setActive();
+    markNavigatorOpenSet();
+    dock?.saveLayout();
+  }
+  const fileActions = createFileActions({
+    tree: artifactList,
+    navigator: artifactNavigator,
+    dataAccess,
+    enabled: desk && !singlePane && !readLock,
+    getSlug: () => currentSlug,
+    open: openArtifact,
+    dirty: (path) => [...panes.values()].some((pane) => pane.path && within(pane.path, path) && pane.isDirty?.()),
+    prepare: async (path) => {
+      const affected = [...panes.values()].filter((pane) => pane.path && within(pane.path, path));
+      await Promise.all(affected.map((pane) => pane.pauseFileOperation?.()));
+      return () => {
+        for (const pane of affected) pane.resumeFileOperation?.();
+      };
+    },
+    changed: async (action, body, result) => {
+      const rename =
+        action === "rename"
+          ? { from: body.from, to: body.to }
+          : result.undone?.op === "rename"
+            ? { from: result.undone.to, to: result.undone.path }
+            : null;
+      if (rename) await renameOpenPanes(rename.from, rename.to);
+      if (action === "trash")
+        for (const [id, pane] of [...panes]) {
+          if (!pane.path || !within(pane.path, body.path)) continue;
+          if (pane.isDirty?.()) pane.markMissing?.();
+          else {
+            const panel = dock?.api.getPanel(id);
+            if (panel) dock.api.removePanel(panel);
+          }
+        }
+      if (action === "restore")
+        for (const pane of panes.values())
+          if (pane.path && within(pane.path, body.destination_path ?? body.path)) pane.putBack?.();
+      if (action === "undo")
+        for (const pane of panes.values())
+          if (pane.path && within(pane.path, result.undone?.path ?? body.path)) pane.putBack?.();
+      await refreshArtifactList();
+    },
+  });
   artifactList.after(imageImportStatus);
   artifactList.addEventListener("dragover", (event) => {
     if (!event.dataTransfer?.types.includes("Files") || readLock) return;
@@ -1762,6 +1865,7 @@ export function mountApp(
    * tab the reader opened — that silently destroys the layout they built. */
   async function refreshArtifactIndex() {
     await refreshArtifactList();
+    if (fileActions.busy) return;
     for (const [id, pane] of panes) {
       if (!isArtifactPanel(id)) continue;
       if (!knownArtifacts.has(pane.path)) pane.markMissing();
@@ -1816,13 +1920,19 @@ export function mountApp(
       },
       onEvent: (frame) => {
         attentionWatch?.handleFrame(frame);
-        if (frame.event === "artifact" && frame.data?.path) refreshOpenArtifact(frame.data.path);
+        if (frame.event === "artifact" && frame.data?.path)
+          fileActions.defer(() => refreshOpenArtifact(frame.data.path));
         if (frame.event === "image") {
           void refreshArtifactList();
           for (const pane of panes.values()) void pane.refreshImages?.();
         }
         if (frame.event === "artifact_index") void refreshArtifactIndex();
         if (frame.event === "journal") {
+          if (frame.data?.event === "paths_renamed")
+            fileActions.defer(async () => {
+              await renameOpenPanes(frame.data.detail?.from, frame.data.detail?.to);
+              await refreshArtifactList();
+            });
           trackClaims(frame.data);
           for (const pane of panes.values()) {
             if (pane.applyJournalEvent?.(frame.data)) break;
@@ -1904,6 +2014,7 @@ export function mountApp(
     refreshTopbarTitle();
     attentionTray.setWorkspace(slug);
     artifactNavigator.setWorkspace(slug);
+    void fileActions.setWorkspace();
     writeStored(layoutStorage ?? defaultStorage(), LAST_WORKSPACE_STORAGE_KEY, slug);
     renderStars();
     renderStarToggle();
@@ -2214,6 +2325,7 @@ export function mountApp(
     stopBrowserEvents?.();
     window.removeEventListener("focus", onWindowFocus);
     sidebarNav.destroy();
+    fileActions.destroy();
     feedbackController.destroy();
     stopStream?.();
     for (const pane of panes.values()) pane.destroy?.();

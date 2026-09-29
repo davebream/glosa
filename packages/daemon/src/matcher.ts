@@ -135,7 +135,7 @@ function toNfcPosixPath(segments: string[]): string {
  * call this rather than each compiling their own picomatch instances, which is what "one canonical
  * matcher" (A4 §F20) actually requires: not merely the same CONFIG, but the same compiled policy
  * object, so the two can never drift by so much as a picomatch option. */
-function buildMatcherPredicates(config: MatcherConfig): {
+export function buildMatcherPredicates(config: MatcherConfig): {
   isIncluded: (path: string) => boolean;
   isExcluded: (path: string) => boolean;
   isPrunedDir: (path: string) => boolean;

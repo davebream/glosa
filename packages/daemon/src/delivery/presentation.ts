@@ -133,6 +133,7 @@ function annotationPresentation(
   const fixed = [
     `glosa annotation ${id}`,
     `artifact: ${artifactPath}`,
+    ...(typeof payload.previous_artifact_path === "string" ? [`was: ${payload.previous_artifact_path}`] : []),
     `intent: ${intent}`,
     `quote: ${JSON.stringify(quote)}`,
     ...(address ? [`address: ${address} ${ADDRESS_NOTE}`] : []),
@@ -183,6 +184,21 @@ function humanEditPresentation(
   payload: Record<string, unknown>,
   opts: BuildPresentationOptions,
 ): DeliverableEntry | null {
+  if (payload.operation && typeof payload.operation === "object") {
+    const operation = payload.operation as Record<string, unknown>;
+    const text = `glosa human_edit ${id}\n${operation.op}: ${operation.path}${operation.to ? ` → ${operation.to}` : ""}\ncheckpoints: ${payload.checkpoint_before}..${payload.checkpoint_after}`;
+    if (utf8Bytes(text) > (opts.maxBytes ?? MAX_ENTRY_PRESENTATION_BYTES)) return null;
+    return {
+      id,
+      kind: "human_edit",
+      status: opts.status,
+      text,
+      bytes: utf8Bytes(text),
+      detail: payload,
+      truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+      retrieval: retrieval(id),
+    };
+  }
   const before = stringOf(payload.checkpoint_before);
   const after = stringOf(payload.checkpoint_after);
   const rawFiles = Array.isArray(payload.files) ? payload.files : null;

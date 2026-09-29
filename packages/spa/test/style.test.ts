@@ -21,6 +21,10 @@ function fakeStorage(initial: Record<string, string> = {}) {
   const map = new Map(Object.entries(initial));
   return {
     map,
+    get length() {
+      return map.size;
+    },
+    key: (index: number) => [...map.keys()][index] ?? null,
     getItem: (key: string) => map.get(key) ?? null,
     setItem: (key: string, value: string) => void map.set(key, value),
     removeItem: (key: string) => void map.delete(key),
@@ -52,6 +56,21 @@ function fakeFolders(initial: Record<string, string | null> = {}) {
 }
 
 describe("which style a document is set in", () => {
+  test("folder rename carries closed document styles and repeated events do not erase them", () => {
+    const storage = fakeStorage({
+      [styleKey("ws", "drafts/closed.md")]: "spec",
+      [styleKey("other", "drafts/closed.md")]: "mono",
+    });
+    const store = createStyleStore({ storage });
+    store.choose("ws", "drafts/open.md", "mono");
+    store.rename("ws", "drafts", "ideas");
+    store.rename("ws", "drafts", "ideas");
+    expect(store.get("ws", "ideas/closed.md").style).toBe("spec");
+    expect(store.get("ws", "ideas/open.md").style).toBe("mono");
+    expect(store.get("ws", "drafts/open.md").own).toBeNull();
+    expect(store.get("other", "drafts/closed.md").style).toBe("mono");
+  });
+
   test("the document's own choice, then the folder's default, then Editorial", () => {
     expect(resolveStyle(null, null)).toEqual({ style: "editorial", source: "default" });
     expect(resolveStyle(null, "spec")).toEqual({ style: "spec", source: "folder" });

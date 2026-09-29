@@ -27,7 +27,10 @@ describe("replay.ts — foldEvents (pure)", () => {
     const s1 = foldEvents(events);
     const s2 = foldEvents(events);
     expect(s1.entries).toEqual(s2.entries);
-    expect(s1.entries).toEqual({ e1: { status: "applied" }, e2: { status: "pending" } });
+    expect(s1.entries).toEqual({
+      e1: { status: "applied", renames_seen_at_creation: 0 },
+      e2: { status: "pending", renames_seen_at_creation: 0 },
+    });
   });
 
   test("duplicate event_id (the exact same event appended twice) is ignored", () => {

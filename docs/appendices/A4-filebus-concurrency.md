@@ -238,9 +238,50 @@ Bounds: 64 KiB serialized journal records; 64 MiB per intent journal; 256 MiB bl
 not delete original durable messages. Disk errors stop admission instead of acknowledging lost intent.
 
 
-## Image assets (#401)
+## Versioned assets and file operations (#401, #443)
 
-Images are a separate asset listing, not tracked document inputs. Their imports and filesystem
-notifications do not create checkpoints, journal entries or agent claims. The Markdown save that
-inserts a reference uses the existing human-edit transaction. Undo/discard leaves the asset on disk;
-checkpoint restore restores document bytes only. There is no image garbage collection in this scope.
+The document matcher remains the input for rendering, editing and document-specific claims. A
+separate versioned inventory includes those documents, supported images up to 20 MiB, and eligible
+directories in directory workspaces. Loose-file registrations retain their bounded document history.
+Image imports create human checkpoints. External image and directory changes, including offline
+changes, use the ordinary unknown-attribution capture. No image garbage collection is introduced.
+
+Directory existence is stored as an empty blob under
+`.glosa-history-v1/directories/<base64url(NFC-relative-path)>` in the shadow tree only. No sidecar is
+written into the person's folder. Only explicitly enumerated eligible files enter the index;
+directory pathspecs never recursively import ignored contents. Native filesystem names are read
+unchanged and indexed under their NFC identities. Binary Git output is transported as bytes.
+
+`captureHumanFileOperation` holds the same workspace mutex as saves, claims and external capture:
+
+```text
+validate -> confirm claim ids -> release claims -> capture unclaimed drift as unknown
+         -> compute proven tree edits -> mutate filesystem -> human checkpoint -> immutable entry
+         -> paths_renamed (rename only)
+```
+
+A pathless exclusive claim covers the whole workspace. A confirmed takeover releases by human and
+records abandoned edits as unknown. The rename/trash informational signal is emitted only after the
+operation succeeds. Rename checkpoints move the preceding snapshot's blobs between names; they do
+not attribute bytes changed concurrently by an outside process to the person moving the file.
+Imports and restores commit their validated input bytes. Subsequent external bytes remain unknown.
+
+An immutable `human_edit` entry uses `edit_kind`, an `operation` summary and the checkpoint pair.
+It carries bounded paths and changes, not file contents. The checkpoint's `Glosa-File-Operation`
+trailer stores the entry id and operation; startup repairs missing inbox/journal facts idempotently.
+A crash before a checkpoint leaves unproven filesystem changes for unknown capture. A bookkeeping
+failure after mutation returns pending and fences further writes in that bus until reconciliation.
+
+`paths_renamed` records `{from,to,scope,checkpoint_after,holders}`. Replay keeps its ordered list and
+the rename count at each entry's creation. Read projections apply only later renames, including
+folder prefixes, so old notes follow their file and a newly created file at the old name gets its
+own notes. Original inbox bytes remain immutable. The projected identity is used by annotations,
+attention, delivery, claim scoping and a current document's historical lookup. That lookup reverses
+a rename only for a strict ancestor of its checkpoint, never the rename checkpoint itself. The
+snapshot inventory's preview and restore use its literal saved paths, independent of later renames.
+
+Folder restore publishes the supported subtree at a free destination with one staged rename. It
+restores eligible documents, images and empty directory structure, not excluded or unsupported
+contents. The OS Trash retains those contents. Restores are bounded to 20,000 entries, 256 MiB total,
+the current document size limit and the 20 MiB per-image limit. Image replacement requires explicit
+confirmation and refuses if its bytes or identity change while preparing the restore.

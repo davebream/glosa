@@ -85,6 +85,10 @@ import { type ReconcileOptions, type ReconcileResult, reconcileWorkspace, trunca
 import { applyEvent, createEmptyState, type DerivedEntryState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
+import { currentPath, currentPayload } from "./path-identity.ts";
+import { type FileOperation, operationPayload, operationTree, repairFileOperations } from "./file-operation.ts";
+import { FileOperationError } from "../security/file-path-guard.ts";
+import { pathWithin } from "../versioned-files.ts";
 import type { WorkspaceBusWriteCheckpointObserver } from "./write-checkpoint.ts";
 
 const DELIVERY_RESERVATION_TTL_MS = 30_000;
@@ -377,8 +381,15 @@ export class WorkspaceBus {
   // disappears out from under it ends the hold instead of leaving it subscribed to a bus nothing
   // will ever notify again.
   private readonly closeController = new AbortController();
+  private fileHistoryPending = false;
 
   private assertWritable(): void {
+    if (this.fileHistoryPending)
+      throw new FileOperationError(
+        503,
+        "file-operation-uncertain",
+        "History recording was interrupted. Restart glosa before making another change.",
+      );
     if (this.state.adoptionSeal) throw new WorkspaceAdoptedError(this.state.adoptionSeal.targetRegistrationId);
     if (this.state.forgetSeal) throw new WorkspaceForgottenError();
   }
@@ -677,14 +688,14 @@ export class WorkspaceBus {
           // fail-closed inbox fallback below.
           if (state.approval_mode === false) continue;
           if (state.approval_mode === true && typeof state.target_path === "string") {
-            if (state.target_path === payload.target_path) {
+            if (currentPath(this.state, entryId, state.target_path) === payload.target_path) {
               proven = true;
               break;
             }
             continue;
           }
 
-          const existing = readInboxEntry(this.workspace, entryId);
+          const existing = currentPayload(this.state, entryId, readInboxEntry(this.workspace, entryId));
           // A non-object body (scalar, array, JSON `null`) is not an inbox payload this daemon
           // ever wrote — inbox files are write-once, so any deviation is corruption, and a
           // corrupted body cannot rule out what the entry originally was.
@@ -1272,7 +1283,7 @@ export class WorkspaceBus {
   readEntry(id: string): { payload: unknown; status: string } | null {
     const state = this.state.entries[id];
     if (!state) return null;
-    return { payload: readInboxEntry(this.workspace, id), status: state.status };
+    return { payload: currentPayload(this.state, id, readInboxEntry(this.workspace, id)), status: state.status };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1297,7 +1308,7 @@ export class WorkspaceBus {
     const derived = this.state.entries[entryId];
     if (typeof derived?.target_path === "string") paths.add(derived.target_path);
     for (const path of pathsOfPayload(readInboxEntry(this.workspace, entryId))) paths.add(path);
-    return [...paths].sort();
+    return [...paths].map((path) => currentPath(this.state, entryId, path)).sort();
   }
 
   /** Validates `resources` and returns them deduplicated plus the normalized path set they cover.
@@ -2177,6 +2188,96 @@ export class WorkspaceBus {
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       return checkpoint(this.workspace, { attribution: "human", kind });
+    });
+  }
+
+  /** File operations are serialized with saves, claims and watcher capture. All filesystem work,
+   * including destination reservation, belongs in mutate, after validation under this mutex. */
+  captureHumanFileOperation<T>(
+    prepare: () => {
+      operation: FileOperation;
+      takeOver?: string[];
+      validate?: () => void;
+      mutate: (before: string) => Promise<T> | T;
+      historyFiles?: (value: T) => ReadonlyMap<string, Uint8Array>;
+    },
+  ): Promise<{ value: T; checkpoint: string; history_status: "recorded" | "pending" }> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await repairFileOperations({
+        workspaceRoot: this.workspace,
+        state: this.state,
+        writer: this.writer,
+        ulid: this.ulidFn,
+        now: this.nowFn,
+        reducer: this.reducer,
+      });
+      const plan = prepare(),
+        operation = plan.operation;
+      const covers = (path: string) =>
+        pathWithin(path, operation.path) || (!!operation.to && pathWithin(path, operation.to));
+      const covering = this.heldClaimsLocked().filter(
+        (claim) => claim.mode === "exclusive" && (!claim.paths.length || claim.paths.some(covers)),
+      );
+      for (const claim of covering) if (isClaimExpired(claim, this.nowFn())) await this.expireClaimLocked(claim, "ttl");
+      const live = covering.filter((claim) => !isClaimExpired(claim, this.nowFn()));
+      if (live.some((claim) => !plan.takeOver?.includes(claim.claim_id)))
+        throw new FileOperationError(409, "claimed", "An agent is editing this item.", {
+          claims: live.map((claim) => ({ id: claim.claim_id, holder_label: claim.holder_session })),
+        });
+      operation.holders = live.map((claim) => claim.holder_session);
+      for (const claim of live) await this.releaseClaimLocked(claim, "human", "released_by_human");
+      await this.captureExternalEditLocked({ paths: await this.unclaimedTrackedPathsLocked(true) });
+      const before = await headSha(this.workspace);
+      const treeChanges = await operationTree(this.workspace, operation, before);
+      plan.validate?.();
+      const value = await plan.mutate(before);
+      const entry = this.ulidFn();
+      let after = before;
+      try {
+        for (const [path, content] of plan.historyFiles?.(value) ?? []) {
+          const blob = (
+            await runGit(this.workspace, ["hash-object", "-w", "--stdin"], { input: content })
+          ).stdout.trim();
+          treeChanges.set(path, blob);
+        }
+        after = await checkpoint(this.workspace, {
+          attribution: "human",
+          kind: "human_edit",
+          entry,
+          treeChanges,
+          trailers: { "Glosa-File-Operation": Buffer.from(JSON.stringify({ entry, operation })).toString("base64url") },
+        });
+        this.createEntryLocked(entry, operationPayload(operation, before, after), {
+          by: "human",
+          detail: { file_operation: operation },
+        });
+        if (operation.rename) {
+          const event: JournalEvent = {
+            v: 1,
+            event_id: this.ulidFn(),
+            at: this.nowFn().toISOString(),
+            entry,
+            event: "paths_renamed",
+            by: "human",
+            detail: {
+              ...operation.rename,
+              scope: operation.scope,
+              checkpoint_after: after,
+              holders: operation.holders,
+            },
+          };
+          appendEvent(this.writer, event, { fsync: true });
+          applyEvent(this.state, event, this.reducer);
+          this.notify(event);
+        }
+        return { value, checkpoint: after, history_status: "recorded" };
+      } catch {
+        this.fileHistoryPending = true;
+        return { value, checkpoint: after, history_status: "pending" };
+      }
     });
   }
 

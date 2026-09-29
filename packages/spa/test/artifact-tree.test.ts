@@ -6,6 +6,7 @@ import {
   createArtifactTreeNavigator,
   flattenVisibleTree,
 } from "../src/artifact-tree.js";
+import { createFileActions } from "../src/file-actions.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
 
 describe("artifact tree model", () => {
@@ -56,6 +57,84 @@ describe("artifact tree navigator", () => {
 
   afterEach(() => {
     dom.teardown();
+  });
+
+  test("file menu is keyboard navigable, blur keeps the name draft, and AltGr never creates a file", async () => {
+    const tree = dom.document.createElement("ul");
+    dom.document.body.append(tree);
+    const navigator = createArtifactTreeNavigator(tree as unknown as HTMLElement, { storage: null, onOpen: () => {} });
+    navigator.setWorkspace("ws");
+    navigator.setArtifacts([
+      { path: "notes.md", class: "R" },
+      { path: "zebra.md", class: "R" },
+    ]);
+    const calls: unknown[] = [];
+    const actions = createFileActions({
+      tree,
+      navigator,
+      enabled: true,
+      getSlug: () => "ws",
+      dirty: () => false,
+      prepare: async () => () => {},
+      changed: async () => {},
+      open: async (...args: unknown[]) => calls.push(args),
+      dataAccess: {
+        getFileFormats: async () => ({
+          manageable: true,
+          documents: [{ extension: ".md" }, { extension: ".txt" }],
+          default_extension: ".md",
+        }),
+        createPath: async (_slug: string, body: unknown) => {
+          calls.push(body);
+          return { receipt: "new", history_status: "recorded" };
+        },
+      },
+    });
+    try {
+      await actions.setWorkspace();
+      const row = tree.querySelector('[data-node-id="f:notes.md"]') as any;
+      row.focus();
+      row.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", { key: "ń", code: "KeyN", ctrlKey: true, altKey: true, bubbles: true }),
+      );
+      expect(tree.querySelector(".glosa-file-name-editor")).toBeNull();
+      row.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", { key: "F10", code: "F10", shiftKey: true, bubbles: true }),
+      );
+      const menu = tree.querySelector('[role="menu"]')!;
+      const buttons = [...menu.querySelectorAll("button")];
+      expect(dom.document.activeElement).toBe(buttons[0]!);
+      buttons[0]!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      expect(dom.document.activeElement).toBe(buttons[1]!);
+      buttons[1]!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(tree.querySelector('[role="menu"]')).toBeNull();
+      expect(dom.document.activeElement).toBe(row);
+      const macShortcut = new dom.window.KeyboardEvent("keydown", {
+        key: "Dead",
+        code: "KeyN",
+        metaKey: true,
+        altKey: true,
+        bubbles: true,
+      });
+      // Happy DOM treats every Alt press as AltGraph; macOS Option is not AltGraph.
+      Object.defineProperty(macShortcut, "getModifierState", {
+        value: (key: string) => key === "Alt" || key === "Meta",
+      });
+      row.dispatchEvent(macShortcut);
+      const input = tree.querySelector(".glosa-file-name-editor input") as any;
+      expect(input).not.toBeNull();
+      input.value = "idea.txt";
+      input.blur();
+      navigator.setCurrent("notes.md");
+      expect(tree.querySelector(".glosa-file-name-editor input")).toBe(input);
+      expect(calls).toEqual([]);
+      input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(calls).toEqual([{ path: "idea.txt", kind: "file" }, ["idea.txt", { mode: "edit" }]]);
+    } finally {
+      actions.destroy();
+      navigator.destroy();
+    }
   });
 
   test("expands folders, opens files, and exposes the WAI-ARIA tree structure", () => {

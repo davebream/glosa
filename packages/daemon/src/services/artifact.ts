@@ -31,6 +31,7 @@ import {
 import { readInboxEntry } from "../bus/inbox.ts";
 import { type EntryKind, isTerminal } from "../bus/lifecycle.ts";
 import { peekJournal } from "../bus/peek.ts";
+import { currentPayload, currentPath } from "../bus/path-identity.ts";
 import type { DerivedEntryState } from "../bus/replay.ts";
 import { buildDiffHunks, commitExists } from "../checkpoint-diff.ts";
 import { checkpointArtifactPath, listCheckpoints } from "../checkpoints.ts";
@@ -309,6 +310,7 @@ export function actionablePresentation(
   cursor?: string,
   opts: { watched?: boolean; claims?: readonly PresentationClaim[] } = {},
 ): (DeliverableEntry & { workspace: string }) | null {
+  payload = currentPayload(peekJournal(workspace).state, entryId, payload);
   const record =
     payload !== null && typeof payload === "object" && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)
@@ -543,7 +545,7 @@ export function listInboxEntries(workspace: WorkspaceTarget, opts: { all?: boole
       created_at: createdAt.get(id) ?? null,
       // `entry_adopted` never carries a `target_path` (lifecycle.ts's adopted arm has no such
       // field) — stated as `null` here rather than papered over by reading the payload.
-      target_path: typeof entry.target_path === "string" ? entry.target_path : null,
+      target_path: typeof entry.target_path === "string" ? currentPath(state, id, entry.target_path) : null,
       payload_present: readInboxEntry(workspace, id) !== null,
       holder: holderOf(claimForEntry(state.claims, id), now),
     });

@@ -340,10 +340,12 @@ function loadMergeModule() {
 }
 
 export function createArtifactPane(host, deps) {
+  let path = deps.path;
+  let fileOperationPaused = false;
+  let saving = null;
   const {
     dataAccess,
     slug,
-    path,
     initialMode = "read",
     readLock = false,
     loadHistoryPane,
@@ -2209,6 +2211,7 @@ export function createArtifactPane(host, deps) {
   /** Writes the working source after the page has been quiet for `RUN_SAVE_DELAY`. */
   function scheduleRunSave() {
     if (saveTimer) clearTimeout(saveTimer);
+    if (fileOperationPaused || paneEl.hasAttribute("data-missing")) return;
     saveTimer = setTimeout(() => {
       saveTimer = null;
       // Caught, not floated. `saveCurrentArtifact` rethrows anything that is not a 409, so a downed
@@ -4587,6 +4590,8 @@ export function createArtifactPane(host, deps) {
    * skipped by a path that isn't the ordinary Save button.
    */
   async function writeAndSettle(artifact, content, ifMatch) {
+    if (fileOperationPaused || paneEl.hasAttribute("data-missing") || artifact.source_path !== path)
+      return SAVE_DECLINED;
     saveButton.disabled = true;
     setEditStatus("Saving…");
     try {
@@ -4635,7 +4640,16 @@ export function createArtifactPane(host, deps) {
    * about collateral and said no — callers that act on a save (the approval flow) must check,
    * because "nothing was written" is not the same as "nothing needed writing".
    */
-  async function saveCurrentArtifact({ onlyIfDirty = false } = {}) {
+  function saveCurrentArtifact(options = {}) {
+    if (fileOperationPaused || paneEl.hasAttribute("data-missing")) return Promise.resolve(SAVE_DECLINED);
+    if (saving) return saving;
+    saving = performSave(options).finally(() => {
+      saving = null;
+    });
+    return saving;
+  }
+
+  async function performSave({ onlyIfDirty = false } = {}) {
     if (!slug || !currentArtifact || currentArtifact.class !== "R") return currentArtifact;
     // `workingSource` is the third way this pane can be holding unwritten bytes, and leaving it out
     // is why the debounced write after a block edit did nothing at all: `scheduleRunSave` fired,
@@ -5419,6 +5433,16 @@ export function createArtifactPane(host, deps) {
    * pane says so; glosa never closes a tab the reader opened, because that silently destroys the
    * layout they built. */
   function markMissing() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    if (isDirty()) {
+      paneEl.setAttribute("data-missing", "true");
+      setEditStatus("This file is gone. Your draft is kept here. Use Put back in the file tree before saving.", {
+        error: true,
+      });
+      onStateChange();
+      return;
+    }
     currentArtifact = null;
     loading = false;
     paneEl.setAttribute("data-missing", "true");
@@ -5463,7 +5487,40 @@ export function createArtifactPane(host, deps) {
 
   return {
     element: paneEl,
-    path,
+    get path() {
+      return path;
+    },
+    async pauseFileOperation() {
+      fileOperationPaused = true;
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = null;
+      await saving;
+    },
+    resumeFileOperation() {
+      fileOperationPaused = false;
+    },
+    retarget(nextPath) {
+      const previous = path;
+      path = nextPath;
+      paneEl.setAttribute("aria-label", nextPath);
+      if (currentArtifact?.source_path === previous) currentArtifact = { ...currentArtifact, source_path: nextPath };
+      if (parkedSource?.path === previous) parkedSource.path = nextPath;
+      if (unsavedFacePath === previous) unsavedFacePath = nextPath;
+      if (contentEl.getAttribute("data-path") === previous) contentEl.setAttribute("data-path", nextPath);
+      refreshHistory = null;
+      if (historyVisible) void renderHistory();
+      paneEl.removeAttribute("data-missing");
+      styleControl?.refresh();
+      renderTitle();
+      void hydrateAnnotations(nextPath);
+      if (!currentArtifact || currentArtifact.class === "F") void refreshArtifact();
+    },
+    putBack() {
+      paneEl.removeAttribute("data-missing");
+      setEditStatus("");
+      if (!isDirty()) void refreshArtifact();
+      onStateChange();
+    },
     ready,
     get artifact() {
       return currentArtifact;

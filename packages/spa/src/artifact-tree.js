@@ -209,6 +209,7 @@ function escapeSelectorValue(value) {
  * @param {{ onOpen: (path: string) => void, storage?: Storage | null }} options
  */
 export function createArtifactTreeNavigator(container, options) {
+  let paused = false;
   let root = buildArtifactTree([]);
   let workspace = "";
   /** @type {string | null} */
@@ -361,6 +362,7 @@ export function createArtifactTreeNavigator(container, options) {
   }
 
   function render() {
+    if (paused) return;
     const hadFocus = container.contains(document.activeElement);
     const visible = flattenVisibleTree(root, expanded);
     const visibleIds = new Set(visible.map(({ node }) => node.id));
@@ -400,6 +402,8 @@ export function createArtifactTreeNavigator(container, options) {
 
   /** @param {MouseEvent} event */
   function onClick(event) {
+    if (event.defaultPrevented || (event.target instanceof Element && event.target.closest("input, select, button")))
+      return;
     const target = event.target;
     if (!(target instanceof Element)) return;
     const row = target.closest(".glosa-tree-row");
@@ -411,6 +415,8 @@ export function createArtifactTreeNavigator(container, options) {
 
   /** @param {KeyboardEvent} event */
   function onKeyDown(event) {
+    if (event.defaultPrevented || (event.target instanceof Element && event.target.closest("input, select, textarea")))
+      return;
     const target = event.target;
     if (!(target instanceof Element)) return;
     const item = target.closest('[role="treeitem"]');
@@ -471,6 +477,17 @@ export function createArtifactTreeNavigator(container, options) {
   container.addEventListener("keydown", onKeyDown);
 
   return {
+    /** @param {boolean} value */
+    pause(value) {
+      paused = value;
+      if (!value) render();
+    },
+    /** @param {string} path @param {boolean} [folder] */
+    focusPath(path, folder = false) {
+      for (const id of ancestorDirectoryIds(`${path}/_`)) expanded.add(id);
+      render();
+      focusItem(folder ? directoryId(path) : fileId(path));
+    },
     /** @param {string} slug */
     setWorkspace(slug) {
       workspace = slug;

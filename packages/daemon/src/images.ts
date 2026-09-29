@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Workspace images are assets, never document checkpoints or agent claims.
+// Workspace images are versioned assets, separate from editable documents.
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants,
@@ -27,7 +27,7 @@ import {
   matchTrackedFile,
   resolveMatchedFiles,
 } from "./matcher.ts";
-import { confinePath } from "./security/confine-path.ts";
+import { filePath, FileOperationError } from "./security/file-path-guard.ts";
 import { workspaceBusPath, workspaceTracking, workspaceWorktree, type WorkspaceTarget } from "./workspace.ts";
 
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -56,7 +56,14 @@ const invalidPath = () =>
 
 export function imageConfig(workspace: WorkspaceTarget) {
   const base = loadMatcherConfig(workspaceWorktree(workspace), workspaceBusPath(workspace));
-  return { artifacts: { ...base.artifacts, include: ["**/*"], maxFileBytes: MAX_IMAGE_BYTES } };
+  return {
+    artifacts: {
+      ...base.artifacts,
+      exclude: [...base.artifacts.exclude, "**/.*/**"],
+      include: ["**/*"],
+      maxFileBytes: MAX_IMAGE_BYTES,
+    },
+  };
 }
 
 /** The watcher uses the same exclusion policy as reads, imports and listing. */
@@ -65,31 +72,18 @@ export function imageIgnored(workspace: WorkspaceTarget) {
 }
 
 /** confinePath prevents escapes, but an in-root symlink is forbidden too. */
-export function imagePath(workspace: WorkspaceTarget, path: string, allowMissing = false): string {
-  const root = workspaceWorktree(workspace);
-  if (
-    path.includes("\\") ||
-    path.split("/").some((part) => !part || part === "." || part === ".." || part.startsWith("."))
-  )
-    throw invalidPath();
-  const confined = confinePath(root, path);
-  if (!confined.ok) throw invalidPath();
-  const ignored = imageIgnored(workspace);
-  let current = root;
-  const parts = path.split("/");
-  for (const [index, part] of parts.entries()) {
-    current = join(current, part);
-    let stat: import("node:fs").Stats | undefined;
-    try {
-      stat = lstatSync(current);
-    } catch (error) {
-      if (!allowMissing || (error as NodeJS.ErrnoException).code !== "ENOENT")
-        throw new ImageError(404, "image-missing", "Image is missing or unreadable.");
-    }
-    if (stat?.isSymbolicLink() || (index < parts.length - 1 && stat && !stat.isDirectory()) || ignored(current, stat))
-      throw invalidPath();
+export function imagePath(workspace: WorkspaceTarget, path: string, allowMissing: boolean | "parents" = false): string {
+  try {
+    return filePath(workspace, path, allowMissing);
+  } catch (error) {
+    if (error instanceof FileOperationError)
+      throw new ImageError(
+        error.status,
+        error.code === "not-found" ? "image-missing" : "invalid-image-path",
+        error.message,
+      );
+    throw error;
   }
-  return confined.realPath;
 }
 
 export function inspectImage(bytes: Uint8Array) {
@@ -140,7 +134,7 @@ export function referencedImages(workspace: WorkspaceTarget): string[] {
           const decoded = decodeURIComponent(src.split(/[?#]/)[0]!);
           if (decoded.split("/").includes("..")) continue;
           const path = posix.join(posix.dirname(document), decoded);
-          imagePath(workspace, path, true);
+          imagePath(workspace, path, "parents");
           if (IMAGE_EXTENSIONS.test(path)) found.add(path);
         } catch {
           /* A placeholder explains refused or missing references. */

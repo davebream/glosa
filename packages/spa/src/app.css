@@ -9571,3 +9571,93 @@ button:is(
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* File actions stay within the navigator; notices never take over the writing pane. */
+.glosa-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-block: var(--space-2);
+}
+.glosa-file-actions[hidden],
+.glosa-file-status[hidden] {
+  display: none;
+}
+.glosa-file-actions .glosa-btn {
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-2);
+}
+.glosa-file-status {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: var(--space-2);
+  overflow-wrap: anywhere;
+}
+.glosa-file-status [role="alert"],
+.glosa-file-name-error {
+  color: var(--ink);
+}
+.glosa-file-name-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+.glosa-file-name-editor input {
+  flex: 1;
+  min-width: 8ch;
+  width: 100%;
+}
+.glosa-file-name-error {
+  width: 100%;
+  font-size: var(--text-xs);
+  margin: 0;
+}
+.glosa-file-menu {
+  display: grid;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-tool);
+}
+.glosa-file-menu button {
+  text-align: left;
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--ink);
+  border-radius: var(--radius-tool);
+}
+.glosa-file-menu button:hover,
+.glosa-file-menu button:focus-visible {
+  background: var(--surface-sunken);
+}
+.glosa-file-history {
+  max-width: min(52rem, 90vw);
+  width: 90vw;
+  max-height: 85vh;
+  overflow: auto;
+}
+.glosa-history-file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12ch, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  padding-block: var(--space-2);
+  border-bottom: 1px solid var(--rule);
+}
+.glosa-history-file span {
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+}
+.glosa-history-image {
+  grid-column: 1 / -1;
+  max-width: 100%;
+  max-height: 20rem;
+  object-fit: contain;
+}
+@media (max-width: 600px) {
+  .glosa-history-file {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -205,11 +205,14 @@ describe("app-smoke: comparisons", () => {
     write(shipped, "packages/cli/src/main.ts", "changed");
     write(shipped, "extra.txt");
     const differences = listingDifferences(treeListing(staged), treeListing(shipped));
-    expect(differences).toEqual([
-      "missing from the app: node_modules/zod/package.json",
-      "differs in the app: packages/cli/src/main.ts (1 staged, 7 shipped)",
-      "not staged but shipped: extra.txt",
-    ]);
+    // Directory enumeration order differs between macOS and Linux. Every difference must remain.
+    expect([...differences].sort()).toEqual(
+      [
+        "missing from the app: node_modules/zod/package.json",
+        "differs in the app: packages/cli/src/main.ts (1 staged, 7 shipped)",
+        "not staged but shipped: extra.txt",
+      ].sort(),
+    );
   });
   test("identical trees have no differences", () => {
     expect(listingDifferences(treeListing(cleanTree()), treeListing(cleanTree()))).toEqual([]);

@@ -5,6 +5,7 @@
 // back. Kept separate from http.ts so the route handler itself stays a thin dispatcher.
 import { runGit, safePathspec } from "./git/shadow.ts";
 import type { WorkspaceTarget } from "./workspace.ts";
+import { directoryFromHistoryKey } from "./versioned-files.ts";
 
 export interface DiffHunk {
   path: string;
@@ -68,6 +69,7 @@ export async function buildDiffHunks(root: WorkspaceTarget, from: string, to: st
 
   const hunks: DiffHunk[] = [];
   for (const path of paths) {
+    if (directoryFromHistoryKey(path)) continue;
     const diffArgs = isWorking
       ? ["diff", "-M", from, "--", safePathspec(path)]
       : ["diff", "-M", from, to, "--", safePathspec(path)];

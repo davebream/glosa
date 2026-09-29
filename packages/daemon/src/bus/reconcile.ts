@@ -23,6 +23,8 @@ import { quarantineRawBytes } from "./quarantine.ts";
 import { applyEvent, replayJournal, type DerivedState, type Reducer } from "./replay.ts";
 import { lifecycleReducer } from "./lifecycle.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
+import { versionedInventory } from "../versioned-files.ts";
+import { repairFileOperations } from "./file-operation.ts";
 import { checkpoint, headSha, initShadowRepo, reclaimIndexLock, trackedUnion } from "../git/shadow.ts";
 import { type Claim, entryIdOfResource, isClaimExpired, liveExclusiveClaims } from "./claims.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
@@ -243,7 +245,12 @@ export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineC
   const tracked = deps.resolveTrackedFilesAsync
     ? await deps.resolveTrackedFilesAsync(deps.workspaceRoot)
     : resolveTrackedFiles(deps.workspaceRoot);
-  const hasTrackedFiles = tracked.tracked.length > 0;
+  const inventory = versionedInventory(
+    deps.workspaceRoot,
+    tracked.tracked.map((file) => file.path),
+  );
+  const historyPaths = [...inventory.files.map((file) => file.path), ...inventory.directories.map((dir) => dir.path)];
+  const hasTrackedFiles = historyPaths.length > 0;
   const trackedPaths = tracked.tracked.map((file) => file.path);
   const shadowExists = existsSync(shadowGitDir(deps.workspaceRoot));
   if (!hasTrackedFiles && !shadowExists) return { occurred: false };
@@ -259,7 +266,7 @@ export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineC
 
   const unclaimed =
     claimed.size > 0
-      ? (await trackedUnion(deps.workspaceRoot, trackedPaths)).filter((path) => !claimed.has(path))
+      ? (await trackedUnion(deps.workspaceRoot, historyPaths)).filter((path) => !claimed.has(path))
       : undefined;
   if (unclaimed !== undefined && unclaimed.length === 0) return { occurred: false };
 
@@ -443,6 +450,8 @@ export async function reconcileWorkspace(
       };
     }
 
+    if (existsSync(shadowGitDir(workspaceRoot)))
+      await repairFileOperations({ workspaceRoot, state, writer, ulid: ulidFn, now: opts.now, reducer });
     const healedEntryIds = selfHealInbox({
       workspaceRoot: workspaceWorktree(workspaceRoot),
       state,

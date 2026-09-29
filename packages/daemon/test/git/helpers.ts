@@ -64,7 +64,7 @@ export function testWriter(root: string): JournalWriter {
  * stubbed comparison. Always pair with `dropDaemonIdentity()` in `afterEach`: the claim is
  * process-wide, and `bun test` runs every file in one process. */
 export function claimTestDaemonIdentity(root: string, instanceId = "gl-test-instance"): DaemonIdentity {
-  const home = join(root, "daemon-home");
+  const home = join(root, ".daemon-home");
   mkdirSync(home, { recursive: true });
   const lockFile = join(home, "daemon.lock");
   rmSync(lockFile, { force: true });

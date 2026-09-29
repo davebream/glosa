@@ -17,6 +17,7 @@ import { journalPath, shadowGitDir } from "../bus/paths.ts";
 import { currentDaemonIdentity, type DaemonIdentity } from "../lifecycle/daemon-identity.ts";
 import { readLock } from "../lifecycle/lock.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
+import { directoryHistoryKey, historyPath, versionedInventory } from "../versioned-files.ts";
 import { type WorkspaceTarget, workspaceWorktree } from "../workspace.ts";
 
 export const GLOSA_BRANCH = "glosa";
@@ -79,6 +80,7 @@ function isolatedEnv(extra: Record<string, string> = {}): Record<string, string>
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_SYSTEM = "/dev/null";
   env.GIT_TERMINAL_PROMPT = "0";
+  env.GIT_LITERAL_PATHSPECS = "1";
   return { ...env, ...extra };
 }
 
@@ -95,6 +97,7 @@ export interface RunGitOptions {
    * ("differs") or `rev-parse --verify -q`'s 1 ("no such ref yet"). Defaults to `[0]`. */
   allowExitCodes?: number[];
   env?: Record<string, string>;
+  input?: Uint8Array;
 }
 
 /** Spawns system git as an argv array — NEVER a shell string — always scoped to this workspace's
@@ -102,6 +105,12 @@ export interface RunGitOptions {
  * no call site can forget them (and thus accidentally operate on the user's own repo, if the
  * workspace happens to be one). */
 export async function runGit(workspace: WorkspaceTarget, args: string[], opts: RunGitOptions = {}): Promise<GitResult> {
+  const result = await runGitBytes(workspace, args, opts);
+  return { ...result, stdout: Buffer.from(result.stdout).toString("utf8") };
+}
+
+/** Binary transport shares the same shadow scope and environment as every other Git command. */
+export async function runGitBytes(workspace: WorkspaceTarget, args: string[], opts: RunGitOptions = {}) {
   const root = workspaceWorktree(workspace);
   const argv = ["git", `--git-dir=${shadowGitDir(workspace)}`, `--work-tree=${root}`, ...args];
   const proc = Bun.spawn({
@@ -110,15 +119,16 @@ export async function runGit(workspace: WorkspaceTarget, args: string[], opts: R
     env: opts.env ?? isolatedEnv(),
     stdout: "pipe",
     stderr: "pipe",
+    stdin: opts.input ?? "ignore",
   });
   const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
+    new Response(proc.stdout).arrayBuffer().then((bytes) => new Uint8Array(bytes)),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  const result: GitResult = { stdout, stderr, exitCode };
+  const result = { stdout, stderr, exitCode };
   const allowed = opts.allowExitCodes ?? [0];
-  if (!allowed.includes(exitCode)) throw gitFailedError(argv, result);
+  if (!allowed.includes(exitCode)) throw gitFailedError(argv, { ...result, stdout: "[binary output]" });
   return result;
 }
 
@@ -406,16 +416,20 @@ export async function checkpointUnion(
   root: WorkspaceTarget,
   resolve: typeof resolveTrackedFiles = resolveTrackedFiles,
 ): Promise<string[]> {
-  return trackedUnion(
+  const inventory = versionedInventory(
     root,
     resolve(root).tracked.map((file) => file.path),
   );
+  return trackedUnion(root, [
+    ...inventory.files.map((file) => file.path),
+    ...inventory.directories.map((dir) => dir.path),
+  ]);
 }
 
 export async function trackedUnion(root: WorkspaceTarget, currentTracked: readonly string[]): Promise<string[]> {
   const result = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD"], { allowExitCodes: [0, 128] });
   const headTracked = result.exitCode === 0 ? result.stdout.split("\0").filter((line) => line.length > 0) : [];
-  return [...new Set([...currentTracked, ...headTracked])].sort();
+  return [...new Set([...currentTracked, ...headTracked.map(historyPath)])].sort();
 }
 
 export interface InitShadowRepoDeps {
@@ -598,8 +612,7 @@ export async function repairShadowBaseline(root: WorkspaceTarget, deps: RepairSh
   mkdirSync(shadowGitDir(root), { recursive: true });
   await configureShadowRepo(root);
   await runGit(root, ["read-tree", "--empty"]);
-  const paths = resolveTrackedFiles(root).tracked.map((file) => safePathspec(file.path));
-  if (paths.length) await runGit(root, ["add", "-A", "-f", "--", ...paths]);
+  await stageVersioned(root);
   await deps.afterStep?.("index-staged");
   const tree = (await runGit(root, ["write-tree"])).stdout.trim();
   await runGit(root, ["cat-file", "-e", `${tree}^{tree}`]);
@@ -661,7 +674,7 @@ export async function initShadowRepo(root: WorkspaceTarget, deps: InitShadowRepo
   // paths), so tracking what glosa matched is the consistent behaviour.
   const tracked =
     deps.trackedPaths ?? (deps.resolveTrackedFiles ?? resolveTrackedFiles)(root).tracked.map((f) => f.path);
-  if (tracked.length > 0) await runGit(root, ["add", "-A", "-f", "--", ...tracked.map(safePathspec)]);
+  await stageVersioned(root, undefined, tracked);
   await commit(root, {
     message: "checkpoint",
     trailers: { "Glosa-Attribution": "unknown", "Glosa-Kind": "baseline" },
@@ -692,6 +705,10 @@ async function configureShadowRepo(root: WorkspaceTarget): Promise<void> {
 }
 
 export interface CheckpointOptions {
+  /** Proven tree edits for filesystem operations. Moving a name must not attribute concurrent
+   * external changes to its bytes to the person who moved it. Values are existing blob ids. */
+  treeChanges?: ReadonlyMap<string, string | null>;
+  trailers?: Record<string, string>;
   attribution: Attribution;
   /** Free-form `Glosa-Kind` trailer value — this module doesn't constrain the vocabulary, but
    * callers in this codebase use `baseline` (init only, via `commit()` directly, not this
@@ -716,20 +733,38 @@ export interface CheckpointOptions {
   resolveTrackedFiles?: typeof resolveTrackedFiles;
 }
 
-/** The subset of `paths` git can stage: those on disk (an edit or a new file) plus those HEAD
- * records (a deletion). A path that is neither — an entry about a file that does not exist yet, or
- * one removed before it was ever checkpointed — has nothing to stage, and naming it would make
- * `git add` exit 128 on an unmatched pathspec and fail the whole checkpoint. Whole-workspace
- * staging never hits this because `trackedUnion` only ever lists paths that exist in one of the
- * two; path-scoped claims (issue #155) are what made it reachable. */
-async function stageablePaths(root: WorkspaceTarget, paths: readonly string[]): Promise<string[]> {
-  const unique = [...new Set(paths)];
-  const listed = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", ...unique.map(safePathspec)], {
-    allowExitCodes: [0, 128],
-  });
-  const inHead = new Set(listed.exitCode === 0 ? listed.stdout.split("\0").filter((path) => path.length > 0) : []);
-  const worktree = workspaceWorktree(root);
-  return unique.filter((path) => inHead.has(path) || existsSync(join(worktree, path)));
+/** Stage exact eligible files and private directory entries. Never `git add` a directory:
+ * that would recursively stage excluded contents, including the person's repository. */
+async function stageVersioned(root: WorkspaceTarget, scope?: readonly string[], tracked?: readonly string[]) {
+  const inventory = versionedInventory(root, tracked);
+  const selected = (path: string) => !scope || scope.includes(path);
+  const previous = (
+    await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD"], { allowExitCodes: [0, 128] })
+  ).stdout
+    .split("\0")
+    .filter(Boolean);
+  const files = inventory.files.filter((file) => selected(file.path));
+  const directories = inventory.directories.filter((dir) => selected(dir.path));
+  const desired = new Set([
+    ...files.map((file) => file.path),
+    ...directories.map((dir) => directoryHistoryKey(dir.path)),
+  ]);
+  const removed = previous.filter((key) => selected(historyPath(key)) && !desired.has(key));
+  if (removed.length) await runGit(root, ["update-index", "--force-remove", "--", ...removed]);
+  if (files.length) {
+    // Read native names, index their NFC identities. This also handles case-only renames without
+    // Git's ignoreCase lookup retaining the old spelling. No directory pathspec is ever staged.
+    const blobs = (await runGit(root, ["hash-object", "-w", "--", ...files.map((file) => file.rawPath)])).stdout
+      .trim()
+      .split("\n");
+    const lines = files.map((file, index) => `100644 ${blobs[index]}\t${file.path}\0`).join("");
+    await runGit(root, ["update-index", "-z", "--index-info"], { input: Buffer.from(lines) });
+  }
+  if (directories.length) {
+    const blob = (await runGit(root, ["hash-object", "-w", "--stdin"], { input: new Uint8Array() })).stdout.trim();
+    const lines = directories.map((dir) => `100644 ${blob}\t${directoryHistoryKey(dir.path)}\0`).join("");
+    await runGit(root, ["update-index", "-z", "--index-info"], { input: Buffer.from(lines) });
+  }
 }
 
 /** Resets the index to HEAD, stages the tracked∪HEAD union (or just `opts.paths`), and commits iff
@@ -756,22 +791,31 @@ export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions)
   // to, and nothing can have staged into it yet — same house pattern as `isPathDirty`.
   await runGit(root, ["read-tree", "HEAD"], { allowExitCodes: [0, 128] });
 
-  const tracked =
-    opts.trackedPaths ?? (opts.resolveTrackedFiles ?? resolveTrackedFiles)(root).tracked.map((f) => f.path);
-  const union =
-    opts.paths && opts.paths.length > 0 ? await stageablePaths(root, opts.paths) : await trackedUnion(root, tracked);
   // An empty union means nothing is tracked and nothing was ever committed under the ruleset —
   // there is NOTHING to stage. A bare `git add -A` (no pathspec) would stage the entire
   // work-tree, including `.glosa/shadow.git/` itself (its own object store, refs, the journal) —
   // self-staging the shadow repo into its own history. Skip staging outright and fall through to
   // the same "nothing staged" idempotent return below.
   // `-f` for the same reason as the baseline stage above.
-  if (union.length > 0) await runGit(root, ["add", "-A", "-f", "--", ...union.map(safePathspec)]);
+  if (opts.treeChanges) {
+    const removed = [...opts.treeChanges].filter(([, blob]) => blob === null).map(([path]) => path);
+    if (removed.length) await runGit(root, ["update-index", "--force-remove", "--", ...removed]);
+    const added = [...opts.treeChanges]
+      .filter(([, blob]) => blob !== null)
+      .map(([path, blob]) => `100644 ${blob}\t${path}\0`)
+      .join("");
+    if (added) await runGit(root, ["update-index", "-z", "--index-info"], { input: Buffer.from(added) });
+  } else {
+    const tracked =
+      opts.trackedPaths ?? (opts.resolveTrackedFiles ?? resolveTrackedFiles)(root).tracked.map((f) => f.path);
+    await stageVersioned(root, opts.paths, tracked);
+  }
 
   const staged = await runGit(root, ["diff", "--cached", "--quiet"], { allowExitCodes: [0, 1] });
   if (staged.exitCode === 0) return headSha(root); // nothing staged -> idempotent, no commit
 
   const trailers: Record<string, string> = {
+    ...opts.trailers,
     "Glosa-Attribution": opts.attribution,
     "Glosa-Kind": opts.kind,
   };

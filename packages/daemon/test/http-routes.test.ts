@@ -117,7 +117,397 @@ describe("A1 §5 route catalog", () => {
 
   // --- GET /api/workspaces (5.2) ---
 
-  test("image uploads preserve bytes, stay out of checkpoints, and reject unsafe paths", async () => {
+  test("tree operations create empty items, refuse collisions and preserve notes through rename and undo", async () => {
+    const act = async (action: string, body: object) =>
+      fetchFn(stateChangingReq(`/w/${slug}/files/${action}`, { method: "POST", body: JSON.stringify(body) }));
+    expect((await act("create", { path: "drafts", kind: "folder" })).status).toBe(201);
+    const created = await act("create", { path: "drafts/new.md", kind: "file" });
+    expect(created.status, await created.clone().text()).toBe(201);
+    expect(readFileSync(join(root, "drafts/new.md"), "utf8")).toBe("");
+    const bus = await ctx
+      .getWorkspaceBus(root)
+      .reconcileOnce()
+      .then(() => ctx.getWorkspaceBus(root));
+    await bus.createEntry("note-before-rename", {
+      kind: "annotation",
+      artifact_path: "drafts/new.md",
+      body: "Keep this note",
+    });
+    const renamed = await act("rename", { from: "drafts/new.md", to: "drafts/new.txt" });
+    expect(renamed.status, await renamed.clone().text()).toBe(200);
+    const result = await renamed.json();
+    expect(result.history_status).toBe("recorded");
+    expect(existsSync(join(root, "drafts/new.md"))).toBe(false);
+    const annotations = await (await fetchFn(req(`/w/${slug}/annotations?path=drafts%2Fnew.txt`))).json();
+    expect(JSON.stringify(annotations)).toContain("Keep this note");
+    const recreated = await act("create", { path: "drafts/new.md", kind: "file" });
+    expect(recreated.status).toBe(201);
+    await bus.createEntry("note-at-reused-name", {
+      kind: "annotation",
+      artifact_path: "drafts/new.md",
+      body: "A new document",
+    });
+    const newNotes = await (await fetchFn(req(`/w/${slug}/annotations?path=drafts%2Fnew.md`))).json();
+    expect(JSON.stringify(newNotes)).toContain("A new document");
+    expect(JSON.stringify(newNotes)).not.toContain("Keep this note");
+    expect(
+      JSON.stringify(await (await fetchFn(req(`/w/${slug}/annotations?path=drafts%2Fnew.txt`))).json()),
+    ).not.toContain("A new document");
+    const collision = await act("rename", { from: "drafts/new.txt", to: "drafts/new.md" });
+    expect(collision.status).toBe(409);
+    const history = await (await fetchFn(req(`/w/${slug}/files/history?checkpoint=${result.checkpoint}`))).json();
+    expect(history.items).toContainEqual({ path: "drafts", kind: "folder" });
+    expect(history.items).toContainEqual({ path: "drafts/new.txt", kind: "file" });
+    expect((await act("undo", { receipt: result.receipt })).status).toBe(409);
+    expect(readFileSync(join(root, "drafts/new.txt"), "utf8")).toBe("");
+  });
+
+  test("tree operation routes reject escapes, symlinks, protected state and nested repositories before mutation", async () => {
+    const act = (action: string, body: object) =>
+      fetchFn(stateChangingReq(`/w/${slug}/files/${action}`, { method: "POST", body: JSON.stringify(body) }));
+    writeFileSync(join(root, "source.md"), "original");
+    symlinkSync(join(root, "source.md"), join(root, "alias.md"));
+    for (const path of ["../escape.md", "/escape.md", ".git/config", "alias.md"]) {
+      const response = await act("create", { path, kind: "file" });
+      expect(response.status, path).toBeGreaterThanOrEqual(400);
+    }
+    expect((await act("rename", { from: "alias.md", to: "moved.md" })).status).toBe(400);
+    expect((await act("trash", { path: "alias.md" })).status).toBe(400);
+    expect(existsSync(join(root, "alias.md"))).toBe(true);
+    for (const path of ["Node_Modules/a.md", "trailing.md ", "control\n.md", `${"x".repeat(253)}.md`])
+      expect((await act("create", { path, kind: "file" })).status, path).toBeGreaterThanOrEqual(400);
+    mkdirSync(join(root, "nested"));
+    writeFileSync(join(root, "nested/.git"), "gitdir: elsewhere");
+    expect((await act("rename", { from: "nested", to: "renamed" })).status).toBe(409);
+    expect(readFileSync(join(root, "source.md"), "utf8")).toBe("original");
+    expect(existsSync(join(root, "nested/.git"))).toBe(true);
+  });
+
+  test("folder history restores binary assets and empty directories only at a free destination", async () => {
+    const act = (action: string, body: object) =>
+      fetchFn(stateChangingReq(`/w/${slug}/files/${action}`, { method: "POST", body: JSON.stringify(body) }));
+    await act("create", { path: "drafts", kind: "folder" });
+    await act("create", { path: "drafts/empty", kind: "folder" });
+    writeFileSync(join(root, "drafts/notes.md"), "Saved words");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4uoAAAAASUVORK5CYII=",
+      "base64",
+    );
+    writeFileSync(join(root, "drafts/picture.png"), bytes);
+    mkdirSync(join(root, "drafts/.cache"));
+    writeFileSync(join(root, "drafts/.cache/private.png"), bytes);
+    writeFileSync(join(root, "drafts/untracked.bin"), "retained only in original");
+    const renamed = await act("rename", { from: "drafts", to: "ideas" });
+    expect(renamed.status, await renamed.clone().text()).toBe(200);
+    const checkpoint = (await renamed.json()).checkpoint;
+    const restored = await act("restore", { path: "ideas", to: checkpoint, destination_path: "recovered" });
+    expect(restored.status, await restored.clone().text()).toBe(200);
+    expect(readFileSync(join(root, "recovered/picture.png"))).toEqual(bytes);
+    expect(readFileSync(join(root, "recovered/notes.md"), "utf8")).toBe("Saved words");
+    expect(existsSync(join(root, "recovered/empty"))).toBe(true);
+    expect(existsSync(join(root, "recovered/.cache"))).toBe(false);
+    expect(existsSync(join(root, "recovered/untracked.bin"))).toBe(false);
+    const savedImage = await fetchFn(req(`/w/${slug}/images/ideas/picture.png?checkpoint=${checkpoint}`));
+    expect(savedImage.status).toBe(200);
+    expect(Buffer.from(await savedImage.arrayBuffer())).toEqual(bytes);
+    const currentBytes = Buffer.concat([bytes, Buffer.from([0])]);
+    writeFileSync(join(root, "ideas/picture.png"), currentBytes);
+    const replace = { path: "ideas/picture.png", to: checkpoint };
+    expect((await act("restore", replace)).status).toBe(409);
+    expect(readFileSync(join(root, "ideas/picture.png"))).toEqual(currentBytes);
+    expect((await act("restore", { ...replace, force: true })).status).toBe(200);
+    expect(readFileSync(join(root, "ideas/picture.png"))).toEqual(bytes);
+    expect((await act("restore", { path: "ideas", to: checkpoint, destination_path: "recovered" })).status).toBe(409);
+    await act("rename", { from: "ideas/notes.md", to: "ideas/older.md" });
+    writeFileSync(join(root, "ideas/fresh.md"), "Different document");
+    await act("rename", { from: "ideas/fresh.md", to: "ideas/notes.md" });
+    const literalRestore = await act("restore", {
+      path: "ideas/notes.md",
+      to: checkpoint,
+      destination_path: "original.md",
+    });
+    expect(literalRestore.status, await literalRestore.clone().text()).toBe(200);
+    expect(readFileSync(join(root, "original.md"), "utf8")).toBe("Saved words");
+  });
+
+  test("tree Trash round trip preserves bytes and identity, undo is single-use and refuses a reused name", async () => {
+    const act = (action: string, body: object) =>
+      fetchFn(stateChangingReq(`/w/${slug}/files/${action}`, { method: "POST", body: JSON.stringify(body) }));
+    const path = `trash-roundtrip-${crypto.randomUUID()}.md`;
+    const bytes = "Words to recover.\n";
+    writeFileSync(join(root, path), bytes);
+    const response = await act("trash", { path });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const receipt = await response.json();
+    expect(receipt.history_status).toBe("recorded");
+    expect(existsSync(join(root, path))).toBe(false);
+    writeFileSync(join(root, path), "replacement");
+    expect((await act("undo", { receipt: receipt.receipt })).status).toBe(409);
+    expect(readFileSync(join(root, path), "utf8")).toBe("replacement");
+    unlinkSync(join(root, path));
+    const undo = await act("undo", { receipt: receipt.receipt });
+    expect(undo.status, await undo.clone().text()).toBe(200);
+    expect(readFileSync(join(root, path), "utf8")).toBe(bytes);
+    expect((await act("undo", { receipt: receipt.receipt })).status).toBe(409);
+    const bus = ctx.getWorkspaceBus(root);
+    expect((await bus.captureExternalEdit()).committed).toBe(false);
+  });
+
+  test("tree rename requires the current claim ids, records a human takeover and keeps later external bytes unknown", async () => {
+    const act = (action: string, body: object) =>
+      fetchFn(stateChangingReq(`/w/${slug}/files/${action}`, { method: "POST", body: JSON.stringify(body) }));
+    writeFileSync(join(root, "notes.md"), "before\n");
+    const claimResponse = await fetchFn(
+      stateChangingReq("/api/workspaces/claims", {
+        method: "POST",
+        body: JSON.stringify({ path: root, session: "A", resources: ["artifact:notes.md"] }),
+      }),
+    );
+    expect(claimResponse.status, await claimResponse.clone().text()).toBe(201);
+    const claim = await claimResponse.json();
+    const refused = await act("rename", { from: "notes.md", to: "renamed.md" });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).claims[0].id).toBe(claim.claim_id);
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("before\n");
+    const response = await act("rename", { from: "notes.md", to: "renamed.md", take_over: [claim.claim_id] });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const result = await response.json();
+    const bus = ctx.getWorkspaceBus(root);
+    expect((await bus.captureExternalEdit()).committed).toBe(false);
+    writeFileSync(join(root, "renamed.md"), "after\n");
+    expect((await bus.captureExternalEdit()).committed).toBe(true);
+    const { runGit } = await import("../src/git/shadow.ts");
+    expect((await runGit(root, ["show", `${result.checkpoint}:renamed.md`])).stdout).toBe("before\n");
+    expect((await runGit(root, ["show", "-s", "--format=%B", "HEAD"])).stdout).toContain("Glosa-Attribution: unknown");
+    expect(readFileSync(join(root, ".glosa/journal.ndjson"), "utf8")).toContain('"by":"human"');
+  });
+
+  test("tree rename handles case and normalization without duplicating the saved file", async () => {
+    const act = (body: object) =>
+      fetchFn(stateChangingReq(`/w/${slug}/files/rename`, { method: "POST", body: JSON.stringify(body) }));
+    const native = "cafe\u0301.md",
+      normalized = native.normalize("NFC");
+    writeFileSync(join(root, native), "accented words");
+    const response = await act({ from: normalized, to: "CAFÉ.md" });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const result = await response.json();
+    expect(readFileSync(join(root, "CAFÉ.md"), "utf8")).toBe("accented words");
+    const history = await (await fetchFn(req(`/w/${slug}/files/history?checkpoint=${result.checkpoint}`))).json();
+    expect(history.items).toEqual([{ path: "CAFÉ.md", kind: "file" }]);
+  });
+
+  test("file-operation checkpoints repair missing journal facts once and keep note identity through restart", async () => {
+    const act = (body: object) =>
+      fetchFn(stateChangingReq(`/w/${slug}/files/rename`, { method: "POST", body: JSON.stringify(body) }));
+    writeFileSync(join(root, "notes.md"), "Words\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcileOnce();
+    await bus.createEntry("before-crash", { kind: "annotation", artifact_path: "notes.md", body: "Attached" });
+    const rawInbox = readFileSync(join(root, ".glosa/inbox/before-crash.json"));
+    const result = await (await act({ from: "notes.md", to: "moved.md" })).json();
+    const { runGit } = await import("../src/git/shadow.ts");
+    const entry = (
+      await runGit(root, ["show", "-s", "--format=%(trailers:key=Glosa-Entry,valueonly)", result.checkpoint])
+    ).stdout.trim();
+    await busRegistry.close(root);
+    const journal = join(root, ".glosa/journal.ndjson");
+    writeFileSync(
+      journal,
+      readFileSync(journal, "utf8")
+        .split("\n")
+        .filter((line) => !line || JSON.parse(line).entry !== entry)
+        .join("\n"),
+    );
+    unlinkSync(join(root, `.glosa/inbox/${entry}.json`));
+    await ctx.getWorkspaceBus(root).reconcileOnce();
+    const first = readFileSync(journal, "utf8");
+    expect(first.split("\n").filter((line) => line.includes('"event":"paths_renamed"'))).toHaveLength(1);
+    expect(ctx.getWorkspaceBus(root).readEntry("before-crash")?.payload).toMatchObject({ artifact_path: "moved.md" });
+    expect(readFileSync(join(root, ".glosa/inbox/before-crash.json"))).toEqual(rawInbox);
+    await busRegistry.close(root);
+    await ctx.getWorkspaceBus(root).reconcileOnce();
+    expect(readFileSync(journal, "utf8")).toBe(first);
+  });
+
+  test("macOS Trash timeout kills and awaits the helper without changing source bytes", async () => {
+    const { trashItemMac } = await import("../src/trash/index.ts");
+    const source = join(root, "timeout.md");
+    writeFileSync(source, "retained");
+    let killed = false,
+      exited = false;
+    let resolveExit!: (code: number) => void;
+    const exit = new Promise<number>((resolve) => {
+      resolveExit = resolve;
+    });
+    await expect(
+      trashItemMac(source, {
+        timeoutMs: 1,
+        spawn: (argv, options) => {
+          expect(argv[0]).toBe("/usr/bin/osascript");
+          expect(argv.at(-1)).toBe(source);
+          expect(options.env).toEqual({ PATH: "/usr/bin:/bin" });
+          return {
+            stdout: new ReadableStream({
+              start(c) {
+                c.close();
+              },
+            }),
+            stderr: new ReadableStream({
+              start(c) {
+                c.close();
+              },
+            }),
+            exited: exit.then((code) => {
+              exited = true;
+              return code;
+            }),
+            kill: (signal) => {
+              expect(signal).toBe("SIGKILL");
+              killed = true;
+              queueMicrotask(() => resolveExit(137));
+            },
+          };
+        },
+      }),
+    ).rejects.toMatchObject({ code: "trash-unavailable", data: { reason: "timeout" } });
+    expect(killed).toBe(true);
+    expect(exited).toBe(true);
+    expect(readFileSync(source, "utf8")).toBe("retained");
+  });
+
+  test("freedesktop Trash preserves orphan collisions and percent-encodes a reversible source path", async () => {
+    const { trashItemLinux, verifyTrash, finishTrashRestore } = await import("../src/trash/index.ts");
+    const { renameSync } = await import("node:fs");
+    const dataHome = join(root, "xdg");
+    mkdirSync(dataHome, { mode: 0o700 });
+    const source = join(root, "a #100%.md");
+    writeFileSync(source, "recover me");
+    const files = join(dataHome, "Trash/files");
+    mkdirSync(files, { recursive: true, mode: 0o700 });
+    writeFileSync(join(files, "a #100%.md"), "orphan retained");
+    const result = await trashItemLinux(source, { dataHome });
+    expect(result.location).toBe(join(files, "a #100%.md.2"));
+    expect(readFileSync(result.info!, "utf8")).toContain("a%20%23100%25.md");
+    expect(readFileSync(join(files, "a #100%.md"), "utf8")).toBe("orphan retained");
+    expect(existsSync(source)).toBe(false);
+    renameSync(verifyTrash(result), source);
+    finishTrashRestore(result);
+    expect(readFileSync(source, "utf8")).toBe("recover me");
+    expect(existsSync(result.info!)).toBe(false);
+    const unsafe = join(root, "unsafe-xdg");
+    symlinkSync(dataHome, unsafe);
+    await expect(trashItemLinux(source, { dataHome: unsafe })).rejects.toMatchObject({ code: "trash-unavailable" });
+    expect(readFileSync(source, "utf8")).toBe("recover me");
+  });
+
+  test("file operation history never attributes bytes changed during its mutation to the person moving the file", async () => {
+    const { renameSync } = await import("node:fs");
+    const { runGit } = await import("../src/git/shadow.ts");
+    writeFileSync(join(root, "before.md"), "proven bytes");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcileOnce();
+    const result = await bus.captureHumanFileOperation(() => ({
+      operation: {
+        op: "rename",
+        path: "before.md",
+        to: "after.md",
+        scope: "file",
+        rename: { from: "before.md", to: "after.md" },
+      },
+      mutate: () => {
+        writeFileSync(join(root, "before.md"), "outside edit during rename");
+        renameSync(join(root, "before.md"), join(root, "after.md"));
+      },
+    }));
+    expect((await runGit(root, ["show", `${result.checkpoint}:after.md`])).stdout).toBe("proven bytes");
+    expect((await runGit(root, ["show", "-s", "--format=%B", result.checkpoint])).stdout).toContain(
+      "Glosa-Attribution: human",
+    );
+    expect((await bus.captureExternalEdit()).committed).toBe(true);
+    expect((await runGit(root, ["show", "HEAD:after.md"])).stdout).toBe("outside edit during rename");
+    expect((await runGit(root, ["show", "-s", "--format=%B", "HEAD"])).stdout).toContain("Glosa-Attribution: unknown");
+  });
+
+  test("a post-checkpoint inbox failure reports pending, fences writes and repairs the rename on reopen", async () => {
+    writeFileSync(join(root, "notes.md"), "words");
+    let fail = false;
+    const bus = busRegistry.get(root, {
+      writeCheckpoint: (step) => {
+        if (fail && step.name === "inbox:temp-fsynced") throw new Error("injected disk failure");
+      },
+    });
+    await bus.reconcileOnce();
+    await bus.createEntry("note", { kind: "annotation", artifact_path: "notes.md" });
+    fail = true;
+    const response = await fetchFn(
+      stateChangingReq(`/w/${slug}/files/rename`, {
+        method: "POST",
+        body: JSON.stringify({ from: "notes.md", to: "renamed.md" }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).history_status).toBe("pending");
+    expect(readFileSync(join(root, "renamed.md"), "utf8")).toBe("words");
+    await expect(bus.createEntry("forbidden", { kind: "annotation" })).rejects.toMatchObject({
+      code: "file-operation-uncertain",
+    });
+    expect(existsSync(join(root, ".glosa/inbox/forbidden.json"))).toBe(false);
+    await busRegistry.close(root);
+    await ctx.getWorkspaceBus(root).reconcileOnce();
+    expect(ctx.getWorkspaceBus(root).readEntry("note")?.payload).toMatchObject({ artifact_path: "renamed.md" });
+    await ctx.getWorkspaceBus(root).createEntry("allowed-again", { kind: "annotation" });
+    expect(existsSync(join(root, ".glosa/inbox/allowed-again.json"))).toBe(true);
+  });
+
+  test("file actions leave a real repository's index and HEAD unchanged", async () => {
+    const { statSync } = await import("node:fs");
+    const env = { PATH: process.env.PATH!, HOME: home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const git = async (args: string[]) => {
+      const process = Bun.spawn(["git", "--no-optional-locks", "-C", root, ...args], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [output, error, code] = await Promise.all([
+        new Response(process.stdout).text(),
+        new Response(process.stderr).text(),
+        process.exited,
+      ]);
+      expect(code, error).toBe(0);
+      return output;
+    };
+    await git(["init", "--quiet"]);
+    writeFileSync(join(root, "notes.md"), "staged source");
+    await git(["add", "--", "notes.md"]);
+    const index = readFileSync(join(root, ".git/index")),
+      stamp = statSync(join(root, ".git/index")).mtimeMs,
+      head = readFileSync(join(root, ".git/HEAD"));
+    const status = await git(["status", "--porcelain", "--untracked-files=no"]);
+    const response = await fetchFn(
+      stateChangingReq(`/w/${slug}/files/rename`, {
+        method: "POST",
+        body: JSON.stringify({ from: "notes.md", to: "renamed.md" }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(
+      (
+        await fetchFn(
+          stateChangingReq(`/w/${slug}/files/undo`, {
+            method: "POST",
+            body: JSON.stringify({ receipt: result.receipt }),
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(readFileSync(join(root, ".git/index"))).toEqual(index);
+    expect(statSync(join(root, ".git/index")).mtimeMs).toBe(stamp);
+    expect(readFileSync(join(root, ".git/HEAD"))).toEqual(head);
+    expect(await git(["status", "--porcelain", "--untracked-files=no"])).toBe(status);
+  });
+
+  test("image uploads preserve bytes in asset history, stay out of document inputs, and reject unsafe paths", async () => {
     writeFileSync(join(root, "document.md"), "# Images\n");
     const bytes = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4uoAAAAASUVORK5CYII=",
@@ -141,7 +531,8 @@ describe("A1 §5 route catalog", () => {
     expect(resolveTrackedFiles(root).tracked.map((file) => file.path)).toEqual(["document.md"]);
     await ctx.getWorkspaceBus(root).reconcile();
     const tree = await runGit(root, ["ls-tree", "-r", "--name-only", "HEAD"]);
-    expect(tree.stdout.trim().split("\n")).toEqual(["document.md"]);
+    expect(tree.stdout.trim().split("\n")).toContain("document.md");
+    expect(tree.stdout.trim().split("\n")).toContain(image.path);
     const fetched = await fetchFn(req(`/w/${slug}/images/${image.path}`));
     expect(fetched.status).toBe(200);
     expect(fetched.headers.get("Content-Type")).toBe("image/png");

@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.24", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.25", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -1484,3 +1484,50 @@ the agent needs the reason to tell the person what to do.
 
 Additive, N/N-1 safe: an N-1 page never asks to host, so the tools answer that no desk window shows
 the workspace; an N-1 daemon ignores `browser=1` and never sends the frame.
+
+
+### 5.26 Desk file actions and asset history (contract 1.25, issue #443)
+
+These actions operate on directory registrations. The SPA shows them only on the desk. The daemon
+applies the same Host, Origin, Bearer, revocation and registration checks as artifact writes. Reads
+are `authed-read`; mutations are `state-changing`. All JSON paths are workspace relative.
+
+| Route | Request | Result |
+| --- | --- | --- |
+| `GET /w/:slug/files/formats` | None | `manageable`, editable `documents:[{extension}]`, `default_extension`, `image_extensions` |
+| `GET /w/:slug/files/inspect?path=…` | Existing path | Kind, document/image/other-file counts and open-note count |
+| `POST /w/:slug/files/create` | `{path,kind:"file"|"folder"}` | 201; empty item, receipt, checkpoint and history status |
+| `POST /w/:slug/files/rename` | `{from,to,take_over?:string[]}` | 200; same-parent rename, receipt and checkpoint |
+| `POST /w/:slug/files/trash` | `{path,take_over?:string[]}` | 200; OS Trash move and receipt; never exposes the absolute Trash location |
+| `POST /w/:slug/files/undo` | `{receipt}` | 200; `undone` operation and history status; no redo receipt |
+| `GET /w/:slug/files/history?checkpoint=…&path=…&cursor=…` | Commit id; optional subtree and cursor | Up to 100 `{path,kind}` entries and nullable `next_cursor`; directories include empty ones |
+| `GET /w/:slug/images/:path?checkpoint=…` | Commit id | Validated historical image bytes with the existing image CSP and content headers |
+| `POST /w/:slug/files/restore` | `{path,to,destination_path?,force?,take_over?}` | Restore a saved document, image or subtree; folders and copied files require a free destination |
+
+New files use an editable document format selected by the effective matcher; the formats response
+contains Markdown, text and configured simple suffix globs. Document renames retain rendering class;
+image renames retain the exact extension. Folder renames cannot alter which descendants are tracked.
+Existing image replacement uses `force:true` after a 409 `dirty-artifact` confirmation. Document
+replacement continues to use `POST /w/:slug/restore`. Every restore records human provenance.
+Asset-history preview and restore use the literal path returned by the selected snapshot's
+inventory. Later renames or name reuse cannot redirect that selection to another saved item.
+
+Collisions return 409 `path-exists`. An exclusive claim returns 409 `claimed` with
+`claims:[{id,holder_label}]`; a caller may confirm and retry with exactly those ids. A new holder
+requires a new confirmation. Undo refusals return 409 `undo-unavailable` with a reason, such as
+`expired`, `already-undone`, `changed-since`, `path-exists`, `claimed` or `not-in-trash`.
+Other refusals include `invalid-path`, `format-not-allowed`, `tracking-would-change`,
+`contains-repository`, `protected-path`, `not-manageable` and `trash-unavailable`.
+
+A completed filesystem operation whose history bookkeeping failed returns its result with
+`history_status:"pending"`. Its bus refuses subsequent writes until glosa is restarted and the
+workspace reconciled. A Trash helper whose outcome cannot be verified returns `file-operation-uncertain`; source absence alone
+never licenses a retry. Receipts are single-use random 128-bit values, kept only in daemon memory,
+limited to 50 per workspace bus and discarded on restart or registration eviction.
+
+This is an additive HTTP minor version. An older page never calls these routes; a new page hides
+file controls if formats is unavailable. The durable `paths_renamed` event and directory-history
+keys require this release's reader. Do not reopen an upgraded writable bus with an older daemon:
+older journal readers do not understand path identity and older capture code can remove directory
+metadata. Existing checkpoints remain readable; pre-upgrade checkpoints contain no newly introduced
+image/directory history. Recording starts from the assets present at upgrade, with unknown provenance.
