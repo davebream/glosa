@@ -88,6 +88,7 @@ the same eight. `requirements.md` governs where any summary of it disagrees.
 | Suite | Requirement clause (`docs/requirements.md` §5) |
 |---|---|
 | `fault` | storage/fault (kill daemon at each write step → one legal recovered state) |
+| `concurrency` | `packages/daemon/test/http-routes.test.ts` |
 | `concurrency` | concurrency |
 | `delivery` | delivery (monitor/Codex push, reconnect, MCP pull fallback, parked/resumed) |
 | `security` | browser security (the A3 §5 attacks) |

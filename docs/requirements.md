@@ -355,7 +355,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.24: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.25: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -720,3 +720,18 @@ It preserves surviving history and immutable records, records the reason durably
 external-edit capture. Read-only diagnosis counts entries referring to missing checkpoints and
 qualifies unassessable data. See A4 F21 for ownership, crash recovery and the limit when all evidence
 of prior initialization is absent; A1 and A6 define the API and command.
+
+
+### Desk file management and complete asset history (2026-09-29, #443)
+
+Directory workspaces on the desk support New file, New folder, same-parent rename, OS Trash and
+single-use undo. Companion, document and loose-file surfaces do not expose those actions. Rename
+preserves document class or image extension, notes and inbox targets; dirty editors retain their
+bytes and resume saving at the new path. Exclusive claims require confirmed takeover. No action
+runs Git against the user's repository or permanently deletes an item as a Trash fallback.
+
+History additionally preserves supported images and eligible directory structure, including empty
+folders, image imports and externally observed changes. Images remain separate from editable
+documents. Folder restoration requires a free path and restores glosa-visible content only; the OS
+Trash retains unsupported/excluded contents. See A1 §5.26, A3 Desk filesystem mutations and A4
+Versioned assets and file operations for transport, safety, provenance and recovery contracts.

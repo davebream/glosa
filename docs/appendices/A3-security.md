@@ -475,3 +475,30 @@ Markdown images resolve relative to their document. Remote URLs remain inert pla
 no remote request is attempted. The SPA obtains local bytes through its one data-access module
 and paints data URLs under the existing `img-src 'self' data:` policy. No egress or blob permission
 is added. Missing, unreadable and refused images retain their description and original path.
+
+
+## Desk filesystem mutations (#443)
+
+The shared file/image guard rejects absolute paths, traversal, backslashes, control characters,
+dot-prefixed segments, overlong names, trailing spaces/dots, excluded paths and all symlink
+components. It compares names in NFC while retaining native syscall spellings, rejects ambiguous
+normalization twins, and rejects case-varied exclusions conservatively. Workspace roots, bus-state
+ancestors and folders containing another registration or a `.git` file/directory cannot be moved.
+Folder inspection uses `lstat`, never follows links and refuses more than 20,000 entries.
+
+Creation uses `O_EXCL` or `mkdir`. Rename reserves a free destination and replaces only its unchanged
+inode; a case-only alias of the same directory entry is handled separately. Existing hard links
+are collisions. Parents and identities are rechecked immediately before mutation. Pure Bun/Node
+filesystem APIs cannot eliminate the final check-to-syscall race against another process with the
+same uid; there is no claim that these checks provide a kernel transaction or protect against the
+owner actively racing filesystem operations. Git runs only through the isolated shadow scope,
+with ambient Git selectors removed and literal paths enabled.
+
+macOS Trash uses a constant AppleScriptObjC file and `/usr/bin/osascript` with an argv source path,
+`cwd:/`, ignored stdin and only `PATH=/usr/bin:/bin`. After ten seconds the child is killed and
+awaited before examining paths. Success requires the resulting item's original device/inode.
+Linux uses freedesktop Trash, validates private uid-owned 0700 directories and shared sticky-bit
+parents, reserves `.trashinfo` before the move and requires the name to be free in both info and
+files. A relative XDG home is ignored in favor of the default. Symlinked Trash ancestors,
+cross-device moves and unsafe directories are refused. Neither provider falls back to copy or permanent deletion. Undo verifies the stored
+identity and a free original destination; its opaque receipt is scoped to one live workspace bus.

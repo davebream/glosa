@@ -109,3 +109,22 @@ establish practical screen-reader usability:
   `test/acceptance/workbench-real-engine.test.ts` now holds that nothing in an open document
   transitions a property that moves it under reduced motion. The automated checks above emulate
   the query in Chromium and override the shell's getter in Electron.
+
+
+## Desk file tree actions (#443)
+
+Directory desks offer New file, New folder and History beside the tree. A context menu is available
+by secondary click, the Context Menu key or Shift+F10. Arrow keys, Home/End and Escape navigate the
+menu and restore tree focus. Tree-only shortcuts use physical `event.code`: F2 renames, ⌘Backspace
+or Delete moves to Trash, ⌥⌘N creates a file, and ⌘Z/Ctrl+Z undoes the last file action. Composition,
+AltGr, and input/editor targets do not trigger these actions; editor undo stays local to the editor.
+
+The inline name field has a visible Create/Rename action and Cancel. Enter submits, Escape cancels,
+and blur never commits. A typed suffix takes precedence over the format picker. Validation errors
+use an alert; successful actions use a polite status with Undo or Put back. Folder trash and files
+with notes or unsaved edits require confirmation; clean single files move directly with Undo.
+Claim takeover names the holder and requires a separate confirmation. A failed action retains the
+input. Created files open in Edit; folders and renamed items receive tree focus. Dirty trashed tabs
+retain their draft and explain Put back. File controls are absent from companion, document and
+loose-file surfaces. Historical images have descriptive alternative text, and restores name a free
+path instead of replacing a folder silently.

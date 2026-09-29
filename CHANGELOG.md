@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Create, rename, Trash, undo and asset history from the file tree (#443).
 - Browser tabs on the desk in the desktop app: web pages open as dock tabs beside documents and
   chats, from a link, ⌘T, Go to, or the new tools at the end of each tab strip. Pages run apart from
   glosa and cannot reach it; restored internet tabs wait for Load page, and typed words are never
@@ -27,10 +28,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   is idle; an open window says "glosa was updated. Reload to use the new version." and reloads when
   you click. A `glosa monitor` started before an upgrade keeps delivering instead of retrying
   forever. API contract 1.23 (#432).
-- Local images in Markdown, image paste/drop and an Insert image picker in block Edit, Rich and
-  Source, plus image files in the tree and docked image tabs with fit, zoom, pan and live updates.
-  Imports preserve original bytes up to 20 MiB and stay outside document checkpoints. Remote images
-  remain blocked; local missing/refused images show their description and path (#401).
+- Local images in Markdown, paste/drop and Insert image, plus image tabs with zoom, pan and
+  live updates. Imports preserve bytes up to 20 MiB. Remote images stay blocked; missing or
+  refused local images show their description and path (#401).
 - Experimental Linux x86_64/glibc CLI and daemon support with Bun 1.4.2+, `xdg-open`, headless
   URL output, Linux boot identity and MCP parent observation. Linux core and installed-package
   checks now run in CI and release validation. Linux desktop packaging, native managed chats,
