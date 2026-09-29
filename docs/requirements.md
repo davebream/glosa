@@ -574,10 +574,15 @@ registration epochs prevent filename collisions and restoration into a replaceme
   dictation (#434) and installed Manjaro desktop qualification and publication (#435) remain
   pending, and no installed Manjaro release is claimed.
 - **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
-  unconfigured external runtime calls. The two update actions are explicit exceptions: `glosa update`
+  unconfigured external runtime calls. The two update actions and desk browser tabs are explicit exceptions: `glosa update`
   (A6 §F33) and the desktop app's Check for Updates… (A3 §4b) reach out only when the person runs or
   clicks them, send no glosa version or machine data, and keep no cache that could become a
-  heartbeat; the app's check installs nothing. After versioned consent, a configured provider may
+  heartbeat; the app's check installs nothing. In the desktop app's desk browser tabs
+  (#440), a web page loads only when the person asks for it (an address typed, a link clicked, Load
+  on a restored tab, reload, back or forward), in a partition of its own, never the SPA's session,
+  whose loopback-only gate is unchanged; a tab restored with an internet address waits for a click,
+  and glosa makes no other load for a tab: no search, suggestions, prefetch or favicon (A3 §4b,
+  `docs/decisions.md` 2026-09-29). After versioned consent, a configured provider may
   receive only its disclosed data following a foreground user action. Class-F network egress remains
   blocked by CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
 - **Robustness**: daemon crash loses nothing (journal-as-truth + fsync-before-ACK + replay; SSE

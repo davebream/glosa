@@ -53,7 +53,9 @@ a live document week.
    warm-ups, or unconfigured egress. A configured external provider may receive only the data named
    in current versioned consent, and only after the user starts its foreground action. `glosa update`
    and the desktop app's Check for Updates… remain explicitly invoked only (A6 §F33, A3 §4b), with a
-   static `User-Agent`, no version beacon, and no cache file that could become a heartbeat.
+   static `User-Agent`, no version beacon, and no cache file that could become a heartbeat. The
+   desktop app's desk browser tabs load a web page only when a person asks for it, in a partition of
+   their own; the SPA's session and its loopback-only gate are unchanged (A3 §4b, #440).
 6. **The SPA reaches the daemon through ONE data-access module** (so a future hosted shell is a deploy,
    not a refactor) (R6).
 

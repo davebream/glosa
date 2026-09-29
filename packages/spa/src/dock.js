@@ -109,6 +109,9 @@ export function createDock(host, deps) {
     confirmClosePanel = () => Promise.resolve(true),
     storage = defaultStorage(),
     emptyState,
+    // The tools at the right end of each group's tab strip (#440: New chat, New browser tab), or
+    // nothing. Called once per group with dockview's group, so a tool acts on the group it is in.
+    createHeaderTools = null,
   } = deps;
 
   /** @type {Map<string, { element: HTMLElement, refresh: () => void }>} */
@@ -149,7 +152,9 @@ export function createDock(host, deps) {
       return {
         element,
         init(parameters) {
-          pane = createPane(id, parameters.params ?? {}, element, parameters.api);
+          // Whether this panel comes from a saved layout rather than a person's action: a browser tab
+          // restored with an internet address waits for a click before it loads (#440).
+          pane = createPane(id, parameters.params ?? {}, element, parameters.api, { restoring });
         },
         dispose() {
           destroyPane(id, pane);
@@ -183,6 +188,9 @@ export function createDock(host, deps) {
         else if (state.kind === "chat" && state.provider) glyph.replaceChildren(agentIcon(state.provider));
         else if (state.kind === "chat" || state.kind === "external-chat")
           glyph.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h10v8H7l-4 3z"/></svg>';
+        else if (state.kind === "browser")
+          glyph.innerHTML =
+            '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c-2.2 2.4-2.2 9.6 0 12M8 2c2.2 2.4 2.2 9.6 0 12"/></svg>';
         else if (state.kind === "agent-settings")
           glyph.innerHTML =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12M5 2v4M11 6v4M6 10v4"/></svg>';
@@ -259,6 +267,22 @@ export function createDock(host, deps) {
         },
       };
     },
+    ...(createHeaderTools
+      ? {
+          createRightHeaderActionComponent: (group) => {
+            const element = el("div", { className: "glosa-strip-tools-host" });
+            return {
+              element,
+              init() {
+                element.replaceChildren(...[createHeaderTools(group)].filter(Boolean));
+              },
+              dispose() {
+                element.replaceChildren();
+              },
+            };
+          },
+        }
+      : {}),
     createWatermarkComponent: () => {
       const element = el("div", { className: "glosa-watermark" });
       return {
@@ -311,6 +335,28 @@ export function createDock(host, deps) {
   });
   api.onDidAddPanel(() => relabel());
   api.onDidRemovePanel(() => relabel());
+
+  // A page in a browser tab (#440) takes every pointer event over it, so a tab dragged across one
+  // would stop finding its drop targets. While a drag is under way, pages let the pointer through
+  // (app.css `.glosa-dock-dragging`); the drag ends on a drop, a release or Escape.
+  function endDrag() {
+    host.classList.remove("glosa-dock-dragging");
+    window.removeEventListener("pointerup", endDrag, true);
+    window.removeEventListener("pointercancel", endDrag, true);
+    window.removeEventListener("keydown", onDragKey, true);
+  }
+  function onDragKey(event) {
+    if (event.key === "Escape") endDrag();
+  }
+  function startDrag() {
+    host.classList.add("glosa-dock-dragging");
+    window.addEventListener("pointerup", endDrag, true);
+    window.addEventListener("pointercancel", endDrag, true);
+    window.addEventListener("keydown", onDragKey, true);
+  }
+  api.onWillDragPanel(startDrag);
+  api.onWillDragGroup(startDrag);
+  api.onDidDrop(endDrag);
 
   function storageKey() {
     return `${LAYOUT_STORAGE_PREFIX}${slug}`;
@@ -500,6 +546,7 @@ export function createDock(host, deps) {
         isEnabled: () => canMoveActivePanel(command.id),
       })),
     destroy() {
+      endDrag();
       stopAppearance?.();
       api.dispose();
       tabViews.clear();

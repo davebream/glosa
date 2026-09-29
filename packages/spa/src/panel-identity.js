@@ -15,6 +15,11 @@ export function externalPanelId(id) {
 export function settingsPanelId() {
   return JSON.stringify(["agent-settings"]);
 }
+/** A desk browser tab (#440). Its identity is the tab, not the page: two tabs may show one address,
+ * and a tab keeps its identity as it navigates. */
+export function browserPanelId(tabId) {
+  return JSON.stringify(["browser", tabId]);
+}
 export function comparisonPanelId(path, from, to) {
   return JSON.stringify(["diff", path, from, to]);
 }
@@ -26,6 +31,15 @@ export function panelIdentity(id, params = {}) {
   if (params.kind === "external-chat" && typeof params.sessionId === "string")
     return { id: externalPanelId(params.sessionId), params: { ...params, kind: "external-chat" } };
   if (params.kind === "agent-settings") return { id: settingsPanelId(), params: { kind: "agent-settings" } };
+  if (params.kind === "browser") {
+    const decoded = decodePanelId(id);
+    const tabId = decoded[0] === "browser" && typeof decoded[1] === "string" ? decoded[1] : null;
+    if (!tabId) return null;
+    return {
+      id: browserPanelId(tabId),
+      params: { kind: "browser", url: typeof params.url === "string" ? params.url : "" },
+    };
+  }
   if (
     params.kind === "diff" &&
     typeof params.path === "string" &&
@@ -42,7 +56,7 @@ export function decodePanelId(id) {
     const value = JSON.parse(id);
     if (
       Array.isArray(value) &&
-      ["artifact", "image", "diff", "chat", "external-chat", "agent-settings"].includes(value[0])
+      ["artifact", "image", "diff", "chat", "external-chat", "agent-settings", "browser"].includes(value[0])
     )
       return value;
   } catch {

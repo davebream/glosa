@@ -926,3 +926,194 @@ export function contrastPush(lastPushed: boolean, reading: unknown): boolean | n
 export function contrastPushReaches(recordedOrigin: string | null | undefined, frameOrigin: unknown): boolean {
   return typeof recordedOrigin === "string" && recordedOrigin !== "" && frameOrigin === recordedOrigin;
 }
+
+// ---------- desk browser tabs (#440) ----------
+//
+// A desk window hosts web pages as `<webview>` guests inside its dock (docs/research/2026-09-29-
+// browser-tab-rendering.md). Every guest runs in one persistent partition of its own, with its own
+// request policy; the SPA's session, its egress gate and its CSP are untouched (A3 §4b).
+
+/** The one saved cookie and storage store every desk browser tab shares, across workspaces and
+ * relaunches (maintainer decision 2026-09-28). Never the SPA's default session: that one holds the
+ * pairing credential in the SPA origin's storage. */
+export const BROWSER_PARTITION = "persist:glosa-browser";
+
+/** What a page in a browser tab may request: the web (http, https and their sockets) and what never
+ * leaves the process. Never a file, a custom scheme, or a daemon port on this machine: `glosaPorts`
+ * holds each open window's SPA port and the class-F port beside it, on every loopback name. */
+export function browserRequestDecision(url: string, glosaPorts: readonly number[]): "allow" | "cancel" {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "cancel";
+  }
+  if (parsed.protocol === "data:" || parsed.protocol === "blob:") return "allow";
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) return "cancel";
+  const hostname = parsed.hostname.replace(/^\[(.*)\]$/, "$1");
+  const loopback = isLoopbackHost(parsed.hostname) || hostname === "::1" || /^127\./.test(hostname);
+  const port = Number(parsed.port || (parsed.protocol === "https:" || parsed.protocol === "wss:" ? 443 : 80));
+  return loopback && glosaPorts.includes(port) ? "cancel" : "allow";
+}
+
+/** Where a page in a browser tab may take its tab: a web address or a blank page, nothing else. */
+export function browserNavigationDecision(url: string): "allow" | "deny" {
+  if (url === "about:blank") return "allow";
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:" ? "allow" : "deny";
+  } catch {
+    return "deny";
+  }
+}
+
+/** Whether a window may attach a browser tab: a desk window, from its SPA frame, for a web address
+ * or a blank page. A companion window never gets one (maintainer decision 2026-09-28). */
+export function webviewAttachDecision(input: {
+  kind: "desk" | "companion" | null | undefined;
+  frameOrigin: unknown;
+  spaOrigin: string | null | undefined;
+  src: string;
+}): "allow" | "deny" {
+  if (input.kind !== "desk") return "deny";
+  if (typeof input.spaOrigin !== "string" || input.spaOrigin === "" || input.frameOrigin !== input.spaOrigin) {
+    return "deny";
+  }
+  return browserNavigationDecision(input.src) === "allow" ? "allow" : "deny";
+}
+
+/** Rewrites a guest's preferences before it attaches, whatever the page asked for: the browser
+ * partition, no preload, sandboxed, isolated, no Node, web security on. Mutates, because Electron
+ * reads the object it passed to `will-attach-webview`. */
+export function lockGuestPreferences(prefs: Record<string, unknown>): void {
+  for (const key of ["preload", "preloadURL", "enableBlinkFeatures", "additionalArguments"]) delete prefs[key];
+  Object.assign(prefs, {
+    partition: BROWSER_PARTITION,
+    sandbox: true,
+    contextIsolation: true,
+    nodeIntegration: false,
+    nodeIntegrationInSubFrames: false,
+    nodeIntegrationInWorker: false,
+    webSecurity: true,
+    allowRunningInsecureContent: false,
+    experimentalFeatures: false,
+    webviewTag: false,
+    navigateOnDragDrop: false,
+  });
+}
+
+/** The user agent a browser tab sends: the Chromium one without Electron's or glosa's product
+ * tokens, so no site learns that glosa, or which version of it, is asking (invariant 5 keeps glosa
+ * from beaconing its version). */
+export function browserUserAgent(fallback: string): string {
+  return fallback
+    .replace(/\s(?:glosa|Electron)\/\S+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/** What a key pressed inside a browser tab does. The page gets it unless it is one of glosa's own
+ * chords: reload, back and forward act on the page from here; the rest go to the SPA ("app"), so
+ * ⌘W, ⌘K, ⌘T, ⌘L and tab cycling work the same with a page focused. `mod` is ⌘ on macOS, Ctrl
+ * elsewhere. */
+export function browserKeyAction(
+  input: { type: string; key: string; meta?: boolean; control?: boolean; shift?: boolean; alt?: boolean },
+  platform: NodeJS.Platform = process.platform,
+): "reload" | "back" | "forward" | "app" | null {
+  if (input.type !== "keyDown") return null;
+  const mod = platform === "darwin" ? Boolean(input.meta) : Boolean(input.control);
+  const key = input.key.length === 1 ? input.key.toLowerCase() : input.key;
+  if (input.control && !input.meta && !input.alt && key === "Tab") return "app";
+  if (!mod) return null;
+  if (input.alt) return key === "ArrowLeft" || key === "ArrowRight" ? "app" : null;
+  if (key === "r") return "reload";
+  if (key === "[" && !input.shift) return "back";
+  if (key === "]" && !input.shift) return "forward";
+  if (key === "\\") return "app";
+  if (!input.shift && ["w", "k", "t", "l"].includes(key)) return "app";
+  return null;
+}
+
+/** Whether "Open in your browser" (and a link that belongs outside glosa) may leave for the
+ * system's handler: web addresses and mail links only, never a file or an app's own scheme. */
+export function externalLinkDecision(url: unknown): "open" | "refuse" {
+  if (typeof url !== "string" || url.length > 8192) return "refuse";
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:" || protocol === "mailto:" ? "open" : "refuse";
+  } catch {
+    return "refuse";
+  }
+}
+
+/** The permissions a page is refused out loud, as words for the notice under the address row. Every
+ * other permission is refused quietly: pages ask for some of them all the time, and a notice for
+ * each would be noise. */
+export function permissionNotice(permission: string): string | null {
+  const words: Record<string, string> = {
+    media: "your camera or microphone",
+    geolocation: "your location",
+    notifications: "to show notifications",
+    "clipboard-read": "to read your clipboard",
+    midi: "your MIDI devices",
+    midiSysex: "your MIDI devices",
+    openExternal: "to open another app",
+    hid: "a connected device",
+    serial: "a connected device",
+    usb: "a connected device",
+    "display-capture": "to record your screen",
+  };
+  return words[permission] ?? null;
+}
+
+/** A download a page started, as the SPA's notice names it: the file's own name, cut to a length a
+ * notice can hold, never a path. */
+export function downloadName(name: unknown): string {
+  const base = typeof name === "string" ? (name.split(/[\\/]/).pop() ?? "") : "";
+  // Control characters out, so a name cannot break the notice's line.
+  const clean = Array.from(base)
+    .filter((c) => {
+      const code = c.codePointAt(0) ?? 0;
+      return code > 0x1f && code !== 0x7f;
+    })
+    .join("")
+    .trim();
+  if (!clean) return "a file";
+  return clean.length > 80 ? `${clean.slice(0, 77)}…` : clean;
+}
+
+/** One row of a page's right-click menu, before Electron builds it. `action` names what the main
+ * process does; `role` is Electron's own edit role. */
+export type BrowserMenuItem =
+  | { label: string; action: "open-link-in-tab" | "open-link-outside" | "copy-link" | "back" | "forward" | "reload" }
+  | { role: "cut" | "copy" | "paste" | "selectAll" }
+  | { type: "separator" };
+
+/** The right-click menu of a page in a browser tab: link actions over a link, editing over a field
+ * or a selection, and the page's own back, forward and reload. */
+export function browserContextMenu(params: {
+  linkURL?: string;
+  selectionText?: string;
+  isEditable?: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}): BrowserMenuItem[] {
+  const items: BrowserMenuItem[] = [];
+  if (params.linkURL && browserNavigationDecision(params.linkURL) === "allow" && params.linkURL !== "about:blank") {
+    items.push(
+      { label: "Open Link in New Browser Tab", action: "open-link-in-tab" },
+      { label: "Open Link in Your Browser", action: "open-link-outside" },
+      { label: "Copy Link Address", action: "copy-link" },
+      { type: "separator" },
+    );
+  }
+  if (params.isEditable) {
+    items.push({ role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }, { type: "separator" });
+  } else if (params.selectionText) {
+    items.push({ role: "copy" }, { type: "separator" });
+  }
+  if (params.canGoBack) items.push({ label: "Back", action: "back" });
+  if (params.canGoForward) items.push({ label: "Forward", action: "forward" });
+  items.push({ label: "Reload", action: "reload" });
+  return items;
+}

@@ -22,6 +22,13 @@
         "files": ["docs/research/spikes/browser-tab-comps.html"],
         "createdAt": "2026-09-29T12:12:39.152Z",
         "reason": "Claude triage: the mock third-party website in the comps uses its own system font stack by design"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": ["docs/research/spikes/browser-tab-comps.html"],
+        "createdAt": "2026-09-29T12:21:33.483Z",
+        "reason": "Claude triage: static comps page recording already-made decisions; flagged elements are mock-scale copies of existing product keycaps, labels and a fake third-party site"
       }
     ]
   }

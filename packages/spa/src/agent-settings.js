@@ -7,7 +7,10 @@ import { confirmDialog } from "./dialog.js";
 import { mountTextSizeControl } from "./text-size.js";
 import { createElement as el } from "./viewer-shell.js";
 
-export function mountAgentSettings(host, { dataAccess, onChange, appearance, textSize = null }) {
+export function mountAgentSettings(
+  host,
+  { dataAccess, onChange, appearance, textSize = null, openOutside = undefined },
+) {
   let disposed = false,
     login,
     busy = false,
@@ -684,6 +687,7 @@ export function mountAgentSettings(host, { dataAccess, onChange, appearance, tex
               login = await mountAgentLogin(loginHost, {
                 dataAccess,
                 profile,
+                openLink: openOutside,
                 signal: loginAbort.signal,
                 onFinished: () => {
                   login = null;

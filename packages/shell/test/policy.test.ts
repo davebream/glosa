@@ -5,6 +5,12 @@ import { describe, expect, test } from "bun:test";
 import { buildAppUrl } from "../../cli/src/open-presentation.ts";
 import {
   appearanceDecision,
+  BROWSER_PARTITION,
+  browserContextMenu,
+  browserKeyAction,
+  browserNavigationDecision,
+  browserRequestDecision,
+  browserUserAgent,
   cliCandidates,
   cliChoice,
   compareVersions,
@@ -12,9 +18,12 @@ import {
   contrastPush,
   contrastPushReaches,
   contrastReply,
+  downloadName,
   egressDecision,
+  externalLinkDecision,
   firstFrameColor,
   linkFromArgv,
+  lockGuestPreferences,
   loopbackApiOrigin,
   MAX_RESPONSE_BYTES,
   MAX_TAG_LENGTH,
@@ -28,6 +37,7 @@ import {
   parseOpenEnvelope,
   parsePackageType,
   parseVersion,
+  permissionNotice,
   plainPath,
   preloadShouldExpose,
   quitDecision,
@@ -48,6 +58,7 @@ import {
   UPDATE_USER_AGENT,
   type UpdateOutcome,
   updateChannelFor,
+  webviewAttachDecision,
   updateDialog,
   updateOutcome,
   windowFor,
@@ -1116,5 +1127,177 @@ describe("a window whose daemon's install changed (#432, R-L8)", () => {
     const down = reconnectOutcome("install-a", null);
     expect(down).toMatchObject({ ok: false, reason: "failed" });
     expect(JSON.stringify(down)).not.toContain("\u2014");
+  });
+});
+
+describe("desk browser tabs: what a page may reach, and what reaches it (#440, A3 §4b)", () => {
+  test("a page loads the web and what never leaves the process, and nothing else", () => {
+    for (const url of [
+      "https://example.org/a",
+      "http://example.org/",
+      "wss://example.org/s",
+      "ws://localhost:5173/hmr",
+    ])
+      expect(browserRequestDecision(url, [])).toBe("allow");
+    for (const url of ["data:text/plain,x", "blob:https://example.org/1"])
+      expect(browserRequestDecision(url, [])).toBe("allow");
+    for (const url of [
+      "file:///etc/passwd",
+      "glosa://open?path=/x",
+      "chrome://settings",
+      "javascript:alert(1)",
+      "not a url",
+    ])
+      expect(browserRequestDecision(url, [])).toBe("cancel");
+  });
+
+  test("a page never reaches the daemon's SPA or class-F port on any loopback name", () => {
+    const ports = [4646, 4647];
+    for (const url of [
+      "http://glosa.localhost:4646/api/handshake",
+      "http://127.0.0.1:4647/doc/x",
+      "http://localhost:4646/",
+      "http://[::1]:4646/",
+      "ws://127.0.0.1:4646/",
+    ])
+      expect(browserRequestDecision(url, ports)).toBe("cancel");
+    // Another local server, or the same port off this machine, is a page like any other.
+    expect(browserRequestDecision("http://localhost:5173/", ports)).toBe("allow");
+    expect(browserRequestDecision("http://example.org:4646/", ports)).toBe("allow");
+  });
+
+  test("a tab navigates only to web addresses or a blank page", () => {
+    expect(browserNavigationDecision("https://example.org/")).toBe("allow");
+    expect(browserNavigationDecision("http://localhost:3000/")).toBe("allow");
+    expect(browserNavigationDecision("about:blank")).toBe("allow");
+    for (const url of ["file:///Users/", "mailto:a@b.c", "glosa://open?path=/x", "data:text/html,x", "about:config"])
+      expect(browserNavigationDecision(url)).toBe("deny");
+  });
+
+  test("only a desk window's SPA frame may attach a tab, and only for a web address", () => {
+    const desk = {
+      kind: "desk" as const,
+      frameOrigin: "http://glosa.localhost:4646",
+      spaOrigin: "http://glosa.localhost:4646",
+    };
+    expect(webviewAttachDecision({ ...desk, src: "https://example.org/" })).toBe("allow");
+    expect(webviewAttachDecision({ ...desk, kind: "companion", src: "https://example.org/" })).toBe("deny");
+    expect(webviewAttachDecision({ ...desk, kind: null, src: "https://example.org/" })).toBe("deny");
+    expect(webviewAttachDecision({ ...desk, frameOrigin: "null", src: "https://example.org/" })).toBe("deny");
+    expect(webviewAttachDecision({ ...desk, frameOrigin: "http://127.0.0.1:4647", src: "https://example.org/" })).toBe(
+      "deny",
+    );
+    expect(webviewAttachDecision({ ...desk, src: "file:///etc/hosts" })).toBe("deny");
+  });
+
+  test("a guest's preferences are locked whatever the page asked for", () => {
+    const prefs: Record<string, unknown> = {
+      preload: "/evil.js",
+      preloadURL: "file:///evil.js",
+      nodeIntegration: true,
+      sandbox: false,
+      contextIsolation: false,
+      partition: "persist:elsewhere",
+      webSecurity: false,
+      enableBlinkFeatures: "X",
+    };
+    lockGuestPreferences(prefs);
+    expect(prefs).toMatchObject({
+      partition: BROWSER_PARTITION,
+      nodeIntegration: false,
+      sandbox: true,
+      contextIsolation: true,
+      webSecurity: true,
+      webviewTag: false,
+    });
+    expect(prefs).not.toHaveProperty("preload");
+    expect(prefs).not.toHaveProperty("preloadURL");
+    expect(prefs).not.toHaveProperty("enableBlinkFeatures");
+    expect(BROWSER_PARTITION.startsWith("persist:")).toBe(true);
+  });
+
+  test("the user agent names neither Electron nor glosa", () => {
+    const fallback =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) glosa/0.1.0-alpha.36 Chrome/152.0.7977.130 Electron/44.4.5 Safari/537.36";
+    const ua = browserUserAgent(fallback);
+    expect(ua).not.toMatch(/glosa|Electron/i);
+    expect(ua).toContain("Chrome/152.0.7977.130");
+    expect(ua).toContain("Safari/537.36");
+  });
+
+  test("glosa's chords work with a page focused; everything else is the page's", () => {
+    const mac = (key: string, extra = {}) => browserKeyAction({ type: "keyDown", key, meta: true, ...extra }, "darwin");
+    expect(mac("r")).toBe("reload");
+    expect(mac("[")).toBe("back");
+    expect(mac("]")).toBe("forward");
+    for (const key of ["w", "k", "t", "l", "W", "\\"]) expect(mac(key)).toBe("app");
+    expect(mac("ArrowRight", { alt: true })).toBe("app");
+    expect(browserKeyAction({ type: "keyDown", key: "Tab", control: true }, "darwin")).toBe("app");
+    // The page's own keys and edits stay the page's.
+    for (const key of ["c", "v", "a", "z", "f", "1"]) expect(mac(key)).toBe(null);
+    expect(browserKeyAction({ type: "keyDown", key: "w" }, "darwin")).toBe(null);
+    expect(browserKeyAction({ type: "keyUp", key: "w", meta: true }, "darwin")).toBe(null);
+    // Ctrl is the modifier off macOS, and ⌘ is not.
+    expect(browserKeyAction({ type: "keyDown", key: "w", control: true }, "linux")).toBe("app");
+    expect(browserKeyAction({ type: "keyDown", key: "w", meta: true }, "linux")).toBe(null);
+  });
+
+  test("Open in your browser leaves only for web and mail addresses", () => {
+    for (const url of ["https://example.org/", "http://localhost:3000/", "mailto:someone@example.org"])
+      expect(externalLinkDecision(url)).toBe("open");
+    for (const url of [
+      "file:///Applications/Calculator.app",
+      "glosa://open?path=/x",
+      "javascript:void 0",
+      "zoommtg://x",
+      42,
+      null,
+    ])
+      expect(externalLinkDecision(url)).toBe("refuse");
+    expect(externalLinkDecision(`https://example.org/${"a".repeat(9000)}`)).toBe("refuse");
+  });
+
+  test("refused permissions a person would miss are named; the rest stay quiet", () => {
+    expect(permissionNotice("media")).toBe("your camera or microphone");
+    expect(permissionNotice("geolocation")).toBe("your location");
+    expect(permissionNotice("fullscreen")).toBe(null);
+    expect(permissionNotice("clipboard-sanitized-write")).toBe(null);
+  });
+
+  test("a blocked download is named by its file alone, cut to a notice's length", () => {
+    expect(downloadName("tides-2026.pdf")).toBe("tides-2026.pdf");
+    expect(downloadName("../../etc/passwd")).toBe("passwd");
+    expect(downloadName("a\nb.txt")).toBe("ab.txt");
+    expect(downloadName("evil\u0000\u001b[2Jname.txt")).toBe("evil[2Jname.txt");
+    expect(downloadName("")).toBe("a file");
+    expect(downloadName(`${"x".repeat(100)}.pdf`)).toHaveLength(78);
+  });
+
+  test("the right-click menu offers link, editing and page actions where they apply", () => {
+    const labels = (items: ReturnType<typeof browserContextMenu>) =>
+      items.map((item) => ("label" in item ? item.label : "role" in item ? item.role : "-"));
+    expect(
+      labels(browserContextMenu({ linkURL: "https://example.org/", canGoBack: true, canGoForward: false })),
+    ).toEqual([
+      "Open Link in New Browser Tab",
+      "Open Link in Your Browser",
+      "Copy Link Address",
+      "-",
+      "Back",
+      "Reload",
+    ]);
+    expect(labels(browserContextMenu({ isEditable: true, canGoBack: false, canGoForward: true }))).toEqual([
+      "cut",
+      "copy",
+      "paste",
+      "selectAll",
+      "-",
+      "Forward",
+      "Reload",
+    ]);
+    // A link that is not a web address gets no link actions.
+    expect(labels(browserContextMenu({ linkURL: "file:///x", canGoBack: false, canGoForward: false }))).toEqual([
+      "Reload",
+    ]);
   });
 });

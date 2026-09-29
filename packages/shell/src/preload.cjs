@@ -34,7 +34,48 @@ if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin
       }
     }
   });
+  // What the shell saw in one of this window's browser tabs (#440). Only the known shapes pass, with
+  // only their own fields, so the page's listener never receives anything the main process did not
+  // mean to send.
+  const browserListeners = new Set();
+  const BROWSER_EVENTS = {
+    "open-tab": ["url"],
+    key: ["key", "meta", "control", "shift", "alt"],
+    "download-blocked": ["name", "url"],
+    "permission-refused": ["words"],
+  };
+  ipcRenderer.on("glosa:browser-event", (_event, message) => {
+    if (!message || typeof message.guestId !== "number" || !Object.hasOwn(BROWSER_EVENTS, message.type)) return;
+    const clean = { guestId: message.guestId, type: message.type };
+    for (const field of BROWSER_EVENTS[message.type]) {
+      const value = message[field];
+      if (typeof value === "string" || typeof value === "boolean") clean[field] = value;
+    }
+    for (const listener of browserListeners) {
+      try {
+        listener(clean);
+      } catch {
+        // One page listener failing does not stop the others.
+      }
+    }
+  });
   contextBridge.exposeInMainWorld("glosaShell", {
+    /** Desk browser tabs (#440): this shell hosts web pages as locked-down `<webview>` guests in the
+     * dock. A version, so an SPA served by a newer daemon can tell an older shell apart. */
+    browserTabs: 1,
+    /** Opens a web or mail address in the system's own handler ("Open in your browser"). The main
+     * process refuses any other scheme (policy.ts). */
+    openExternal: (url) => ipcRenderer.invoke("glosa:open-external", url),
+    /** Calls `listener(event)` for each thing the shell saw in a browser tab (a new window it turned
+     * into a tab, a glosa chord pressed inside a page, a refused download or permission), and
+     * returns an unsubscribe. */
+    onBrowserEvent: (listener) => {
+      if (typeof listener !== "function") return () => {};
+      browserListeners.add(listener);
+      return () => {
+        browserListeners.delete(listener);
+      };
+    },
     /** One-shot: the presentation token for this window load, or null once taken (R-P1, R-P2). */
     presentationToken: () => ipcRenderer.invoke("glosa:presentation-token"),
     /** Opens the native folder picker; the main process runs `glosa open` on the choice. */
