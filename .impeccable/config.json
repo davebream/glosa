@@ -8,6 +8,20 @@
         "value": "\\s*var\\(--font-manuscript\\)/)",
         "createdAt": "2026-09-27T21:47:55.767Z",
         "reason": "false positive: packages/spa/test/style.test.ts asserts in a regex that app.css uses the documented --font-manuscript token; it sets no font (triaged by the assistant, not the user)"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "*",
+        "files": ["docs/research/spikes/browser-tab-comps.html"],
+        "createdAt": "2026-09-29T12:12:39.134Z",
+        "reason": "Claude triage: the flagged colours draw a mock third-party website inside a comps frame, by design outside glosa's palette"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": ["docs/research/spikes/browser-tab-comps.html"],
+        "createdAt": "2026-09-29T12:12:39.152Z",
+        "reason": "Claude triage: the mock third-party website in the comps uses its own system font stack by design"
       }
     ]
   }
