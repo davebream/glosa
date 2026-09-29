@@ -1,0 +1,668 @@
+<!doctype html>
+<!--
+  glosa desk browser tabs: comps for #440 (2026-09-29). A decision aid, not product code. It loads the
+  SPA's own themes.css and app.css, so every colour, face, radius and shadow here is the product's
+  token. Serve the repository root over loopback (`python3 -m http.server` from the root, then open
+  /docs/research/spikes/browser-tab-comps.html) so the vendored faces load; over file:// the browser
+  may refuse them and fall back. The web pages inside the frames are deliberately someone else's
+  design, with literal colours: glosa frames them and never restyles them.
+  Chosen by the maintainer: A1, B1, C2, E3b (docs/design/2026-09-29-browser-tabs-brief.md).
+-->
+<html lang="en" data-theme="light" data-scheme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser tab comps</title>
+<link rel="stylesheet" href="../../../packages/spa/src/themes.css">
+<link rel="stylesheet" href="../../../packages/spa/src/app.css">
+<style>
+  /* ---------- the comps page itself ---------- */
+  html, body { height: auto; }
+  body { background: var(--surface); padding: 0 0 6rem; font-size: var(--text-sm); }
+  .cx-top { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: var(--space-4);
+    padding: var(--space-3) var(--space-6); background: var(--bg); border-bottom: 1px solid var(--rule); }
+  .cx-top h1 { margin: 0; font-size: var(--text-lg); font-weight: 600; }
+  .cx-top p { margin: 0; color: var(--muted); }
+  .cx-top .cx-spacer { flex: 1; }
+  .cx-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-panel); box-shadow: inset 0 0 0 1px var(--rule); }
+  .cx-toggle button { height: 26px; padding: 0 var(--space-3); border-radius: var(--radius-control); color: var(--muted); }
+  .cx-toggle button[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); font-weight: 600; }
+  main { max-width: 1240px; margin: 0 auto; padding: 0 var(--space-6); }
+  section.cx-q { margin-top: var(--space-12); }
+  .cx-q > h2 { font-size: var(--text-xl); font-weight: 600; margin: 0 0 var(--space-2); }
+  .cx-q > .cx-lede { margin: 0 0 var(--space-6); color: var(--muted); font-size: var(--text-base); max-width: 70ch; line-height: 1.55; }
+  .cx-opt { margin-bottom: var(--space-8); }
+  .cx-cap { display: grid; grid-template-columns: auto 1fr; column-gap: var(--space-3); align-items: baseline; margin-bottom: var(--space-3); max-width: 90ch; }
+  .cx-letter { font-weight: 700; font-size: var(--text-md); font-variant-numeric: tabular-nums; }
+  .cx-name { font-weight: 600; font-size: var(--text-md); }
+  .cx-name .cx-rec { margin-left: var(--space-2); font-size: var(--text-xs); font-weight: 600; color: var(--ink);
+    border: 1px solid var(--ink); border-radius: var(--radius-pill); padding: 0 var(--space-2); vertical-align: 2px; }
+  .cx-cap p { grid-column: 2; margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-base); line-height: 1.5; }
+  .cx-row { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--space-4); align-items: start; }
+  .cx-row.cx-one { grid-template-columns: minmax(0, 1fr); }
+  .cx-states { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-6) var(--space-4); }
+  .cx-states .cx-cap { margin-bottom: var(--space-2); }
+  .cx-states .cx-name { font-size: var(--text-base); }
+  @media (max-width: 1100px) {
+    .cx-row { grid-template-columns: minmax(0, 1fr); }
+    .cx-row > div:last-child:not(:first-child) { max-width: 380px; }
+    .cx-states { grid-template-columns: minmax(0, 1fr); }
+    .cx-top { flex-wrap: wrap; }
+  }
+  .cx-width { font-size: var(--text-xs); color: var(--muted); margin: 0 0 var(--space-1); font-variant-numeric: tabular-nums; }
+
+  /* ---------- a miniature desk: tab strip + one pane ---------- */
+  .d { background: var(--bg); border: 1px solid var(--border); overflow: hidden; container-type: inline-size; container-name: d; }
+  .d-strip { display: flex; height: 36px; background: var(--bg); box-shadow: inset 0 -1px 0 var(--border); }
+  .d-tab { position: relative; display: flex; align-items: center; gap: 7px; max-width: 15rem; padding: 0 var(--space-2) 0 var(--space-3);
+    color: var(--muted); white-space: nowrap; }
+  .d-tab + .d-tab { background: linear-gradient(var(--border-strong), var(--border-strong)) no-repeat 0 50% / 1px 14px; }
+  .d-tab.on { background: var(--bg); color: var(--ink); font-weight: 600; box-shadow: inset 1px 0 0 var(--border), inset -1px 0 0 var(--border); }
+  .d-tab.on + .d-tab, .d-tab:has(+ .d-tab.on) { background-image: none; }
+  .d-tab.on:first-child { box-shadow: inset -1px 0 0 var(--border); }
+  .d-tab.on::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--primary); }
+  .d-tab .g { display: grid; place-items: center; color: var(--faint); }
+  .d-tab.on .g { color: var(--muted); }
+  .d-tab .g svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .d-tab .l { overflow: hidden; text-overflow: ellipsis; }
+  .d-tab .x { width: 16px; height: 16px; display: grid; place-items: center; color: var(--muted); opacity: 0; }
+  .d-tab.on .x { opacity: 1; }
+  .d-tab .x svg { width: 10px; height: 10px; stroke: currentColor; stroke-width: 1.5; fill: none; }
+  .d-tab .badge { font-size: var(--text-xs); font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .d-plus { display: grid; place-items: center; width: 28px; height: 28px; margin: 4px 4px 0; border-radius: var(--radius-control); color: var(--muted); }
+  .d-plus:hover, .d-plus.hot { background: var(--surface-sunken); color: var(--ink); }
+  .d-plus svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.6; fill: none; stroke-linecap: round; }
+  .d-pane { position: relative; display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 380px; background: var(--bg); }
+  .d.tall .d-pane { height: 440px; }
+  .d.short .d-pane { height: 300px; }
+
+  /* shared chrome controls */
+  .ic { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-control); color: var(--muted); flex: 0 0 auto; }
+  .ic:hover { background: var(--surface-sunken); color: var(--ink); }
+  .ic[aria-disabled="true"] { color: var(--faint); background: none; }
+  .ic svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .ic svg.fill { fill: currentColor; stroke: none; }
+  .nav { display: flex; gap: 2px; }
+  .loc { flex: 0 0 auto; font-size: var(--text-xs); color: var(--muted); font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+  .loc.warn { color: var(--warn); }
+  .loc svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+  .host { color: var(--ink); }
+  .rest { color: var(--muted); }
+  .url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* A1 · the document bar: the artifact bar's idiom, the address as the row's one object */
+  .a1 { display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, 34rem) minmax(max-content, 1fr); align-items: center; column-gap: var(--space-3);
+    width: calc(100% - 2 * var(--space-4)); height: 40px; margin: var(--space-2) auto var(--space-2); }
+  .a1 .nav { justify-self: start; }
+  .a1 .end { justify-self: end; display: flex; align-items: center; gap: var(--space-1); }
+  .field { display: flex; align-items: center; gap: var(--space-2); height: 30px; padding: 0 var(--space-3); min-width: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font-size: var(--text-sm); }
+  .field:hover { background: var(--bg); border-color: var(--border-strong); }
+  .field.focus { background: var(--bg); border-color: var(--hand); box-shadow: 0 0 0 3px var(--hand-wash); }
+  .field.err { background: var(--bg); border-color: var(--danger); }
+  .field .caret { width: 1px; height: 15px; background: var(--hand); margin-left: -6px; }
+  .field .typed { color: var(--ink); }
+
+  /* A2 · the toolbar: a familiar browser row, the address filling the width */
+  .a2 { display: flex; align-items: center; gap: var(--space-2); height: 44px; padding: 0 var(--space-2); border-bottom: 1px solid var(--border); }
+  .a2 .field { flex: 1; }
+
+  /* A3 · the printed address: set as text, like a path; it becomes a field on click or ⌘L */
+  .a3 { display: flex; align-items: center; gap: var(--space-2); height: 40px; width: calc(100% - 2 * var(--space-4)); margin: var(--space-2) auto var(--space-2); }
+  .a3 .printed { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--space-2); height: 30px; padding: 0 var(--space-2);
+    border-radius: var(--radius-control); line-height: 30px; }
+  .a3 .printed:hover { background: var(--surface-sunken); }
+  .a3 .printed .host { font-weight: 600; }
+  .a3 .printed .rest { font-family: var(--font-mono); font-size: var(--text-xs); }
+  .a3 .end { display: flex; gap: var(--space-1); }
+
+  /* the frame the page sits in, and the page itself (someone else's design) */
+  .d-pane > .frame { grid-row: -2 / -1; }
+  .frame { position: relative; display: grid; min-height: 0; overflow: hidden; border-top: 1px solid var(--border); }
+  .frame > .menu { position: absolute; }
+  .a2 + .notice + .frame, .a2 + .frame { border-top: 0; }
+  .web { min-height: 0; overflow: hidden; background: #fff; color: #1b2230; font: 15px/1.55 -apple-system, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: auto; }
+  .web .wnav { display: flex; align-items: center; gap: 22px; height: 52px; padding: 0 28px; border-bottom: 1px solid #e6e9ef; font-size: 14px; }
+  .web .wlogo { font-weight: 700; color: #0e5fd8; letter-spacing: -0.01em; font-size: 16px; }
+  .web .wnav span { color: #4a5568; }
+  .web .wnav .wbtn { margin-left: auto; background: #0e5fd8; color: #fff; padding: 6px 12px; border-radius: 6px; font-weight: 600; font-size: 13px; }
+  .web .wbody { display: grid; grid-template-columns: 180px 1fr; gap: 32px; padding: 26px 28px; }
+  .web .wside { font-size: 13px; color: #4a5568; display: grid; gap: 8px; align-content: start; }
+  .web .wside b { color: #0e5fd8; font-weight: 600; }
+  .web h3 { margin: 0 0 10px; font-size: 26px; line-height: 1.2; letter-spacing: -0.015em; color: #0f1522; }
+  .web p { margin: 0 0 12px; max-width: 62ch; color: #2d3748; }
+  .web code { background: #f1f4f9; padding: 1px 5px; border-radius: 4px; font: 13px ui-monospace, Menlo, monospace; color: #b0306a; }
+  .web pre { background: #0f1522; color: #e2e8f0; border-radius: 8px; padding: 12px 14px; font: 12.5px/1.6 ui-monospace, Menlo, monospace; margin: 0; max-width: 62ch; }
+  @container d (max-width: 520px) { .web .wbody { grid-template-columns: 1fr; } .web .wside { display: none; } .web .wnav span:not(.wlogo):not(.wbtn) { display: none; } }
+
+  /* narrow panes: the row collapses in the same order every time */
+  @container d (max-width: 460px) {
+    .a1 { grid-template-columns: auto minmax(0, 1fr) auto; }
+    .a1 .nav .fwd, .a3 .nav .fwd, .a2 .nav .fwd { display: none; }
+    .a1 .end .ext, .a2 .ext, .a3 .end .ext { display: none; }
+    .a3 .printed .rest { display: none; }
+  }
+
+  /* B · a restored internet tab that has not loaded */
+  .b1 { display: grid; place-items: center; height: 100%; padding: var(--space-6); }
+  .b1 .sheet { width: min(30rem, 100%); }
+  .b1 h4 { margin: 0 0 var(--space-1); font-size: var(--text-lg); font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+  .b1 .full { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); overflow-wrap: anywhere; margin: 0 0 var(--space-4); }
+  .b1 .why { font-size: var(--text-base); color: var(--ink); line-height: 1.55; margin: 0 0 var(--space-4); }
+  .btns { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .btn { white-space: nowrap; height: 30px; padding: 0 var(--space-3); border-radius: var(--radius-control); font-size: var(--text-sm); font-weight: 500; border: 1px solid transparent; }
+  .btn.p { background: var(--primary); color: var(--on-primary); }
+  .btn.p:hover { background: var(--primary-hover); }
+  .btn.s { background: var(--bg); color: var(--ink); border-color: var(--border-strong); }
+  .btn.s:hover { background: var(--surface); }
+  .btn.sm { height: 26px; padding: 0 var(--space-2); font-size: var(--text-xs); }
+  .b2note { padding: var(--space-4); color: var(--muted); font-size: var(--text-xs); }
+  .b2 .loadbtn { margin-left: var(--space-1); }
+
+  /* C · an agent driving the tab (Session Ink is a session's mark, nothing else) */
+  .notice { display: flex; align-items: center; gap: var(--space-2); min-height: 34px; padding: 0 var(--space-4); border-top: 1px solid var(--rule); font-size: var(--text-sm); color: var(--ink); }
+  .notice > span:not(.sg):not(.end) { min-width: 0; }
+  .notice .sg { display: grid; place-items: center; width: 18px; height: 18px; color: var(--session); }
+  .notice .sg svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+  .notice b { font-weight: 600; }
+  .notice .m { color: var(--muted); }
+  .notice .end { flex: 0 0 auto; margin-left: auto; display: flex; gap: var(--space-2); align-items: center; }
+  .notice.warnrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: 0 0 auto; }
+  .notice + .frame { border-top: 1px solid var(--border); }
+  .frame.sess { border-top: 2px solid var(--session); }
+  .frame.sess.after { border-top: 1px solid var(--session); }
+  .said { display: inline-flex; align-items: center; gap: 5px; margin-right: var(--space-2); color: var(--session); font-size: var(--text-2xs); font-weight: 700; white-space: nowrap; }
+  .said.after { font-weight: 600; }
+  @container d (max-width: 460px) { .said .w { display: none; } }
+  .said svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+  .d-tab .agent { width: 13px; height: 13px; color: var(--muted); }
+
+  /* E · entry points */
+  .menu { position: absolute; z-index: 5; width: 15rem; padding: 4px; background: var(--elevated-bg); border: 1px solid var(--elevated-border); border-radius: var(--radius-panel); box-shadow: var(--shadow-menu); }
+  .menu .mi { display: flex; align-items: center; gap: var(--space-2); height: 30px; padding: 0 var(--space-2); border-radius: var(--radius-micro); color: var(--ink); }
+  .menu .mi.hot { background: var(--surface-sunken); }
+  .menu .mi svg { width: 14px; height: 14px; fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .menu .mi kbd, .pal kbd { margin-left: auto; font: 600 var(--text-2xs) var(--font-sans); color: var(--muted); border: 1px solid var(--border); background: var(--bg); border-radius: var(--radius-micro); padding: 0 4px; line-height: 16px; }
+  .scrim { position: absolute; inset: 0; background: var(--scrim); z-index: 4; }
+  .pal { position: absolute; z-index: 5; left: 50%; top: 36px; transform: translateX(-50%); width: min(36rem, calc(100% - 2rem)); background: var(--elevated-bg); border-radius: var(--radius-overlay);
+    box-shadow: var(--dialog-shadow); border: 1px solid var(--border); overflow: hidden; }
+  .pal .q { display: flex; align-items: center; height: 44px; padding: 0 var(--space-4); font-size: var(--text-base); border-bottom: 1px solid var(--hand); gap: 2px; }
+  .pal .q .caret { width: 1px; height: 17px; background: var(--hand); }
+  .pal .grp { padding: var(--space-2) var(--space-4) 2px; font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+  .pal .row { display: flex; align-items: center; gap: var(--space-2); height: 30px; margin: 0 4px; padding: 0 var(--space-3); border-radius: var(--radius-micro); color: var(--ink); }
+  .pal .row.hot { background: var(--surface-sunken); }
+  .pal .row .d2 { color: var(--muted); font-size: var(--text-xs); }
+  .pal .hint { padding: var(--space-2) var(--space-4) var(--space-3); color: var(--muted); font-size: var(--text-xs); border-top: 1px solid var(--border); margin-top: 4px; }
+
+  /* E3 · tools at the strip's right end, one set per group */
+  .dock2 { display: grid; grid-template-columns: 3fr 2fr; }
+  .dock2 > .grp + .grp { border-left: 1px solid var(--border); }
+  .grp .d-strip { position: relative; }
+  .grp .tabs { display: flex; min-width: 0; overflow: hidden; flex: 1; }
+  .stools { display: flex; align-items: center; gap: 2px; padding: 0 var(--space-1) 0 var(--space-2); flex: 0 0 auto; }
+  .stools .t { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-tool); color: var(--muted); }
+  .stools .t:hover, .stools .t.hot { background: var(--surface-sunken); color: var(--ink); }
+  .stools .t svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .stools .sep { width: 1px; height: 14px; background: var(--border-strong); margin: 0 var(--space-1); }
+  .grp.inactive .stools .t { color: var(--faint); }
+  .grp.inactive .stools .t:hover { color: var(--ink); }
+  .tip { position: absolute; z-index: 6; top: 34px; right: 38px; padding: 3px 8px; border-radius: var(--radius-micro); background: var(--ink); color: var(--bg); font-size: var(--text-xs); white-space: nowrap; box-shadow: var(--shadow-menu); }
+  .tip kbd { font: inherit; opacity: 0.75; margin-left: 6px; }
+  .grp .body { height: 230px; padding: 1.5rem 2rem; font: 16px/1.62 var(--font-serif); color: var(--ink); }
+  .grp .body.chat { font-size: 15px; color: var(--muted); }
+
+  /* States */
+  .msg { height: 100%; display: grid; align-content: center; justify-items: start; padding: var(--space-6) var(--space-8); }
+  .msg h4 { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: 600; overflow-wrap: anywhere; }
+  .msg p { margin: 0 0 var(--space-4); font-size: var(--text-base); color: var(--muted); max-width: 44ch; line-height: 1.55; }
+  .msg code { font-family: var(--font-mono); font-size: 0.9em; color: var(--ink); }
+  .helper { margin: -4px var(--space-4) var(--space-2); padding-left: calc(64px + var(--space-3)); font-size: var(--text-xs); color: var(--danger); font-weight: 600; }
+  .progress { position: relative; height: 2px; margin-top: -1px; overflow: hidden; }
+  .progress::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 38%; background: var(--ink); animation: cx-load 1.4s var(--ease-out) infinite; }
+  @keyframes cx-load { from { transform: translateX(-100%); } to { transform: translateX(270%); } }
+  @media (prefers-reduced-motion: reduce) { .progress::after { animation: none; width: 100%; background: var(--border-strong); } }
+  .blank { height: 100%; background: var(--bg); }
+  .skel { padding: 26px 28px; display: grid; gap: 10px; }
+  .skel i { display: block; height: 10px; border-radius: 3px; background: var(--surface-sunken); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-back" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></symbol>
+    <symbol id="i-fwd" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"/></symbol>
+    <symbol id="i-reload" viewBox="0 0 16 16"><path d="M12.6 6A5 5 0 1 0 13 8.5"/><path d="M13 2.8V6h-3.2"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4"/><path d="M13.5 2.5 8 8"/><path d="M11.5 9.5v4h-9v-9h4"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c-2.2 2.4-2.2 9.6 0 12M8 2c2.2 2.4 2.2 9.6 0 12"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 16 16"><path d="M3 2.5h10v8H7l-4 3z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.3v.2"/></symbol>
+    <symbol id="i-pointer" viewBox="0 0 16 16"><path d="M3.5 2.5 12.5 7l-4 1.3-1.5 4.2z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 10 10"><path d="m1.5 1.5 7 7m0-7-7 7"/></symbol>
+    <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></symbol>
+    <symbol id="i-newchat" viewBox="0 0 16 16"><path d="M2.5 2.5h9v6.5H6l-3.5 2.8z"/><path d="M13 9.5v4M11 11.5h4"/></symbol>
+    <symbol id="i-newweb" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5"/><path d="M2 7h10M7 2c-1.8 2-1.8 8 0 10M7 2c1.8 2 1.8 8 0 10"/><path d="M13 10.5v4M11 12.5h4"/></symbol>
+    <symbol id="i-splitr" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M8 2.5v11"/></symbol>
+    <symbol id="i-splitd" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 8h12"/></symbol>
+    <symbol id="i-claude" viewBox="0 0 16 16"><path d="M8 1.8v12.4M1.8 8h12.4M3.6 3.6l8.8 8.8M12.4 3.6l-8.8 8.8"/></symbol>
+  </defs>
+</svg>
+
+<header class="cx-top">
+  <h1>Browser tabs</h1>
+  <p>Comps for #440. Every colour, face and shadow is the SPA's own token. Chosen: A1, B1, C2, E3b.</p>
+  <span class="cx-spacer"></span>
+  <div class="cx-toggle">
+    <button type="button" aria-pressed="true" data-t="light">Light</button>
+    <button type="button" aria-pressed="false" data-t="dark">Dark</button>
+  </div>
+</header>
+
+<main>
+<!-- ======================================================= A -->
+<section class="cx-q">
+  <h2>1 · Where the address lives</h2>
+  <p class="cx-lede">The row above the page. Same controls in each: back, forward, reload, the address, Open in your browser, More. Right column: the same option in a 380px split pane, where the row collapses (forward and Open in your browser fold into More first).</p>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">A1</span><span class="cx-name">The document bar <span class="cx-rec">Chosen</span></span>
+      <p>The artifact bar's idiom: a transparent row on the paper, the address field centred as the row's one object (like the mode control), navigation left, actions right. A browser tab and a document tab read as the same kind of sheet.</p></div>
+    <div class="cx-row">
+      <div class="d"><div class="d-strip">
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span></div>
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div>
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="d-pane">
+          <div class="a1">
+            <div class="nav"><span class="ic" title="Back"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true" title="Forward"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic" title="Reload"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+            <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+            <div class="end"><span class="ic ext" title="Open in your browser"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic" title="More"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div>
+          </div>
+          <div class="notice" hidden></div>
+          <div class="frame"><div class="web">
+            <div class="wnav"><span class="wlogo">Tidewater</span><span>Guides</span><span>API</span><span>Changelog</span><span class="wbtn">Sign in</span></div>
+            <div class="wbody"><div class="wside"><b>Getting started</b><span>Installation</span><span>Configuration</span><span>Deploying</span></div>
+              <div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar. Install the CLI, then run <code>tide init</code> in your project.</p><pre>npm install -g tidewater
+tide init --region north-sea</pre></div></div>
+          </div></div>
+        </div></div>
+      <div><p class="cx-width">380px pane</p>
+        <div class="d"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+          <div class="d-pane">
+            <div class="a1">
+              <div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+              <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+              <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div>
+            </div><div class="notice" hidden></div>
+            <div class="frame"><div class="web"><div class="wnav"><span class="wlogo">Tidewater</span><span class="wbtn">Sign in</span></div><div class="wbody"><div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar. Install the CLI, then run <code>tide init</code>.</p></div></div></div></div>
+          </div></div></div>
+    </div>
+  </div>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">A2</span><span class="cx-name">The toolbar</span>
+      <p>A familiar browser row: the address fills the width between navigation and actions, and a rule separates the row from the page. Most address visible, most like Chrome or Safari, least like the rest of the desk.</p></div>
+    <div class="cx-row">
+      <div class="d"><div class="d-strip">
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span></div>
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div>
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="d-pane">
+          <div class="a2">
+            <div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+            <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+            <span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span>
+          </div>
+          <div class="notice" hidden></div>
+          <div class="frame"><div class="web">
+            <div class="wnav"><span class="wlogo">Tidewater</span><span>Guides</span><span>API</span><span>Changelog</span><span class="wbtn">Sign in</span></div>
+            <div class="wbody"><div class="wside"><b>Getting started</b><span>Installation</span><span>Configuration</span><span>Deploying</span></div>
+              <div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar. Install the CLI, then run <code>tide init</code> in your project.</p><pre>npm install -g tidewater
+tide init --region north-sea</pre></div></div>
+          </div></div>
+        </div></div>
+      <div><p class="cx-width">380px pane</p>
+        <div class="d"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+          <div class="d-pane">
+            <div class="a2"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+              <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+              <span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div>
+            <div class="notice" hidden></div>
+            <div class="frame"><div class="web"><div class="wnav"><span class="wlogo">Tidewater</span><span class="wbtn">Sign in</span></div><div class="wbody"><div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar. Install the CLI, then run <code>tide init</code>.</p></div></div></div></div>
+          </div></div></div>
+    </div>
+  </div>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">A3</span><span class="cx-name">The printed address</span>
+      <p>No box at rest: the host is printed in 600 ink and the path in mono, like a document's path in its bar. A click or ⌘L turns it into a field with the whole address selected. Quietest, most "glosa", but the field is less obviously a place to type.</p></div>
+    <div class="cx-row">
+      <div class="d"><div class="d-strip">
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span></div>
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div>
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="d-pane">
+          <div class="a3">
+            <div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+            <div class="printed"><span class="loc">Local</span><span class="host">localhost:5173</span><span class="rest url">/docs/getting-started</span></div>
+            <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div>
+          </div>
+          <div class="notice" hidden></div>
+          <div class="frame"><div class="web">
+            <div class="wnav"><span class="wlogo">Tidewater</span><span>Guides</span><span>API</span><span>Changelog</span><span class="wbtn">Sign in</span></div>
+            <div class="wbody"><div class="wside"><b>Getting started</b><span>Installation</span><span>Configuration</span><span>Deploying</span></div>
+              <div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar. Install the CLI, then run <code>tide init</code> in your project.</p><pre>npm install -g tidewater
+tide init --region north-sea</pre></div></div>
+          </div></div>
+        </div></div>
+      <div><p class="cx-width">380px pane</p>
+        <div class="d"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+          <div class="d-pane">
+            <div class="a3"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+              <div class="printed"><span class="loc">Local</span><span class="host">localhost:5173</span><span class="rest url">/docs/getting-started</span></div>
+              <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div>
+            <div class="notice" hidden></div>
+            <div class="frame"><div class="web"><div class="wnav"><span class="wlogo">Tidewater</span><span class="wbtn">Sign in</span></div><div class="wbody"><div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar. Install the CLI, then run <code>tide init</code>.</p></div></div></div></div>
+          </div></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================= B -->
+<section class="cx-q">
+  <h2>2 · A tab that came back without loading</h2>
+  <p class="cx-lede">After a relaunch, an internet tab keeps its address but fetches nothing until you ask (the issue's "restore without silent egress"). Local tabs load at once and never show this. Shown in the A1 row.</p>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">B1</span><span class="cx-name">A quiet sheet <span class="cx-rec">Chosen</span></span>
+      <p>The page area says what this is and why, with Load page as the one primary action. Reads as a deliberate state, not a failure. The tab label is the host until the page names itself.</p></div>
+    <div class="cx-row cx-one">
+      <div class="d short"><div class="d-strip">
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span></div>
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">developer.mozilla.org</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="d-pane">
+          <div class="a1">
+            <div class="nav"><span class="ic" aria-disabled="true"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic" aria-disabled="true"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+            <div class="field"><span class="url"><span class="host">developer.mozilla.org</span><span class="rest">/en-US/docs/Web/API/Popover_API</span></span></div>
+            <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div>
+          </div><div class="notice" hidden></div>
+          <div class="frame"><div class="b1"><div class="sheet">
+            <h4>developer.mozilla.org</h4>
+            <p class="full">https://developer.mozilla.org/en-US/docs/Web/API/Popover_API</p>
+            <p class="why">Not loaded yet. glosa reopened this tab without visiting the site, and fetches nothing until you load it.</p>
+            <div class="btns"><button class="btn p" type="button">Load page</button><button class="btn s" type="button">Open in your browser</button></div>
+          </div></div></div>
+        </div></div>
+    </div>
+  </div>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">B2</span><span class="cx-name">Load in the row</span>
+      <p>The row stays as it always is, with a small Load button where reload sits; the page area is blank paper with one line of explanation. Quieter, but the only action is small and far from where the eye lands.</p></div>
+    <div class="cx-row cx-one">
+      <div class="d short"><div class="d-strip">
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span></div>
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">developer.mozilla.org</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="d-pane">
+          <div class="a1 b2">
+            <div class="nav"><span class="ic" aria-disabled="true"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><button class="btn p sm loadbtn" type="button">Load</button></div>
+            <div class="field"><span class="url"><span class="host">developer.mozilla.org</span><span class="rest">/en-US/docs/Web/API/Popover_API</span></span></div>
+            <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div>
+          </div><div class="notice" hidden></div>
+          <div class="frame"><div class="blank"><p class="b2note">Not loaded since glosa reopened. Nothing is fetched until you load it.</p></div></div>
+        </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================= C -->
+<section class="cx-q">
+  <h2>3 · When an agent is driving the tab</h2>
+  <p class="cx-lede">A chat's agent opened or is reading this page. Session Ink is a session's mark and nothing else (DESIGN.md, the Two Hands Rule), so each option uses it only as a mark, never as a button or a fill. Each shows the moment of reading; C2 also shows what stays after.</p>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">C1</span><span class="cx-name">A notice strip</span>
+      <p>The Question Notice's shape: a one-row strip under the address, a Session Ink glyph, who is doing what, and a way to the chat. Most explicit; costs a row of page height while it shows.</p></div>
+    <div class="cx-row cx-one">
+      <div class="d short"><div class="d-strip">
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div>
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="d-pane">
+          <div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+            <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+            <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div>
+          <div class="notice"><span class="sg"><svg aria-hidden="true"><use href="#i-pointer"/></svg></span><span><b>Claude</b> is reading this page <span class="m">for "Docs rewrite"</span></span><span class="end"><button class="btn s sm" type="button">Show chat</button></span></div>
+          <div class="frame"><div class="web">
+            <div class="wnav"><span class="wlogo">Tidewater</span><span>Guides</span><span>API</span><span>Changelog</span><span class="wbtn">Sign in</span></div>
+            <div class="wbody"><div class="wside"><b>Getting started</b><span>Installation</span><span>Configuration</span></div><div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar. Install the CLI, then run <code>tide init</code> in your project.</p></div></div>
+          </div></div>
+        </div></div>
+    </div>
+  </div>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">C2</span><span class="cx-name">A session's rule, words in the row <span class="cx-rec">Chosen</span></span>
+      <p>The page's edge takes the mark, the way a passage takes a session's bracket: a 2px Session Ink rule along the top of the page, and the words printed in the row, never on the page (a label hanging into the page covered the site's own Sign in button). After the agent finishes, the rule thins to 1px and the row says "Opened by Claude" until you navigate yourself. Costs no page height.</p></div>
+    <div class="cx-row">
+      <div><p class="cx-width">While reading</p>
+        <div class="d short"><div class="d-strip">
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div>
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="badge">reading</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="d-pane">
+          <div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+            <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+            <div class="end"><span class="said"><svg aria-hidden="true"><use href="#i-pointer"/></svg><span class="w">Claude is reading</span></span><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div>
+          <div class="notice" hidden></div>
+          <div class="frame sess"><div class="web">
+            <div class="wnav"><span class="wlogo">Tidewater</span><span>Guides</span><span>API</span><span class="wbtn">Sign in</span></div>
+            <div class="wbody"><div class="wside"><b>Getting started</b><span>Installation</span></div><div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar. Install the CLI, then run <code>tide init</code>.</p></div></div>
+          </div></div>
+        </div></div></div>
+      <div><p class="cx-width">After, until you navigate (380px pane: the words fold to the glyph)</p>
+        <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+          <div class="d-pane">
+            <div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+              <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+              <div class="end"><span class="said after" title="Opened by Claude"><svg aria-hidden="true"><use href="#i-pointer"/></svg><span class="w">Opened by Claude</span></span><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div>
+            <div class="notice" hidden></div>
+            <div class="frame sess after"><div class="web"><div class="wnav"><span class="wlogo">Tidewater</span><span class="wbtn">Sign in</span></div><div class="wbody"><div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar.</p></div></div></div></div>
+          </div></div></div>
+    </div>
+  </div>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">C3</span><span class="cx-name">The tab only</span>
+      <p>Nothing in the pane: the dock tab's glyph becomes the agent's mark and the tab carries "reading", the way a chat tab carries its activity. Invisible once you are looking at the page itself, which is when it matters most.</p></div>
+    <div class="cx-row cx-one">
+      <div class="d short"><div class="d-strip">
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div>
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true" class="agent"><use href="#i-claude"/></svg></span><span class="l">Getting started · Tidewater</span><span class="badge">Claude reading</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="d-pane">
+          <div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+            <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+            <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div>
+          <div class="notice" hidden></div>
+          <div class="frame"><div class="web"><div class="wnav"><span class="wlogo">Tidewater</span><span>Guides</span><span class="wbtn">Sign in</span></div><div class="wbody"><div class="wside"><b>Getting started</b></div><div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar.</p></div></div></div></div>
+        </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================= E -->
+<section class="cx-q">
+  <h2>4 · How you open one</h2>
+  <p class="cx-lede">Links in chats and documents open a tab on their own. For a blank one: ⌘T in the desktop app (free in both the menu and the SPA today) and a Go to command in both modes. The question was whether the desk also shows a button; the maintainer asked for one at the strip's right end, as cmux has (E3).</p>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">E1</span><span class="cx-name">⌘T and Go to only</span>
+      <p>No new chrome on any pane. "New browser tab" sits in Go to's Commands with its chord; ⌘T opens it directly. The new tab arrives with the address field focused. Kept as the keyboard path beside E3b.</p></div>
+    <div class="cx-row cx-one">
+      <div class="d short"><div class="d-strip">
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div>
+        </div>
+        <div class="d-pane"><div class="scrim"></div>
+          <div class="pal"><div class="q"><span class="typed">new br</span><span class="caret"></span></div>
+            <div class="grp">Commands</div>
+            <div class="row hot"><svg aria-hidden="true" width="14" height="14" style="fill:none;stroke:var(--muted);stroke-width:1.5"><use href="#i-globe"/></svg>New browser tab<kbd>⌘T</kbd></div>
+            <div class="row"><svg aria-hidden="true" width="14" height="14" style="fill:none;stroke:var(--muted);stroke-width:1.5"><use href="#i-chat"/></svg>New chat</div>
+            <div class="hint">Enter to run · Esc to close</div>
+          </div>
+          <div style="padding:2rem 3rem;font:18px/1.62 var(--font-serif);color:var(--ink);max-width:68ch">A draft about tide tables. The session changed the docs site's getting-started page.</div>
+        </div></div>
+    </div>
+  </div>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">E2</span><span class="cx-name">A + at the end of the tab strip</span>
+      <p>Every tab strip ends in a small +, which opens a menu: New browser tab, New chat. Discoverable by pointer, but one more click than a tool per action.</p></div>
+    <div class="cx-row cx-one">
+      <div class="d short"><div class="d-strip">
+          <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+          <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div>
+          <span class="d-plus hot" title="New tab"><svg aria-hidden="true"><use href="#i-plus"/></svg></span>
+        </div>
+        <div class="d-pane">
+          <div class="menu" style="left:250px;top:2px">
+            <div class="mi hot"><svg aria-hidden="true"><use href="#i-globe"/></svg>New browser tab<kbd>⌘T</kbd></div>
+            <div class="mi"><svg aria-hidden="true"><use href="#i-chat"/></svg>New chat</div>
+          </div>
+          <div style="padding:2rem 3rem;font:18px/1.62 var(--font-serif);color:var(--ink);max-width:68ch">A draft about tide tables. The session changed the docs site's getting-started page.</div>
+        </div></div>
+    </div>
+  </div>
+
+  <div class="cx-opt">
+    <div class="cx-cap"><span class="cx-letter">E3</span><span class="cx-name">Tools at the strip's right end <span class="cx-rec">Chosen: E3b</span></span>
+      <p>Like cmux's corner: every group's tab strip ends in a few quiet 28px drawn tools, the navigator's header-tool style. A new tab opens in the group whose tool you pressed. Tabs give way (overflow) before the tools do. Desk only; a companion strip shows none. ⌘T and the Go to command stay.</p></div>
+    <p class="cx-width">E3a · browser only</p>
+    <div class="cx-row cx-one"><div class="d dock2">
+        <div class="grp"><div class="d-strip"><div class="tabs">
+            <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+            <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span></div></div>
+            <div class="stools"><span class="t hot" title="New browser tab (⌘T)"><svg aria-hidden="true"><use href="#i-newweb"/></svg></span></div><span class="tip">New browser tab<kbd>⌘T</kbd></span></div>
+          <div class="body">A draft about tide tables. The session changed the docs site's getting-started page, and the change should be checked before the chapter goes out.</div></div>
+        <div class="grp inactive"><div class="d-strip"><div class="tabs">
+            <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div></div>
+            <div class="stools"><span class="t" title="New browser tab (⌘T)"><svg aria-hidden="true"><use href="#i-newweb"/></svg></span></div></div>
+          <div class="body chat">The chat group has its own tools: a new tab opens in the group whose button was pressed.</div></div>
+      </div></div>
+    <p class="cx-width" style="margin-top:var(--space-4)">E3b · new chat and new browser tab (chosen)</p>
+    <div class="cx-row cx-one"><div class="d dock2">
+        <div class="grp"><div class="d-strip"><div class="tabs">
+            <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+            <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span></div></div>
+            <div class="stools"><span class="t" title="New chat"><svg aria-hidden="true"><use href="#i-newchat"/></svg></span><span class="t hot" title="New browser tab (⌘T)"><svg aria-hidden="true"><use href="#i-newweb"/></svg></span></div><span class="tip">New browser tab<kbd>⌘T</kbd></span></div>
+          <div class="body">A draft about tide tables. The session changed the docs site's getting-started page, and the change should be checked before the chapter goes out.</div></div>
+        <div class="grp inactive"><div class="d-strip"><div class="tabs">
+            <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div></div>
+            <div class="stools"><span class="t" title="New chat"><svg aria-hidden="true"><use href="#i-newchat"/></svg></span><span class="t" title="New browser tab (⌘T)"><svg aria-hidden="true"><use href="#i-newweb"/></svg></span></div></div>
+          <div class="body chat">The chat group has its own tools: a new tab opens in the group whose button was pressed.</div></div>
+      </div></div>
+    <p class="cx-width" style="margin-top:var(--space-4)">E3c · cmux parity: chat, browser, split right, split down</p>
+    <div class="cx-row cx-one"><div class="d dock2">
+        <div class="grp"><div class="d-strip"><div class="tabs">
+            <div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div>
+            <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span></div></div>
+            <div class="stools"><span class="t" title="New chat"><svg aria-hidden="true"><use href="#i-newchat"/></svg></span><span class="t hot" title="New browser tab (⌘T)"><svg aria-hidden="true"><use href="#i-newweb"/></svg></span><span class="sep"></span><span class="t" title="Split right"><svg aria-hidden="true"><use href="#i-splitr"/></svg></span><span class="t" title="Split down"><svg aria-hidden="true"><use href="#i-splitd"/></svg></span></div><span class="tip">New browser tab<kbd>⌘T</kbd></span></div>
+          <div class="body">A draft about tide tables. The session changed the docs site's getting-started page, and the change should be checked before the chapter goes out.</div></div>
+        <div class="grp inactive"><div class="d-strip"><div class="tabs">
+            <div class="d-tab"><span class="g"><svg aria-hidden="true"><use href="#i-chat"/></svg></span><span class="l">Docs rewrite</span></div></div>
+            <div class="stools"><span class="t" title="New chat"><svg aria-hidden="true"><use href="#i-newchat"/></svg></span><span class="t" title="New browser tab (⌘T)"><svg aria-hidden="true"><use href="#i-newweb"/></svg></span><span class="sep"></span><span class="t" title="Split right"><svg aria-hidden="true"><use href="#i-splitr"/></svg></span><span class="t" title="Split down"><svg aria-hidden="true"><use href="#i-splitd"/></svg></span></div></div>
+          <div class="body chat">The chat group has its own tools: a new tab opens in the group whose button was pressed.</div></div>
+      </div></div>
+  </div>
+</section>
+
+<!-- ======================================================= States -->
+<section class="cx-q">
+  <h2>5 · States (not choices, check the copy)</h2>
+  <p class="cx-lede">Drawn in A1. These follow from the issue and the security rules.</p>
+  <div class="cx-states">
+
+    <div><div class="cx-cap"><span class="cx-letter">S1</span><span class="cx-name">New, empty tab</span><p>Focused field, nothing loaded. No suggestions: glosa never searches the web.</p></div>
+      <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">New browser tab</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+        <div class="d-pane"><div class="a1"><div class="nav"><span class="ic" aria-disabled="true"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic" aria-disabled="true"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+          <div class="field focus"><span class="caret" style="margin-left:0"></span><span class="rest">Web address, or localhost and a port</span></div>
+          <div class="end"><span class="ic ext" aria-disabled="true"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div><div class="notice" hidden></div>
+          <div class="frame"><div class="msg"><p style="margin:0">Type an address and press Return. <code>localhost:3000</code> and other local addresses load at once; anything else loads from the internet.</p></div></div></div></div></div>
+
+    <div><div class="cx-cap"><span class="cx-letter">S2</span><span class="cx-name">Loading</span><p>Reload becomes Stop; a 2px ink line runs under the row. Under reduced motion the line is still.</p></div>
+      <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">localhost:5173</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+        <div class="d-pane"><div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic" title="Stop"><svg aria-hidden="true"><use href="#i-stop"/></svg></span></div>
+          <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+          <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div><div class="progress"></div>
+          <div class="frame"><div class="blank"><div class="skel"><i style="width:30%"></i><i style="width:70%"></i><i style="width:55%"></i></div></div></div></div></div></div>
+
+    <div><div class="cx-cap"><span class="cx-letter">S3</span><span class="cx-name">Local server not running</span><p>The most common failure for a dev server. Says what to do, not the Chromium error code.</p></div>
+      <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">localhost:5173</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+        <div class="d-pane"><div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+          <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+          <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div><div class="notice" hidden></div>
+          <div class="frame"><div class="msg"><h4>Nothing is answering at localhost:5173</h4><p>The dev server may not be running. Start it, then reload.</p><div class="btns"><button class="btn s" type="button">Reload</button></div></div></div></div></div></div>
+
+    <div><div class="cx-cap"><span class="cx-letter">S4</span><span class="cx-name">Not a web address</span><p>Typed words are not searched: that would send them to a search engine nobody configured.</p></div>
+      <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">New browser tab</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+        <div class="d-pane" style="grid-template-rows:auto auto auto minmax(0,1fr)"><div class="a1"><div class="nav"><span class="ic" aria-disabled="true"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic" aria-disabled="true"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+          <div class="field err"><span class="typed">tide table api</span><span class="caret" style="margin-left:0"></span></div>
+          <div class="end"><span class="ic ext" aria-disabled="true"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div>
+          <p class="helper" style="text-align:center;padding:0">"tide table api" isn't a web address. glosa doesn't search the web.</p><div class="notice" hidden></div>
+          <div class="frame" style="border-top:0"><div class="blank"></div></div></div></div></div>
+
+    <div><div class="cx-cap"><span class="cx-letter">S5</span><span class="cx-name">Not secure, and a blocked download</span><p>Plain http off this Mac is labelled in words. A download or a permission request is refused and said once, with a way out.</p></div>
+      <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Reports · Harbour Office</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+        <div class="d-pane"><div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+          <div class="field"><span class="loc warn"><svg aria-hidden="true"><use href="#i-warn"/></svg>Not secure</span><span class="url"><span class="host">harbour-office.example</span><span class="rest">/reports</span></span></div>
+          <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div>
+          <div class="notice warnrow"><span class="dot"></span><span>This page tried to download <b>tides-2026.pdf</b>. glosa doesn't save downloads.</span><span class="end"><button class="btn s sm" type="button">Open in your browser</button><span class="ic" style="width:24px;height:24px" title="Dismiss"><svg aria-hidden="true" style="width:10px;height:10px"><use href="#i-close"/></svg></span></span></div>
+          <div class="frame"><div class="web"><div class="wnav"><span class="wlogo" style="color:#276749">Harbour Office</span><span>Reports</span><span>Notices</span></div><div class="wbody"><div class="wside"><b style="color:#276749">Tide reports</b></div><div><h3>Annual tide report</h3><p>Download the full report for 2026 as a PDF.</p></div></div></div></div></div></div></div>
+
+    <div><div class="cx-cap"><span class="cx-letter">S6</span><span class="cx-name">Certificate not valid</span><p>No "proceed anyway" inside glosa. The escape hatch is your own browser, where your trust settings live.</p></div>
+      <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">staging.tidewater.dev</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+        <div class="d-pane"><div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+          <div class="field"><span class="url"><span class="host">staging.tidewater.dev</span></span></div>
+          <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div><div class="notice" hidden></div>
+          <div class="frame"><div class="msg"><h4>staging.tidewater.dev has a certificate glosa can't trust</h4><p>glosa won't show this page. If you trust the site, open it in your browser.</p><div class="btns"><button class="btn s" type="button">Open in your browser</button></div></div></div></div></div></div>
+
+    <div><div class="cx-cap"><span class="cx-letter">S7</span><span class="cx-name">In a plain browser: the hand-off</span><p>Go to's "New browser tab" turns the palette into an address prompt; Return opens a tab of your own browser. glosa's page stays where it was.</p></div>
+      <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-doc"/></svg></span><span class="l">draft.md</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+        <div class="d-pane"><div class="scrim"></div>
+          <div class="pal" style="top:24px"><div class="q"><span class="typed">localhost:5173/docs</span><span class="caret"></span></div>
+            <div class="row hot"><svg aria-hidden="true" width="14" height="14" style="fill:none;stroke:var(--muted);stroke-width:1.5"><use href="#i-ext"/></svg>Open localhost:5173/docs<span class="d2" style="margin-left:auto">in a new tab of this browser</span></div>
+            <div class="hint">Browser tabs inside glosa need the desktop app. Here, pages open in your own browser.</div></div>
+          <div style="padding:2rem 3rem;font:18px/1.62 var(--font-serif);color:var(--ink)">A draft about tide tables.</div></div></div></div>
+
+    <div><div class="cx-cap"><span class="cx-letter">S8</span><span class="cx-name">A menu over the page</span><p>Menus, Go to and dialogs always draw over the page.</p></div>
+      <div class="d short"><div class="d-strip"><div class="d-tab on"><span class="g"><svg aria-hidden="true"><use href="#i-globe"/></svg></span><span class="l">Getting started · Tidewater</span><span class="x"><svg aria-hidden="true"><use href="#i-close"/></svg></span></div></div>
+        <div class="d-pane"><div class="a1"><div class="nav"><span class="ic"><svg aria-hidden="true"><use href="#i-back"/></svg></span><span class="ic fwd" aria-disabled="true"><svg aria-hidden="true"><use href="#i-fwd"/></svg></span><span class="ic"><svg aria-hidden="true"><use href="#i-reload"/></svg></span></div>
+          <div class="field"><span class="loc">Local</span><span class="url"><span class="host">localhost:5173</span><span class="rest">/docs/getting-started</span></span></div>
+          <div class="end"><span class="ic ext"><svg aria-hidden="true"><use href="#i-ext"/></svg></span><span class="ic" style="background:var(--surface-sunken);color:var(--ink)"><svg aria-hidden="true" class="fill"><use href="#i-more"/></svg></span></div></div><div class="notice" hidden></div>
+          <div class="frame"><div class="menu" style="right:16px;top:2px">
+            <div class="mi"><svg aria-hidden="true"><use href="#i-ext"/></svg>Open in your browser</div>
+            <div class="mi hot"><svg aria-hidden="true"><use href="#i-doc"/></svg>Copy address</div>
+            <div class="mi"><svg aria-hidden="true"><use href="#i-reload"/></svg>Reload<kbd>⌘R</kbd></div>
+            <div class="mi"><svg aria-hidden="true"><use href="#i-close" style="transform:translate(2px,2px)"/></svg>Close tab<kbd>⌘W</kbd></div></div>
+            <div class="web"><div class="wnav"><span class="wlogo">Tidewater</span><span>Guides</span><span class="wbtn">Sign in</span></div><div class="wbody"><div class="wside"><b>Getting started</b></div><div><h3>Getting started</h3><p>Tidewater syncs tide tables to your calendar.</p></div></div></div></div></div></div></div>
+
+  </div>
+</section>
+</main>
+<script>
+  for (const b of document.querySelectorAll(".cx-toggle button")) b.addEventListener("click", () => {
+    document.documentElement.dataset.theme = b.dataset.t;
+    document.documentElement.dataset.scheme = b.dataset.t;
+    for (const o of document.querySelectorAll(".cx-toggle button")) o.setAttribute("aria-pressed", String(o === b));
+  });
+</script>
+</body>
+</html>

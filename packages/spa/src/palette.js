@@ -76,6 +76,18 @@ export function createCommandPalette({
     searching = false;
   /** @type {ReturnType<typeof setTimeout> | undefined} */ let searchTimer;
   /** @type {string | undefined} */ let nextChatPage;
+  /**
+   * A question the palette asks instead of searching (`prompt`), such as the address a plain
+   * browser hands to a tab of its own (#440). Null while the palette is Go to.
+   * @type {null | {
+   *   label: string,
+   *   placeholder: string,
+   *   hint: string,
+   *   describe: (text: string) => ({ ok: true, label: string, detail: string } | { ok: false, message: string } | null),
+   *   submit: (text: string) => void,
+   * }}
+   */
+  let prompting = null;
 
   const inputEl = el("input", {
     className: "glosa-palette-input",
@@ -144,6 +156,67 @@ export function createCommandPalette({
     [sheetEl],
   );
   host.append(rootEl);
+  const goTo = {
+    placeholder: inputEl.placeholder,
+    label: inputEl.getAttribute("aria-label"),
+    hint: hintEl.textContent,
+  };
+
+  /** Puts the palette back to Go to after a prompt. */
+  function endPrompt() {
+    prompting = null;
+    rootEl.setAttribute("aria-label", "Go to");
+    inputEl.placeholder = goTo.placeholder;
+    inputEl.setAttribute("aria-label", goTo.label ?? "");
+    hintEl.textContent = goTo.hint;
+    filters.hidden = false;
+    delete emptyEl.dataset.tone;
+  }
+
+  function renderPrompt() {
+    if (!prompting) return;
+    listEl.textContent = "";
+    shown = [];
+    delete emptyEl.dataset.tone;
+    emptyEl.hidden = true;
+    inputEl.setAttribute("aria-activedescendant", "");
+    const answer = prompting.describe(inputEl.value);
+    if (!answer) return;
+    if (!answer.ok) {
+      emptyEl.hidden = false;
+      emptyEl.dataset.tone = "error";
+      emptyEl.textContent = answer.message;
+      return;
+    }
+    const row = el("button", {
+      className: "glosa-palette-item",
+      type: "button",
+      role: "option",
+      id: `${listId}-0`,
+      tabIndex: -1,
+      "aria-selected": "true",
+      "data-kind": "command",
+    });
+    row.append(
+      el("span", { className: "glosa-palette-label", textContent: answer.label }),
+      el("span", { className: "glosa-palette-meta", textContent: answer.detail }),
+    );
+    row.addEventListener("click", () => submitPrompt());
+    listEl.append(row);
+    inputEl.setAttribute("aria-activedescendant", row.id);
+  }
+
+  function submitPrompt() {
+    const spec = prompting;
+    if (!spec) return;
+    const text = inputEl.value;
+    if (!spec.describe(text)?.ok) {
+      renderPrompt();
+      return;
+    }
+    close();
+    spec.submit(text);
+  }
 
   /** @param {string} raw */
   function parseQuery(raw) {
@@ -339,6 +412,7 @@ export function createCommandPalette({
   function close({ restoreFocus = true } = {}) {
     if (!open) return;
     open = false;
+    if (prompting) endPrompt();
     searchGeneration++;
     clearTimeout(searchTimer);
     rootEl.hidden = true;
@@ -353,6 +427,10 @@ export function createCommandPalette({
   }
 
   function onInput() {
+    if (prompting) {
+      renderPrompt();
+      return;
+    }
     active = 0;
     searchGeneration++;
     clearTimeout(searchTimer);
@@ -417,9 +495,11 @@ export function createCommandPalette({
     if (event.target !== inputEl) return;
     if (event.key === "Enter") {
       event.preventDefault();
-      pick(active);
+      if (prompting) submitPrompt();
+      else pick(active);
       return;
     }
+    if (prompting) return;
     const next =
       event.key === "ArrowDown"
         ? active + 1
@@ -459,6 +539,27 @@ export function createCommandPalette({
       else show();
     },
     isOpen: () => open,
+    /** Asks one question in the palette's place: the row under the field says what Return will do,
+     * or why it will not. Used where the answer leaves glosa, such as a plain browser handing an
+     * address to a tab of its own (#440).
+     * @param {NonNullable<typeof prompting>} spec */
+    prompt(spec) {
+      if (destroyed) return;
+      if (!open) show();
+      prompting = spec;
+      searchGeneration++;
+      clearTimeout(searchTimer);
+      rootEl.setAttribute("aria-label", spec.label);
+      inputEl.placeholder = spec.placeholder;
+      inputEl.setAttribute("aria-label", spec.label);
+      inputEl.value = "";
+      filters.hidden = true;
+      more.hidden = true;
+      searchStatus.textContent = "";
+      hintEl.textContent = spec.hint;
+      renderPrompt();
+      queueMicrotask(() => inputEl.focus({ preventScroll: true }));
+    },
     destroy() {
       destroyed = true;
       close({ restoreFocus: false });

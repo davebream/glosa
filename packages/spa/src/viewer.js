@@ -1,5 +1,3 @@
-import { createImagePane } from "./image-pane.js";
-import { droppedImages } from "./image-insertion.js";
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the workspace surface (R6). Since the multi-artifact workbench (design brief
 // docs/design/2026-09-04-multi-artifact-workbench-brief.md) this module owns everything that is
@@ -14,6 +12,10 @@ import { droppedImages } from "./image-insertion.js";
 // Visual system: app.css. Topology: top bar (workspace chrome) / connection banner / navigator /
 // dock. Each dock pane carries its own artifact bar, manuscript, contextual margin, and history.
 
+import { addressProblem, parseAddress } from "./browser-address.js";
+import { createBrowserPane } from "./browser-pane.js";
+import { createImagePane } from "./image-pane.js";
+import { droppedImages } from "./image-insertion.js";
 import { mountAgentFeedback } from "./agent-feedback.js";
 import { isQuestion, selectArrivals } from "./agent-request.js";
 import { mountAgentSettings } from "./agent-settings.js";
@@ -31,7 +33,14 @@ import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_
 import { createStyleStore } from "./style.js";
 import { createTextSizeStore } from "./text-size.js";
 import { createCommandPalette } from "./palette.js";
-import { artifactPanelId, chatPanelId, decodePanelId, externalPanelId, settingsPanelId } from "./panel-identity.js";
+import {
+  artifactPanelId,
+  browserPanelId,
+  chatPanelId,
+  decodePanelId,
+  externalPanelId,
+  settingsPanelId,
+} from "./panel-identity.js";
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
 import { createViewerFeedbackController } from "./viewer-feedback.js";
 import { createNavigatorController } from "./viewer-navigator.js";
@@ -199,6 +208,17 @@ export function mountApp(
 
   // A single presented document is one document: no tab strip, no dock (brief §4).
   const singlePane = surface === "document";
+  // Desk browser tabs (#440): web pages open in the dock only in a desktop app whose shell hosts
+  // them, and says which version it is; in a plain browser the same actions hand the address to
+  // the person's own browser. A companion surface has none of it.
+  const browserTabs = desk && !singlePane && Number(desktopShell?.browserTabs) >= 1;
+  /** A page that belongs outside glosa: the desktop shell hands it to the system; a plain browser
+   * opens a tab of its own. */
+  function openOutside(url) {
+    if (typeof desktopShell?.openExternal === "function") {
+      void Promise.resolve(desktopShell.openExternal(url)).catch(() => {});
+    } else window.open(url, "_blank", "noopener,noreferrer");
+  }
   const dictationController = injectedDictationController ?? createDictationController({ dataAccess });
   const ownsDictationController = !injectedDictationController;
 
@@ -451,7 +471,7 @@ export function mountApp(
       params: { kind: "external-chat", sessionId },
     });
   }
-  function openChat(chatId, sourceChatId) {
+  function openChat(chatId, sourceChatId, group) {
     if (!dock) return;
     const id = chatPanelId(chatId),
       panel = dock.api.getPanel(id);
@@ -465,7 +485,162 @@ export function mountApp(
       tabComponent: "pane",
       title: "Chat",
       params: { kind: "chat", chatId, sourceChatId },
+      ...(group && dock.api.groups.includes(group) ? { position: { referenceGroup: group } } : {}),
     });
+  }
+
+  // ---------- desk browser tabs (#440) ----------
+
+  /** A new browser tab, in `group` or the active one. In a plain browser there is no tab to open:
+   * the address goes to the person's own browser instead (`askAddress`). */
+  function openBrowserTab({ url = "", group } = {}) {
+    if (!dock || !desk || singlePane) return false;
+    if (!browserTabs) {
+      if (url) openOutside(url);
+      else askAddress();
+      return false;
+    }
+    const target = group && dock.api.groups.includes(group) ? group : dock.api.activeGroup;
+    const id = browserPanelId(crypto.randomUUID());
+    dock.api.addPanel({
+      id,
+      component: "pane",
+      tabComponent: "pane",
+      title: "New browser tab",
+      params: { kind: "browser", url },
+      renderer: "always",
+      minimumWidth: MIN_PANE_WIDTH,
+      ...(target ? { position: { referenceGroup: target } } : {}),
+    });
+    markActivePane();
+    // A blank tab is for typing an address: its field takes focus once dockview has attached it.
+    if (!url) requestAnimationFrame(() => panes.get(id)?.focusAddress?.());
+    return true;
+  }
+
+  /** The plain-browser hand-off (brief S7): Go to asks for an address, and Return opens it in a new
+   * tab of this browser. glosa's own page stays where it was. */
+  function askAddress() {
+    palette.prompt({
+      label: "Open a web page",
+      placeholder: "Web address, or localhost and a port",
+      hint: "Browser tabs inside glosa need the desktop app. Here, pages open in your own browser.",
+      describe: (text) => {
+        const parsed = parseAddress(text);
+        if (parsed.ok) return { ok: true, label: `Open ${text.trim()}`, detail: "in a new tab of this browser" };
+        return parsed.reason === "empty" ? null : { ok: false, message: addressProblem(parsed) };
+      },
+      submit: (text) => {
+        const parsed = parseAddress(text);
+        if (parsed.ok) window.open(parsed.url, "_blank", "noopener,noreferrer");
+      },
+    });
+  }
+
+  function newBrowserTab(group) {
+    if (browserTabs) openBrowserTab({ group });
+    else askAddress();
+  }
+
+  /** The dock group a node sits in, found through the pane that holds it. */
+  function groupHolding(node) {
+    for (const [id, pane] of panes) {
+      if (pane.element?.contains?.(node)) return dock?.api.getPanel(id)?.api.group;
+    }
+    return undefined;
+  }
+
+  // Web links on the desk (#440). A link in a chat or a document opens a browser tab beside the
+  // pane it is in; in a plain browser, and anywhere else (Settings, a companion surface), it opens
+  // outside glosa. Nothing here follows a link inside glosa's own page: before this, the desktop
+  // app dropped every such click and a plain browser navigated away from glosa.
+  function onLinkActivate(event) {
+    if (event.defaultPrevented) return;
+    if (event.type === "click" ? event.button !== 0 : event.button !== 1) return;
+    const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (!anchor || !root.contains(anchor)) return;
+    let target;
+    try {
+      target = new URL(anchor.getAttribute("href") ?? "", window.location.href);
+    } catch {
+      return;
+    }
+    if (target.protocol === "mailto:") {
+      if (typeof desktopShell?.openExternal !== "function") return;
+      event.preventDefault();
+      openOutside(target.href);
+      return;
+    }
+    if ((target.protocol !== "http:" && target.protocol !== "https:") || target.origin === window.location.origin)
+      return;
+    event.preventDefault();
+    const inWriting = anchor.closest(".glosa-chat-markdown, .glosa-content, .glosa-conv-feed");
+    if (inWriting && browserTabs) openBrowserTab({ url: target.href, group: groupHolding(anchor) });
+    else openOutside(target.href);
+  }
+  root.addEventListener("click", onLinkActivate);
+  root.addEventListener("auxclick", onLinkActivate);
+
+  /** What the shell saw in one of this window's browser tabs (packages/shell/src/preload.cjs). */
+  function onBrowserEvent(event) {
+    if (unmounted) return;
+    if (event.type === "key") {
+      // A glosa chord pressed with a page focused: the same shortcut the document would have had.
+      onShortcut({
+        key: event.key,
+        metaKey: Boolean(event.meta),
+        ctrlKey: Boolean(event.control),
+        shiftKey: Boolean(event.shift),
+        altKey: Boolean(event.alt),
+        preventDefault() {},
+      });
+      return;
+    }
+    for (const [id, pane] of panes) {
+      if (pane.kind !== "browser" || pane.guestId?.() !== event.guestId) continue;
+      if (event.type === "open-tab") openBrowserTab({ url: event.url, group: dock?.api.getPanel(id)?.api.group });
+      else pane.handleShellEvent?.(event);
+      return;
+    }
+  }
+  const stopBrowserEvents = browserTabs ? (desktopShell?.onBrowserEvent?.(onBrowserEvent) ?? null) : null;
+
+  const TOOL_ICONS = {
+    chat: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 2.5h9v6.5H6l-3.5 2.8z"/><path d="M13 9.5v4M11 11.5h4"/></svg>',
+    browser:
+      '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M2 7h10M7 2c-1.8 2-1.8 8 0 10M7 2c1.8 2 1.8 8 0 10"/><path d="M13 10.5v4M11 12.5h4"/></svg>',
+  };
+
+  /** The tools at the right end of a desk group's tab strip (brief E3b): a new chat and a new
+   * browser tab, each opening in this group. */
+  function stripTools(group) {
+    const tool = (className, label, icon, onClick) => {
+      const button = el("button", {
+        type: "button",
+        className: `glosa-strip-tool ${className}`,
+        "aria-label": label,
+        title: label,
+        onClick,
+      });
+      button.innerHTML = icon;
+      return button;
+    };
+    const tools = el("div", { className: "glosa-strip-tools", role: "group", "aria-label": "New tab in this pane" });
+    if (dataAccess.getChats)
+      tools.append(
+        tool("glosa-strip-new-chat", "New chat", TOOL_ICONS.chat, () =>
+          newChat(undefined, undefined, undefined, group).catch(chatFailed("Couldn't start a chat")),
+        ),
+      );
+    tools.append(
+      tool(
+        "glosa-strip-new-browser",
+        browserTabs ? "New browser tab (⌘T)" : "Open a web page in your browser",
+        TOOL_ICONS.browser,
+        () => newBrowserTab(group),
+      ),
+    );
+    return tools;
   }
   function openAgentSettings() {
     if (!dock) return;
@@ -483,7 +658,7 @@ export function mountApp(
       params: { kind: "agent-settings" },
     });
   }
-  async function newChat(profile, settings, sourceChatId) {
+  async function newChat(profile, settings, sourceChatId, group) {
     if (creatingChat) return;
     creatingChat = true;
     try {
@@ -545,7 +720,7 @@ export function mountApp(
       if (slug !== currentSlug || unmounted) return;
       await refreshChats();
       if (slug !== currentSlug || unmounted) return;
-      openChat(chat.id, sourceChatId);
+      openChat(chat.id, sourceChatId, group);
     } finally {
       creatingChat = false;
     }
@@ -776,6 +951,13 @@ export function mountApp(
         label: "New chat",
         run: () => void newChat().catch(chatFailed("Couldn't start a chat")),
       });
+    if (desk && !singlePane)
+      commands.push({
+        id: "new-browser-tab",
+        label: "New browser tab",
+        detail: browserTabs ? "⌘T" : "Opens in your browser",
+        run: () => newBrowserTab(),
+      });
     if (pane && pane.kind === "artifact" && !readLock) {
       const mode = pane.getMode?.();
       if (mode === "edit") {
@@ -968,6 +1150,8 @@ export function mountApp(
         tooltip: pane.path,
         missing: pane.isMissing(),
       };
+    if (pane.kind === "browser")
+      return { kind: "browser", label: pane.title, tooltip: pane.url || pane.title, loading: pane.loading };
     if (["chat", "external-chat", "agent-settings"].includes(pane.kind))
       return {
         kind: pane.kind,
@@ -1063,7 +1247,43 @@ export function mountApp(
     dock?.saveLayout();
   }
 
-  function createPane(id, params, host, panelApi) {
+  function createPane(id, params, host, panelApi, { restoring = false } = {}) {
+    if (params.kind === "browser") {
+      /** @type {any} */ let pane = null;
+      let savedUrl = typeof params.url === "string" ? params.url : "";
+      pane = createBrowserPane(host, {
+        url: savedUrl,
+        restored: restoring,
+        openOutside,
+        // The page's address rides in the panel's params, so the saved layout brings it back.
+        onNavigate: ({ url }) => {
+          if (!pane) return;
+          if (url && url !== savedUrl && panelApi?.updateParameters) {
+            savedUrl = url;
+            panelApi.updateParameters({ url });
+            dock?.saveLayout();
+          }
+          panelApi?.setTitle?.(pane.title);
+        },
+        onStateChange: () => {
+          if (pane) refreshTabs();
+        },
+        // A click into the page never reaches this document, so the pane is chosen from here.
+        onFocusPage: () => {
+          if (activePanelId !== id) panelApi?.setActive?.();
+        },
+        closeTab: () => void dock?.requestClose(id),
+        paneCommands: dock?.moveCommands() ?? [],
+      });
+      panes.set(id, pane);
+      const visibility = panelApi?.onDidVisibilityChange?.((event) => {
+        if (!event.isVisible) pane.hidden?.();
+      });
+      pane.releaseVisibility = () => visibility?.dispose?.();
+      pane.element.setAttribute("data-active", String(id === activePanelId));
+      panelApi?.setTitle?.(pane.title);
+      return pane;
+    }
     if (params.kind === "image") {
       const pane = createImagePane(host, {
         dataAccess,
@@ -1109,6 +1329,7 @@ export function mountApp(
         dataAccess,
         appearance,
         textSize,
+        openOutside,
         onChange: () => void refreshChats().catch(() => {}),
       });
       panes.set(id, pane);
@@ -1384,6 +1605,18 @@ export function mountApp(
       activePane().toggleEdit?.();
       return;
     }
+    // ⌘T: a new browser tab (#440). A plain browser keeps ⌘T for itself; there Go to offers it.
+    if (!e.altKey && !e.shiftKey && (e.key === "t" || e.key === "T") && desk && !singlePane) {
+      e.preventDefault();
+      newBrowserTab();
+      return;
+    }
+    // ⌘L: the active browser tab's address, as in every browser.
+    if (!e.altKey && !e.shiftKey && (e.key === "l" || e.key === "L") && activePane()?.kind === "browser") {
+      e.preventDefault();
+      activePane().focusAddress();
+      return;
+    }
     if (!e.altKey && (e.key === "w" || e.key === "W")) {
       if (!activePanelId) return;
       e.preventDefault();
@@ -1567,6 +1800,7 @@ export function mountApp(
       destroyPane,
       getTabState: tabStateFor,
       emptyState: paneEmptyState,
+      createHeaderTools: desk && !singlePane ? stripTools : null,
       confirmClosePanel: (id) => panes.get(id)?.confirmClose?.() ?? Promise.resolve(true),
       onActivePanelChange: (id) => {
         activePanelId = id;
@@ -1623,6 +1857,7 @@ export function mountApp(
       dock.restoreLayout(
         (_id, params) =>
           params.kind === "agent-settings" ||
+          (params.kind === "browser" && browserTabs) ||
           (params.kind === "image" && knownImages.has(params.path)) ||
           (params.kind === "external-chat" &&
             externalSessions.some((session) => session.session_id === params.sessionId)) ||
@@ -1904,6 +2139,9 @@ export function mountApp(
     stopChatsStream?.();
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
+    root.removeEventListener("click", onLinkActivate);
+    root.removeEventListener("auxclick", onLinkActivate);
+    stopBrowserEvents?.();
     window.removeEventListener("focus", onWindowFocus);
     sidebarNav.destroy();
     feedbackController.destroy();

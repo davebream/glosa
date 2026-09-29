@@ -1716,3 +1716,51 @@ container (electron-builder 26.15.3, fpm 1.17.0, pacman 7.1) confirmed each one.
   virtual machines without AVX2; the cost is irrelevant for this workload.
 - **A running daemon and a changing install** follow
   `docs/design/2026-09-29-install-lifetime-and-restart.md` (R-L1..R-L10) on every channel.
+
+
+## Desk browser tabs load web pages, in their own partition, only when a person asks (2026-09-29, #440)
+
+The maintainer decided on 2026-09-28 that a desk surface in the desktop app gets browser tabs:
+web pages in the dock beside documents and chats, loading any address, internet included, with one
+saved cookie store for every tab and workspace. A companion surface gets none of it, and a plain
+browser hands the address to the person's own browser. This records how glosa keeps its privacy
+posture (invariant 5, `requirements.md` Privacy) while doing so; A3 §4b holds the rules and §5 the
+tests.
+
+**What may load, and when.** A browser tab fetches only on a person's action: typing an address and
+pressing Return, clicking a link in a chat, a document or a page, clicking Load on a restored tab,
+or reload, back and forward. A tab restored after a relaunch or a reload loads at once only when its
+address is on this machine (loopback); an internet address shows the address and a Load button and
+fetches nothing, because reopening glosa is not choosing to visit that site again. glosa makes no
+other loads for a tab: no search (typed words are refused, never sent to a search engine), no
+suggestions, no prefetch, no favicon or preview for a tab that has not loaded, and the partition's
+spellchecker is off outside macOS, where Chromium would download dictionaries. Agent-initiated
+navigation is not part of this entry; it arrives with the agent's browser tools and is recorded
+with them.
+
+**Where pages run.** Every tab is a `<webview>` guest in one persistent partition,
+`persist:glosa-browser`, never the SPA's default session: that session holds the pairing credential
+in the SPA origin's storage and keeps its loopback-only egress gate exactly as it was. The
+partition has its own request policy: http, https and their sockets load; files, custom schemes and
+the daemon's own ports on any loopback name are cancelled. Permission requests and downloads are
+refused, and the ones a person would miss are said in the tab with a way out to their own browser.
+The user agent drops Electron's and glosa's tokens, so no site learns that glosa, or which version,
+is asking. Certificate errors are not overridable in glosa; the tab offers the person's own browser.
+
+**Why `<webview>`.** `docs/research/2026-09-29-browser-tab-rendering.md`: inside the dock's
+always-render mode the page survives every move the dock makes, and every overlay glosa draws
+(menus, Go to, dialogs, drag targets) lands over the page with no extra work. A `WebContentsView`
+would need a still image under each overlay and bounds kept in step with the panel. Electron
+discourages `<webview>`; the mitigation is the main process: `webviewTag` is on for every window,
+`will-attach-webview` refuses anything but a desk window's SPA frame asking for a web address, and
+rewrites every guest's preferences (the browser partition, no preload, sandboxed, isolated, no Node,
+no nested guests), whatever the page asked for.
+
+**Why one shared store.** Signing in again per project is friction with little benefit for a
+single-person local tool (maintainer, 2026-09-28). The accepted cost: a page opened in one workspace
+can see cookies set while working in another.
+
+**Rejected.** An iframe (most sites refuse framing, and the SPA's CSP frames only class-F); a local
+proxy that strips framing headers (it weakens the site's own protection); loopback only; per-workspace
+or forgetful stores; restoring and loading every tab on launch; a browser on the companion face;
+driving cmux's browser (invariant 4).

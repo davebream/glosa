@@ -329,6 +329,10 @@
     "packages/spa/test/update-notice.test.ts": {
       "seconds": 0.1,
       "reason": "Initial local Bun 1.4.2 estimate for the update notice's happy-dom tests (manual timers, fake shell, no network); replace with measured CI medians."
+    },
+    "packages/spa/test/browser-tab.test.ts": {
+      "seconds": 0.2,
+      "reason": "Initial local Bun 1.4.2 estimate for the browser tab address rules and pane states (pure corpus plus happy-dom with a stand-in webview, measured 0.13 s); replace with measured CI medians."
     }
   }
 }

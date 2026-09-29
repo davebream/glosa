@@ -896,5 +896,266 @@ describe.skipIf(!electronInstalled)(
         redirecting.stop();
       }
     }, 120_000);
+
+    // ---------- desk browser tabs (#440; A3 §4b, §5 row 13) ----------
+
+    /** A stand-in for the web on a port this test owns, counting every request by path. It is
+     * reached as `localhost:<port>` (a local page) and as `internet.test:<port>` (a Chromium
+     * host-resolver rule maps that name to loopback, so glosa sees an internet address without the
+     * test leaving this machine). */
+    function fakeWeb() {
+      const hits = new Map<string, number>();
+      const page = (title: string, body: string) =>
+        new Response(`<!doctype html><title>${title}</title><body>${body}</body>`, {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      let web_port = 0;
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch(req) {
+          const path = new URL(req.url).pathname;
+          hits.set(path, (hits.get(path) ?? 0) + 1);
+          if (path === "/report.pdf")
+            return new Response("%PDF-1.4", {
+              headers: {
+                "content-type": "application/pdf",
+                "content-disposition": "attachment; filename=tides-2026.pdf",
+              },
+            });
+          if (path === "/probe")
+            return page(
+              "Probe",
+              `<a href="/report.pdf">report</a><script>
+              window.__probe = (async () => {
+                const r = { bridge: typeof window.glosaShell, ua: navigator.userAgent };
+                // no-cors: a request that reached the server resolves (opaque); only one the shell
+                // cancelled rejects. A CORS failure must not pass for a refusal.
+                try { await fetch("http://127.0.0.1:${port}/api/handshake", { mode: "no-cors" }); r.daemon = "reached"; } catch { r.daemon = "blocked"; }
+                try { await fetch("http://127.0.0.1:${port + 1}/", { mode: "no-cors" }); r.classF = "reached"; } catch { r.classF = "blocked"; }
+                try { await fetch("http://localhost:${web_port}/other", { mode: "no-cors" }); r.web = "reached"; } catch { r.web = "blocked"; }
+                r.notify = await Notification.requestPermission();
+                return r;
+              })();</script>`,
+            );
+          return page(path.slice(1) || "Home", "<p>page</p>");
+        },
+      });
+      web_port = server.port ?? 0;
+      return { port: server.port, hits: (path: string) => hits.get(path) ?? 0, stop: () => server.stop(true) };
+    }
+
+    /** Types an address into a new browser tab, the way a person does: the strip's tool, then the field. */
+    async function openTab(cdp: Cdp, address: string): Promise<void> {
+      await cdp.evaluate("document.querySelector('.glosa-strip-new-browser').click(), true");
+      let focused = false;
+      for (let i = 0; i < 50 && !focused; i++) {
+        focused = await cdp.evaluate<boolean>(
+          "document.activeElement?.classList.contains('glosa-browser-input') ?? false",
+        );
+        if (!focused) await Bun.sleep(100);
+      }
+      expect(focused, "a new browser tab focuses its address").toBe(true);
+      await cdp.evaluate(`(() => {
+        const input = document.activeElement;
+        input.value = ${JSON.stringify(address)};
+        input.dispatchEvent(new Event("input"));
+        input.form.requestSubmit();
+        return true;
+      })()`);
+    }
+
+    /** The guest showing `path`, as the main process sees it: its id and whether it is in the
+     * browser partition. Polls until it exists. */
+    async function guestFor(
+      main: Cdp,
+      path: string,
+    ): Promise<{ id: number; partition: boolean; notDefault: boolean } | null> {
+      for (let i = 0; i < 100; i++) {
+        const found = await main.evaluateInMain<{
+          id: number;
+          partition: boolean;
+          notDefault: boolean;
+        } | null>(`(() => {
+          const { webContents, session } = require('electron');
+          const g = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && w.getURL().includes(${JSON.stringify(path)}));
+          return g ? { id: g.id, partition: g.session === session.fromPartition('persist:glosa-browser'),
+            notDefault: g.session !== session.defaultSession } : null;
+        })()`);
+        if (found) return found;
+        await Bun.sleep(100);
+      }
+      return null;
+    }
+
+    test("a desk browser tab runs in its own partition with no bridge, reaches no daemon port, is refused permissions and downloads, names neither glosa nor Electron, and a restored internet tab fetches nothing until Load page (#440)", async () => {
+      const web = fakeWeb();
+      const inspectPort = randomPort();
+      launchShell([
+        workspace,
+        "readme.md",
+        `--inspect=${inspectPort}`,
+        "--host-resolver-rules=MAP internet.test 127.0.0.1",
+      ]);
+      const spaOrigin = `http://glosa.localhost:${port}`;
+      const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+      expect(
+        page,
+        `SPA page target; targets seen: ${JSON.stringify(lastTargets)}; shell stderr:\n${stderrText}`,
+      ).not.toBeNull();
+      const mainUrl = await mainInspectorUrl(inspectPort);
+      expect(mainUrl, `main-process inspector; shell stderr:\n${stderrText}`).not.toBeNull();
+      const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
+      const main = await Cdp.connect(mainUrl!);
+      try {
+        expect(await workspaceMounted(cdp), `the workspace mounted; shell stderr:\n${stderrText}`).toBe(true);
+
+        // A local page, in the browser partition, not the SPA's session.
+        await openTab(cdp, `localhost:${web.port}/probe`);
+        const probe = await guestFor(main, "/probe");
+        expect(probe, `the probe's guest attached; shell stderr:\n${stderrText}`).not.toBeNull();
+        expect(probe!.partition).toBe(true);
+        expect(probe!.notDefault).toBe(true);
+        const seen = await main.evaluateInMain<{
+          bridge: string;
+          ua: string;
+          daemon: string;
+          classF: string;
+          web: string;
+          notify: string;
+        }>(`require('electron').webContents.fromId(${probe!.id}).executeJavaScript('window.__probe')`);
+        expect(seen.bridge).toBe("undefined");
+        expect(seen.daemon).toBe("blocked");
+        expect(seen.classF).toBe("blocked");
+        expect(seen.web, "the same probe does reach another local server").toBe("reached");
+        expect(seen.notify).toBe("denied");
+        expect(seen.ua).not.toMatch(/glosa|Electron/i);
+        expect(stderrText).toContain("browser tab: cancelled a request");
+
+        // Whatever the SPA frame asks for, the shell decides the guest's session: a webview with no
+        // partition would otherwise run in the SPA's own session, beside the pairing credential.
+        await cdp.evaluate(`(() => {
+          const w = document.createElement('webview');
+          w.setAttribute('src', 'http://localhost:${web.port}/rogue');
+          w.style.cssText = 'position:fixed;width:10px;height:10px;left:0;top:0';
+          document.body.append(w);
+          return true;
+        })()`);
+        const rogue = await guestFor(main, "/rogue");
+        expect(rogue, `the rogue guest attached; shell stderr:\n${stderrText}`).not.toBeNull();
+        expect(rogue!.partition).toBe(true);
+        expect(rogue!.notDefault).toBe(true);
+        expect(
+          await main.evaluateInMain<string>(
+            `require('electron').webContents.fromId(${rogue!.id}).executeJavaScript('typeof window.glosaShell')`,
+          ),
+        ).toBe("undefined");
+        await cdp.evaluate("document.querySelector('body > webview')?.remove(), true");
+
+        // The refused permission, and a refused download, are said in the tab.
+        const noticeSays = async (words: string) => {
+          for (let i = 0; i < 50; i++) {
+            const text = await cdp.evaluate<string>(
+              "document.querySelector('.glosa-browser-notice-text')?.textContent ?? ''",
+            );
+            if (text.includes(words)) return text;
+            await Bun.sleep(100);
+          }
+          return await cdp.evaluate<string>("document.querySelector('.glosa-browser-notice-text')?.textContent ?? ''");
+        };
+        expect(await noticeSays("asked to show notifications")).toContain("glosa doesn't allow that");
+        await main.evaluateInMain(
+          `require('electron').webContents.fromId(${probe!.id}).executeJavaScript("document.querySelector('a').click()", true)`,
+        );
+        expect(await noticeSays("tides-2026.pdf")).toContain("glosa doesn't save downloads");
+
+        // A guest sent to glosa's own address never gets there.
+        await main.evaluateInMain(
+          `require('electron').webContents.fromId(${probe!.id}).loadURL(${JSON.stringify(`${spaOrigin}/`)}).catch(() => null)`,
+        );
+        await Bun.sleep(500);
+        expect(
+          await main.evaluateInMain<string>(`require('electron').webContents.fromId(${probe!.id}).getURL()`),
+        ).not.toStartWith(spaOrigin);
+
+        // The SPA's own gate is unchanged: the page cannot reach the stand-in internet.
+        expect(
+          await cdp.evaluate<string>(
+            `fetch("http://internet.test:${web.port}/gate").then(() => "reached", () => "blocked")`,
+          ),
+        ).toBe("blocked");
+        expect(web.hits("/gate")).toBe(0);
+
+        // The browser partition can: an internet page a person asked for loads once.
+        await openTab(cdp, `http://internet.test:${web.port}/restore`);
+        expect(
+          await guestFor(main, "/restore"),
+          `the internet page loaded; shell stderr:\n${stderrText}`,
+        ).not.toBeNull();
+        expect(web.hits("/restore")).toBe(1);
+        const probeLoads = web.hits("/probe");
+
+        // After a reload the local tab loads again at once; the internet tab asks nothing until Load page.
+        await cdp.evaluate("(location.reload(), true)");
+        await Bun.sleep(500);
+        expect(await workspaceMounted(cdp)).toBe(true);
+        let unloaded = false;
+        for (let i = 0; i < 50 && !unloaded; i++) {
+          unloaded = await cdp.evaluate<boolean>(
+            "Boolean(document.querySelector('.glosa-browser[data-state=\"unloaded\"]'))",
+          );
+          if (!unloaded) await Bun.sleep(100);
+        }
+        expect(unloaded, "the internet tab came back without loading").toBe(true);
+        for (let i = 0; i < 50 && web.hits("/probe") === probeLoads; i++) await Bun.sleep(100);
+        expect(web.hits("/probe")).toBe(probeLoads + 1);
+        await Bun.sleep(1500); // the window in which a silent restore load would have arrived
+        expect(web.hits("/restore")).toBe(1);
+        await cdp.evaluate(
+          `[...document.querySelectorAll('.glosa-browser-sheet button')].find((b) => b.textContent === 'Load page').click(), true`,
+        );
+        for (let i = 0; i < 50 && web.hits("/restore") === 1; i++) await Bun.sleep(100);
+        expect(web.hits("/restore")).toBe(2);
+      } finally {
+        cdp.close();
+        main.close();
+        web.stop();
+      }
+    }, 120_000);
+
+    test("a companion window has no browser tools, and a webview it asks for never attaches (#440)", async () => {
+      const inspectPort = randomPort();
+      const link = `glosa://open?${new URLSearchParams({ path: workspace, focus: "readme.md", kind: "companion" }).toString()}`;
+      launchShell([link, `--inspect=${inspectPort}`], { GLOSA_SHELL_CONFIRM: "yes" });
+      const spaOrigin = `http://glosa.localhost:${port}`;
+      const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+      expect(page, `SPA page for the link; shell stderr:\n${stderrText}`).not.toBeNull();
+      const mainUrl = await mainInspectorUrl(inspectPort);
+      expect(mainUrl, `main-process inspector; shell stderr:\n${stderrText}`).not.toBeNull();
+      const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
+      const main = await Cdp.connect(mainUrl!);
+      try {
+        expect(await workspaceMounted(cdp)).toBe(true);
+        expect(await cdp.evaluate<boolean>("Boolean(document.querySelector('.glosa-strip-tools'))")).toBe(false);
+        expect(await cdp.evaluate<number>("window.glosaShell.browserTabs")).toBe(1);
+        // The page asks for a guest anyway, as a compromised page would.
+        await cdp.evaluate(`(() => {
+          const w = document.createElement('webview');
+          w.setAttribute('src', 'http://localhost:1/');
+          document.body.append(w);
+          return true;
+        })()`);
+        await Bun.sleep(1500);
+        expect(
+          await main.evaluateInMain<number>(
+            "require('electron').webContents.getAllWebContents().filter((w) => w.getType() === 'webview').length",
+          ),
+        ).toBe(0);
+        expect(stderrText).toContain("refused a browser tab");
+      } finally {
+        cdp.close();
+        main.close();
+      }
+    }, 120_000);
   },
 );

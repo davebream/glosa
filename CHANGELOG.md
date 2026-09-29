@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Browser tabs on the desk in the desktop app: web pages open as dock tabs beside documents and
+  chats, from a link, ⌘T, Go to, or the new tools at the end of each tab strip. Pages run apart from
+  glosa and cannot reach it; restored internet tabs wait for Load page, and typed words are never
+  searched. In a plain browser, links open your own browser instead (#440).
 - The desktop app builds as an x86_64 pacman package for Arch Linux and Manjaro, experimental. It
   carries its own Bun and the command line; pacman installs Git and the libraries it needs, owns
   `/usr/bin/glosa` and every other file it installs, and removes exactly those, leaving `~/.glosa`

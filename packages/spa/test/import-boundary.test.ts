@@ -254,6 +254,10 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./document-images.js",
     "./image-insertion.js",
     "./image-pane.js",
+    // Desk browser tabs (#440): the pane talks only to its <webview> and the shell's bridge it is
+    // handed; its address rules are pure. Neither reaches the daemon.
+    "./browser-pane.js",
+    "./browser-address.js",
     "./data-access.js",
     // Dictation is a local controller; daemon access stays caller-injected through data-access.js.
     "./dictation.js",

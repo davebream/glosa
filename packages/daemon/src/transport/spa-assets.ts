@@ -60,6 +60,9 @@ export const SPA_ASSETS: Readonly<Record<string, string>> = {
   "document-images.js": "text/javascript; charset=utf-8",
   "image-insertion.js": "text/javascript; charset=utf-8",
   "image-pane.js": "text/javascript; charset=utf-8",
+  // Desk browser tabs (#440): the pane and its address rules.
+  "browser-pane.js": "text/javascript; charset=utf-8",
+  "browser-address.js": "text/javascript; charset=utf-8",
   "vendor/image-viewer.js": "text/javascript; charset=utf-8",
   "vendor/image-viewer.css": "text/css; charset=utf-8",
   "data-access.js": "text/javascript; charset=utf-8",
