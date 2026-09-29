@@ -25,6 +25,7 @@ import {
   egressDecision,
   externalLinkDecision,
   firstFrameColor,
+  hiddenMode,
   linkFromArgv,
   lockGuestPreferences,
   loopbackApiOrigin,
@@ -88,6 +89,16 @@ describe("egress gate (readiness note §3: a browser-process gate, not a CSP)", 
     expect(egressDecision("devtools://devtools/bundled/x.html")).toBe("allow");
     expect(egressDecision("file:///etc/passwd")).toBe("cancel");
     expect(egressDecision("not a url")).toBe("cancel");
+  });
+});
+
+describe("hidden windows, test-only (#447)", () => {
+  test("only an unpackaged app honors GLOSA_SHELL_HIDDEN=yes", () => {
+    expect(hiddenMode({ packaged: false, value: "yes" })).toBe(true);
+    expect(hiddenMode({ packaged: true, value: "yes" })).toBe(false);
+    expect(hiddenMode({ packaged: false, value: undefined })).toBe(false);
+    expect(hiddenMode({ packaged: false, value: "no" })).toBe(false);
+    expect(hiddenMode({ packaged: false, value: "Yes" })).toBe(false);
   });
 });
 

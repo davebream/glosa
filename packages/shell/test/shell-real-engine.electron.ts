@@ -127,6 +127,14 @@ function releasesStub(answer: () => Response) {
 
 /** Clicks Check for Updates… `times` times, back to back, from the main process, once the menu exists. */
 async function clickCheckForUpdates(main: Cdp, times: number): Promise<void> {
+  // An update check is exercised here for its menu, request and result. A native result dialog
+  // would interrupt a local run; trap any attempt so the hidden-mode guard has a named failure.
+  await main.evaluateInMain(`(() => {
+    const { dialog } = require('electron');
+    globalThis.__glosaUpdateDialogs = 0;
+    dialog.showMessageBox = async () => { globalThis.__glosaUpdateDialogs++; return { response: 0 }; };
+    return true;
+  })()`);
   const clicked = await main.evaluateInMain<boolean>(`(async () => {
     const { Menu } = require('electron');
     // 5 s, well inside the CDP call's own 10 s, so a missing item fails the assertion below.
@@ -248,6 +256,7 @@ describe.skipIf(!electronInstalled)(
           GLOSA_SHELL_RELEASES_API: closedReleases!.url,
           ANTHROPIC_API_KEY: "sk-must-never-reach-a-child",
           ...extra,
+          GLOSA_SHELL_HIDDEN: "yes",
         },
         stdin: "ignore",
         stdout: "pipe",
@@ -330,6 +339,54 @@ describe.skipIf(!electronInstalled)(
       closedReleases = null;
       expect(survivors, `Electron processes outlived the test (${marker})`).toEqual([]);
     }, 20_000);
+
+    test("hidden test mode keeps windows off screen while the renderer runs animation frames (#447)", async () => {
+      const inspectPort = randomPort();
+      launchShell([workspace, "readme.md", `--inspect=${inspectPort}`]);
+      const spaOrigin = `http://glosa.localhost:${port}`;
+      const page = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+      expect(page, `SPA page target; shell stderr:\n${stderrText}`).not.toBeNull();
+      const mainUrl = await mainInspectorUrl(inspectPort);
+      expect(mainUrl, `main-process inspector; shell stderr:\n${stderrText}`).not.toBeNull();
+      const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
+      const main = await Cdp.connect(mainUrl!);
+      try {
+        expect(await workspaceMounted(cdp), `the workspace mounted; shell stderr:\n${stderrText}`).toBe(true);
+        const windows = await main.evaluateInMain<{
+          count: number;
+          visible: number;
+          throttled: number;
+          focused: boolean;
+          dockVisible: boolean | null;
+        }>(`(() => {
+          const { app, BrowserWindow } = require('electron');
+          const all = BrowserWindow.getAllWindows();
+          return { count: all.length, visible: all.filter((w) => w.isVisible()).length,
+            throttled: all.filter((w) => w.webContents.getBackgroundThrottling()).length,
+            focused: BrowserWindow.getFocusedWindow() !== null,
+            dockVisible: process.platform === 'darwin' ? app.dock.isVisible() : null };
+        })()`);
+        expect(windows.count).toBeGreaterThan(0);
+        expect(windows.visible, "no shell window is visible").toBe(0);
+        // Electron initially treats show:false pages as visible, so rAF alone cannot catch a
+        // missing throttle override. Read the effective setting from the real WebContents too.
+        expect(windows.throttled, "hidden shell windows keep background throttling disabled").toBe(0);
+        expect(windows.focused, "the shell has no focused window").toBe(false);
+        if (process.platform === "darwin") expect(windows.dockVisible, "the shell has no Dock icon").toBe(false);
+        // Electron reports a page as visible when background throttling is disabled, even though
+        // BrowserWindow.isVisible() is false. The real contract is no native UI and live frames.
+        const framed = await cdp.evaluate<boolean>(
+          `Promise.race([
+            new Promise((resolve) => requestAnimationFrame(() => resolve(true))),
+            new Promise((resolve) => setTimeout(() => resolve(false), 1000)),
+          ])`,
+        );
+        expect(framed, "a hidden window still runs animation frames").toBe(true);
+      } finally {
+        cdp.close();
+        main.close();
+      }
+    }, 120_000);
 
     test("pairs over the bridge with no token in any URL, keeps class-F sandboxed, denies leaving the SPA origin, and leaves the daemon running on quit", async () => {
       launchShell([workspace, "classf/probe.html"]);
@@ -846,6 +903,10 @@ describe.skipIf(!electronInstalled)(
           expect(headers["user-agent"]).toBe("glosa-update");
           for (const [name, value] of Object.entries(headers)) expect(value, name).not.toContain(SHELL_VERSION);
           expect(closedReleases!.requests, "nothing reached the suite's closed default endpoint").toEqual([]);
+          expect(
+            await main.evaluateInMain<number>("globalThis.__glosaUpdateDialogs"),
+            "hidden mode opens no update-result dialog",
+          ).toBe(0);
         } finally {
           cdp.close();
           main.close();
@@ -888,6 +949,10 @@ describe.skipIf(!electronInstalled)(
           expect(redirecting.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
             "GET /repos/davebream/glosa/releases",
           ]);
+          expect(
+            await main.evaluateInMain<number>("globalThis.__glosaUpdateDialogs"),
+            "hidden mode opens no update-result dialog",
+          ).toBe(0);
         } finally {
           main.close();
         }
@@ -952,17 +1017,6 @@ describe.skipIf(!electronInstalled)(
       });
       web_port = server.port ?? 0;
       return { port: server.port, hits: (path: string) => hits.get(path) ?? 0, stop: () => server.stop(true) };
-    }
-
-    /** Keeps every window painting while another app's window covers it. A covered window is
-     * `hidden` to Chromium and runs no animation frames (measured: a new tab's field, focused on
-     * the next frame, never took focus in a covered window), so a test on a busy desktop would be
-     * measuring the window stack, not glosa. A person uses a window they can see. */
-    async function keepPainting(main: Cdp): Promise<void> {
-      await main.evaluateInMain(`(() => {
-        for (const w of require('electron').BrowserWindow.getAllWindows()) w.webContents.setBackgroundThrottling(false);
-        return true;
-      })()`);
     }
 
     /** Types an address into a new browser tab, the way a person does: the strip's tool, then the field. */
@@ -1036,7 +1090,6 @@ describe.skipIf(!electronInstalled)(
       const main = await Cdp.connect(mainUrl!);
       try {
         expect(await workspaceMounted(cdp), `the workspace mounted; shell stderr:\n${stderrText}`).toBe(true);
-        await keepPainting(main);
 
         // A local page, in the browser partition, not the SPA's session.
         await openTab(cdp, `localhost:${web.port}/probe`);
@@ -1167,7 +1220,6 @@ describe.skipIf(!electronInstalled)(
       let second: Cdp | null = null;
       try {
         expect(await workspaceMounted(cdp), `the workspace mounted; shell stderr:\n${stderrText}`).toBe(true);
-        await keepPainting(main);
         await openTab(cdp, `localhost:${web.port}/tides`);
         const tides = await guestFor(main, "/tides");
         expect(tides, `the page's guest attached; shell stderr:\n${stderrText}`).not.toBeNull();
@@ -1217,7 +1269,17 @@ describe.skipIf(!electronInstalled)(
         expect(secondTarget, `a second desk window; targets seen: ${JSON.stringify(lastTargets)}`).not.toBeNull();
         second = await Cdp.connect(secondTarget!.webSocketDebuggerUrl);
         expect(await workspaceMounted(second)).toBe(true);
-        await keepPainting(main);
+        const nativeWindows = await main.evaluateInMain<{ count: number; visible: number; focused: boolean }>(
+          `(() => {
+            const { BrowserWindow } = require('electron');
+            const all = BrowserWindow.getAllWindows();
+            return { count: all.length, visible: all.filter((w) => w.isVisible()).length,
+              focused: BrowserWindow.getFocusedWindow() !== null };
+          })()`,
+        );
+        expect(nativeWindows.count, "the link opened a second native window").toBeGreaterThanOrEqual(2);
+        expect(nativeWindows.visible, "both desk windows stay hidden").toBe(0);
+        expect(nativeWindows.focused, "the second window did not take focus").toBe(false);
         await openTab(second, `localhost:${web.port}/elsewhere`);
         const elsewhere = await guestFor(main, "/elsewhere");
         expect(elsewhere, `the second window's guest attached; shell stderr:\n${stderrText}`).not.toBeNull();
