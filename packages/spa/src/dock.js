@@ -201,7 +201,7 @@ export function createDock(host, deps) {
         element.title = state.tooltip ?? id;
         element.setAttribute("data-missing", String(Boolean(state.missing)));
         badges.textContent = "";
-        if (state.kind === "chat" && (state.attentionCount || state.activityLabel)) {
+        if ((state.kind === "chat" || state.kind === "browser") && (state.attentionCount || state.activityLabel)) {
           const text = state.attentionCount
             ? `${state.attentionCount} ${state.attentionCount === 1 ? "reply" : "replies"}`
             : state.activityLabel;

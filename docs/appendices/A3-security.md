@@ -233,10 +233,11 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   equals the SPA origin exactly, and every `ipcMain` handler re-checks `event.senderFrame.origin`
   before acting; that handler check is the boundary (a class-F document reports a `null` origin under
   its CSP sandbox and is refused even by a deliberately unscoped preload). The class-F frame receives
-  no preload. The bridge carries eight calls, two pushes and one constant: a one-shot presentation
+  no preload. The bridge carries nine calls, two pushes and one constant: a one-shot presentation
   token, "open folder", an OS notification, "reveal in Finder", "bring back this window's daemon"
   (R-L8, #432), the page's resolved appearance, a synchronous read of whether macOS asks for more
-  contrast, and "open in your browser" (#440, below); the pushes are the contrast value when it
+  contrast, "open in your browser" and "read one of this window's browser tabs" for a chat agent
+  (#440, below); the pushes are the contrast value when it
   changes and what the shell saw in one of the window's browser tabs; the constant is the browser-tab
   version (`browserTabs: 1`), so an SPA served by a newer daemon can tell an older shell apart.
   No call takes a path from the page. Reveal in Finder takes no argument at all: the main process
@@ -289,7 +290,14 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   act on the page itself. "Open in your browser" (`openExternal`) hands a web or mail address to
   the system's handler and refuses any other scheme. What a tab may load, and when, is decided in the
   SPA and `docs/decisions.md` (2026-09-29): only on a person's action, a restored internet tab waits
-  for a click, and nothing else loads for a tab.
+  for a click, and nothing else loads for a tab. A managed chat's agent may also open, move and read
+  tabs of its own, only inside a turn the person started; the daemon holds those rules (A1 §5.25,
+  `docs/decisions.md` 2026-09-29). The shell's part is the read (`glosa:browser-read`): it takes a
+  guest id and a character cap, answers only a desk window's SPA frame, and only for a guest that
+  window hosts (`hostWebContents` is the sender), so a page cannot read another window's tabs by
+  guessing ids. It runs one fixed script in an isolated world the page's own scripts cannot see or
+  patch, and returns the page's address, title and visible text, cut at the cap (at most 100,000
+  characters) and marked where it was cut. Nothing from the page is evaluated in the SPA.
 - **The pairing token never travels in a URL the shell loads.** The main process runs the same
   `glosa open <folder> --url --json` the CLI runs, strips `p=` from the fragment, loads the tokenless
   URL and hands the token to the page over the bridge once per window load; the page redeems it as it
@@ -395,6 +403,15 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
     internet host stays blocked while a browser tab loads it; after a reload the internet tab makes
     no request until Load page; and a companion window's webview never attaches. The pure rules are
     pinned in `packages/shell/test/policy.test.ts`.
+14. A chat's agent (#440) tries to use browser tabs to reach glosa, another chat's tabs, a page the
+    person opened, another window's tabs, or to browse with no one there → the daemon's relay refuses
+    non-web addresses and glosa's own ports, tabs its chat did not open, and any call with no desk
+    window hosting the workspace, and serves a call only inside the active run that made it; the
+    shell reads only a guest the asking window hosts → tests
+    (`packages/daemon/test/browser-relay.test.ts`: each refusal, the newest host winning, a closed
+    host failing what it held, a late or foreign answer refused, a run stopped mid-request;
+    `packages/shell/test/shell-real-engine.electron.ts`: the read returns a guest's text through
+    the bridge and refuses a guest another window hosts).
 
 ### Explicit shadow repair (#226)
 

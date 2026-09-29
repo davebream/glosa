@@ -66,6 +66,10 @@ if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin
     /** Opens a web or mail address in the system's own handler ("Open in your browser"). The main
      * process refuses any other scheme (policy.ts). */
     openExternal: (url) => ipcRenderer.invoke("glosa:open-external", url),
+    /** A chat agent's read of one of this window's browser tabs (#440): `{ url, title, text,
+     * truncated }`, the text cut at `maxChars`. The main process refuses any guest this window does
+     * not host. */
+    readBrowserTab: (guestId, maxChars) => ipcRenderer.invoke("glosa:browser-read", guestId, maxChars),
     /** Calls `listener(event)` for each thing the shell saw in a browser tab (a new window it turned
      * into a tab, a glosa chord pressed inside a page, a refused download or permission), and
      * returns an unsubscribe. */

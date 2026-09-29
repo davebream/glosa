@@ -12,6 +12,11 @@ import {
 } from "../agents/interface.ts";
 import { IntentJournal, privateDirectory, putBlob, readBlob } from "./journal.ts";
 
+/** The consent text in force (#440). 1 named workspace files, messages and attachments; 2 adds the
+ * text of web pages the agent reads in desk browser tabs, including pages the person is signed in
+ * to. The SPA says which text it showed when it records a grant. */
+export const CONSENT_DISCLOSURE = 2;
+
 const id = z.uuid();
 const text = z.string().max(32_768);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -180,6 +185,9 @@ const controlSchema = z.discriminatedUnion("type", [
       version: z.union([z.literal(1), z.literal(2)]),
       granted: z.boolean(),
       mcpDigest: z.string().max(64).optional(),
+      // Which consent text the person saw (#440). Absent on grants from before it was recorded,
+      // which read as the first text.
+      disclosure: z.number().int().min(1).max(100).optional(),
     })
     .strict(),
 ]);
@@ -602,6 +610,8 @@ export class AgentStore {
     { epoch: number; manifestId: string; capabilities: AgentCapabilities }
   >();
   private readonly consents = new Map<string, boolean>();
+  /** The consent text each grant was given under (`CONSENT_DISCLOSURE`), by the same key. */
+  private readonly consentDisclosures = new Map<string, number>();
   private readonly mcpOverrides = new Map<string, { revision: number; servers: AgentMcpServer[] | null }>();
   private readonly chats = new Map<string, ChatLog>();
   private readonly unreadable = new Set<string>();
@@ -631,6 +641,7 @@ export class AgentStore {
       if (!event.granted)
         for (const key of this.consents.keys()) if (key.startsWith(prefix)) this.consents.set(key, false);
       this.consents.set(`${prefix}${event.mcpDigest ?? ""}`, event.granted);
+      this.consentDisclosures.set(`${prefix}${event.mcpDigest ?? ""}`, event.disclosure ?? 1);
     } else if (event.type === "mcp_override")
       this.mcpOverrides.set(`${event.profileId}:${event.workspaceId}:${event.workspaceEpoch}`, event);
     else if (event.type === "commands")
@@ -683,10 +694,20 @@ export class AgentStore {
     const record = this.control.append(event, request);
     this.applyControl(record.data);
   }
+  /** A grant counts only under the current consent text: one given before it named what the agent
+   * can now send (#440: the text of web pages it reads) is asked for again. */
   consent(profileId: string, workspaceId: string, workspaceEpoch: string, mcpDigest = ""): boolean {
-    return this.consents.get(`${profileId}:${workspaceId}:${workspaceEpoch}:${mcpDigest}`) === true;
+    const key = `${profileId}:${workspaceId}:${workspaceEpoch}:${mcpDigest}`;
+    return this.consents.get(key) === true && (this.consentDisclosures.get(key) ?? 1) >= CONSENT_DISCLOSURE;
   }
-  setConsent(profileId: string, workspaceId: string, workspaceEpoch: string, granted: boolean, mcpDigest = ""): void {
+  setConsent(
+    profileId: string,
+    workspaceId: string,
+    workspaceEpoch: string,
+    granted: boolean,
+    mcpDigest = "",
+    disclosure = CONSENT_DISCLOSURE,
+  ): void {
     const event = controlSchema.parse({
       type: "consent",
       profileId,
@@ -695,6 +716,7 @@ export class AgentStore {
       version: this.profile(profileId).configuration ? 2 : 1,
       granted,
       mcpDigest,
+      disclosure,
     });
     this.control.append(event);
     this.applyControl(event);

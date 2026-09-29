@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   chats, from a link, ⌘T, Go to, or the new tools at the end of each tab strip. Pages run apart from
   glosa and cannot reach it; restored internet tabs wait for Load page, and typed words are never
   searched. In a plain browser, links open your own browser instead (#440).
+- Chat agents can open, move and read web pages in desk browser tabs while they answer you, marked
+  on the tab as theirs. Existing workspace permissions are asked for once more (#440).
 - The desktop app builds as an x86_64 pacman package for Arch Linux and Manjaro, experimental. It
   carries its own Bun and the command line; pacman installs Git and the libraries it needs, owns
   `/usr/bin/glosa` and every other file it installs, and removes exactly those, leaving `~/.glosa`

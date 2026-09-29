@@ -355,7 +355,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.23: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.24: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -582,7 +582,9 @@ registration epochs prevent filename collisions and restoration into a replaceme
   on a restored tab, reload, back or forward), in a partition of its own, never the SPA's session,
   whose loopback-only gate is unchanged; a tab restored with an internet address waits for a click,
   and glosa makes no other load for a tab: no search, suggestions, prefetch or favicon (A3 §4b,
-  `docs/decisions.md` 2026-09-29). After versioned consent, a configured provider may
+  `docs/decisions.md` 2026-09-29). A managed chat's agent may open, move and read its own tabs there
+  only while answering a message the person sent, under consent that names it, and never with no
+  desk window open (A1 §5.25). After versioned consent, a configured provider may
   receive only its disclosed data following a foreground user action. Class-F network egress remains
   blocked by CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
 - **Robustness**: daemon crash loses nothing (journal-as-truth + fsync-before-ACK + replay; SSE

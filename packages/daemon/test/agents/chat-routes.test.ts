@@ -127,3 +127,38 @@ test("conversation transfer freezes only visible user and assistant text with ex
   expect(preview.bytes).toBe(Buffer.byteLength(preview.text));
   expect(response.headers.get("Cache-Control")).toBe("no-store");
 });
+
+test("a consent grant records the consent text the page showed, and an older page's records the first (#440)", async () => {
+  const profileId = "22222222-2222-4222-8222-222222222222";
+  const path = `/api/agents/profiles/${profileId}/consent`;
+  const recorded: unknown[] = [];
+  const route = chatRoutes(
+    {
+      workspaceIndex: {
+        getBySlug: () => ({ registration_id: "a".repeat(64), first_seen: "epoch", canonical_path: "/tmp/fixture" }),
+      },
+      service: {
+        bindAuthorization() {},
+        async consent(_workspace: unknown, id: string, granted: boolean, disclosure: number) {
+          recorded.push([id, granted, disclosure]);
+        },
+      },
+    } as unknown as Parameters<typeof chatRoutes>[0],
+    "POST",
+    path,
+  )!;
+  const post = (body: unknown) =>
+    route.handle(
+      new Request(`http://127.0.0.1:4646${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+  expect((await post({ workspace: "test", granted: true, version: 1 })).status).toBe(200);
+  expect((await post({ workspace: "test", granted: true, version: 1, disclosure: 2 })).status).toBe(200);
+  expect(recorded).toEqual([
+    [profileId, true, 1],
+    [profileId, true, 2],
+  ]);
+});
