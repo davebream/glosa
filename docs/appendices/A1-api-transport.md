@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.23", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.24", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -1228,7 +1228,7 @@ wire mechanics.
 Standard SSE framing, hand-parsed client-side (fetch-streaming, not `EventSource` — §2):
 ```
 id: <cursor>
-event: <artifact | journal | heartbeat | snapshot | resync_required | chats_changed | attention_changed | metadata | folder_style>
+event: <artifact | journal | heartbeat | snapshot | resync_required | chats_changed | attention_changed | metadata | folder_style | browser_request>
 data: <json>
 
 ```
@@ -1445,3 +1445,42 @@ asynchronous body parsing, before the filesystem commit.
 The workspace stream emits advisory `image` frames with `{path}` (`null` for subtree changes).
 A page re-reads the listing and affected views; reconnect re-reads them too. The frame does not
 create a document checkpoint, claim, annotation or attribution record. Older clients ignore it.
+
+### 5.25 Desk browser tabs for managed chats (contract 1.24, issue #440)
+
+A managed chat's agent has three tools that act on browser tabs in a desk window of the desktop
+app: `glosa_browser_open {url}`, `glosa_browser_navigate {tab, url}` and
+`glosa_browser_read {tab, max_chars}`. The pages live in the shell's own browser partition
+(A3 §4b); the daemon never fetches a page. A refusal is a tool result `{ok: false, reason}`, not an
+MCP error, because the managed MCP route replaces every thrown error with one generic message and
+the agent needs the reason to tell the person what to do.
+
+- **Hosting.** A desk page in the desktop app opens its workspace stream as
+  `GET /w/:slug/stream?browser=1`. That stream registers the page as a browser host for the
+  workspace registration. The newest host receives requests; when its stream closes, any request
+  it holds is answered with a reason. A stream without the parameter never receives the frame.
+- **Frame.** `event: browser_request`, no cursor, never replayed:
+  `{id, chat_id, provider, action: "open" | "navigate" | "read", url?, tab?, max_chars?}`, with a
+  UUID `id`. `provider` lets the tab name the agent at work on it.
+- **Answer.** `POST /w/:slug/browser-requests/:id` with
+  `{ok: true, tab, url, title, text?, truncated?, failure?}` or `{ok: false, reason}`. `204` when
+  accepted; `404 not-found` for a request that is unknown, already answered, timed out, belongs to
+  another workspace, or for a malformed answer. The ordinary bearer, Host, Origin and revocation
+  gates apply; it is a state-changing route.
+- **Rules the daemon holds**, whatever a page sends:
+  - with no host for the chat's workspace the tool is refused at once; nothing is queued or loaded
+    in the background;
+  - only `http` and `https` addresses, and never the daemon's own ports on a loopback host;
+  - `navigate` and `read` act only on tabs this chat opened;
+  - every call runs inside the active run that made it, checked before the frame is sent and again
+    when the answer arrives;
+  - `open` and `navigate` time out after 30 s and `read` after 15 s; `max_chars` is 1,000 to
+    100,000, default 100,000, and the shell marks text it cut.
+- **Consent.** `POST /api/agents/profiles/:id/consent` takes an optional integer `disclosure`: the
+  consent text the person saw. A grant recorded under a disclosure below 2, which is every grant
+  made before this contract, no longer counts, so the next send asks once more with the prompt that
+  names the browser tools. A body without `disclosure` records 1, so an N-1 page's grant never
+  covers them.
+
+Additive, N/N-1 safe: an N-1 page never asks to host, so the tools answer that no desk window shows
+the workspace; an N-1 daemon ignores `browser=1` and never sends the frame.

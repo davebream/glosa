@@ -294,6 +294,82 @@ describe("the browser pane (#440)", () => {
     expect(one(".glosa-browser-notice").hidden).toBe(true);
   });
 
+  test("a chat agent's tab says who is at work on it, then who opened it, until the person navigates", async () => {
+    let changes = 0;
+    const pane = open({ onStateChange: () => void changes++ });
+    const said = one(".glosa-browser-said");
+    expect(said.hidden).toBe(true);
+    expect(pane.agentActivity).toBeNull();
+
+    pane.markAgent("Claude", "working", "opening");
+    pane.navigate("https://example.org/");
+    expect(said.hidden).toBe(false);
+    expect(said.getAttribute("role")).toBe("status");
+    expect(said.textContent).toBe("Claude is opening a page");
+    expect(one(".glosa-browser").dataset.agent).toBe("working");
+    expect(pane.agentActivity).toBe("opening");
+    expect(changes).toBeGreaterThan(0);
+
+    const { view } = guest({ url: "https://example.org/" });
+    const loaded = pane.waitForLoad(1000);
+    fire(view, "dom-ready");
+    fire(view, "did-start-loading");
+    fire(view, "did-navigate", { url: "https://example.org/" });
+    fire(view, "page-title-updated", { title: "Example Domain" });
+    fire(view, "did-stop-loading");
+    expect(await loaded).toEqual({ url: "https://example.org/", title: "Example Domain" });
+    // The agent's own load does not count as the person taking the tab elsewhere.
+    expect(said.hidden).toBe(false);
+
+    pane.markAgent("Claude", "working", "reading");
+    expect(said.textContent).toBe("Claude is reading");
+    pane.markAgent("Claude", "done");
+    expect(said.textContent).toBe("Opened by Claude");
+    expect(one(".glosa-browser").dataset.agent).toBe("done");
+    expect(pane.agentActivity).toBeNull();
+
+    // A link the person clicks in the page is a full navigation the agent did not ask for.
+    fire(view, "did-navigate", { url: "https://example.org/more" });
+    expect(said.hidden).toBe(true);
+    expect(one(".glosa-browser").dataset.agent).toBeUndefined();
+  });
+
+  test("the person's own address, back or forward takes the tab from the agent", () => {
+    const pane = open({ url: "https://example.org/" });
+    const { view } = guest({ back: true, url: "https://example.org/" });
+    fire(view, "dom-ready");
+    pane.markAgent("Codex", "done");
+    expect(one(".glosa-browser-said").textContent).toBe("Opened by Codex");
+    submit("example.com");
+    expect(one(".glosa-browser-said").hidden).toBe(true);
+
+    pane.markAgent("Codex", "done");
+    fire(view, "did-navigate", { url: "https://example.com/" });
+    one(".glosa-browser-back").click();
+    expect(one(".glosa-browser-said").hidden).toBe(true);
+  });
+
+  test("an agent's load of glosa's own address settles at once, as a failure", async () => {
+    const pane = open();
+    pane.markAgent("Claude", "working", "opening");
+    pane.navigate("http://127.0.0.1:4646/api/handshake");
+    const page = await pane.waitForLoad(1000);
+    expect(page.url).toBe("http://127.0.0.1:4646/api/handshake");
+    expect(page.failure).toBe("glosa doesn't show 127.0.0.1:4646 in a browser tab");
+    expect(one("webview")).toBeNull();
+  });
+
+  test("a load that never settles answers with what is showing when the wait runs out", async () => {
+    const pane = open();
+    pane.navigate("https://slow.example/");
+    guest();
+    expect(await pane.waitForLoad(5)).toEqual({
+      url: "https://slow.example/",
+      title: "",
+      failure: "The page did not finish loading in time.",
+    });
+  });
+
   test("Open in your browser hands the page's address to the person's own browser", () => {
     open({ url: "https://example.org/a" });
     one(".glosa-browser-outside").click();

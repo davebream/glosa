@@ -25,11 +25,15 @@ import {
   session,
   shell,
   systemPreferences,
+  webContents,
 } from "electron";
 import {
   appearanceDecision,
   BROWSER_PARTITION,
+  BROWSER_READ_MAX,
+  BROWSER_READ_SCRIPT,
   browserContextMenu,
+  browserReadResult,
   browserKeyAction,
   browserNavigationDecision,
   browserRequestDecision,
@@ -442,6 +446,9 @@ function createWindow(origin: string | null): BrowserWindow {
 
 // ---------- desk browser tabs (#440) ----------
 
+/** The isolated world an agent's read runs in (any id Electron's own worlds do not use). */
+const BROWSER_READ_WORLD = 1099;
+
 /** What the shell tells a desk window about one of its browser tabs. The SPA knows each tab by its
  * guest's id (`<webview>.getWebContentsId()`). */
 function toHost(host: Electron.WebContents | null | undefined, guest: Electron.WebContents, event: object): void {
@@ -763,6 +770,21 @@ function installIpc(): void {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     if (externalLinkDecision(url) !== "open") throw new Error("rejected: not a web or mail address");
     await shell.openExternal(url as string);
+  });
+  // A chat agent's read of one of this window's browser tabs (#440): the page's address, title and
+  // visible text. Only a desk window's SPA may ask, only for a guest it hosts, and the page is read
+  // in an isolated world its own scripts cannot reach.
+  ipcMain.handle("glosa:browser-read", async (event, guestId: unknown, maxChars: unknown) => {
+    if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
+    if (windows.get(event.sender.id)?.kind !== "desk") throw new Error("rejected: not a desk window");
+    const guest = typeof guestId === "number" ? webContents.fromId(guestId) : undefined;
+    if (!guest || guest.getType() !== "webview" || guest.hostWebContents?.id !== event.sender.id) {
+      throw new Error("rejected: not one of this window's browser tabs");
+    }
+    const raw = await guest.executeJavaScriptInIsolatedWorld(BROWSER_READ_WORLD, [{ code: BROWSER_READ_SCRIPT }]);
+    const read = browserReadResult(raw, typeof maxChars === "number" ? maxChars : BROWSER_READ_MAX);
+    if (!read) throw new Error("the page could not be read");
+    return read;
   });
   ipcMain.handle("glosa:reveal", (event) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");

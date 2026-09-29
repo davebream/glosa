@@ -86,7 +86,13 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 // frame carries `{reason}` (`install-changed` or `shutdown`). Additive, N/N-1 safe: an N-1 page
 // keeps requesting unscoped `/app/<file>`, which still answers, and ignores the new data; an N-1
 // daemon omits the field and never stamps the page.
-export const CONTRACT_VERSION = "1.23";
+// v1.24 (#440): desk browser tabs for managed chats (A1 §5.25). A desk page in the desktop app may
+// open its workspace stream with `?browser=1` to host a chat agent's browser tabs, receives
+// `browser_request` frames there and answers at `POST /w/:slug/browser-requests/:id`; the consent
+// route takes an optional `disclosure`, and a grant below disclosure 2 is asked for once more.
+// Additive, N/N-1 safe: an N-1 page never asks to host, so the tools refuse with a reason; an N-1
+// daemon ignores the parameter and never sends the frame.
+export const CONTRACT_VERSION = "1.24";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

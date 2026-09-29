@@ -6,6 +6,7 @@ import type { WorkspaceBus } from "../bus/bus.ts";
 import { buildDeliveryPresentation } from "../delivery/presentation.ts";
 import type { ChatState } from "../chats/store.ts";
 import type { WorkspaceEntry } from "../registry/workspace-index.ts";
+import type { BrowserRelay } from "./browser-relay.ts";
 import { type ArtifactAccessDependencies, actionablePresentation } from "../services/artifact.ts";
 import { ManagedAgentError } from "./interface.ts";
 
@@ -36,6 +37,12 @@ const schemas = {
     })
     .strict(),
   glosa_release: noScope.extend({ claim_id: z.string().min(1).max(512) }).strict(),
+  // Desk browser tabs (#440): the tab is a daemon-issued id from glosa_browser_open.
+  glosa_browser_open: noScope.extend({ url: z.string().min(1).max(8192) }).strict(),
+  glosa_browser_navigate: noScope.extend({ tab: z.string().min(1).max(64), url: z.string().min(1).max(8192) }).strict(),
+  glosa_browser_read: noScope
+    .extend({ tab: z.string().min(1).max(64), max_chars: z.number().int().min(1000).max(100_000).default(100_000) })
+    .strict(),
   glosa_resolve: noScope
     .extend({
       entry_id: z.string().min(1).max(512),
@@ -57,7 +64,13 @@ const descriptions: Record<keyof typeof schemas, string> = {
   glosa_release: "Release your own claim without claiming that changes were applied.",
   glosa_resolve:
     "Resolve a feedback entry after applying, rejecting or finding it stale. Applied requires the claim's fence; human edits win.",
+  glosa_browser_open:
+    "Open an http or https page in a new browser tab in the glosa desktop app's desk window for this workspace, beside the person's documents. The person sees the tab and that you opened it. Returns the tab id, the address the page settled on and its title, or a reason it could not open (for example, no desk window shows this workspace).",
+  glosa_browser_navigate: "Load an http or https address in a browser tab you opened in this chat.",
+  glosa_browser_read:
+    "Read the visible text of a browser tab you opened in this chat, with its address and title. The text is sent to your model provider like a file you read, and may come from a page the person is signed in to. Long pages are cut at max_chars and say so.",
 };
+const BROWSER_TOOLS = new Set(["glosa_browser_open", "glosa_browser_navigate", "glosa_browser_read"]);
 /** What a managed chat needs to deliver a note the way every HTTP delivery does: through
  * `actionablePresentation`, which reads the document as it stands, resolves the note's quote to a
  * source range and names its passage address (issue #411). Built without it, an entry carries no
@@ -73,6 +86,7 @@ export function createManagedTools(
   busFor: (chat: ChatState) => Promise<WorkspaceBus>,
   present?: (chat: ChatState, path: string) => { slug: string; path: string; class: "R" | "F" },
   resolution?: ManagedDeliveryResolution,
+  browser?: BrowserRelay,
 ): ManagedTools {
   const presentation = (
     chat: ChatState,
@@ -99,6 +113,7 @@ export function createManagedTools(
     },
     list: Object.entries(schemas)
       .filter(([name]) => name !== "glosa_present" || present)
+      .filter(([name]) => !BROWSER_TOOLS.has(name) || browser)
       .map(([name, schema]) => ({
         name,
         description: descriptions[name as keyof typeof schemas],
@@ -115,6 +130,15 @@ export function createManagedTools(
       )
         throw new ManagedAgentError("workspace-changed", "This grant cannot select another session or workspace.", 403);
       context.assertActive();
+      if (BROWSER_TOOLS.has(name)) {
+        if (!browser) throw new ManagedAgentError("managed-unavailable", "Browser tabs are unavailable.");
+        const who = { id: chat.id, workspaceId: chat.workspaceId, provider: chat.provider };
+        if (name === "glosa_browser_open")
+          return browser.request(who, { action: "open", url: args.url }, context.assertActive);
+        if (name === "glosa_browser_navigate")
+          return browser.request(who, { action: "navigate", tab: args.tab, url: args.url }, context.assertActive);
+        return browser.request(who, { action: "read", tab: args.tab, maxChars: args.max_chars }, context.assertActive);
+      }
       const bus = await busFor(chat);
       context.assertActive();
       const ownedEntry = (id: string) => {

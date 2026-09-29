@@ -107,10 +107,21 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
               return json(result);
             }
             const input = z
-              .object({ workspace: z.string().min(1), granted: z.boolean(), version: z.literal(1) })
+              .object({
+                workspace: z.string().min(1),
+                granted: z.boolean(),
+                version: z.literal(1),
+                // #440: which consent text the person saw; absent is the first.
+                disclosure: z.number().int().min(1).max(100).optional(),
+              })
               .strict()
               .parse(await req.json());
-            await service.consent(chatWorkspace(findWorkspace(deps, input.workspace)), profile[1]!, input.granted);
+            await service.consent(
+              chatWorkspace(findWorkspace(deps, input.workspace)),
+              profile[1]!,
+              input.granted,
+              input.disclosure ?? 1,
+            );
             return nil();
           }
           const login = /^logins\/([a-f0-9-]{36})(?:\/(input|resize|finish))?$/.exec(tail);

@@ -53,6 +53,9 @@ export interface StreamOptions {
   subscribeChats?: (listener: (change?: { slug?: string }) => void) => () => void;
   /** Attention changes daemon-wide, one call per workspace affected (#389). */
   subscribeAttention?: (listener: (slug: string) => void) => () => void;
+  /** Registers this stream as a desk window that hosts browser tabs for its workspace (#440, only
+   * when the page asked with `?browser=1`); each request is written to it as a `browser_request`. */
+  subscribeBrowser?: (send: (request: object) => void) => () => void;
 }
 
 /** Builds the `GET /w/:slug/stream` response. `server` is used only to disable Bun's idle
@@ -90,6 +93,7 @@ export function createJournalStreamResponse(
   let unsubscribeFolderStyle: (() => void) | null = null;
   let unsubscribeChats: (() => void) | null = null;
   let unsubscribeAttention: (() => void) | null = null;
+  let unsubscribeBrowser: (() => void) | null = null;
   let chatTimer: ReturnType<typeof setTimeout> | undefined;
   // Workspaces whose chats changed inside the current 250ms window (#389); `chatUnknown` when a
   // change could not be tied to one, so the frame says "something, refetch" as it always did.
@@ -104,6 +108,7 @@ export function createJournalStreamResponse(
     unsubscribeFolderStyle?.();
     unsubscribeChats?.();
     unsubscribeAttention?.();
+    unsubscribeBrowser?.();
     clearTimeout(chatTimer);
     unsubscribeArtifacts?.();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -190,6 +195,12 @@ export function createJournalStreamResponse(
                 }),
               );
             }, 250);
+          }) ?? null;
+        // #440: a desk window's requests for its browser tabs, sent to this stream alone.
+        unsubscribeBrowser =
+          opts.subscribeBrowser?.((request) => {
+            if (closed) return;
+            send(encodeSseFrame({ event: "browser_request", data: request }));
           }) ?? null;
         // #389: attention is daemon-wide, so this stream forwards every workspace's changes, its
         // own included; the page's own workspace also sees them as `journal` frames.

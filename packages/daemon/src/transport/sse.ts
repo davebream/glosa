@@ -19,6 +19,7 @@ export type SseEventType =
   | "metadata"
   | "folder_style"
   | "chats_changed"
+  | "browser_request"
   | "attention_changed"
   | "heartbeat"
   | "resync_required"

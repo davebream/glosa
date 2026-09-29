@@ -828,6 +828,110 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(companion.querySelector(".glosa-strip-tools")).toBeNull();
   });
 
+  test("a chat agent's request opens a marked tab without taking the pane, and the daemon hears the answer", async () => {
+    const shell = browserShell();
+    const reads: [number, number][] = [];
+    Object.assign(shell.bridge, {
+      readBrowserTab: async (guest: number, maxChars: number) => {
+        reads.push([guest, maxChars]);
+        return { url: "https://example.org/", title: "Example Domain", text: "Hello", truncated: false };
+      },
+    });
+    let deliver: ((request: any) => void) | null = null;
+    const answers: [string, string, any][] = [];
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const unmount = mountApp(root, {
+      dataAccess: fakeDataAccess({
+        openBrowserRequests: (_slug: string, callbacks: { onRequest: (request: any) => void }) => {
+          deliver = callbacks.onRequest;
+          return () => {
+            deliver = null;
+          };
+        },
+        answerBrowserRequest: async (slug: string, id: string, answer: any) => void answers.push([slug, id, answer]),
+      }),
+      surfaceKind: "desk",
+      shell: shell.bridge as any,
+    });
+    await openNotes(root);
+    expect(deliver).not.toBeNull();
+    const activeLabel = () => root.querySelector(".dv-active-tab .glosa-tab-label")?.textContent;
+    expect(activeLabel()).toBe("notes.md");
+
+    deliver!({ id: "req-open", chat_id: "chat-1", provider: "codex", action: "open", url: "https://example.org/" });
+    await settleTabs();
+    const pane = root.querySelector(".glosa-browser") as any;
+    expect(pane.dataset.agent).toBe("working");
+    expect(pane.querySelector(".glosa-browser-said").textContent).toBe("Codex is opening a page");
+    expect(activeLabel()).toBe("notes.md");
+    expect(root.querySelector(".glosa-tab-count")?.textContent).toBe("opening");
+    const view = pane.querySelector("webview");
+    expect(view.getAttribute("src")).toBe("https://example.org/");
+    // The methods Electron's guest element has, as far as the pane uses them.
+    Object.assign(view, {
+      getWebContentsId: () => 7,
+      getURL: () => "https://example.org/",
+      canGoBack: () => false,
+      canGoForward: () => false,
+      loadURL: async () => {},
+    });
+    for (const [type, fields] of [
+      ["dom-ready", {}],
+      ["did-start-loading", {}],
+      ["did-navigate", { url: "https://example.org/" }],
+      ["page-title-updated", { title: "Example Domain" }],
+      ["did-stop-loading", {}],
+    ] as const)
+      view.dispatchEvent(Object.assign(new dom.window.Event(type), fields));
+    await settleTabs();
+    expect(answers).toHaveLength(1);
+    const [slug, id, opened] = answers[0]!;
+    expect([slug, id]).toEqual(["ws-1", "req-open"]);
+    // The tab id is the panel's own uuid, which is what the agent names the tab by afterwards.
+    expect(opened.tab).toMatch(/^[0-9a-f-]{36}$/);
+    expect(opened).toEqual({ ok: true, tab: opened.tab, url: "https://example.org/", title: "Example Domain" });
+    expect(pane.dataset.agent).toBe("done");
+    expect(pane.querySelector(".glosa-browser-said").textContent).toBe("Opened by Codex");
+    expect(root.querySelector(".glosa-tab-count")).toBeNull();
+
+    deliver!({
+      id: "req-read",
+      chat_id: "chat-1",
+      provider: "codex",
+      action: "read",
+      tab: opened.tab,
+      max_chars: 5000,
+    });
+    await settleTabs();
+    expect(reads).toEqual([[7, 5000]]);
+    expect(answers[1]).toEqual([
+      "ws-1",
+      "req-read",
+      {
+        ok: true,
+        tab: opened.tab,
+        url: "https://example.org/",
+        title: "Example Domain",
+        text: "Hello",
+        truncated: false,
+      },
+    ]);
+
+    deliver!({
+      id: "req-gone",
+      chat_id: "chat-1",
+      provider: "codex",
+      action: "read",
+      tab: "no-such-tab",
+      max_chars: 5000,
+    });
+    await settleTabs();
+    expect(answers[2]).toEqual(["ws-1", "req-gone", { ok: false, reason: "That tab has been closed." }]);
+    unmount();
+    expect(deliver).toBeNull();
+  });
+
   test("a page's new window becomes a tab beside it, and glosa's chords work from inside a page", async () => {
     const shell = browserShell();
     const root = dom.document.createElement("div");

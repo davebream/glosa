@@ -938,6 +938,15 @@ describe.skipIf(!electronInstalled)(
                 return r;
               })();</script>`,
             );
+          if (path === "/tides")
+            // A page that tries to change what an agent reads: in its own world, every element's
+            // text reads as TAMPERED. The shell reads in an isolated world, where it does not.
+            return page(
+              "Tides",
+              `<p>High water at Gdańsk 06:12</p><script>
+              Object.defineProperty(HTMLElement.prototype, "innerText", { get() { return "TAMPERED"; } });
+              </script>`,
+            );
           return page(path.slice(1) || "Home", "<p>page</p>");
         },
       });
@@ -945,8 +954,26 @@ describe.skipIf(!electronInstalled)(
       return { port: server.port, hits: (path: string) => hits.get(path) ?? 0, stop: () => server.stop(true) };
     }
 
+    /** Keeps every window painting while another app's window covers it. A covered window is
+     * `hidden` to Chromium and runs no animation frames (measured: a new tab's field, focused on
+     * the next frame, never took focus in a covered window), so a test on a busy desktop would be
+     * measuring the window stack, not glosa. A person uses a window they can see. */
+    async function keepPainting(main: Cdp): Promise<void> {
+      await main.evaluateInMain(`(() => {
+        for (const w of require('electron').BrowserWindow.getAllWindows()) w.webContents.setBackgroundThrottling(false);
+        return true;
+      })()`);
+    }
+
     /** Types an address into a new browser tab, the way a person does: the strip's tool, then the field. */
     async function openTab(cdp: Cdp, address: string): Promise<void> {
+      // The strip's tools arrive with the dock's first layout, after the workspace has mounted.
+      let tool = false;
+      for (let i = 0; i < 50 && !tool; i++) {
+        tool = await cdp.evaluate<boolean>("Boolean(document.querySelector('.glosa-strip-new-browser'))");
+        if (!tool) await Bun.sleep(100);
+      }
+      expect(tool, "the tab strip offers New browser tab").toBe(true);
       await cdp.evaluate("document.querySelector('.glosa-strip-new-browser').click(), true");
       let focused = false;
       for (let i = 0; i < 50 && !focused; i++) {
@@ -1009,6 +1036,7 @@ describe.skipIf(!electronInstalled)(
       const main = await Cdp.connect(mainUrl!);
       try {
         expect(await workspaceMounted(cdp), `the workspace mounted; shell stderr:\n${stderrText}`).toBe(true);
+        await keepPainting(main);
 
         // A local page, in the browser partition, not the SPA's session.
         await openTab(cdp, `localhost:${web.port}/probe`);
@@ -1120,6 +1148,97 @@ describe.skipIf(!electronInstalled)(
         cdp.close();
         main.close();
         web.stop();
+      }
+    }, 120_000);
+
+    test("a chat agent's read goes through the bridge for the window's own tab only, and the page cannot change what is read (#440)", async () => {
+      const web = fakeWeb();
+      const other = mkdtempSync(join(tmpdir(), "glosa-shell-ws-other-"));
+      writeFileSync(join(other, "readme.md"), "# Other\n");
+      const inspectPort = randomPort();
+      launchShell([workspace, "readme.md", `--inspect=${inspectPort}`], { GLOSA_SHELL_CONFIRM: "yes" });
+      const spaOrigin = `http://glosa.localhost:${port}`;
+      const first = await listTargets(cdpPort, 60_000, (t) => t.type === "page" && t.url.startsWith(spaOrigin));
+      expect(first, `SPA page target; shell stderr:\n${stderrText}`).not.toBeNull();
+      const mainUrl = await mainInspectorUrl(inspectPort);
+      expect(mainUrl, `main-process inspector; shell stderr:\n${stderrText}`).not.toBeNull();
+      const cdp = await Cdp.connect(first!.webSocketDebuggerUrl);
+      const main = await Cdp.connect(mainUrl!);
+      let second: Cdp | null = null;
+      try {
+        expect(await workspaceMounted(cdp), `the workspace mounted; shell stderr:\n${stderrText}`).toBe(true);
+        await keepPainting(main);
+        await openTab(cdp, `localhost:${web.port}/tides`);
+        const tides = await guestFor(main, "/tides");
+        expect(tides, `the page's guest attached; shell stderr:\n${stderrText}`).not.toBeNull();
+        // The page has run its script: in its own world the text reads as TAMPERED.
+        let tampered = "";
+        for (let i = 0; i < 50 && tampered !== "TAMPERED"; i++) {
+          tampered = await main.evaluateInMain<string>(
+            `require('electron').webContents.fromId(${tides!.id}).executeJavaScript('document.body.innerText')`,
+          );
+          if (tampered !== "TAMPERED") await Bun.sleep(100);
+        }
+        expect(tampered).toBe("TAMPERED");
+
+        const read = await cdp.evaluate<{ url: string; title: string; text: string; truncated: boolean }>(
+          `window.glosaShell.readBrowserTab(${tides!.id}, 5000)`,
+        );
+        expect(read).toEqual({
+          url: `http://localhost:${web.port}/tides`,
+          title: "Tides",
+          text: "High water at Gdańsk 06:12",
+          truncated: false,
+        });
+        const refused = (expression: string) =>
+          cdp.evaluate<string>(`${expression}.then(() => "read", (error) => String(error?.message ?? error))`);
+        // The SPA's own page is not a browser tab.
+        const own = await main.evaluateInMain<number>(
+          `require('electron').webContents.getAllWebContents().find((w) => w.getType() === 'window' && w.getURL().startsWith(${JSON.stringify(spaOrigin)})).id`,
+        );
+        expect(await refused(`window.glosaShell.readBrowserTab(${own}, 5000)`)).toContain(
+          "not one of this window's browser tabs",
+        );
+        expect(await refused(`window.glosaShell.readBrowserTab("${tides!.id}", 5000)`)).toContain(
+          "not one of this window's browser tabs",
+        );
+
+        // Another desk window, on another folder, with a tab of its own.
+        await main.evaluateInMain(
+          `(require('electron').app.emit('open-url', { preventDefault() {} }, ${JSON.stringify(
+            `glosa://open?${new URLSearchParams({ path: other, focus: "readme.md", kind: "desk" }).toString()}`,
+          )}), true)`,
+        );
+        const secondTarget = await listTargets(
+          cdpPort,
+          60_000,
+          (t) => t.type === "page" && t.url.startsWith(spaOrigin) && (t as { id?: string }).id !== first!.id,
+        );
+        expect(secondTarget, `a second desk window; targets seen: ${JSON.stringify(lastTargets)}`).not.toBeNull();
+        second = await Cdp.connect(secondTarget!.webSocketDebuggerUrl);
+        expect(await workspaceMounted(second)).toBe(true);
+        await keepPainting(main);
+        await openTab(second, `localhost:${web.port}/elsewhere`);
+        const elsewhere = await guestFor(main, "/elsewhere");
+        expect(elsewhere, `the second window's guest attached; shell stderr:\n${stderrText}`).not.toBeNull();
+        // Each window reads its own tab and not the other's, whatever id it names.
+        expect(await refused(`window.glosaShell.readBrowserTab(${elsewhere!.id}, 5000)`)).toContain(
+          "not one of this window's browser tabs",
+        );
+        expect(
+          await second.evaluate<string>(
+            `window.glosaShell.readBrowserTab(${tides!.id}, 5000).then(() => "read", (error) => String(error?.message ?? error))`,
+          ),
+        ).toContain("not one of this window's browser tabs");
+        expect(
+          (await second.evaluate<{ title: string }>(`window.glosaShell.readBrowserTab(${elsewhere!.id}, 5000)`)).title,
+        ).toBe("elsewhere");
+      } finally {
+        second?.close();
+        cdp.close();
+        main.close();
+        web.stop();
+        rmSync(other, { recursive: true, force: true });
       }
     }, 120_000);
 

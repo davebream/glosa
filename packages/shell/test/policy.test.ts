@@ -6,8 +6,11 @@ import { buildAppUrl } from "../../cli/src/open-presentation.ts";
 import {
   appearanceDecision,
   BROWSER_PARTITION,
+  BROWSER_READ_MAX,
+  BROWSER_READ_SCRIPT,
   browserContextMenu,
   browserKeyAction,
+  browserReadResult,
   browserNavigationDecision,
   browserRequestDecision,
   browserUserAgent,
@@ -1299,5 +1302,48 @@ describe("desk browser tabs: what a page may reach, and what reaches it (#440, A
     expect(labels(browserContextMenu({ linkURL: "file:///x", canGoBack: false, canGoForward: false }))).toEqual([
       "Reload",
     ]);
+  });
+});
+
+describe("a chat agent's read of a browser tab (#440)", () => {
+  const page = (text: string) => ({ url: "https://example.org/a", title: "Example", text });
+
+  test("returns the page's address, title and text, whole when it fits", () => {
+    expect(browserReadResult(page("Hello"), 5000)).toEqual({
+      url: "https://example.org/a",
+      title: "Example",
+      text: "Hello",
+      truncated: false,
+    });
+  });
+
+  test("cuts the text at the cap and says so; the cap stays between 1,000 and 100,000", () => {
+    const long = "x".repeat(250_000);
+    const cut = browserReadResult(page(long), 2000)!;
+    expect(cut.truncated).toBe(true);
+    expect(cut.text).toBe(`${"x".repeat(2000)}\n\n[glosa cut the page's text at 2000 characters.]`);
+    expect(browserReadResult(page(long), 10)!.text.startsWith(`${"x".repeat(1000)}\n\n`)).toBe(true);
+    expect(browserReadResult(page(long), 10_000_000)!.text).toContain(`at ${BROWSER_READ_MAX} characters.`);
+    expect(browserReadResult(page(long), Number.NaN)!.text).toContain(`at ${BROWSER_READ_MAX} characters.`);
+    expect(browserReadResult(page("x".repeat(1000)), 1000)!.truncated).toBe(false);
+  });
+
+  test("anything but that shape from the page is refused, and the address and title are bounded", () => {
+    for (const raw of [null, "text", 42, { url: 1, title: "", text: "" }, { url: "", title: "" }]) {
+      expect(browserReadResult(raw, 5000)).toBeNull();
+    }
+    const huge = browserReadResult(
+      { url: `https://e.org/${"a".repeat(20_000)}`, title: "t".repeat(5000), text: "" },
+      5000,
+    )!;
+    expect(huge.url.length).toBe(8192);
+    expect(huge.title.length).toBe(1024);
+  });
+
+  test("the script reads only the address, title and visible text, and calls nothing the page defined", () => {
+    expect(BROWSER_READ_SCRIPT).toContain("location.href");
+    expect(BROWSER_READ_SCRIPT).toContain("document.title");
+    expect(BROWSER_READ_SCRIPT).toContain("document.body.innerText");
+    expect(BROWSER_READ_SCRIPT).not.toMatch(/window\.|fetch|eval|postMessage/);
   });
 });

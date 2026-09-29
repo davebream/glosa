@@ -1764,3 +1764,36 @@ can see cookies set while working in another.
 proxy that strips framing headers (it weakens the site's own protection); loopback only; per-workspace
 or forgetful stores; restoring and loading every tab on launch; a browser on the companion face;
 driving cmux's browser (invariant 4).
+
+
+## A chat's agent drives desk browser tabs only inside a turn a person started (2026-09-29, #440)
+
+A managed chat's agent can open a web page in a desk browser tab, move one of its tabs to another
+address, and read a tab's text (`glosa_browser_open`, `glosa_browser_navigate`, `glosa_browser_read`;
+A1 §5.25). This extends the entry above, where only a person's action loads a page. The rule that
+keeps it inside the privacy posture: **an agent's load is part of a turn the person started.** A
+tool call is served only while the chat run that made it is active, which exists only because the
+person sent a message; there is no background browsing, no queue for later, and nothing loads in a
+window nobody has open.
+
+**The rules the daemon holds** (`packages/daemon/src/agents/browser-relay.ts`), whatever a page
+sends: a request goes only to a desk window in the desktop app showing the chat's own workspace,
+the newest one; with none the tool is refused at once with a reason the agent can pass on
+(maintainer decision 2026-09-29: refuse, never queue, never load in the background); only http and
+https, never glosa's own ports; `navigate` and `read` act only on tabs the same chat opened. The
+shell holds its own: a read answers only for a guest hosted by the asking window, and runs in an
+isolated world the page's scripts cannot see (A3 §4b).
+
+**Consent is asked once more.** A read sends the page's text, including a page the person is signed
+in to, to the agent's provider. That is new data under invariant 5, so the consent prompt names it
+and every grant made before it (disclosure 1) is asked for again on the next send (maintainer
+decision 2026-09-29). A grant is not split into a separate browser permission.
+
+**The person can see it.** An agent's tab opens beside the chat without taking the pane, marked in
+Session Ink (brief C2, `DESIGN.md` Browser Tab): "Claude is reading" in the row and on the tab while
+it works, "Opened by Claude" after, until the person takes the tab elsewhere.
+
+**Rejected.** A daemon-side fetcher or headless browser (a second network stack, and it could not
+read a page the person is signed in to); loading in a hidden window when no desk window is open;
+letting an agent drive a tab the person opened (the person's tab is theirs; the agent opens its
+own); keeping the old consent with a copy change only.

@@ -1117,3 +1117,32 @@ export function browserContextMenu(params: {
   items.push({ label: "Reload", action: "reload" });
   return items;
 }
+
+/** The most an agent's read of a browser tab returns, in characters (#440, brief: 100 KB of text). */
+export const BROWSER_READ_MAX = 100_000;
+
+/** Run in an isolated world of the page (Electron `executeJavaScriptInIsolatedWorld`), which shares
+ * the page's DOM but none of its JavaScript, so the page's own scripts cannot change what is read. */
+export const BROWSER_READ_SCRIPT =
+  "(() => ({ url: location.href, title: document.title, text: document.body ? document.body.innerText : '' }))()";
+
+/** What an agent's read of a browser tab returns: the page's address, title and visible text, cut at
+ * `maxChars` (at least 1,000, at most `BROWSER_READ_MAX`) with a line saying so. Null when what came
+ * back from the page is not that shape. */
+export function browserReadResult(
+  raw: unknown,
+  maxChars: unknown,
+): { url: string; title: string; text: string; truncated: boolean } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { url, title, text } = raw as Record<string, unknown>;
+  if (typeof url !== "string" || typeof title !== "string" || typeof text !== "string") return null;
+  const asked = typeof maxChars === "number" && Number.isFinite(maxChars) ? Math.floor(maxChars) : BROWSER_READ_MAX;
+  const cap = Math.max(1000, Math.min(BROWSER_READ_MAX, asked));
+  const truncated = text.length > cap;
+  return {
+    url: url.slice(0, 8192),
+    title: title.slice(0, 1024),
+    text: truncated ? `${text.slice(0, cap)}\n\n[glosa cut the page's text at ${cap} characters.]` : text,
+    truncated,
+  };
+}

@@ -44,6 +44,7 @@ import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-sc
 import { SessionProviderConflict, type SessionRecord, type SessionRegistry } from "../registry/session-registry.ts";
 import { canonicalize } from "../registry/slug.ts";
 import { starName, type WorkspaceStar, WorkspaceStars } from "../registry/workspace-stars.ts";
+import type { BrowserRelay } from "../agents/browser-relay.ts";
 import { FolderStyles, FolderStylesNewerError, isFolderStyle } from "../registry/folder-styles.ts";
 import {
   AdoptionError,
@@ -150,6 +151,9 @@ export interface ApiContext {
   /** Optional external dictation providers, injected by the CLI composition root. */
   dictationRegistry?: DictationProviderRegistry;
   managedChats?: ManagedChatService;
+  /** Desk browser tabs for managed chats' agents (#440): the stream registers desk windows on it,
+   * and a window's answers come back through `POST /w/:slug/browser-requests/:id`. */
+  browserRelay?: BrowserRelay;
   pushRegistry?: SessionPushRegistry;
   /** Session signals derived from claim events (issue #155). Optional so a hand-built test context
    * keeps compiling; absent, drains carry no `signals` and the ack route answers 404. */
@@ -681,6 +685,26 @@ async function handleSetFolderStyle(ctx: ApiContext, slug: string, req: Request)
   } catch (error) {
     return folderStyleWriteRefused(error, url.pathname);
   }
+}
+
+/** `POST /w/:slug/browser-requests/:id` (#440) — a desk window's answer to one of the agent's
+ * browser requests. 204 when it matched a request still waiting on this workspace; 404 otherwise
+ * (answered, timed out, another workspace's, or malformed), so a page cannot answer for anything
+ * it was not asked. */
+async function handleBrowserAnswer(ctx: ApiContext, slug: string, id: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  if (!ctx.browserRelay?.answer(resolved.entry.registration_id, id, body)) {
+    return problem(404, "not-found", "no browser request is waiting under that id", undefined, url.pathname);
+  }
+  return new Response(null, { status: 204 });
 }
 
 /** A `folder-styles.json` from a newer glosa is kept, not overwritten: say so, as a conflict with
@@ -2814,6 +2838,11 @@ async function handleStream(
         }
       : undefined,
     subscribeAttention: ctx.attentionFeed ? (listener) => ctx.attentionFeed!.subscribe(listener) : undefined,
+    // #440: a desk window in the desktop app says it hosts browser tabs by asking with `browser=1`.
+    subscribeBrowser:
+      ctx.browserRelay && url.searchParams.get("browser") === "1"
+        ? (send) => ctx.browserRelay!.register(resolved.entry.registration_id, send)
+        : undefined,
     subscribeMetadata: ctx.metadataRegistry
       ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry, listener)
       : undefined,
@@ -3173,6 +3202,11 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "DELETE" && (m = pathname.match(/^\/w\/([^/]+)\/folder-style$/))) {
     const slug = m[1] as string;
     return { routeClass: "state-changing", handle: () => handleClearFolderStyle(ctx, slug, pathname) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/browser-requests\/([0-9a-f-]{36})$/))) {
+    const slug = m[1] as string;
+    const id = m[2] as string;
+    return { routeClass: "state-changing", handle: (req) => handleBrowserAnswer(ctx, slug, id, req) };
   }
   if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/session-binding$/))) {
     const slug = m[1] as string;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -728,6 +728,27 @@ test("reopening history neither spawns nor replays an uncertain submitted turn",
   expect(unexpected).toBe(0);
   await recovered.close();
   // Replay writes only to the copied crash image; the original owner remains isolated.
+});
+
+test("a grant given under the first consent text is asked for again now that the agent can read web pages (#440)", async () => {
+  const h = setup();
+  const granted = (store = h.store) => store.consent(h.profile.id, h.workspace.id, h.workspace.epoch);
+  expect(granted()).toBe(true);
+  h.store.setConsent(h.profile.id, h.workspace.id, h.workspace.epoch, true, "", 1);
+  expect(granted()).toBe(false);
+  // The control log keeps which text each grant was given under, and a grant written before the
+  // field existed reads as the first text.
+  expect(granted(new AgentStore(h.root))).toBe(false);
+  const log = join(h.root, "control.jsonl");
+  const lines = readFileSync(log, "utf8").trimEnd().split("\n");
+  const last = JSON.parse(lines.at(-1)!);
+  expect(last.data).toMatchObject({ type: "consent", granted: true, disclosure: 1 });
+  delete last.data.disclosure;
+  writeFileSync(log, [...lines.slice(0, -1), JSON.stringify(last)].join("\n") + "\n");
+  expect(granted(new AgentStore(h.root))).toBe(false);
+  await h.service.consent(h.workspace, h.profile.id, true);
+  expect(granted()).toBe(true);
+  expect(granted(new AgentStore(h.root))).toBe(true);
 });
 
 test("workspace consent does not survive removal and re-registration at the same path", async () => {
