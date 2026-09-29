@@ -279,6 +279,7 @@ export function mountApp(
     agentStatus,
     chatsRefreshTimer,
     stopChatsStream,
+    /** @type {undefined | (() => void)} */ stopBrowserRequests,
     creatingChat = false;
   // Chats belong to the desk surface: a companion surface already has its agent in a terminal.
   const chatsHost = el("section", {
@@ -491,14 +492,15 @@ export function mountApp(
 
   // ---------- desk browser tabs (#440) ----------
 
-  /** A new browser tab, in `group` or the active one. In a plain browser there is no tab to open:
-   * the address goes to the person's own browser instead (`askAddress`). */
-  function openBrowserTab({ url = "", group } = {}) {
-    if (!dock || !desk || singlePane) return false;
+  /** A new browser tab, in `group` or the active one, and its panel id. In a plain browser there is
+   * no tab to open: the address goes to the person's own browser instead (`askAddress`). An agent's
+   * tab opens `inactive`: it joins the strip, marked, without taking the pane from the person. */
+  function openBrowserTab({ url = "", group, inactive = false } = {}) {
+    if (!dock || !desk || singlePane) return null;
     if (!browserTabs) {
       if (url) openOutside(url);
       else askAddress();
-      return false;
+      return null;
     }
     const target = group && dock.api.groups.includes(group) ? group : dock.api.activeGroup;
     const id = browserPanelId(crypto.randomUUID());
@@ -511,11 +513,67 @@ export function mountApp(
       renderer: "always",
       minimumWidth: MIN_PANE_WIDTH,
       ...(target ? { position: { referenceGroup: target } } : {}),
+      ...(inactive ? { inactive: true } : {}),
     });
     markActivePane();
     // A blank tab is for typing an address: its field takes focus once dockview has attached it.
-    if (!url) requestAnimationFrame(() => panes.get(id)?.focusAddress?.());
-    return true;
+    if (!url && !inactive) requestAnimationFrame(() => panes.get(id)?.focusAddress?.());
+    return id;
+  }
+
+  /**
+   * A chat agent's request for this window's browser tabs (#440), sent by the daemon on this
+   * workspace's stream because this is a desk window in the desktop app. Open and navigate wait for
+   * the page to settle; read asks the shell for the page's text. The tab says who is at work on it
+   * (brief C2) while the request runs, then that the agent opened it, until the person navigates.
+   * The daemon holds the rules (which tabs this chat may use, which addresses); this answers.
+   */
+  async function handleBrowserRequest(slug, request) {
+    const answer = (result) => dataAccess.answerBrowserRequest?.(slug, request.id, result).catch(() => {});
+    if (unmounted || slug !== currentSlug || !dock) {
+      return answer({ ok: false, reason: "This window is showing another workspace." });
+    }
+    const who = agentName(request.provider);
+    const tabOf = (id) => decodePanelId(id)[1];
+    try {
+      if (request.action === "open") {
+        // Opened blank, then navigated as the agent's: the page it lands on stays marked as the
+        // agent's until the person takes the tab somewhere else.
+        const id = openBrowserTab({ inactive: true });
+        const pane = id ? panes.get(id) : null;
+        if (!id || !pane) return answer({ ok: false, reason: "This window cannot open a browser tab." });
+        pane.markAgent(who, "working", "opening");
+        pane.navigate(String(request.url ?? ""));
+        const page = await pane.waitForLoad();
+        pane.markAgent(who, "done");
+        return answer({ ok: true, tab: tabOf(id), ...page });
+      }
+      const pane = panes.get(browserPanelId(String(request.tab ?? "")));
+      if (!pane) return answer({ ok: false, reason: "That tab has been closed." });
+      if (request.action === "navigate") {
+        pane.markAgent(who, "working", "opening");
+        pane.navigate(String(request.url ?? ""));
+        const page = await pane.waitForLoad();
+        pane.markAgent(who, "done");
+        return answer({ ok: true, tab: request.tab, ...page });
+      }
+      if (request.action === "read") {
+        const guest = pane.guestId();
+        if (guest === null || pane.state !== "page" || typeof desktopShell?.readBrowserTab !== "function") {
+          return answer({ ok: false, reason: "That tab has no page loaded to read." });
+        }
+        pane.markAgent(who, "working", "reading");
+        try {
+          const read = await desktopShell.readBrowserTab(guest, request.max_chars);
+          return answer({ ok: true, tab: request.tab, ...read });
+        } finally {
+          pane.markAgent(who, "done");
+        }
+      }
+      return answer({ ok: false, reason: "That is not something a browser tab can do." });
+    } catch {
+      return answer({ ok: false, reason: "The browser tab could not do that." });
+    }
   }
 
   /** The plain-browser hand-off (brief S7): Go to asks for an address, and Return opens it in a new
@@ -1151,7 +1209,14 @@ export function mountApp(
         missing: pane.isMissing(),
       };
     if (pane.kind === "browser")
-      return { kind: "browser", label: pane.title, tooltip: pane.url || pane.title, loading: pane.loading };
+      return {
+        kind: "browser",
+        label: pane.title,
+        tooltip: pane.url || pane.title,
+        loading: pane.loading,
+        // A chat agent at work on the tab (brief C2), as a chat tab shows its own activity.
+        activityLabel: pane.agentActivity,
+      };
     if (["chat", "external-chat", "agent-settings"].includes(pane.kind))
       return {
         kind: pane.kind,
@@ -1832,6 +1897,10 @@ export function mountApp(
     chatNotice.textContent = "";
     renderChats();
     stopChatsStream = singlePane ? undefined : dataAccess.openChatsStream?.(slug, { onEvent: scheduleChatsRefresh });
+    stopBrowserRequests?.();
+    stopBrowserRequests = browserTabs
+      ? dataAccess.openBrowserRequests?.(slug, { onRequest: (request) => void handleBrowserRequest(slug, request) })
+      : undefined;
     refreshTopbarTitle();
     attentionTray.setWorkspace(slug);
     artifactNavigator.setWorkspace(slug);
@@ -2137,6 +2206,7 @@ export function mountApp(
     attentionWatch?.destroy();
     clearTimeout(chatsRefreshTimer);
     stopChatsStream?.();
+    stopBrowserRequests?.();
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
     root.removeEventListener("click", onLinkActivate);

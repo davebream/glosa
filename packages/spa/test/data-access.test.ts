@@ -789,14 +789,14 @@ describe("a daemon that changes under the page (#432, R-L6)", () => {
     const seen: Headers[] = [];
     const dataAccess = createDataAccess({
       storage: fakeStorage({ glosa_token: "t" }),
-      contractVersion: "1.23",
+      contractVersion: "1.24",
       fetchFn: async (_path: string, init: RequestInit) => {
         seen.push(new Headers(init.headers));
         return jsonResponse(200, { workspaces: [] });
       },
     });
     await dataAccess.getWorkspaces();
-    expect(seen[0]?.get("X-Contract-Version")).toBe("1.23");
+    expect(seen[0]?.get("X-Contract-Version")).toBe("1.24");
   });
 
   test("a bye that says install-changed is reported once; an ordinary bye is not", async () => {
@@ -873,3 +873,78 @@ async function waitFor(condition: () => boolean, deadlineMs = 2000): Promise<voi
     await Bun.sleep(5);
   }
 }
+
+describe("desk browser tabs for chat agents (#440)", () => {
+  function streamingDataAccess(browserHost: boolean) {
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const streams: string[] = [];
+    const posts: [string, unknown][] = [];
+    const da = createDataAccess({
+      storage: fakeStorage({ glosa_token: "t" }),
+      browserHost,
+      fetchFn: async (path: string, init: RequestInit) => {
+        if (path.includes("/stream")) {
+          streams.push(path);
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(value) {
+                controller = value;
+              },
+            }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          );
+        }
+        posts.push([path, JSON.parse(String(init.body))]);
+        return path.includes("browser-requests")
+          ? new Response(null, { status: 204 })
+          : jsonResponse(200, { ok: true });
+      },
+    });
+    const push = (text: string) => controller!.enqueue(new TextEncoder().encode(text));
+    const opened = async () => {
+      for (let i = 0; i < 100 && !controller; i++) await new Promise((resolve) => setTimeout(resolve, 1));
+      expect(controller).toBeDefined();
+    };
+    return { da, streams, posts, push, opened };
+  }
+
+  test("a desk window in the desktop app asks to host them, hears only their requests, and answers", async () => {
+    const h = streamingDataAccess(true);
+    const requests: unknown[] = [];
+    const stop = h.da.openBrowserRequests("ws", { onRequest: (request: unknown) => requests.push(request) });
+    try {
+      await h.opened();
+      const frame = { id: "11111111-1111-4111-8111-111111111111", chat_id: "c", provider: "codex", action: "open" };
+      h.push(`event: chats_changed\ndata: {}\n\nevent: browser_request\ndata: ${JSON.stringify(frame)}\n\n`);
+      for (let i = 0; i < 100 && !requests.length; i++) await new Promise((resolve) => setTimeout(resolve, 1));
+      expect(requests).toEqual([frame]);
+      await h.da.answerBrowserRequest("ws", frame.id, { ok: false, reason: "No." });
+      expect(h.posts).toEqual([[`/w/ws/browser-requests/${frame.id}`, { ok: false, reason: "No." }]]);
+    } finally {
+      stop();
+    }
+    expect(h.streams).toEqual(["/w/ws/stream?browser=1"]);
+  });
+
+  test("any other page opens the plain stream, so the daemon never sends it a request", async () => {
+    const h = streamingDataAccess(false);
+    const stop = h.da.openStream("ws", {});
+    try {
+      await h.opened();
+    } finally {
+      stop();
+    }
+    expect(h.streams).toEqual(["/w/ws/stream"]);
+  });
+
+  test("a consent grant says it was given under the text that names browser tabs", async () => {
+    const h = streamingDataAccess(false);
+    await h.da.setAgentConsent("22222222-2222-4222-8222-222222222222", "ws", true);
+    expect(h.posts).toEqual([
+      [
+        "/api/agents/profiles/22222222-2222-4222-8222-222222222222/consent",
+        { workspace: "ws", granted: true, version: 1, disclosure: 2 },
+      ],
+    ]);
+  });
+});

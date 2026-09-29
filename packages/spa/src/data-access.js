@@ -31,7 +31,7 @@ const TOKEN_KEY = "glosa_token";
  *   sleepFn?: SleepFn,
  *   randFn?: () => number,
  * }} StreamOptions */
-/** @typedef {StreamOptions & { slug: string }} OpenStreamOptions */
+/** @typedef {StreamOptions & { slug: string, browser?: boolean }} OpenStreamOptions */
 /** @typedef {{ contract_version?: unknown, paired?: boolean, install_id?: unknown, build_id?: unknown }} Handshake */
 /** @typedef {{
  *   fetchFn?: FetchFn,
@@ -42,6 +42,7 @@ const TOKEN_KEY = "glosa_token";
  *   contractVersion?: string | null,
  *   pageBuildId?: string | null,
  *   onDaemonChanged?: (kind: "install-changed" | "build-changed") => void,
+ *   browserHost?: boolean,
  * }} DataAccessDeps */
 /** @typedef {{ method?: string, headers?: Record<string, string>, body?: string | Blob | FormData, signal?: AbortSignal }} RequestOptions */
 
@@ -269,11 +270,14 @@ export function openStream({
   onStatus,
   onUnauthorized,
   onBye,
+  browser = false,
   backoffFn = computeBackoffMs,
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randFn = Math.random,
 }) {
-  return openEventStream(`/w/${encodeURIComponent(slug)}/stream`, {
+  // `browser=1` (#440): this page is a desk window in the desktop app, so the daemon may send it the
+  // chat agents' requests for its browser tabs on this stream.
+  return openEventStream(`/w/${encodeURIComponent(slug)}/stream${browser ? "?browser=1" : ""}`, {
     fetchFn,
     storage,
     onEvent,
@@ -491,6 +495,7 @@ export function createDataAccess(deps = {}) {
         fetchFn,
         storage,
         slug,
+        browser: deps.browserHost === true,
         onUnauthorized: handleUnauthorized,
         onEvent: (frame) => {
           for (const listener of listeners) {
@@ -584,8 +589,29 @@ export function createDataAccess(deps = {}) {
     /** @param {string} id @param {string} secret */
     finishAgentLogin: (id, secret) => postJson(loginPath(id, "finish"), {}, { "X-Glosa-Operation": secret }),
     /** @param {string} id @param {string} slug @param {boolean} granted */
+    // `disclosure` names the consent text the person saw (#440): 2 is the one that says the agent
+    // can read web pages in desk browser tabs. The daemon asks again for a grant under an older one.
     setAgentConsent: (id, slug, granted) =>
-      postJson(profilePath(id, "consent"), { workspace: slug, granted, version: 1 }),
+      postJson(profilePath(id, "consent"), { workspace: slug, granted, version: 1, disclosure: 2 }),
+    /** A chat agent's requests for this window's browser tabs (#440); only arrive when this data
+     * access was created with `browserHost`. @param {string} slug @param {{ onRequest: (request: any) => void }} callbacks */
+    openBrowserRequests(slug, callbacks) {
+      return subscribeWorkspace(slug, {
+        onEvent: (frame) => {
+          if (frame.event === "browser_request" && frame.data && typeof frame.data === "object")
+            callbacks.onRequest(frame.data);
+        },
+      });
+    },
+    /** The answer to one browser request: the tab and page, or why not.
+     * @param {string} slug @param {string} id @param {unknown} answer */
+    answerBrowserRequest: async (slug, id, answer) => {
+      await request(`/w/${encodeURIComponent(slug)}/browser-requests/${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(answer),
+      });
+    },
     /** @param {string} slug @param {StreamOptions} [callbacks] */
     openChatsStream(slug, callbacks = {}) {
       return subscribeWorkspace(slug, {

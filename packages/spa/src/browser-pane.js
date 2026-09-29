@@ -39,6 +39,7 @@ const ICONS = {
   close: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.6 4.6 6.8 6.8M11.4 4.6l-6.8 6.8"/></svg>',
   move: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M8 2.5v11"/></svg>',
   warn: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.3v.2"/></svg>',
+  pointer: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2.5 12.5 7l-4 1.3-1.5 4.2z"/></svg>',
 };
 
 /**
@@ -75,6 +76,15 @@ export function createBrowserPane(host, options) {
   let ready = false;
   let destroyed = false;
   /** @type {any} */ let view = null;
+  /** A chat's agent driving this tab (brief C2): who, and whether it is at work now or opened the
+   * page that is showing. Cleared when the person navigates. @type {null | { name: string, phase: "working" | "done", verb: string }} */
+  let agent = null;
+  /** The next full navigation is the agent's own, so it does not clear the mark. */
+  let agentNav = false;
+  /** A load has been asked for and has not settled; `waitForLoad` waits on it. */
+  let pendingNav = false;
+  /** @type {Array<(page: { url: string, title: string, failure?: string }) => void>} */
+  const loadWaiters = [];
   /** The state the tab is in: "empty" (nothing typed yet), "unloaded" (a restored internet page
    * that has not been asked for), or "page" (a webview is showing, loading or has failed). */
   let state = url ? (restored && !isLocalUrl(url) ? "unloaded" : "page") : "empty";
@@ -90,13 +100,16 @@ export function createBrowserPane(host, options) {
     b.innerHTML = icon;
     return b;
   };
-  const back = button("glosa-browser-back", "Back", ICONS.back, () => view?.canGoBack() && view.goBack());
-  const forward = button(
-    "glosa-browser-forward",
-    "Forward",
-    ICONS.forward,
-    () => view?.canGoForward() && view.goForward(),
-  );
+  const back = button("glosa-browser-back", "Back", ICONS.back, () => {
+    if (!view?.canGoBack()) return;
+    clearAgent();
+    view.goBack();
+  });
+  const forward = button("glosa-browser-forward", "Forward", ICONS.forward, () => {
+    if (!view?.canGoForward()) return;
+    clearAgent();
+    view.goForward();
+  });
   const reload = button("glosa-browser-reload", "Reload", ICONS.reload, () => {
     if (loading && ready) view.stop();
     else reloadPage();
@@ -177,10 +190,19 @@ export function createBrowserPane(host, options) {
     reloadItem.disabled = state === "empty";
   });
 
+  // The words of an agent's mark, printed in the row and never on the page (brief C2): Session Ink,
+  // a glyph that stays when a narrow pane folds the words away, and a polite status for readers.
+  const saidWords = el("span", { className: "glosa-browser-said-words" });
+  const said = el("span", { className: "glosa-browser-said", role: "status", hidden: true }, [
+    el("span", { className: "glosa-browser-said-glyph", "aria-hidden": "true" }),
+    saidWords,
+  ]);
+  /** @type {HTMLElement} */ (said.firstElementChild).innerHTML = ICONS.pointer;
+
   const bar = el("div", { className: "glosa-browser-bar" }, [
     el("div", { className: "glosa-browser-nav" }, [back, forward, reload]),
     address,
-    el("div", { className: "glosa-browser-actions" }, [outside, menu.element]),
+    el("div", { className: "glosa-browser-actions" }, [said, outside, menu.element]),
   ]);
 
   const noticeText = el("span", { className: "glosa-browser-notice-text" });
@@ -250,6 +272,7 @@ export function createBrowserPane(host, options) {
       return;
     }
     clearProblem();
+    clearAgent();
     go(parsed.url);
     input.blur();
     view?.focus();
@@ -311,10 +334,11 @@ export function createBrowserPane(host, options) {
         onNavigate({ url, title });
       }
       render();
+      settle();
     });
-    view.addEventListener("did-navigate", (event) => arrived(event.url));
+    view.addEventListener("did-navigate", (event) => arrived(event.url, { full: true }));
     view.addEventListener("did-navigate-in-page", (event) => {
-      if (event.isMainFrame) arrived(event.url);
+      if (event.isMainFrame) arrived(event.url, { full: false });
     });
     view.addEventListener("page-title-updated", (event) => {
       title = String(event.title ?? "");
@@ -336,6 +360,7 @@ export function createBrowserPane(host, options) {
       crashed = true;
       loading = false;
       render();
+      settle();
     });
     // A click into the page never reaches the SPA's document, so the pane learns it was chosen here,
     // and anything open over the page gives way.
@@ -347,8 +372,14 @@ export function createBrowserPane(host, options) {
     return view;
   }
 
-  function arrived(next) {
+  function arrived(next, { full }) {
     if (!next || next === "about:blank") return;
+    // A full navigation the agent did not ask for is the person's (or the page's, on the person's
+    // click): the page is no longer the one the agent opened.
+    if (full) {
+      if (agentNav) agentNav = false;
+      else if (agent) clearAgent();
+    }
     url = next;
     failure = null;
     showAddress();
@@ -356,17 +387,20 @@ export function createBrowserPane(host, options) {
     render();
   }
 
-  function go(next) {
+  function go(next, { byAgent = false } = {}) {
     url = next;
     title = "";
     failure = null;
     crashed = false;
     state = "page";
+    agentNav = byAgent;
+    pendingNav = true;
     showAddress();
     if (isGlosaAddress(next, window.location.href)) {
       failure = describeLoadFailure(-20, next);
       onNavigate({ url, title });
       render();
+      settle();
       return;
     }
     const page = ensureView();
@@ -481,6 +515,44 @@ export function createBrowserPane(host, options) {
     onStateChange();
   }
 
+  /** What a load came to, for whoever waited on it. */
+  function snapshot() {
+    const why = crashed ? "This page stopped working" : failure?.title;
+    return { url, title, ...(why ? { failure: why } : {}) };
+  }
+
+  function settle() {
+    pendingNav = false;
+    const page = snapshot();
+    for (const waiter of loadWaiters.splice(0)) waiter(page);
+  }
+
+  function showAgent() {
+    said.hidden = !agent;
+    if (agent) {
+      const words =
+        agent.phase !== "working"
+          ? `Opened by ${agent.name}`
+          : agent.verb === "opening"
+            ? `${agent.name} is opening a page`
+            : `${agent.name} is reading`;
+      saidWords.textContent = words;
+      said.title = words;
+      element.dataset.agent = agent.phase;
+    } else {
+      saidWords.textContent = "";
+      said.removeAttribute("title");
+      delete element.dataset.agent;
+    }
+  }
+
+  function clearAgent() {
+    if (!agent) return;
+    agent = null;
+    showAgent();
+    onStateChange();
+  }
+
   function guestId() {
     try {
       return view && ready ? view.getWebContentsId() : null;
@@ -518,6 +590,34 @@ export function createBrowserPane(host, options) {
     },
     guestId,
     isMissing: () => false,
+    /** The agent at work on this tab now, for the tab's badge (brief C2), or null. */
+    get agentActivity() {
+      return agent?.phase === "working" ? agent.verb : null;
+    },
+    /** A chat agent's load, marked as the agent's (`markAgent` first). */
+    navigate: (next) => go(next, { byAgent: true }),
+    /** Resolves once the asked-for load settles (loaded, failed, refused or crashed), or after
+     * `timeoutMs` with what is showing then. */
+    waitForLoad(timeoutMs = 25_000) {
+      if (!pendingNav) return Promise.resolve(snapshot());
+      return new Promise((resolve) => {
+        const timer = setTimeout(
+          () => resolve({ ...snapshot(), failure: "The page did not finish loading in time." }),
+          timeoutMs,
+        );
+        loadWaiters.push((page) => {
+          clearTimeout(timer);
+          resolve(page);
+        });
+      });
+    },
+    /** Marks the tab as a chat agent's: at work now (`verb` "reading" or "opening"), or done. */
+    markAgent(name, phase, verb = "reading") {
+      agent = { name, phase, verb };
+      showAgent();
+      onStateChange();
+    },
+    clearAgent,
     /** ⌘L: the address, selected, ready to be replaced. */
     focusAddress() {
       input.focus({ preventScroll: true });

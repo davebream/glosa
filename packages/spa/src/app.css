@@ -9469,6 +9469,48 @@ button:is(
   color: var(--muted);
 }
 
+/* A chat agent at work on the tab (brief C2): a 2px Session Ink rule on the page's top edge while it
+   works and a 1px one after, with the words in the row, until the person takes the tab elsewhere.
+   Nothing is drawn on the page itself: a label hanging into it covered the site's own buttons. */
+.glosa-browser[data-agent] .glosa-browser-frame {
+  border-top-color: var(--session);
+}
+
+.glosa-browser[data-agent="working"] .glosa-browser-frame {
+  border-top-width: 2px;
+}
+
+.glosa-browser-said {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-right: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--session);
+  white-space: nowrap;
+}
+
+.glosa-browser-said[hidden] {
+  display: none;
+}
+
+.glosa-browser-said-glyph {
+  display: grid;
+  place-items: center;
+}
+
+.glosa-browser-said-glyph svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
 /* A narrow pane keeps back, reload, the address and More; forward and Open in your browser move
    into More, where the address still has the room it needs. */
 @container browser (max-width: 460px) {
@@ -9479,6 +9521,11 @@ button:is(
 
   .glosa-browser-forward,
   .glosa-browser-outside {
+    display: none;
+  }
+
+  /* The glyph stays; the words live on in its tooltip and the tab's badge. */
+  .glosa-browser-said-words {
     display: none;
   }
 }

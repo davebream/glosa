@@ -27,6 +27,7 @@ import { RUNTIME_INSTALL_TIMEOUT_MS } from "../agents/runtimes.ts";
 import { digest, privateDirectory, readBlob } from "./journal.ts";
 import {
   AgentStore,
+  CONSENT_DISCLOSURE,
   type Attachment,
   type ChatLog,
   type ChatState,
@@ -1219,10 +1220,24 @@ export class ManagedChatService {
     op.output = "";
     if (this.management === op) this.management = undefined;
   }
-  consent(workspace: ChatWorkspace, profileId: string, granted: boolean): Promise<void> {
+  /** `disclosure` is the consent text the person saw; the HTTP route passes what the page said,
+   * and an older page that says nothing is asked again (store.ts CONSENT_DISCLOSURE). */
+  consent(
+    workspace: ChatWorkspace,
+    profileId: string,
+    granted: boolean,
+    disclosure = CONSENT_DISCLOSURE,
+  ): Promise<void> {
     this.validateWorkspace(workspace);
     this.store.profile(profileId);
-    this.store.setConsent(profileId, workspace.id, workspace.epoch, granted, this.mcpDigest(profileId, workspace));
+    this.store.setConsent(
+      profileId,
+      workspace.id,
+      workspace.epoch,
+      granted,
+      this.mcpDigest(profileId, workspace),
+      disclosure,
+    );
     if (!granted) return this.stopProfile(profileId, workspace);
     return Promise.resolve();
   }

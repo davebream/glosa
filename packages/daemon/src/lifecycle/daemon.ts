@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
 import { type ArtifactAccessDependencies, getArtifact } from "../services/artifact.ts";
+import { BrowserRelay } from "../agents/browser-relay.ts";
 import { createManagedTools } from "../agents/managed-tools.ts";
 import { connect } from "node:net";
 import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSync, unlinkSync } from "node:fs";
@@ -151,6 +152,8 @@ export interface DaemonBackend {
   providerRegistry: AgentProviderRegistry;
   dictationRegistry: DictationProviderRegistry;
   managedChats?: ManagedChatService;
+  /** Desk browser tabs for managed chats' agents (#440). */
+  browserRelay: BrowserRelay;
   pushRegistry: SessionPushRegistry;
   signalRegistry: SignalRegistry;
   attentionFeed: AttentionFeed;
@@ -243,6 +246,9 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const supervisor = new RuntimeSupervisor(join(home, "agents"));
   const runtimes = new RuntimeCatalog(join(home, "agents"), opts.managedRuntime?.candidates ?? []);
   let managedChats: ManagedChatService | undefined;
+  // Desk browser tabs for a managed chat's agent (#440): shared by its tools and the workspace
+  // stream a desk window registers on, the one path between the two.
+  const browserRelay = new BrowserRelay();
   /** A managed chat's workspace, refused once it is no longer the registration the chat began in. */
   const managedWorkspace = (chat: ChatState) => {
     const entry = workspaceIndex.getWorkspaceByRegistration(chat.workspaceId);
@@ -278,6 +284,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
         // A managed chat's notes go through the same resolving path as every HTTP delivery, so they
         // arrive resolved, with their passage address and workspace line (issue #411).
         { deps: managedArtifacts, workspaceFor: managedWorkspace },
+        browserRelay,
       ),
       bindSession: async (chat) => {
         await sessionRegistry.register({
@@ -489,6 +496,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     providerRegistry,
     dictationRegistry,
     managedChats,
+    browserRelay,
     pushRegistry,
     signalRegistry,
     attentionFeed,
@@ -600,6 +608,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // registry and adoption coordinator on this object's identity, so the two listeners below must
   // be built from this exact reference rather than from a copy.
   backend.managedChats?.setMcpOrigin(`http://127.0.0.1:${port}`);
+  backend.browserRelay.setGlosaPorts([port, classFPort]);
   const apiContext: ApiContext = {
     port,
     classFPort,
@@ -620,6 +629,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     providerRegistry: backend.providerRegistry,
     dictationRegistry: backend.dictationRegistry,
     managedChats: backend.managedChats,
+    browserRelay: backend.browserRelay,
     pushRegistry: backend.pushRegistry,
     signalRegistry: backend.signalRegistry,
     attentionFeed: backend.attentionFeed,

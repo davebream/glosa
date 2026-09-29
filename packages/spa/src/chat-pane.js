@@ -571,6 +571,9 @@ export function createChatPane(
       title: "Allow this account to work in this workspace?",
       body:
         "The coding agent can read workspace files and receive your messages and attachments through its configured provider. File changes and commands follow its approval mode." +
+        // Browser tools (#440): existing permissions are asked once more for this sentence
+        // (CONSENT_DISCLOSURE in packages/daemon/src/chats/store.ts).
+        " In the glosa desktop app it can also open web pages in this window's browser tabs and read them while it answers you. The text of those pages, including pages you are signed in to, goes to its provider." +
         (profile?.configuration
           ? " Its native settings, permission rules, plugins, hooks and MCP servers will also run, including startup hooks before a message is sent. Configuration changes require renewed permission."
           : " This permission lasts until revoked in this workspace.") +
