@@ -355,7 +355,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.25: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.26: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -735,3 +735,24 @@ folders, image imports and externally observed changes. Images remain separate f
 documents. Folder restoration requires a free path and restores glosa-visible content only; the OS
 Trash retains unsupported/excluded contents. See A1 §5.26, A3 Desk filesystem mutations and A4
 Versioned assets and file operations for transport, safety, provenance and recovery contracts.
+
+### Desk read-only files (#448)
+
+Directory desks show a separate read-only tier alongside tracked documents and images. This tier
+never participates in document matching, claims, journal capture or shadow Git. Companion and
+loose-file surfaces retain their current inventories. All files is the default view; Documents only
+retains tracked documents, images and their existing directory rows. Folder preferences persist in
+glosa home, keyed by canonical folder path, and synchronize across open desks.
+
+Read-only files obey workspace exclusions, dot-directory and symlink refusal, and root/nested
+`.gitignore` rules unless Show ignored files is selected. The deterministic listing admits at most
+10,000 files, reports the omitted count and warns when enumeration is incomplete. Ordinary dotfiles
+remain eligible. Binary and oversized files remain visible with metadata placeholders. Text uses
+the existing configured `maxFileBytes` limit and a locally vendored, lazy CodeMirror viewer with
+line numbers, highlighting, search, wrapping, selection/copy and virtualized rendering. Unknown
+extensions use plain text. Source is returned only as authenticated JSON.
+
+Direct rename/trash, annotation, history and edit controls are unavailable for this tier. Existing
+parent-directory operations retain their existing semantics. Open read-only tabs survive filtering,
+reload and parent renames; missing/excluded files show a recoverable unavailable state. Content
+refreshes on disk invalidations through a separate desk watcher, outside document capture.

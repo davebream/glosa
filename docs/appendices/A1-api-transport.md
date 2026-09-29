@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.25", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.26", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -1531,3 +1531,36 @@ keys require this release's reader. Do not reopen an upgraded writable bus with 
 older journal readers do not understand path identity and older capture code can remove directory
 metadata. Existing checkpoints remain readable; pre-upgrade checkpoints contain no newly introduced
 image/directory history. Recording starts from the assets present at upgrade, with unknown provenance.
+
+### 5.27 Desk read-only files (contract 1.26, issue #448)
+
+These routes accept registered directory workspace slugs only. Loose-file workspaces return 422
+and never scan siblings. Reads are authenticated, return JSON with `Cache-Control: no-store`, and
+never initialize the workspace bus. PUT requires the existing state-changing Origin checks.
+
+| Route | Result |
+|---|---|
+| `GET /w/:slug/read-only-files` | `{files, omitted_count, complete, warning}`. Each entry is `{kind:"read-only",path,size_bytes,version}`. `version` is stat identity, not a content hash or journal cursor. |
+| `GET /w/:slug/read-only-files/:path` | `{path,size_bytes,file_type,kind:"text",text}` or `{path,size_bytes,file_type,kind:"placeholder",reason:"binary"\|"oversize"}`. |
+| `GET /w/:slug/file-view` | `{mode:"all"\|"documents",show_ignored:boolean}`; defaults to `all` and false. |
+| `PUT /w/:slug/file-view` | Same exact two-field body and response; unknown keys refused. Stored privately in version 1 `folder-file-views.json` under glosa home, keyed by canonical path. |
+
+The file read independently rechecks confinement, every symlink component, exclusions, current
+document/image membership and current ignore preference after admission by the capped listing.
+Invalid paths return 400; absent, excluded or unlisted files 404; concurrent changes 409; failed
+listing 503. `read-only-unavailable` carries actionable detail. A file growing during a read may
+return 413; retry reclassifies it as an oversized placeholder. Text decoding is strict UTF-8, with
+NUL in the first 8 KiB classified as binary. The content limit is `artifacts.maxFileBytes`.
+
+`GET /w/:slug/stream?read_only=1` adds ephemeral `read_only_files` and `file_view` invalidations
+for directory desks. This flag composes with `browser=1`. Events have no journal cursor; receivers
+refetch through the data-access module. A shared, refcounted filesystem watcher debounces changes
+and closes on the last subscriber; listing runs in a bounded worker with a 30-second deadline.
+Reconnect triggers a fresh invalidation. Incomplete scans and unavailable watchers are visible,
+with retry guidance. The listing retains the first 10,000 entries of sorted depth-first traversal
+and counts additional eligible files; incomplete scans cannot promise a total.
+
+The SPA requests this subscription only on desks and exposes controls only for directories.
+Documents only hides read-only rows without closing their tabs. Changing Show ignored files
+revalidates open tabs. Old daemons returning 404 hide the unsupported controls. The read-only
+viewer has its own persisted panel kind and never falls back to a document editor.
