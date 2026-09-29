@@ -254,6 +254,8 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./document-images.js",
     "./image-insertion.js",
     "./image-pane.js",
+    "./read-only-pane.js",
+    "./file-view.js",
     // Desk browser tabs (#440): the pane talks only to its <webview> and the shell's bridge it is
     // handed; its address rules are pure. Neither reaches the daemon.
     "./browser-pane.js",
@@ -337,6 +339,7 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     expect([...seen]).toContain(resolve(SPA_SRC_DIR, "outline.js"));
     expect([...seen]).not.toContain(resolve(SPA_SRC_DIR, "vendor/prosemirror.js"));
     expect([...seen]).not.toContain(resolve(SPA_SRC_DIR, "vendor/image-viewer.js"));
+    expect([...seen]).not.toContain(resolve(SPA_SRC_DIR, "vendor/codemirror.js"));
   });
 
   test("artifact-pane.js's local imports are exactly the sanctioned set", () => {

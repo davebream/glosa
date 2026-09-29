@@ -115,6 +115,74 @@ describe("A1 §5 route catalog", () => {
     return req(path, { ...init, headers: { ...init.headers, Origin: `http://127.0.0.1:${PORT}` } });
   }
 
+  test("read-only HTTP listing and reads never track source bytes or allow document writes", async () => {
+    writeFileSync(join(root, "notes.md"), "# Notes");
+    writeFileSync(join(root, "code.ts"), "const first = 1;");
+    writeFileSync(join(root, ".gitignore"), "ignored.ts\n");
+    writeFileSync(join(root, "ignored.ts"), "private");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcileOnce();
+    const head = await headSha(root);
+    const before = readFileSync(journalPath(root), "utf8");
+    const list = await fetchFn(req(`/w/${slug}/read-only-files`));
+    expect(list.status).toBe(200);
+    expect((await list.json()).files.map((file: { path: string }) => file.path)).toEqual([".gitignore", "code.ts"]);
+    const read = await fetchFn(req(`/w/${slug}/read-only-files/code.ts`));
+    expect(read.headers.get("content-type")).toContain("application/json");
+    expect(read.headers.get("cache-control")).toBe("no-store");
+    expect(await read.json()).toMatchObject({ kind: "text", text: "const first = 1;" });
+    expect((await fetchFn(req(`/w/${slug}/read-only-files/ignored.ts`))).status).toBe(404);
+    for (const route of [`/w/${slug}/artifacts/code.ts`, `/w/${slug}/read-only-files/code.ts`])
+      expect(
+        (await fetchFn(stateChangingReq(route, { method: "PUT", body: JSON.stringify({ source: "changed" }) }))).status,
+      ).toBeGreaterThanOrEqual(400);
+    for (const action of ["rename", "trash"])
+      expect(
+        (
+          await fetchFn(
+            stateChangingReq(`/w/${slug}/files/${action}`, {
+              method: "POST",
+              body: JSON.stringify({ path: "code.ts", to: "other.ts" }),
+            }),
+          )
+        ).status,
+      ).toBeGreaterThanOrEqual(400);
+    writeFileSync(join(root, "code.ts"), "const second = 2;");
+    expect((await (await fetchFn(req(`/w/${slug}/read-only-files/code.ts`))).json()).text).toBe("const second = 2;");
+    expect((await bus.captureExternalEdit()).committed).toBe(false);
+    expect(await headSha(root)).toBe(head);
+    expect(readFileSync(journalPath(root), "utf8")).toBe(before);
+    expect(readFileSync(join(root, "code.ts"), "utf8")).toBe("const second = 2;");
+  });
+
+  test("file-view HTTP writes need Origin, persist under the canonical folder, and reject loose workspaces", async () => {
+    const route = `/w/${slug}/file-view`;
+    const body = JSON.stringify({ mode: "documents", show_ignored: true });
+    expect((await fetchFn(req(route, { method: "PUT", body }))).status).toBe(403);
+    expect((await fetchFn(stateChangingReq(route, { method: "PUT", body }))).status).toBe(200);
+    expect(await (await fetchFn(req(route))).json()).toEqual({ mode: "documents", show_ignored: true });
+    expect(JSON.parse(readFileSync(join(home, "folder-file-views.json"), "utf8")).folders[root]).toEqual({
+      mode: "documents",
+      show_ignored: true,
+    });
+    expect(existsSync(join(root, ".glosa/config.json"))).toBe(false);
+    expect(
+      (
+        await fetchFn(
+          stateChangingReq(route, {
+            method: "PUT",
+            body: JSON.stringify({ mode: "all", show_ignored: true, path: "/tmp" }),
+          }),
+        )
+      ).status,
+    ).toBe(422);
+    const file = join(root, "standalone.bin");
+    writeFileSync(file, "single");
+    const loose = await workspaceIndex.resolveOpenTarget(file);
+    expect((await fetchFn(req(`/w/${loose.entry.slug}/read-only-files`))).status).toBe(422);
+    expect((await fetchFn(req(route, { headers: { Authorization: "Bearer wrong" } }))).status).toBe(401);
+  });
+
   // --- GET /api/workspaces (5.2) ---
 
   test("tree operations create empty items, refuse collisions and preserve notes through rename and undo", async () => {

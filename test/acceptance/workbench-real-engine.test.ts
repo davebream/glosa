@@ -22,7 +22,7 @@
 // CDP client is file-local on purpose: importing one out of another acceptance test would couple
 // two gates' failure modes together.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tokenPath } from "../../packages/daemon/src/security/token.ts";
@@ -608,6 +608,169 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   };
 
   const paneFor = (state: PageState, path: string) => state.panes.find((pane) => pane.path === path);
+
+  test(
+    "read-only source tabs virtualize, search, wrap, restore and follow disk changes without loading remote code",
+    async () => {
+      const source = Array.from({ length: 20_000 }, (_, i) => `const value${i} = ${i};`).join("\n");
+      writeFileSync(join(workspaceRoot, "source.ts"), source);
+      writeFileSync(join(workspaceRoot, "binary.dat"), Buffer.from([0, 255]));
+      writeFileSync(join(workspaceRoot, ".gitignore"), "ignored.log\n");
+      writeFileSync(join(workspaceRoot, "ignored.log"), "ignored content");
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, `${pairedUrl(ALPHA)}&kind=desk`);
+      const wait = async (expression: string) => {
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          try {
+            if (await tab.evaluate<boolean>(expression)) return;
+          } catch {
+            /* reload context */
+          }
+          await Bun.sleep(25);
+        }
+        throw new Error(
+          `Read-only browser state missing: ${expression}; ${await tab.evaluate("document.body.innerText")}`,
+        );
+      };
+      await waitForReady(tab, "desk ready");
+      await wait(`!!document.querySelector('[data-node-id="f:source.ts"]')`);
+      expect(
+        await tab.evaluate<unknown>(
+          `performance.getEntriesByType('resource').some(r => r.name.includes('codemirror.js'))`,
+        ),
+      ).toBe(false);
+      expect(
+        await tab.evaluate<unknown>(
+          `document.querySelector('[data-node-id="f:source.ts"]').getAttribute('aria-label')`,
+        ),
+      ).toContain("read-only");
+      expect(await tab.evaluate<unknown>(`!!document.querySelector('[data-node-id="f:ignored.log"]')`)).toBe(false);
+      await openFromNavigator(tab, "binary.dat");
+      await wait(`document.querySelector('.glosa-read-only-status')?.textContent.includes('Binary file')`);
+      expect(
+        await tab.evaluate<unknown>(
+          `performance.getEntriesByType('resource').some(r => r.name.includes('codemirror.js'))`,
+        ),
+      ).toBe(false);
+      await openFromNavigator(tab, "source.ts");
+      await wait(`document.querySelectorAll('.cm-line').length > 0`);
+      expect(await tab.evaluate<number>(`document.querySelectorAll('.cm-line').length`)).toBeLessThan(500);
+      expect(
+        await tab.evaluate<boolean>(`(() => {
+        const pane = document.querySelector('.glosa-read-only-pane[aria-label="Read-only file: source.ts"]');
+        const metadata = pane.querySelector('.glosa-read-only-metadata').getBoundingClientRect();
+        const editor = pane.querySelector('.cm-editor').getBoundingClientRect();
+        return metadata.height > 0 && metadata.bottom <= innerHeight && editor.height > 100 && editor.bottom <= metadata.top + 1;
+      })()`),
+      ).toBe(true);
+      expect(
+        await tab.evaluate<unknown>(`document.querySelector('.cm-content').getAttribute('contenteditable')`),
+      ).not.toBe("true");
+      await tab.evaluate(`document.querySelector('.cm-content').focus()`);
+      await tab.send("Input.insertText", { text: "not an edit" });
+      expect(readFileSync(join(workspaceRoot, "source.ts"), "utf8")).toBe(source);
+      await tab.evaluate(
+        `[...document.querySelectorAll('.glosa-read-only-toolbar button')].find(b => b.textContent === 'Find' && !b.disabled).click()`,
+      );
+      await wait(`!!document.querySelector('.cm-search input[name="search"]')`);
+      await tab.evaluate(`document.querySelector('.cm-search input[name="search"]').focus()`);
+      await tab.send("Input.insertText", { text: "value19999" });
+      await tab.send("Input.dispatchKeyEvent", { type: "keyUp", key: "9", code: "Digit9", windowsVirtualKeyCode: 57 });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await wait(`document.querySelector('.cm-content')?.textContent.includes('value19999')`);
+      await tab.evaluate(
+        `[...document.querySelectorAll('.glosa-read-only-toolbar button')].find(b => b.textContent === 'Wrap lines' && !b.disabled).click()`,
+      );
+      expect(await tab.evaluate<unknown>(`!!document.querySelector('.cm-lineWrapping')`)).toBe(true);
+      // Hiding rows must not close the already-open source pane.
+      await tab.evaluate(
+        `const select = document.querySelector('.glosa-file-view select'); select.value = 'documents'; select.dispatchEvent(new Event('change', {bubbles:true}));`,
+      );
+      await wait(`!document.querySelector('[data-node-id="f:source.ts"]')`);
+      expect(await tab.evaluate<unknown>(`!!document.querySelector('.cm-content')`)).toBe(true);
+      const beforeReload = await tab.evaluate<number>("performance.timeOrigin");
+      await tab.send("Page.reload");
+      await wait(`performance.timeOrigin > ${beforeReload} && !!document.querySelector('.cm-content')`);
+      expect(await tab.evaluate<unknown>(`document.querySelector('.glosa-file-view select').value`)).toBe("documents");
+      writeFileSync(join(workspaceRoot, "source.ts"), "const updatedFromDisk = 7;");
+      await wait(`document.querySelector('.cm-content')?.textContent.includes('updatedFromDisk')`);
+      await browser.send("Browser.grantPermissions", {
+        origin: `http://127.0.0.1:${port}`,
+        permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"],
+      });
+      await tab.evaluate(`(() => {
+      document.querySelector('.cm-content').focus();
+      const line = document.querySelector('.cm-line'); const range = document.createRange();
+      range.selectNodeContents(line); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    })()`);
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "c",
+        code: "KeyC",
+        modifiers: 4,
+        windowsVirtualKeyCode: 67,
+        commands: ["copy"],
+      });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "c",
+        code: "KeyC",
+        modifiers: 4,
+        windowsVirtualKeyCode: 67,
+      });
+      await wait(`navigator.clipboard.readText().then(text => text === "const updatedFromDisk = 7;")`);
+      expect(await tab.evaluate<string>("navigator.clipboard.readText()")).toBe("const updatedFromDisk = 7;");
+      // A second authenticated desk follows the same folder preference over SSE.
+      const other = await openTab(browser, cdpPort, `${pairedUrl(ALPHA)}&kind=desk`);
+      await waitForReady(other, "second desk ready");
+      await other.evaluate(`document.querySelector('.glosa-file-view summary').click()`);
+      await other.evaluate(
+        `const select = document.querySelector('.glosa-file-view select'); select.value = 'all'; select.dispatchEvent(new Event('change', {bubbles:true}));`,
+      );
+      await wait(
+        `document.querySelector('.glosa-file-view select').value === 'all' && !!document.querySelector('[data-node-id="f:source.ts"]')`,
+      );
+      await tab.evaluate(
+        `document.querySelector('.glosa-file-view').open = true; document.querySelector('.glosa-file-view input').click()`,
+      );
+      await wait(`!!document.querySelector('[data-node-id="f:ignored.log"]')`);
+      // Unknown grammar and a near-limit single line still leave the controls responsive.
+      writeFileSync(join(workspaceRoot, "long.unknown"), "x".repeat(2 * 1024 * 1024));
+      await wait(`!!document.querySelector('[data-node-id="f:long.unknown"]')`);
+      await openFromNavigator(tab, "long.unknown");
+      await wait(
+        `!!document.querySelector('.glosa-read-only-pane[aria-label="Read-only file: long.unknown"] .cm-content')`,
+      );
+      expect(
+        await tab.evaluate<number>(
+          `document.querySelector('.glosa-read-only-pane[aria-label="Read-only file: long.unknown"] .cm-content').textContent.length`,
+        ),
+      ).toBeLessThan(100_000);
+      await openFromNavigator(tab, "source.ts");
+      unlinkSync(join(workspaceRoot, "source.ts"));
+      await wait(
+        `document.querySelector('.glosa-read-only-pane[aria-label="Read-only file: source.ts"] .glosa-read-only-status')?.textContent.includes('not in the read-only listing')`,
+      );
+      expect(
+        await tab.evaluate<unknown>(
+          `performance.getEntriesByType('resource').filter(r => !r.name.startsWith(location.origin) && !r.name.startsWith('data:')).map(r=>r.name)`,
+        ),
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   test(
     "tree rename keeps a real source editor and its group, then saves at the new path",
