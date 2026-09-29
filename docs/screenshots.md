@@ -48,8 +48,8 @@ workspace (`team-charter`) so the sidebar's workspace list is populated. What ma
 Commit each fixture directory as its own Git repository, then register both:
 
 ```sh
-glosa open --url --workspace "$DEMO/impact-plan" plans/first-90-days.md
-glosa open --url --workspace "$DEMO/team-charter" team-charter.md
+glosa open --url "$DEMO/impact-plan" plans/first-90-days.md
+glosa open --url "$DEMO/team-charter" team-charter.md
 ```
 
 `open --url` prints the paired URL. Every capture drives that URL in a headless Chromium at

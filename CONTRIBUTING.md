@@ -11,7 +11,8 @@ glosa is an experimental public alpha. Bug reports, focused fixes, tests, and do
 
 ## Development setup
 
-Requirements are macOS 13+, Bun 1.2.7+, and Git 2.30+.
+Requirements are macOS 13+, Bun 1.4.2+, and Git 2.30+. The test runner refuses an older Bun; the
+app itself runs on Bun 1.2.7+ on macOS.
 
 ```sh
 git clone https://github.com/davebream/glosa.git

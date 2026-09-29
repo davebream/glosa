@@ -319,7 +319,7 @@ Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand
 - **Scrim** (ink at 30%; black at 45% in dark): behind a blocking dialog.
 
 ### Session
-- **Session Ink, Blue-Black** (`{colors.session}`; about 8.9:1 on paper): a session's mark on the page and nothing else: the bracket in the gutter, its tab (paper text on Session Ink) and the "{provider} asks" label printed in the margin beside it, the dotted rule under a pointer's words, the "?" glyph on the question notice, and the 1.5px top rule of a session's card (2px on the card that floats at a passage). Dark: `{colors.dark-session}`.
+- **Session Ink, Blue-Black** (`{colors.session}`; about 8.3:1 on paper): a session's mark on the page and nothing else: the bracket in the gutter, its tab (paper text on Session Ink) and the "{provider} asks" label printed in the margin beside it, the dotted rule under a pointer's words, the "?" glyph on the question notice, and the 1.5px top rule of a session's card (2px on the card that floats at a passage). Dark: `{colors.dark-session}`.
 - **Session Wash** (Session Ink at 10% over transparent, 14% in dark): the wash on the exact words a question is about, and the ground under a session's quote on its card. The words of the request the reader is on, or whose card is hovered or focused, take a second wash over the first, so they read deeper without a third colour.
 
 ### Semantic

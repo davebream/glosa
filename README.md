@@ -150,7 +150,7 @@ Install the alpha CLI globally:
 bun add --global @davebream/glosa@alpha
 ```
 
-From the next release, Homebrew can install it instead, together with the Bun it runs on:
+Homebrew can install it instead, together with the Bun it runs on:
 
 ```sh
 brew install davebream/tap/glosa
@@ -228,7 +228,7 @@ A few commands worth knowing:
 
 ### Desktop app
 
-From the next release, the desktop app installs through a Homebrew cask, or as a DMG from the
+The desktop app installs through a Homebrew cask, or as a DMG from the
 Releases page:
 
 ```sh
