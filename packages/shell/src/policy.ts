@@ -4,6 +4,7 @@
 // wiring layer. Contracts: docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md
 // (R-O1…R-O6, R-P1…R-P5) and docs/research/2026-09-25-desktop-shell-readiness.md §3.
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** The SPA contract major this shell was built against (A1: major mismatch → reload, never a fix). */
 export const SHELL_CONTRACT_MAJOR = "1";
@@ -298,6 +299,8 @@ export interface CliLookup {
   override?: string;
   /** GLOSA_HOME, when set; otherwise the recorded executable lives under `<homeDir>/.glosa`. */
   glosaHome?: string;
+  /** `process.platform`. Decides the well-known bin directories; macOS when omitted (#432). */
+  platform?: NodeJS.Platform;
   homeDir: string;
   /** Electron's `process.resourcesPath` when the app is packaged, else null. */
   resourcesPath: string | null;
@@ -315,13 +318,35 @@ export function cliCandidates(lookup: CliLookup): string[] {
   if (lookup.override) return [lookup.override];
   const candidates = [join(lookup.glosaHome ?? join(lookup.homeDir, ".glosa"), "bin", "glosa")];
   if (lookup.resourcesPath !== null) candidates.push(join(lookup.resourcesPath, "bin", "glosa"));
-  candidates.push(
-    join(lookup.homeDir, ".bun", "bin", "glosa"),
-    "/opt/homebrew/bin/glosa",
-    "/usr/local/bin/glosa",
-    "glosa",
-  );
+  // Linux has no Homebrew prefix to look in; the pacman package links /usr/bin/glosa (#432).
+  const wellKnown =
+    lookup.platform === "linux"
+      ? ["/usr/local/bin/glosa", "/usr/bin/glosa"]
+      : ["/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+  candidates.push(join(lookup.homeDir, ".bun", "bin", "glosa"), ...wellKnown, "glosa");
   return candidates;
+}
+
+/**
+ * R-L8 (#432): whether a shell may look for a CLI at all. A packaged app whose own bundled CLI is gone
+ * was removed or replaced underneath it (`pacman -R`, an upgrade in progress); running another
+ * install's CLI then would silently select that install, so it runs none and says so. An unpackaged
+ * run, or a packaged app with its CLI in place, looks up candidates as usual.
+ */
+export function cliChoice(state: { packaged: boolean; ownCliExists: boolean }): "lookup" | "removed" {
+  return state.packaged && !state.ownCliExists ? "removed" : "lookup";
+}
+
+/** What asking the shell to bring a window's daemon back came to (R-L8). */
+export type ReconnectResult = { ok: true } | { ok: false; reason: "removed" | "foreign" | "failed"; message?: string };
+
+/** R-L8: after `glosa open` ran for the window's folder, is the daemon answering the one this window
+ * paired with? `paired` is the install id recorded when the window opened (null when the daemon
+ * published none); `answered` the one the handshake reports now. */
+export function reconnectOutcome(paired: string | null, answered: string | null): ReconnectResult {
+  if (answered === null) return { ok: false, reason: "failed", message: "The glosa daemon is not answering." };
+  if (paired !== null && answered !== paired) return { ok: false, reason: "foreign" };
+  return { ok: true };
 }
 
 // ---------- glosa:// links (#392) ----------
@@ -574,13 +599,56 @@ export const UPDATE_HEADERS = Object.freeze({
   "x-github-api-version": "2022-11-28",
 });
 
-/** The command the dialog copies. The app never installs itself: Homebrew owns the bundle. */
+/** The command the dialog copies on macOS. The app never installs itself: Homebrew owns the bundle. */
 export const UPGRADE_COMMAND = "brew upgrade --cask glosa";
 
-/** What the running app is: its `package.json` version and `process.arch`. */
+/** What the running app is: its `package.json` version, `process.arch` and `process.platform`
+ * (macOS when omitted). */
 export interface RunningApp {
   current: string;
   arch: string;
+  platform?: NodeJS.Platform;
+}
+
+/** The release assets that make a version installable on this platform: the DMG or ZIP on macOS
+ * (#371), the pacman package on Linux (#432), all named `glosa-<version>-<arch>.<ext>`. */
+export function releaseAssetNames(platform: NodeJS.Platform, version: string, arch: string): string[] {
+  if (platform === "linux") return [`glosa-${version}-${arch}.pacman`];
+  return [`glosa-${version}-${arch}.dmg`, `glosa-${version}-${arch}.zip`];
+}
+
+/** How this copy of the app was installed, which decides what the update dialog offers. */
+export type UpdateChannel = "homebrew-cask" | "pacman" | "download";
+
+/** The channel for a platform and the package manager the Linux package names in its
+ * `resources/package-type` marker. A Linux app without the marker was not installed by pacman,
+ * so it only gets the release page, and a Linux app is never told to use Homebrew. */
+export function updateChannelFor(platform: NodeJS.Platform, packageType: string | null): UpdateChannel {
+  if (platform === "darwin") return "homebrew-cask";
+  if (platform === "linux" && packageType === "pacman") return "pacman";
+  return "download";
+}
+
+/** The package-type marker's content, or null when it is not one short lowercase word. */
+export function parsePackageType(text: string | null): string | null {
+  if (text === null || text.length > 64) return null;
+  const value = text.trim();
+  return /^[a-z0-9-]{1,32}$/.test(value) ? value : null;
+}
+
+/** A launcher argument as a path the CLI understands. A desktop entry's `%U` hands a folder over as
+ * `file:///…` (#432); a local file URL becomes its path, and anything else is returned unchanged,
+ * including a `file:` URL naming another host, which is not ours to open. */
+export function targetFromArg(arg: string): string {
+  // Only a URL with an authority part (`file://…`): a bare `file:` would otherwise parse as the root.
+  if (!arg.startsWith("file://")) return arg;
+  try {
+    const url = new URL(arg);
+    if (url.protocol !== "file:" || (url.hostname !== "" && url.hostname !== "localhost")) return arg;
+    return fileURLToPath(url);
+  } catch {
+    return arg;
+  }
 }
 
 /** A release the running app could move to, with the tag it was published under. */
@@ -596,8 +664,8 @@ export const MAX_TAG_LENGTH = 64;
 /**
  * The newest release this app could upgrade to, or null. A release counts when its `draft` is
  * exactly `false`, its tag is `v` plus a SemVer version (or the bare version) no longer than
- * `MAX_TAG_LENGTH`, that version is above the running one, and it has `glosa-<version>-<arch>.dmg`
- * or `.zip` fully uploaded for the running architecture: a published release with no app on it (as
+ * `MAX_TAG_LENGTH`, that version is above the running one, and it has one of `releaseAssetNames`
+ * fully uploaded for the running platform and architecture: a published release with no app on it (as
  * `v0.1.0-alpha.32` and `33` are) is not one. The API lists releases by creation, so this takes the
  * maximum by version, never the first. Entries that do not have that shape are skipped, including
  * one whose `draft` is missing or not a boolean.
@@ -612,7 +680,7 @@ export function newestRelease(releases: readonly unknown[], running: RunningApp)
     if (tag.length > MAX_TAG_LENGTH) continue;
     const version = tag.startsWith("v") ? tag.slice(1) : tag;
     if (parseVersion(version) === null || compareVersions(version, running.current) <= 0) continue;
-    const names = [`glosa-${version}-${running.arch}.dmg`, `glosa-${version}-${running.arch}.zip`];
+    const names = releaseAssetNames(running.platform ?? "darwin", version, running.arch);
     const installable = release.assets.some((asset: unknown) => {
       if (typeof asset !== "object" || asset === null) return false;
       const { name, state } = asset as { name?: unknown; state?: unknown };
@@ -758,8 +826,41 @@ export interface UpdateDialog {
  * release found it is `<releasesPage>/tag/<tag>`, the tag already validated as a version, and
  * otherwise the releases page itself.
  */
-export function updateDialog(outcome: UpdateOutcome, context: { current: string; releasesPage: string }): UpdateDialog {
+export function updateDialog(
+  outcome: UpdateOutcome,
+  context: { current: string; releasesPage: string; channel?: UpdateChannel; arch?: string },
+): UpdateDialog {
   const releases = context.releasesPage.replace(/\/+$/, "");
+  const channel = context.channel ?? "homebrew-cask";
+  if (outcome.kind === "newer" && channel === "pacman") {
+    // pacman owns every file this app installed (#432): the app names the package and the command,
+    // built from the validated version and the running architecture, never from GitHub's answer.
+    const file = `glosa-${outcome.version}-${context.arch ?? "x64"}.pacman`;
+    return {
+      type: "info",
+      message: `glosa ${outcome.version} is available. You have ${context.current}.`,
+      detail: `pacman installed this copy of glosa, so pacman updates it. Download ${file} from the release page, then run the command Copy Install Command copies, from the folder you saved it to.`,
+      buttons: ["Open Release Page", "Copy Install Command", "Later"],
+      defaultId: 0,
+      cancelId: 2,
+      actions: [
+        { open: `${releases}/tag/${encodeURIComponent(outcome.tag)}` },
+        { copy: `sudo pacman -U ./${file}` },
+        null,
+      ],
+    };
+  }
+  if (outcome.kind === "newer" && channel === "download") {
+    return {
+      type: "info",
+      message: `glosa ${outcome.version} is available. You have ${context.current}.`,
+      detail: "Download it from the release page.",
+      buttons: ["Open Release Page", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      actions: [{ open: `${releases}/tag/${encodeURIComponent(outcome.tag)}` }, null],
+    };
+  }
   if (outcome.kind === "newer") {
     return {
       type: "info",

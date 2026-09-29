@@ -4,7 +4,7 @@
 import { lstatSync, readFileSync, realpathSync, watch } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { DeliverableEntry } from "../../../daemon/src/agent-provider/interface.ts";
-import { BUILD_ID } from "../../../daemon/src/lifecycle/build-id.ts";
+import { BUILD_ID, computeBuildId } from "../../../daemon/src/lifecycle/build-id.ts";
 import { daemonPeerMismatchReason } from "../../../daemon/src/lifecycle/daemon.ts";
 import { fetchHandshake } from "../../../daemon/src/lifecycle/handshake.ts";
 import { apiSocketPath, glosaHome, lockPath } from "../../../daemon/src/lifecycle/home.ts";
@@ -182,6 +182,32 @@ export function deriveMonitorTranscriptPath(sessionId: string, projectDir: strin
   return candidates.size === 1 ? [...candidates][0] : undefined;
 }
 
+/**
+ * Whether this monitor may use a daemon of `daemonBuildId` (#432, R-L7, applying R-O2). Only its own
+ * install's daemon, ever. The same build is accepted as before. A different build is accepted when
+ * it is the one on disk now: the install was updated after this monitor started, so the monitor is
+ * the stale side, and refusing (as it used to) left it retrying forever while push delivery silently
+ * stopped. `onDisk` hashes the tree, so it runs only on a mismatch; a throw or no answer refuses.
+ */
+export function monitorAcceptsBuild(
+  daemon: { buildId: string | undefined; installId: string | undefined },
+  mine: { buildId: string; installId: string },
+  onDisk: () => string | undefined,
+): "same" | "on-disk" | null {
+  if (daemon.installId !== mine.installId || daemon.buildId === undefined) return null;
+  if (daemon.buildId === mine.buildId) return "same";
+  let current: string | undefined;
+  try {
+    current = onDisk();
+  } catch {
+    return null;
+  }
+  return current !== undefined && daemon.buildId === current ? "on-disk" : null;
+}
+
+/** Said once per process: a monitor reconnects often, and one notice is enough. */
+let staleMonitorNoticed = false;
+
 /** FIRST resolution only, and read-only by contract: A3 §3 requires the monitor's daemon
  * discovery to "never start, repair, replace, or stop a process", which is why this cannot use
  * `ensureDaemon` — that spawns. The acceptance policy lives here because it answers "SHOULD I use
@@ -193,7 +219,18 @@ async function existingDaemon(home: string): Promise<ExistingDaemon | null> {
   const handshake = await fetchHandshake(lock.port, 500);
   if (!handshake || daemonPeerMismatchReason(lock, handshake) !== null) return null;
   if (!protocolCompatible(PROTOCOL_VERSION, handshake.protocol_version)) return null;
-  if (handshake.install_id !== INSTALL_ID || handshake.build_id !== BUILD_ID) return null;
+  const accepted = monitorAcceptsBuild(
+    { buildId: handshake.build_id, installId: handshake.install_id },
+    { buildId: BUILD_ID, installId: INSTALL_ID },
+    () => computeBuildId(),
+  );
+  if (accepted === null) return null;
+  if (accepted === "on-disk" && !staleMonitorNoticed) {
+    staleMonitorNoticed = true;
+    process.stderr.write(
+      "glosa monitor: glosa was updated after this monitor started; it keeps delivering, and a new session runs the new version.\n",
+    );
+  }
   // A daemon that serves no socket cannot be reached by this monitor at all, and there is
   // deliberately no fall back to its port (A3 §3.2). Refusing is the whole point: a fallback
   // would mean anything that makes the socket look absent gets the credential over TCP.

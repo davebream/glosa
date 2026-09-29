@@ -23,8 +23,8 @@ describe("checkContractVersion", () => {
     expect(checkContractVersion("1.0")).toEqual({ status: "stale-minor" });
   });
 
-  test("minor mismatch, same major (1.23) → stale-minor", () => {
-    expect(checkContractVersion("1.23")).toEqual({ status: "stale-minor" });
+  test("minor mismatch, same major (1.24) → stale-minor", () => {
+    expect(checkContractVersion("1.24")).toEqual({ status: "stale-minor" });
   });
 
   test("major mismatch (2.0) → mismatch", () => {

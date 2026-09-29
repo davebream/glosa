@@ -26,18 +26,22 @@ const TOKEN_KEY = "glosa_token";
  *   onReconnect?: () => void,
  *   onStatus?: (status: "down" | "up") => unknown,
  *   onUnauthorized?: () => unknown,
+ *   onBye?: (reason: string) => void,
  *   backoffFn?: BackoffFn,
  *   sleepFn?: SleepFn,
  *   randFn?: () => number,
  * }} StreamOptions */
 /** @typedef {StreamOptions & { slug: string }} OpenStreamOptions */
-/** @typedef {{ contract_version?: unknown, paired?: boolean, install_id?: unknown }} Handshake */
+/** @typedef {{ contract_version?: unknown, paired?: boolean, install_id?: unknown, build_id?: unknown }} Handshake */
 /** @typedef {{
  *   fetchFn?: FetchFn,
  *   storage?: TokenStorage,
  *   onUnauthorized?: () => void,
  *   expectedInstallId?: string | null,
  *   onForeignDaemon?: () => void,
+ *   contractVersion?: string | null,
+ *   pageBuildId?: string | null,
+ *   onDaemonChanged?: (kind: "install-changed" | "build-changed") => void,
  * }} DataAccessDeps */
 /** @typedef {{ method?: string, headers?: Record<string, string>, body?: string | Blob | FormData, signal?: AbortSignal }} RequestOptions */
 
@@ -143,6 +147,7 @@ function openEventStream(
     onReconnect,
     onStatus,
     onUnauthorized,
+    onBye,
     backoffFn = computeBackoffMs,
     sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     randFn = Math.random,
@@ -188,6 +193,16 @@ function openEventStream(
     cancelReader = () => reader.cancel().catch(() => {});
     for await (const frame of parseSseStream(reader)) {
       if (frame.event === "bye") {
+        // Since contract 1.23 (#432) the frame says why: `install-changed` when the daemon retires
+        // because its install changed under it, otherwise `shutdown`. An older daemon sends none.
+        let reason = "shutdown";
+        try {
+          const parsed = frame.data ? JSON.parse(frame.data) : null;
+          if (parsed && typeof parsed.reason === "string") reason = parsed.reason;
+        } catch {
+          // no reason given
+        }
+        onBye?.(reason);
         await reader.cancel().catch(() => {});
         return true;
       }
@@ -253,6 +268,7 @@ export function openStream({
   onReconnect,
   onStatus,
   onUnauthorized,
+  onBye,
   backoffFn = computeBackoffMs,
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randFn = Math.random,
@@ -264,6 +280,7 @@ export function openStream({
     onReconnect,
     onStatus,
     onUnauthorized,
+    onBye,
     backoffFn,
     sleepFn,
     randFn,
@@ -287,6 +304,7 @@ export function openTranscriptStream(
     onReconnect,
     onStatus,
     onUnauthorized,
+    onBye,
     backoffFn = computeBackoffMs,
     sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     randFn = Math.random,
@@ -299,6 +317,7 @@ export function openTranscriptStream(
     onReconnect,
     onStatus,
     onUnauthorized,
+    onBye,
     backoffFn,
     sleepFn,
     randFn,
@@ -324,6 +343,28 @@ export function createDataAccess(deps = {}) {
       if (typeof window !== "undefined") window.location.reload();
     });
   const onForeignDaemon = deps.onForeignDaemon ?? onUnauthorized;
+  const contractVersion = deps.contractVersion ?? null;
+  const pageBuildId = deps.pageBuildId ?? null;
+  /** Each kind of daemon change is reported once (#432, R-L6): the page shows one notice. */
+  const reportedChanges = new Set();
+  /** @param {"install-changed" | "build-changed"} kind */
+  function reportDaemonChanged(kind) {
+    if (reportedChanges.has(kind)) return;
+    reportedChanges.add(kind);
+    try {
+      deps.onDaemonChanged?.(kind);
+    } catch {
+      // a notice that fails to render must not break the data path
+    }
+  }
+  /** After a reconnect: is the daemon still the build this page was served by? A build id is
+   * `<version>-<hash>` and the page carries the hash (`<meta name="glosa-build">`). */
+  async function checkDaemonBuild() {
+    if (!pageBuildId) return;
+    const handshake = await readHandshake();
+    const build = typeof handshake?.build_id === "string" ? handshake.build_id : null;
+    if (build !== null && build.slice(build.lastIndexOf("-") + 1) !== pageBuildId) reportDaemonChanged("build-changed");
+  }
 
   /** Reads the tokenless handshake. Carries NO credential — that is the point: once a 401 is in
    * doubt, nothing authenticated goes to whatever is answering until it is identified. */
@@ -385,6 +426,8 @@ export function createDataAccess(deps = {}) {
     const headers = { ...(extra ?? {}) };
     const token = storage?.getItem(TOKEN_KEY);
     if (token) headers.Authorization = `Bearer ${token}`;
+    // A1 §3: the daemon answers a different major with 409 contract-mismatch (#432).
+    if (contractVersion) headers["X-Contract-Version"] = contractVersion;
     return headers;
   }
 
@@ -401,6 +444,11 @@ export function createDataAccess(deps = {}) {
         problem = await res.json();
       } catch {
         // body wasn't problem+json (or there wasn't one) — DataAccessError tolerates null
+      }
+      // #432 (R-L6): this page belongs to another build than the daemon answering it.
+      const type = typeof problem?.type === "string" ? problem.type : "";
+      if (res.status === 410 || (res.status === 409 && type.endsWith("contract-mismatch"))) {
+        reportDaemonChanged("build-changed");
       }
       throw new DataAccessError(res.status, problem);
     }
@@ -454,6 +502,7 @@ export function createDataAccess(deps = {}) {
           }
         },
         onReconnect: () => {
+          void checkDaemonBuild();
           for (const listener of listeners) {
             try {
               listener.onReconnect?.();
@@ -461,6 +510,9 @@ export function createDataAccess(deps = {}) {
               /* isolate consumers */
             }
           }
+        },
+        onBye: (reason) => {
+          if (reason === "install-changed") reportDaemonChanged("install-changed");
         },
         onStatus: (status) => {
           for (const listener of listeners) {

@@ -20,9 +20,13 @@ import {
   resolveMatchedFiles,
   tokenPath,
 } from "../../daemon/src/index.ts";
+import { fetchHandshake, type HandshakeResponse } from "../../daemon/src/lifecycle/handshake.ts";
+import { lockPath } from "../../daemon/src/lifecycle/home.ts";
+import { readLock } from "../../daemon/src/lifecycle/lock.ts";
+import { glosaPort } from "../../daemon/src/lifecycle/port.ts";
 import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
 import { classifyInstall, currentPackageRoot, targetsInstall } from "./install-kind.ts";
-import { type RecordedExecutable, readRecordedExecutable } from "./install-link.ts";
+import { type RecordedExecutable, readPackageType, readRecordedExecutable } from "./install-link.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -61,6 +65,12 @@ export interface DoctorDeps extends PlatformDeps {
   packageRoot?: () => string;
   /** What `<GLOSA_HOME>/bin/glosa` holds. Defaults to `readRecordedExecutable`. */
   readRecordedExecutable?: (home: string) => RecordedExecutable;
+  /** The Linux package's package-type marker beside a package root (#432). Defaults to
+   *  `readPackageType`. */
+  readPackageType?: (packageRoot: string) => string | null;
+  /** The reachable daemon's tokenless handshake, for its install-lifetime state (#432). Optional
+   *  and supplied only by `realDoctorDeps`, so no unit test ever probes a real port. */
+  readHandshake?: (home: string) => Promise<HandshakeResponse | null>;
   /** `realpath`, or null when the path does not resolve. Also the existence probe for the other
    * glosa executables the `install` row lists. */
   realpath?: (path: string) => string | null;
@@ -103,6 +113,8 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     env: Bun.env,
     packageRoot: currentPackageRoot,
     readRecordedExecutable,
+    readPackageType,
+    readHandshake: (home) => fetchHandshake(readLock(lockPath(home))?.port ?? glosaPort(), 1000),
     realpath: realRealpath,
   };
 }
@@ -231,18 +243,26 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     client = await deps.createClient();
     status = await client.getStatus();
     const compatible = protocolCompatible(PROTOCOL_VERSION, status.daemon.protocol_version);
+    // Review answer 6 (#432): a daemon fenced by a changed install is reported, not hidden. Reaching
+    // it here means ensureDaemon kept it, which it does only while managed chats are running.
+    const handshake = compatible ? await deps.readHandshake?.(deps.glosaHome()).catch(() => null) : null;
+    const reachable = `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`;
     checks.push(
-      compatible
+      compatible && handshake?.install_changed === true
         ? check(
             "daemon+proto",
-            "pass",
-            `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`,
+            "warn",
+            `${reachable}; its install changed while it ran, and it restarts itself ${
+              handshake.managed_busy === true ? "once its managed chats finish" : "once idle"
+            }`,
           )
-        : check(
-            "daemon+proto",
-            "fail",
-            `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`,
-          ),
+        : compatible
+          ? check("daemon+proto", "pass", reachable)
+          : check(
+              "daemon+proto",
+              "fail",
+              `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`,
+            ),
     );
   } catch (err) {
     // The reason `createClient` gives is what the client could prove within its own budget, which
@@ -577,12 +597,22 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   return checks;
 }
 
+/** The well-known places a terminal-visible `glosa` lives, per platform, for the `install` row's
+ *  "also visible" list. macOS keeps the three it always had (#371); Linux names the pacman
+ *  package's `/usr/bin/glosa` instead of Homebrew's prefix (#432). `which glosa` is added on top. */
+export function installCandidates(platform: NodeJS.Platform, home: string): string[] {
+  const bun = join(home, ".bun", "bin", "glosa");
+  if (platform === "linux") return [bun, "/usr/bin/glosa", "/usr/local/bin/glosa"];
+  return [bun, "/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+}
+
 /** The `install` row (#371). Reads nothing the deps do not hand it. */
 export function installCheck(deps: DoctorDeps): CheckResult {
   const realpath = deps.realpath ?? realRealpath;
   const rawRoot = (deps.packageRoot ?? currentPackageRoot)();
   const root = realpath(rawRoot) ?? rawRoot;
-  const kind = classifyInstall(root, realpath(join(root, ".git")) !== null).kind;
+  const packageType = (deps.readPackageType ?? readPackageType)(root);
+  const kind = classifyInstall(root, realpath(join(root, ".git")) !== null, packageType).kind;
   const recorded = (deps.readRecordedExecutable ?? readRecordedExecutable)(deps.glosaHome());
   const mine = (resolved: string) => targetsInstall(resolved, root);
 
@@ -611,7 +641,7 @@ export function installCheck(deps: DoctorDeps): CheckResult {
   }
 
   const home = deps.homeDir?.() ?? homedir();
-  const candidates = [join(home, ".bun", "bin", "glosa"), "/opt/homebrew/bin/glosa", "/usr/local/bin/glosa"];
+  const candidates = installCandidates(deps.platform(), home);
   const onPath = deps.which("glosa");
   if (onPath !== null && !candidates.includes(onPath)) candidates.push(onPath);
   const visible: string[] = [];

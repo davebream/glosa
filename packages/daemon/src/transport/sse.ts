@@ -36,6 +36,12 @@ export interface SseFrame {
   data?: unknown;
 }
 
+/** Why a stream is closing, for its `bye` frame's data (#432): `install-changed` when the daemon
+ *  retires because its install changed (R-L4), otherwise `shutdown`. */
+export function byeReason(signal: AbortSignal | undefined): string {
+  return typeof signal?.reason === "string" ? signal.reason : "shutdown";
+}
+
 /** Standard SSE framing: `id: <cursor>\nevent: <type>\ndata: <json>\n\n`. `data:` is always
  * present (even empty) so every frame ends in exactly one blank-line terminator regardless of
  * whether there's a payload — `heartbeat`/`resync_required` have none. Safe as a single `data:`

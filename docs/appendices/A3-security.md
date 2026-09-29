@@ -110,7 +110,8 @@ the programmatic API now lives on a Unix socket instead.
 
 **What identity is.** A daemon publishes `instance_id`, `pid`, `port`, `protocol_version`,
 `build_id` and `install_id` in `<GLOSA_HOME>/daemon.lock`, and the tokenless `GET /api/handshake`
-republishes the same values. Agreement between the two is the readiness proof R1 requires. Every
+republishes the same values, plus `install_changed` (#432: the daemon's install changed under it and
+it will retire itself; a fact about the daemon, published like the rest). Agreement between the two is the readiness proof R1 requires. Every
 one of those values is **published**: the lock is world-readable (0644, `openSync(path,"wx")` with
 no mode) inside a `<GLOSA_HOME>` created with no mode either, and the handshake needs no
 credential. The pairing token beside them is 0600.

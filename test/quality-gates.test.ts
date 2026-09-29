@@ -73,18 +73,34 @@ describe("repository quality gates", () => {
       expect(job(yaml, "full")).toContain("bun run test:full");
       expect(job(yaml, "docs")).toContain("if: needs.prepare.outputs.profile == 'docs'");
       expect(job(yaml, "docs")).toContain("bun run test:docs");
-      for (const name of ["tests", "stability", "full", "docs", "linux"]) {
+      for (const name of ["tests", "stability", "full", "docs", "linux", "pacman"]) {
         expect(job(yaml, name)).toContain("if: always()");
         expect(job(yaml, name)).toContain("retention-days: 14");
         expect(job(yaml, name)).toContain("if-no-files-found: error");
       }
     }
   });
+  test("CI and release build the pacman package on Ubuntu and smoke it in Arch containers (#432)", () => {
+    for (const yaml of workflows) {
+      const pacman = job(yaml, "pacman");
+      expect(pacman).toContain("runs-on: ubuntu-24.04");
+      expect(pacman).toContain("if: needs.prepare.outputs.profile == 'full'");
+      expect(pacman).toContain("bun run --cwd packages/shell package -- --arch x64 --smoke");
+      expect(pacman).toContain("sudo apt-get install -y libarchive-tools zstd");
+      // Nothing signs or publishes here, and nothing weakens what the smoke proves.
+      expect(pacman).not.toContain("secrets.");
+      expect(pacman).not.toMatch(/--privileged|--no-sandbox/);
+    }
+    const smoke = readFileSync(join(import.meta.dir, "..", "packages/shell/scripts/linux-package-smoke.ts"), "utf8");
+    expect(smoke).toMatch(/archlinux:base@sha256:[0-9a-f]{64}/);
+    expect(smoke).toMatch(/ARCHIVE_DATE = "\d{4}\/\d{2}\/\d{2}"/);
+    expect(smoke).not.toMatch(/--privileged|"--no-sandbox"/);
+  });
   test("required aggregate always validates all selected dependencies using actual results", () => {
     for (const yaml of workflows) {
       const aggregate = job(yaml, "ci");
       expect(aggregate).toContain("if: always()");
-      expect(aggregate).toContain("needs: [prepare, quality, docs, tests, stability, shell, linux, full]");
+      expect(aggregate).toContain("needs: [prepare, quality, docs, tests, stability, shell, linux, pacman, full]");
       expect(aggregate).toContain("TEST_PROFILE: ${{ needs.prepare.outputs.profile }}");
       expect(aggregate).toContain("TEST_WHOLE: ${{ needs.prepare.outputs.whole }}");
       expect(aggregate).toContain("TEST_RESULTS: ${{ toJSON(needs) }}");

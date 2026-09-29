@@ -144,6 +144,19 @@ on Ubuntu 24.04 x86_64 with pinned Bun. The same report validation rejects missi
 execution. CI and release aggregates require this job for code changes; macOS partitions remain
 complete. Linux also runs the installed npm tarball smoke, including token redemption and document
 retrieval. No desktop shell, native-provider or dictation qualification is implied by this subset.
+Since #432 it also runs the Linux package's install-kind and recording tests, its packaging rules,
+and the install lifetime guard (`install-guard`, and `install-lifetime` against real daemons on a
+staged install), whose filesystem and clock behaviour is exactly what differs on Linux.
+
+The `pacman` job builds the Linux pacman package and runs `packages/shell/scripts/linux-package-smoke.ts`:
+static checks of the package on the host, then fresh digest-pinned Arch Linux containers that get
+only the package files. Its stages are declared up front and a declared stage that did not run
+fails the job, the same rule as a skipped test. It covers installation and dependencies, the CLI
+and MCP on the bundled Bun, the recorded executable, doctor, the update refusal, a missing
+dependency failing without the network, and a running daemon across an upgrade, a removal and a
+reinstall. A second container adds a virtual display and runs the desktop app itself: the launcher
+opening a folder, Chromium's sandbox staying on, a `glosa://` link reaching the running app, and the
+daemon outliving the window.
 
 Local Linux containers must provide init, system Git/ps and executable temporary storage for the
 launcher fixtures so process-lifetime tests observe their intended topology. Container evidence does not qualify an installed Manjaro desktop app.

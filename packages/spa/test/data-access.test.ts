@@ -770,3 +770,106 @@ test("a failed final chat snapshot retries without another stream event or sendi
     stop();
   }
 });
+
+describe("a daemon that changes under the page (#432, R-L6)", () => {
+  function streamOf(frames: string[]): Response {
+    const encoder = new TextEncoder();
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const frame of frames) controller.enqueue(encoder.encode(frame));
+          controller.close();
+        },
+      }),
+      { status: 200 },
+    );
+  }
+
+  test("every authenticated request carries X-Contract-Version", async () => {
+    const seen: Headers[] = [];
+    const dataAccess = createDataAccess({
+      storage: fakeStorage({ glosa_token: "t" }),
+      contractVersion: "1.23",
+      fetchFn: async (_path: string, init: RequestInit) => {
+        seen.push(new Headers(init.headers));
+        return jsonResponse(200, { workspaces: [] });
+      },
+    });
+    await dataAccess.getWorkspaces();
+    expect(seen[0]?.get("X-Contract-Version")).toBe("1.23");
+  });
+
+  test("a bye that says install-changed is reported once; an ordinary bye is not", async () => {
+    const changes: string[] = [];
+    let call = 0;
+    const dataAccess = createDataAccess({
+      storage: fakeStorage({ glosa_token: "t" }),
+      pageBuildId: "0123456789abcdef",
+      onDaemonChanged: (kind: string) => changes.push(kind),
+      fetchFn: async (path: string) => {
+        if (path === "/api/handshake") return jsonResponse(200, { build_id: "1.0.0-0123456789abcdef" });
+        call += 1;
+        if (call === 1) return streamOf(['event: bye\ndata: {"reason":"shutdown"}\n\n']);
+        if (call === 2) return streamOf(['event: bye\ndata: {"reason":"install-changed"}\n\n']);
+        if (call === 3) return streamOf(['event: bye\ndata: {"reason":"install-changed"}\n\n']);
+        return new Promise<Response>(() => {});
+      },
+    });
+    const stop = dataAccess.openStream("ws", {});
+    await waitFor(() => call >= 4);
+    stop();
+    expect(changes).toEqual(["install-changed"]);
+  });
+
+  test("a reconnect to another build is reported as build-changed; the same build is not", async () => {
+    for (const [build, expected] of [
+      ["1.0.1-fedcba9876543210", ["build-changed"]],
+      ["1.0.0-0123456789abcdef", []],
+    ] as const) {
+      const changes: string[] = [];
+      let call = 0;
+      const dataAccess = createDataAccess({
+        storage: fakeStorage({ glosa_token: "t" }),
+        pageBuildId: "0123456789abcdef",
+        onDaemonChanged: (kind: string) => changes.push(kind),
+        fetchFn: async (path: string) => {
+          if (path === "/api/handshake") return jsonResponse(200, { build_id: build });
+          call += 1;
+          if (call === 1) return streamOf(["event: bye\ndata: \n\n"]);
+          // The reconnect succeeds and then stays open and idle, which is what fires onReconnect.
+          return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 });
+        },
+      });
+      const stop = dataAccess.openStream("ws", {});
+      await waitFor(() => call >= 2);
+      await Bun.sleep(20); // the build check reads the handshake after the reconnect
+      stop();
+      expect(changes).toEqual([...expected]);
+    }
+  });
+
+  test("410 build-changed and 409 contract-mismatch report build-changed; any other 409 does not", async () => {
+    for (const [status, type, expected] of [
+      [410, "https://glosa.local/errors/build-changed", ["build-changed"]],
+      [409, "https://glosa.local/errors/contract-mismatch", ["build-changed"]],
+      [409, "https://glosa.local/errors/conflict", []],
+    ] as const) {
+      const changes: string[] = [];
+      const dataAccess = createDataAccess({
+        storage: fakeStorage({ glosa_token: "t" }),
+        onDaemonChanged: (kind: string) => changes.push(kind),
+        fetchFn: async () => jsonResponse(status, { type, title: "x", status }),
+      });
+      await dataAccess.getWorkspaces().catch(() => {});
+      expect(changes).toEqual([...expected]);
+    }
+  });
+});
+
+async function waitFor(condition: () => boolean, deadlineMs = 2000): Promise<void> {
+  const until = Date.now() + deadlineMs;
+  while (!condition()) {
+    if (Date.now() > until) throw new Error("condition not met in time");
+    await Bun.sleep(5);
+  }
+}

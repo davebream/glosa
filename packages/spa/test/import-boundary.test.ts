@@ -439,8 +439,9 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     // Nothing in the unit suite can see that, because unit tests import from disk. So the list is
     // held against the source directory here, where a new module is noticed the moment it is added
     // rather than whenever someone next runs a browser test.
-    const httpSource = readFileSync(resolve(SPA_SRC_DIR, "../../daemon/src/transport/http.ts"), "utf8");
-    const assetBlock = httpSource.slice(httpSource.indexOf("const SPA_ASSETS"));
+    // The allowlist moved out of http.ts into spa-assets.ts with the install lifetime policy (#432).
+    const assetsSource = readFileSync(resolve(SPA_SRC_DIR, "../../daemon/src/transport/spa-assets.ts"), "utf8");
+    const assetBlock = assetsSource.slice(assetsSource.indexOf("const SPA_ASSETS"));
     const served = new Set(
       [...assetBlock.slice(0, assetBlock.indexOf("};")).matchAll(/"([^"]+\.[jt]s)":/g)].map((m) => m[1]!),
     );

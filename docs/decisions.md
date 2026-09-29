@@ -1688,3 +1688,31 @@ uncompressed. Yet Another React Lightbox 3.32.2 was considered (roughly 23 KiB g
 inline and zoom), but its lightbox/gallery model adds a second UI model to a docked single image.
 react-quick-pinch-zoom was rejected because its repository is archived. These measurements are
 selection estimates, not runtime performance guarantees.
+
+
+## The Linux desktop app is a pacman package that owns its files (2026-09-29, #432)
+
+The maintainer approved these choices while planning #432. A Phase 0 build on an x86_64 Arch
+container (electron-builder 26.15.3, fpm 1.17.0, pacman 7.1) confirmed each one.
+
+- **Format and channel.** An x86_64 pacman package built by the existing electron-builder stack,
+  installed explicitly with `pacman -U`. No distribution repository, AUR package or other format.
+- **The package owns every file it installs.** `/usr/bin/glosa` is a package-owned symlink to
+  `/opt/glosa/resources/bin/glosa` (the CLI launcher), so `pacman -Qo` names it and `pacman -R`
+  removes it. `chrome-sandbox` ships root-owned with mode 4755, as Google Chrome's own packages do,
+  so the SUID fallback survives upgrades and a kernel without unprivileged user namespaces never
+  pushes anyone toward `--no-sandbox`. The install and remove scriptlets are deliberate no-ops:
+  electron-builder's defaults would link `/usr/bin/glosa` to the Electron binary and decide the
+  sandbox mode as root, and nothing runs on `pacman -U` anyway.
+- **The install kind comes from a marker, not a path.** The build writes
+  `resources/package-type` containing `pacman` (electron-updater's convention), and the CLI
+  classifies itself as `pacman` from it. A path rule would bake in electron-builder's install
+  location and still not name the channel the update text needs. The marker can only make an
+  install refused, never managed, so a forged one grants nothing. macOS keeps its `.app` path rule.
+- **Package version.** electron-builder turns `0.1.0-alpha.36` into `0.1.0_alpha.36`, which pacman
+  ranks above `0.1.0`. The build passes `0.1.0alpha.36` instead; pacman then orders
+  `alpha < beta < rc < release` and `alpha.9 < alpha.10`. Artifact names keep the semver form.
+- **Bun is `bun-linux-x64-baseline`**, verified against Bun's `SHASUMS256.txt`. It runs on CPUs and
+  virtual machines without AVX2; the cost is irrelevant for this workload.
+- **A running daemon and a changing install** follow
+  `docs/design/2026-09-29-install-lifetime-and-restart.md` (R-L1..R-L10) on every channel.

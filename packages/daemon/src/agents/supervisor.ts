@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { assertInstallUnchanged } from "../lifecycle/install-guard.ts";
 import { managedEnvironment } from "./environment.ts";
 import { ManagedAgentError, type OwnedProcess, type ProcessLauncher } from "./interface.ts";
 import { confirmedExit, prepareOwnership, unresolvedOwnership, writeOwnership } from "./ownership.ts";
@@ -38,6 +39,16 @@ export class RuntimeSupervisor implements ProcessLauncher {
       );
     if (this.activeCount >= this.maxProcesses)
       throw new ManagedAgentError("runtime-capacity", "All managed runtime slots are in use.");
+    // R-L3 (#432): the guardian and its host start from this tree, so a changed tree starts nothing.
+    try {
+      assertInstallUnchanged("a managed run");
+    } catch {
+      throw new ManagedAgentError(
+        "install-changed",
+        "glosa was updated. Start the chat again once glosa has restarted.",
+        503,
+      );
+    }
     const nonce = randomUUID();
     const dir = prepareOwnership(this.root, nonce);
     let guardian: ReturnType<typeof spawnGuardian>;

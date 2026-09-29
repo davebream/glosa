@@ -16,7 +16,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureRecordedExecutable, readRecordedExecutable } from "../src/install-link.ts";
+import { classifyInstall, recordingPlan } from "../src/install-kind.ts";
+import { ensureRecordedExecutable, readPackageType, readRecordedExecutable } from "../src/install-link.ts";
 
 const roots: string[] = [];
 function tempRoot(): string {
@@ -149,5 +150,92 @@ describe("the entrypoint", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(readlinkSync(join(home, "bin", "glosa"))).toBe(main);
+  });
+});
+
+/** The Linux package's resources tree in a temp dir (#432): `glosa/` is the package root, `bin/glosa`
+ *  the launcher beside it, and `package-type` the marker the build writes. */
+function pacmanLayout(root: string, marker: string | null = "pacman\n"): { packageRoot: string; launcher: string } {
+  const resources = join(root, "opt", "glosa", "resources");
+  const packageRoot = join(resources, "glosa");
+  mkdirSync(join(packageRoot, "packages", "cli", "src"), { recursive: true });
+  mkdirSync(join(resources, "bin"), { recursive: true });
+  writeFileSync(join(resources, "bin", "glosa"), "#!/bin/sh\n");
+  if (marker !== null) writeFileSync(join(resources, "package-type"), marker);
+  return { packageRoot, launcher: join(resources, "bin", "glosa") };
+}
+
+/** What the entrypoint does for the CLI at `packageRoot`, minus spawning it: classify with the
+ *  marker, plan, record. main.ts is exactly this wiring. */
+function recordAs(home: string, packageRoot: string): void {
+  const { kind } = classifyInstall(packageRoot, false, readPackageType(packageRoot));
+  const plan = recordingPlan(kind, packageRoot, join(packageRoot, "packages", "cli", "src", "main.ts"));
+  ensureRecordedExecutable(home, plan.executable, { onlyWhenAbsent: plan.onlyWhenAbsent });
+}
+
+describe("readPackageType (#432)", () => {
+  test("reads the trimmed marker beside the package root", () => {
+    const { packageRoot } = pacmanLayout(tempRoot());
+    expect(readPackageType(packageRoot)).toBe("pacman");
+  });
+
+  test("a missing marker, a directory, junk content or an oversized file is no marker", () => {
+    expect(readPackageType(pacmanLayout(tempRoot(), null).packageRoot)).toBeNull();
+    expect(readPackageType(pacmanLayout(tempRoot(), "Pac Man\n").packageRoot)).toBeNull();
+    expect(readPackageType(pacmanLayout(tempRoot(), `${"a".repeat(65)}\n`).packageRoot)).toBeNull();
+    const dir = pacmanLayout(tempRoot(), null);
+    mkdirSync(join(dir.packageRoot, "..", "package-type"));
+    expect(readPackageType(dir.packageRoot)).toBeNull();
+  });
+});
+
+describe("the Linux package records its launcher only when nothing live is recorded (#432)", () => {
+  test("absent: the package's launcher is recorded", () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const { packageRoot, launcher } = pacmanLayout(root);
+    recordAs(home, packageRoot);
+    expect(readlinkSync(join(home, "bin", "glosa"))).toBe(launcher);
+  });
+
+  test("dangling: a record pointing at a removed install is replaced by the launcher", () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    symlinkSync(join(root, "gone", "glosa"), join(home, "bin", "glosa"));
+    const { packageRoot, launcher } = pacmanLayout(root);
+    recordAs(home, packageRoot);
+    expect(readlinkSync(join(home, "bin", "glosa"))).toBe(launcher);
+  });
+
+  test("foreign: a live record of a terminal install keeps ownership", () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const terminal = executable(root, "terminal");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    symlinkSync(terminal, join(home, "bin", "glosa"));
+    recordAs(home, pacmanLayout(root).packageRoot);
+    expect(readlinkSync(join(home, "bin", "glosa"))).toBe(terminal);
+  });
+
+  test("pinned: a hand-placed regular file is never touched", () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    writeFileSync(join(home, "bin", "glosa"), '#!/bin/sh\nexec /somewhere/else "$@"\n');
+    recordAs(home, pacmanLayout(root).packageRoot);
+    expect(lstatSync(join(home, "bin", "glosa")).isFile()).toBe(true);
+    expect(readFileSync(join(home, "bin", "glosa"), "utf8")).toContain("/somewhere/else");
+  });
+
+  test("without the marker the same tree would take over a terminal install's record (the bug #432 fixes)", () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const terminal = executable(root, "terminal");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    symlinkSync(terminal, join(home, "bin", "glosa"));
+    const { packageRoot } = pacmanLayout(root, null);
+    recordAs(home, packageRoot);
+    expect(readlinkSync(join(home, "bin", "glosa"))).toBe(join(packageRoot, "packages", "cli", "src", "main.ts"));
   });
 });

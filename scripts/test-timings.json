@@ -317,6 +317,18 @@
     "packages/spa/test/composer-real-engine.test.ts": {
       "seconds": 4.0,
       "reason": "New composer layout witness: one isolated headless Chromium, native undo, IME, top-layer placement and narrow viewport. Replace with measured CI median."
+    },
+    "packages/daemon/test/install-guard.test.ts": {
+      "seconds": 0.3,
+      "reason": "Initial local Bun 1.4.2 estimate for the install lifetime guard's unit tests (temp dirs and lstat only, no subprocess); replace with measured CI medians."
+    },
+    "packages/daemon/test/install-lifetime.test.ts": {
+      "seconds": 9,
+      "reason": "Initial local Bun 1.4.2 estimate for four real daemons started from a staged copy of the sources (about 6 MB copied per test) plus their graceful retirement; replace with measured CI medians."
+    },
+    "packages/spa/test/update-notice.test.ts": {
+      "seconds": 0.1,
+      "reason": "Initial local Bun 1.4.2 estimate for the update notice's happy-dom tests (manual timers, fake shell, no network); replace with measured CI medians."
     }
   }
 }

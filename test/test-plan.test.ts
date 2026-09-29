@@ -136,6 +136,9 @@ test("the unsigned desktop app is built for anything that shapes the bundle, and
     "packages/cli/src/install-link.ts",
     "packages/cli/src/install-kind.ts",
     "packages/cli/src/doctor.ts",
+    // #432: the pacman install's update refusal and the Linux runtime admission ship in the package.
+    "packages/cli/src/update.ts",
+    "packages/cli/src/platform.ts",
     "packages/daemon/src/lifecycle/daemon.ts",
     "THIRD_PARTY_NOTICES.md",
     "README.md",
@@ -254,4 +257,22 @@ test("Linux core selection includes real process ownership, CLI and MCP boundari
   );
   delete results.linux;
   expect(() => validateResults("full", "false", results)).toThrow("linux");
+});
+
+test("the pacman job is required, and Linux core covers the package's install kind and lifetime (#432)", () => {
+  const files = checkedFiles("linux-core");
+  for (const file of [
+    "packages/cli/test/install-link.test.ts",
+    "packages/shell/test/package-app.test.ts",
+    "packages/daemon/test/install-guard.test.ts",
+    "packages/daemon/test/install-lifetime.test.ts",
+  ])
+    expect(files).toContain(file);
+  expect(expectedJobs("full", false).pacman).toBe("success");
+  expect(expectedJobs("docs", false).pacman).toBe("skipped");
+  const results = Object.fromEntries(
+    Object.entries(expectedJobs("full", false)).map(([job, result]) => [job, { result }]),
+  );
+  delete results.pacman;
+  expect(() => validateResults("full", "false", results)).toThrow("pacman");
 });

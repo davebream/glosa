@@ -14,7 +14,7 @@
 // `TranscriptNormalizer` (normalize.ts), the one module allowed to know the transcript format.
 import { readFileSync, statSync } from "node:fs";
 import { type FSWatcher, watch } from "chokidar";
-import { encodeSseFrame } from "../transport/sse.ts";
+import { byeReason, encodeSseFrame } from "../transport/sse.ts";
 import { type TranscriptEvent, TranscriptNormalizer } from "./normalize.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -120,7 +120,7 @@ export function createTranscriptStreamResponse(
         }
       };
       shutdownListener = () => {
-        send(encodeSseFrame({ event: "bye" }));
+        send(encodeSseFrame({ event: "bye", data: { reason: byeReason(opts.shutdownSignal) } }));
         teardown();
         try {
           controller.close();

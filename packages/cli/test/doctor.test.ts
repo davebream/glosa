@@ -14,6 +14,7 @@ import type { GlosaApiClient } from "../src/api-client.ts";
 import {
   type DoctorDeps,
   INSTALL_CHECK,
+  installCandidates,
   installCheck,
   printDoctorResult,
   realDoctorDeps,
@@ -75,6 +76,7 @@ function makeDeps(overrides: Partial<DoctorDeps> = {}): { deps: DoctorDeps; clie
     // disk. Never reads the developer's real ~/.glosa, ~/.bun or /opt/homebrew.
     packageRoot: () => BUN_ROOT,
     readRecordedExecutable: () => ({ path: join(home, "bin", "glosa"), state: "none" as const }),
+    readPackageType: () => null,
     realpath: () => null,
     ...overrides,
   };
@@ -84,6 +86,8 @@ function makeDeps(overrides: Partial<DoctorDeps> = {}): { deps: DoctorDeps; clie
 const BUN_ROOT = "/Users/x/.bun/install/global/node_modules/@davebream/glosa";
 const APP_ROOT = "/Applications/glosa.app/Contents/Resources/glosa";
 const APP_LAUNCHER = "/Applications/glosa.app/Contents/Resources/bin/glosa";
+const PACMAN_ROOT = "/opt/glosa/resources/glosa";
+const PACMAN_LAUNCHER = "/opt/glosa/resources/bin/glosa";
 
 function findCheck(checks: { name: string; status: string; detail: string }[], name: string) {
   return checks.find((c) => c.name === name);
@@ -216,6 +220,46 @@ describe("glosa doctor", () => {
       expect(row.detail).toBe(
         `this glosa: app-bundle at ${APP_ROOT}; recorded: ${APP_LAUNCHER} (this install); also visible: /opt/homebrew/bin/glosa (this install)`,
       );
+    });
+
+    test("install: a pacman CLI reports its kind and recognises its own launcher (#432)", () => {
+      const { deps } = makeDeps({
+        platform: () => "linux",
+        packageRoot: () => PACMAN_ROOT,
+        readPackageType: (root) => (root === PACMAN_ROOT ? "pacman" : null),
+        readRecordedExecutable: (h) => ({
+          path: join(h, "bin", "glosa"),
+          state: "symlink",
+          target: PACMAN_LAUNCHER,
+          resolved: PACMAN_LAUNCHER,
+        }),
+        which: (cmd) => (cmd === "git" ? "/usr/bin/git" : cmd === "glosa" ? "/usr/bin/glosa" : null),
+        realpath: (p) => (p === "/usr/bin/glosa" ? PACMAN_LAUNCHER : null),
+      });
+      const row = installCheck(deps);
+      expect(row.status).toBe("pass");
+      expect(row.detail).toBe(
+        `this glosa: pacman at ${PACMAN_ROOT}; recorded: ${PACMAN_LAUNCHER} (this install); also visible: /usr/bin/glosa (this install)`,
+      );
+      expect(row.detail).not.toMatch(/homebrew|brew/);
+    });
+
+    test("install: without its marker the same Linux tree is an unknown install", () => {
+      const row = installCheck(makeDeps({ platform: () => "linux", packageRoot: () => PACMAN_ROOT }).deps);
+      expect(row.detail).toStartWith(`this glosa: unknown at ${PACMAN_ROOT};`);
+    });
+
+    test("installCandidates keeps macOS's list and names the pacman package's /usr/bin on Linux", () => {
+      expect(installCandidates("darwin", "/Users/x")).toEqual([
+        "/Users/x/.bun/bin/glosa",
+        "/opt/homebrew/bin/glosa",
+        "/usr/local/bin/glosa",
+      ]);
+      expect(installCandidates("linux", "/home/x")).toEqual([
+        "/home/x/.bun/bin/glosa",
+        "/usr/bin/glosa",
+        "/usr/local/bin/glosa",
+      ]);
     });
 
     test("install: the detail never carries an em dash", () => {
@@ -660,6 +704,32 @@ describe("glosa doctor", () => {
     };
     const result = await runDoctor(dir, deps);
     expect(findCheck(result.data.checks, "claude-monitor")?.status).toBe("skip");
+  });
+
+  test("daemon+proto: a daemon fenced by a changed install is a WARN naming why it has not restarted (#432)", async () => {
+    const handshake = (busy: boolean) =>
+      ({
+        install_changed: true,
+        managed_busy: busy,
+      }) as unknown as import("../../daemon/src/lifecycle/handshake.ts").HandshakeResponse;
+    for (const [busy, words] of [
+      [true, "once its managed chats finish"],
+      [false, "once idle"],
+    ] as const) {
+      const { deps } = makeDeps({ readHandshake: async () => handshake(busy) });
+      const row = findCheck((await runDoctor(freshDir(), deps)).data.checks, "daemon+proto");
+      expect(row?.status).toBe("warn");
+      expect(row?.detail).toContain("its install changed while it ran");
+      expect(row?.detail).toContain(words);
+    }
+    // No handshake reading (every other unit test) or an unchanged install: the row passes as before.
+    const plain = findCheck((await runDoctor(freshDir(), makeDeps().deps)).data.checks, "daemon+proto");
+    expect(plain?.status).toBe("pass");
+    const unchanged = makeDeps({
+      readHandshake: async () =>
+        ({ install_changed: false }) as unknown as import("../../daemon/src/lifecycle/handshake.ts").HandshakeResponse,
+    });
+    expect(findCheck((await runDoctor(freshDir(), unchanged.deps)).data.checks, "daemon+proto")?.status).toBe("pass");
   });
 
   test("daemon+proto: unreachable daemon -> FAIL", async () => {

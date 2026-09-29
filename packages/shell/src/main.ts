@@ -29,6 +29,7 @@ import {
 import {
   appearanceDecision,
   cliCandidates,
+  cliChoice,
   compatibility,
   contrastPush,
   contrastPushReaches,
@@ -43,9 +44,12 @@ import {
   type OpenedWorkspace,
   openArgsFor,
   parseGlosaUrl,
+  parsePackageType,
   parseOpenEnvelope,
   RELEASES_API,
   RecentIds,
+  type ReconnectResult,
+  reconnectOutcome,
   type RoutedWindow,
   representedFile,
   requestReleases,
@@ -53,6 +57,8 @@ import {
   scrubChildEnv,
   splitPresentationToken,
   surfaceKind,
+  targetFromArg,
+  updateChannelFor,
   updateDialog,
   updateOutcome,
   windowFor,
@@ -75,13 +81,28 @@ const log = (line: string): void => {
 
 // ---------- the recorded executable is the install of truth (R-O1) ----------
 
+/** R-L8 (#432): the sentence a packaged app says when its own CLI is gone. */
+const REMOVED_MESSAGE = "glosa was removed or updated. Quit glosa and open it again.";
+
+/** True when this packaged app's own bundled CLI is gone (R-L8). Never for an unpackaged run or when
+ * the harness names the CLI it wants. */
+function ownCliRemoved(): boolean {
+  if (!app.isPackaged || process.env.GLOSA_SHELL_CLI) return false;
+  return (
+    cliChoice({ packaged: true, ownCliExists: existsSync(join(process.resourcesPath, "bin", "glosa")) }) === "removed"
+  );
+}
+
 /** Where the CLI is, also when the app was launched from the Dock with a bare PATH (#371). */
 function resolveCli(): string {
+  // A packaged app whose own CLI is gone runs no other install's (R-L8, #432).
+  if (ownCliRemoved()) throw new Error(REMOVED_MESSAGE);
   const candidates = cliCandidates({
     override: process.env.GLOSA_SHELL_CLI,
     glosaHome: process.env.GLOSA_HOME,
     homeDir: homedir(),
     resourcesPath: app.isPackaged ? process.resourcesPath : null,
+    platform: process.platform,
   });
   // existsSync follows symlinks, so a dangling recorded executable reads as absent. An override is
   // used as given: the harness names exactly what it wants run.
@@ -138,8 +159,28 @@ interface WindowState {
   folder: string | null;
   slug: string | null;
   kind: "desk" | "companion" | null;
+  /** The install whose daemon this window paired with (#432, R-L8), or null when none was published. */
+  installId: string | null;
 }
 const windows = new Map<number, WindowState>();
+
+/** At most one reconnect per window at a time (R-L8): a second ask shares the first's answer. */
+const reconnecting = new Map<number, Promise<ReconnectResult>>();
+
+/** R-L8: bring back the daemon a window was served by, by running `glosa open` for its folder (the
+ * CLI's own spawn-only-when-absent, R-O3), then check it is the same install. Never navigates. */
+async function ensureWindowDaemon(id: number): Promise<ReconnectResult> {
+  const state = windows.get(id);
+  if (!state?.folder) return { ok: false, reason: "failed", message: "This window has no folder to reconnect." };
+  if (ownCliRemoved()) return { ok: false, reason: "removed" };
+  try {
+    await runOpen([state.folder]);
+  } catch (e) {
+    return { ok: false, reason: "failed", message: (e as Error).message };
+  }
+  const answered = await handshake(loopbackApiOrigin(state.origin));
+  return reconnectOutcome(state.installId, typeof answered?.install_id === "string" ? answered.install_id : null);
+}
 
 function blockingScreen(title: string, command: string): string {
   const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string);
@@ -168,7 +209,7 @@ async function openWith(args: readonly string[], options: OpenOptions): Promise<
   try {
     opened = await runOpen(args);
   } catch (e) {
-    log(`glosa open failed after ${Date.now() - started} ms via ${resolveCli()}: ${(e as Error).message}`);
+    log(`glosa open failed after ${Date.now() - started} ms: ${(e as Error).message}`);
     const win = options.errorWindow ?? createWindow(null);
     await win.loadURL(blockingScreen("glosa could not open that folder", (e as Error).message));
     return win;
@@ -177,7 +218,8 @@ async function openWith(args: readonly string[], options: OpenOptions): Promise<
   const url = options.route ? options.route(opened.url) : opened.url;
   const origin = new URL(url).origin;
   const win = options.reuse(opened, origin) ?? createWindow(origin);
-  const compat = compatibility(await handshake(loopbackApiOrigin(origin)), pkg.glosa.minimumDaemon);
+  const answered = await handshake(loopbackApiOrigin(origin));
+  const compat = compatibility(answered, pkg.glosa.minimumDaemon);
   if (compat.state !== "ok") {
     log(`compatibility: ${compat.state}`);
     const titles = {
@@ -195,6 +237,7 @@ async function openWith(args: readonly string[], options: OpenOptions): Promise<
     folder: opened.path,
     slug: opened.slug,
     kind: surfaceKind(url),
+    installId: typeof answered?.install_id === "string" ? answered.install_id : null,
   });
   await win.loadURL(tokenlessUrl);
   return win;
@@ -326,7 +369,7 @@ function createWindow(origin: string | null): BrowserWindow {
     },
   });
   const wc = win.webContents;
-  if (origin) windows.set(wc.id, { origin, folder: null, slug: null, kind: null });
+  if (origin) windows.set(wc.id, { origin, folder: null, slug: null, kind: null, installId: null });
   // What Electron's defaults leave open for the TOP frame (readiness note §3).
   wc.setWindowOpenHandler(() => ({ action: "deny" }));
   wc.on("will-navigate", (event, url) => {
@@ -414,6 +457,18 @@ function revealIn(win: BrowserWindow | null): boolean {
 
 // ---------- Check for Updates…, on click only (#424) ----------
 
+/** The package manager that installed this app, from the marker the Linux package's build writes
+ * beside its resources (#432), or null: macOS, an unpackaged run, or a Linux app pacman did not
+ * install. Read once; it cannot change while the app runs. */
+const packageType: string | null = (() => {
+  if (!app.isPackaged) return null;
+  try {
+    return parsePackageType(readFileSync(join(process.resourcesPath, "package-type"), "utf8"));
+  } catch {
+    return null;
+  }
+})();
+
 /**
  * Where the check asks. `GLOSA_SHELL_RELEASES_API` points it elsewhere and is read only by an
  * unpackaged app: it is how the real-Electron test puts a local stub in GitHub's place, never a way
@@ -444,14 +499,19 @@ function checkForUpdates(): Promise<void> {
 }
 
 async function runUpdateCheck(): Promise<void> {
-  const running = { current: pkg.version, arch: process.arch };
+  const running = { current: pkg.version, arch: process.arch, platform: process.platform };
   // Node's global fetch. One request: no redirect followed, the body capped, one timeout over both.
   const response = await requestReleases(releasesApi(), fetch);
   const outcome = updateOutcome(response, running);
   if (outcome.kind === "newer") log(`update check: found ${outcome.version} for ${running.arch}`);
   else if (outcome.kind === "current") log(`update check: up to date at ${running.current}`);
   else log(`update check: failed: ${outcome.reason}`);
-  const { actions, ...options } = updateDialog(outcome, { current: pkg.version, releasesPage: pkg.glosa.releases });
+  const { actions, ...options } = updateDialog(outcome, {
+    current: pkg.version,
+    releasesPage: pkg.glosa.releases,
+    channel: updateChannelFor(process.platform, packageType),
+    arch: process.arch,
+  });
   const win = BrowserWindow.getFocusedWindow();
   const answer = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   const action = actions[answer.response] ?? null;
@@ -534,6 +594,15 @@ function installIpc(): void {
     await openFolderFlow(BrowserWindow.fromWebContents(event.sender));
   });
   // Takes nothing from the page: which file is revealed is decided here (revealIn).
+  ipcMain.handle("glosa:ensure-daemon", (event) => {
+    if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
+    const id = event.sender.id;
+    const pending = reconnecting.get(id);
+    if (pending) return pending;
+    const attempt = ensureWindowDaemon(id).finally(() => reconnecting.delete(id));
+    reconnecting.set(id, attempt);
+    return attempt;
+  });
   ipcMain.handle("glosa:reveal", (event) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     return revealIn(BrowserWindow.fromWebContents(event.sender));
@@ -676,7 +745,8 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) app.quit();
     return;
   }
-  const target = positionals[0] ?? null;
+  // A desktop entry's %U hands a folder over as file:///… on Linux (#432); the CLI wants a path.
+  const target = positionals[0] ? targetFromArg(positionals[0]) : null;
   if (target) {
     await openInWindow(target, null, positionals[1] ?? null);
     return;

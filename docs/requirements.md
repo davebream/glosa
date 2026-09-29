@@ -53,7 +53,7 @@ private input and signs the sanitized report; an agent never signs on the mainta
 **Non-goals (v1)**: a packaged desktop app (v1 is daemon + browser; the unpackaged shell skeleton
 in `packages/shell` is a development surface, not a release);
 mobile/remote access; cloud sync; a second-agent provider *beyond* Claude Code + Codex; a public
-plugin/SDK surface; telemetry; Windows, Linux ARM/musl, and released Linux app/native-provider/dictation support (tracked by #432–#435); instant-wake of a non-Claude *idle* agent
+plugin/SDK surface; telemetry; Windows, Linux ARM/musl, and released Linux app/native-provider/dictation support (tracked by #433–#435; the Linux package itself is #432); instant-wake of a non-Claude *idle* agent
 (honest limit — see R4).
 
 ## 2. Architecture (fixed)
@@ -355,7 +355,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.22: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.23: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -363,8 +363,10 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   deletion (`glosa forget`, issue #156), starred workspaces (star, unstar, reopen by star id),
   provider-neutral dictation status/session grants, daemon-wide attention counts with an
   `attention_changed` stream frame, issue #389, the passage address on annotation
-  presentations, issue #411, and a folder's default style with a `folder_style` stream frame,
-  issue #407) — schemas, status codes, 1 MiB body cap,
+  presentations, issue #411, a folder's default style with a `folder_style` stream frame,
+  issue #407, and install-change handling: the handshake's `install_changed`, build-scoped
+  `/app/@<hash>/` assets that answer 410 `build-changed` for another build, and a reason on a
+  stream's `bye` frame, issue #432) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
 
@@ -567,8 +569,10 @@ registration epochs prevent filename collisions and restoration into a replaceme
   is the browser floor. Unsupported OS/architecture, libc or Bun versions exit 5 before daemon
   discovery or network access in open, doctor, update and MCP startup. Linux uses `xdg-open` with
   a five-second confirmation deadline; failure preserves the workspace and URL with a warning.
-  URL-only and MCP presentation never launch a browser. Linux app packaging, native managed-chat
-  qualification and dictation remain pending #432–#435; no installed Manjaro release is claimed.
+  URL-only and MCP presentation never launch a browser. The desktop app builds as an x86_64 pacman
+  package verified in Arch Linux containers (#432); native managed-chat qualification (#433),
+  dictation (#434) and installed Manjaro desktop qualification and publication (#435) remain
+  pending, and no installed Manjaro release is claimed.
 - **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
   unconfigured external runtime calls. The two update actions are explicit exceptions: `glosa update`
   (A6 §F33) and the desktop app's Check for Updates… (A3 §4b) reach out only when the person runs or
@@ -584,7 +588,10 @@ registration epochs prevent filename collisions and restoration into a replaceme
   the desktop shell in `packages/shell` is packaged (asar, `.app`, signing, notarization) when it
   ships; that is a build. It still needs no transpile, because Electron's Node strips types from the
   unbundled main process. It packages itself plus a copy of the CLI, daemon, SPA and a Bun
-  runtime under `Contents/Resources`, all unbundled and run with `bun run` direct (#371). The daemon
+  runtime under `Contents/Resources`, all unbundled and run with `bun run` direct (#371). The same
+  exception covers the Linux pacman package (#432): the same unbundled tree under
+  `/opt/glosa/resources`, packaged by the same electron-builder stack, with no transpiler and no
+  native addon. The daemon
   it shows is still whatever the recorded executable (`GLOSA_HOME/bin/glosa`) is; the app's own copy
   is used, and records itself, only when nothing is recorded. The app is therefore the one channel
   with no host prerequisite. The shell is not a root workspace member so Electron is

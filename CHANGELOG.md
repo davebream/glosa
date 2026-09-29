@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- The desktop app builds as an x86_64 pacman package for Arch Linux and Manjaro, experimental. It
+  carries its own Bun and the command line; pacman installs Git and the libraries it needs, owns
+  `/usr/bin/glosa` and every other file it installs, and removes exactly those, leaving `~/.glosa`
+  and your workspaces. `glosa doctor` names the install as `pacman`, and `glosa update` and the app's
+  Check for Updates… give the pacman command instead of Homebrew's. Built and tested in Arch Linux
+  containers; downloads and Manjaro desktop qualification follow in #435 (#432).
+- glosa handles an upgrade or removal while it runs, on every install channel. The background
+  process used to keep serving the new files with old code until some command restarted it, and
+  after a removal it held its port with its files gone. It now serves only what it started with,
+  starts nothing from a changed install, and restarts itself through its normal shutdown once it
+  is idle; an open window says "glosa was updated. Reload to use the new version." and reloads when
+  you click. A `glosa monitor` started before an upgrade keeps delivering instead of retrying
+  forever. API contract 1.23 (#432).
 - Local images in Markdown, image paste/drop and an Insert image picker in block Edit, Rich and
   Source, plus image files in the tree and docked image tabs with fit, zoom, pan and live updates.
   Imports preserve original bytes up to 20 MiB and stay outside document checkpoints. Remote images

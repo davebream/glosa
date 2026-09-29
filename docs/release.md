@@ -7,7 +7,10 @@ check a shipped build, and how the Homebrew cask is bumped.
 
 Pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/release.yml`:
 
-1. The same test jobs as CI, with the full profile forced, plus the secret and dependency scans.
+1. The same test jobs as CI, with the full profile forced, plus the secret and dependency scans. That
+   includes `pacman`, which builds the Linux pacman package and smokes it in Arch Linux containers
+   (#432); a red `pacman` blocks the release. The Linux package is validated, not yet published:
+   uploading it and its checksum is #435.
 2. `release`: publishes `@davebream/glosa` to npm with provenance and creates the GitHub release.
 3. `app`: builds the desktop app for Apple Silicon (`arm64`) and Intel (`x64`), smoke-tests it,
    and uploads to the GitHub release: `glosa-<version>-arm64.dmg`, `glosa-<version>-arm64.zip`,
@@ -103,6 +106,37 @@ bun run --cwd packages/shell package -- --arch arm64 --unsigned --smoke
 The smoke runs the bundled CLI with no Bun on `PATH`, checks the app's version and signature,
 confirms the CLI records its launcher at `~/.glosa/bin/glosa` in a scratch home, and opens a scratch
 folder to prove the daemon it starts runs on the bundled Bun.
+
+## The Linux package (#432)
+
+The `pacman` job in CI and release builds `glosa-<version>-x64.pacman` on an Ubuntu 24.04 runner
+and runs `packages/shell/scripts/linux-package-smoke.ts` against it. To rehearse on an x86_64 Linux
+machine with Docker:
+
+```sh
+sudo apt-get install -y libarchive-tools zstd        # Ubuntu; Arch and Manjaro already have bsdtar and zstd
+bun install --frozen-lockfile && bun install --cwd packages/shell --frozen-lockfile
+bun run --cwd packages/shell package -- --arch x64 --smoke
+```
+
+The smoke also builds a test-only upgrade package (the same app with a newer version), then runs
+every stage in fresh `archlinux:base` containers pinned by digest. Their repositories come from a
+pinned Arch Linux Archive day (`ARCHIVE_DATE` in the script; `GLOSA_SMOKE_ARCHIVE_DATE` overrides it
+when that snapshot ages out). The containers get only the package files, read-only, and run with
+`--init` so a daemon that exits is reaped. The harness passes pacman `--disable-sandbox`, which is
+about pacman's own download sandbox in a container, not the app's. The container that runs the
+desktop app on a virtual display (Xvfb) also gets 1 GB of shared memory and
+`--security-opt seccomp=unconfined`, because Docker's default seccomp profile refuses the calls
+Chromium's own sandbox makes. The app still runs with its sandbox on, and the smoke fails if any
+Electron process has it off. Seccomp itself is asserted only on x86_64 hardware: it is unavailable
+under emulation. Its report lands in `.context/test-results/pacman/report.json`, and a declared stage
+that did not run fails the job. While debugging, `GLOSA_SMOKE_ONLY=G` (or `P`, `D`) runs one group of
+stages; such a run always fails overall, because the others did not run.
+
+Still manual, and pending #435 on a real Manjaro KDE desktop (x86_64): launching from the menu and
+its icon, Wayland and X11, `glosa://` links through `kde-open` with the app closed and open,
+reveal in Dolphin, the Chromium sandbox on the Manjaro kernel, notifications, and dependency
+resolution from Manjaro's stable repositories rather than Arch's.
 
 ## Checking a shipped release
 
