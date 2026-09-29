@@ -266,6 +266,12 @@ jobs:
         # src under erasableSyntaxOnly (Electron's Node strips types, nothing more); the tests import
         # daemon helpers that use non-erasable syntax, so they are checked without that flag.
         run: bunx tsc --noEmit -p packages/shell/tsconfig.json && bunx tsc --noEmit -p packages/shell/tsconfig.test.json
+      # Bun can install Electron's package without its binary, and this job builds no app, so
+      # without this step every real-Electron test skips and the runner fails the job (v0.1.0-alpha.37).
+      - name: Install Electron for the renderer suite
+        run: |
+          node packages/shell/node_modules/electron/install.js
+          bun run --cwd packages/shell brand
       - name: Run the shell's renderer security suite in real Electron
         run: bun run scripts/test-runner.ts shell
       - name: Preserve test evidence
