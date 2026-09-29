@@ -167,7 +167,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libarchive-tools zstd
       - name: Cache the Electron and Bun downloads for the pacman build
         if: needs.prepare.outputs.app == 'true'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cache/electron
@@ -314,7 +314,7 @@ jobs:
       # macOS 14's cannot, and Bun ships no AVX-free macOS build, so this job runs on macos-15.
       - name: Cache the Electron and Bun downloads for the app build
         if: needs.prepare.outputs.app == 'true'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/Library/Caches/electron

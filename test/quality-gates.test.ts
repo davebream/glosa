@@ -141,6 +141,14 @@ describe("repository quality gates", () => {
     expect(job(workflows[1]!, "release")).toContain("npm publish");
   });
 
+  test("CI and release pin every cache action to the reviewed version", () => {
+    const cacheSha = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
+    for (const yaml of workflows) {
+      const cacheUses = [...yaml.matchAll(/^\s*uses: actions\/cache@([0-9a-f]{40})/gm)].map(([, sha]) => sha);
+      expect(cacheUses).toEqual([cacheSha, cacheSha]);
+    }
+  });
+
   test("pull requests that shape the desktop app build it unsigned and smoke it, and nothing in CI signs (#371)", () => {
     const ci = workflows[0]!;
     expect(job(ci, "prepare")).toContain("app: ${{ steps.plan.outputs.app }}");
@@ -148,7 +156,7 @@ describe("repository quality gates", () => {
     expect(shell).toContain(
       "- name: Build the unsigned app and smoke it\n        if: needs.prepare.outputs.app == 'true'\n        run: bun run --cwd packages/shell package -- --arch all --unsigned --smoke",
     );
-    expect(shell).toContain("uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830");
+    expect(shell).toContain("uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
     // The build runs BEFORE the real-Electron suite: that suite's first launch downloads Electron's
     // binary, and a build placed after it passed in CI while the release job, which builds first,
     // failed on node_modules/electron/dist (v0.1.0-alpha.32).
