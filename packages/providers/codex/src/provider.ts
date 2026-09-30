@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { CodexTranscriptNormalizer } from "./transcript.ts";
 // @glosa/providers-codex — the Codex AgentProvider (R7). Implements the R4 delivery ladder through
 // an optional app-server control-socket subscription, then the durable MCP pull fallback.
 //   rung 1  codex_app_server    `turn/steer` / `turn/start` on a connected exact-thread transport.
@@ -99,6 +100,10 @@ export class CodexProvider implements AgentProvider {
    * check to even be tempted by. */
   liveness(session: SessionBinding): Liveness {
     return this.deps.liveness.liveness(session.session_id);
+  }
+
+  createTranscriptNormalizer() {
+    return new CodexTranscriptNormalizer();
   }
 
   transcriptRoots(): readonly string[] {

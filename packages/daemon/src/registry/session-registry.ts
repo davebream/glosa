@@ -34,6 +34,7 @@ export interface SessionRegistryDeps {
   leaseTtlMs?: number;
   index?: WorkspaceIndex;
   /** Injectable scheduler for deterministic connection/expiry tests. */
+  scheduleExpiry?: (expire: () => void, delayMs: number) => () => void;
   scheduleRefresh?: (refresh: () => void, intervalMs: number) => () => void;
   /** The SAME per-target ownership lock `http.ts`'s `ownershipCoordinator(ctx)` hands to session
    * register/bind and `forgetWorkspace`'s own commit (issue #156 held-review finding: "heartbeat
@@ -57,6 +58,11 @@ export class SessionRegistry {
   private readonly connections = new Map<string, Map<string, () => void>>();
   private readonly scheduleRefresh: NonNullable<SessionRegistryDeps["scheduleRefresh"]>;
   private readonly ownershipCoordinator?: AdoptionCoordinator;
+  private readonly listeners = new Set<(paths: readonly string[]) => void>();
+  private readonly scheduleExpiry: NonNullable<SessionRegistryDeps["scheduleExpiry"]>;
+  private cancelExpiry?: () => void;
+  private expiryCandidates: SessionRecord[] = [];
+  private closed = false;
   private onSessionsChanged: () => void = () => {};
   // #153 Part 2 (W3): a held watch captures a session's binding once, at hold-start, and must
   // stop trusting it the moment that binding actually changes — a rebind or a deregistration,
@@ -72,6 +78,13 @@ export class SessionRegistry {
     this.leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
     this.index = deps.index;
     this.ownershipCoordinator = deps.ownershipCoordinator;
+    this.scheduleExpiry =
+      deps.scheduleExpiry ??
+      ((expire, delayMs) => {
+        const timer = setTimeout(expire, delayMs);
+        timer.unref?.();
+        return () => clearTimeout(timer);
+      });
     this.scheduleRefresh =
       deps.scheduleRefresh ??
       ((refresh, intervalMs) => {
@@ -87,7 +100,49 @@ export class SessionRegistry {
     this.onSessionsChanged = fn;
   }
 
-  private announceSessionsChanged(): void {
+  subscribe(listener: (paths: readonly string[]) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  close(): void {
+    this.closed = true;
+    this.cancelExpiry?.();
+    this.expiryCandidates = [];
+    for (const handles of this.connections.values()) for (const release of handles.values()) release();
+    this.listeners.clear();
+    this.onSessionsChanged = () => {};
+  }
+
+  private armExpiry(): void {
+    this.cancelExpiry?.();
+    this.cancelExpiry = undefined;
+    if (this.closed) return;
+    const now = this.now().getTime();
+    // A different session's heartbeat may run before the due timer. Observe that expired
+    // lease before replacing the timer, otherwise a continuously active peer can hide it forever.
+    const expired = this.expiryCandidates.filter(
+      (record) => this.sessions.get(record.session_id) === record && this.liveness(record.session_id) === "stale",
+    );
+    const alive = this.list().filter((record) => new Date(record.lease_expiry).getTime() > now);
+    this.expiryCandidates = alive;
+    if (alive.length) {
+      const deadline = Math.min(...alive.map((record) => new Date(record.lease_expiry).getTime()));
+      this.cancelExpiry = this.scheduleExpiry(() => this.armExpiry(), Math.min(deadline - now, 2 ** 31 - 1));
+    }
+    if (expired.length) this.announceSessionsChanged(expired.map((record) => record.workspace_binding ?? record.cwd));
+  }
+
+  private announceSessionsChanged(paths: readonly string[] = []): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(paths);
+      } catch {
+        /* Observers cannot fail a published registration. */
+      }
+    }
     try {
       this.onSessionsChanged();
     } catch {
@@ -156,7 +211,14 @@ export class SessionRegistry {
       record.workspace_binding = resolved.canonical_path;
     }
     this.sessions.set(record.session_id, record);
-    this.announceSessionsChanged();
+    this.armExpiry();
+    this.announceSessionsChanged([
+      ...new Set(
+        [prior?.workspace_binding ?? prior?.cwd, record.workspace_binding ?? record.cwd].filter(
+          (path): path is string => path !== undefined,
+        ),
+      ),
+    ]);
     // A REBIND, not a heartbeat: the previous binding actually changed value. A held watch that
     // captured the OLD controller's signal must be told its authority moved — see
     // `sessionLifecycleSignal`'s docstring. Deleting rather than reusing the controller means the
@@ -261,7 +323,8 @@ export class SessionRegistry {
     const wasAlive = now.getTime() < new Date(record.lease_expiry).getTime();
     record.last_active_at = now.toISOString();
     record.lease_expiry = new Date(now.getTime() + this.leaseTtlMs).toISOString();
-    if (!wasAlive) this.announceSessionsChanged();
+    this.armExpiry();
+    if (!wasAlive) this.announceSessionsChanged([record.workspace_binding ?? record.cwd]);
     return true;
   }
 
@@ -340,10 +403,12 @@ export class SessionRegistry {
   deregister(sessionId: string): Promise<void> {
     return this.mutex.runExclusive(() => {
       for (const release of this.connections.get(sessionId)?.values() ?? []) release();
+      const prior = this.sessions.get(sessionId);
       const deleted = this.sessions.delete(sessionId);
       this.lifecycleControllers.get(sessionId)?.abort();
       this.lifecycleControllers.delete(sessionId);
-      if (deleted) this.announceSessionsChanged();
+      this.armExpiry();
+      if (deleted && prior) this.announceSessionsChanged([prior.workspace_binding ?? prior.cwd]);
     });
   }
 

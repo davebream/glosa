@@ -71,6 +71,7 @@ export interface TranscriptStreamOptions {
    * cares about the initial read/cursor mechanics. Defaults to on. */
   watchFile?: boolean;
   shutdownSignal?: AbortSignal;
+  normalizer?: TranscriptNormalizer;
 }
 
 /** Builds the `GET /w/:slug/transcript/stream` response. `transcriptPath` MUST already have
@@ -91,7 +92,7 @@ export function createTranscriptStreamResponse(
 
   const heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
   const encoder = new TextEncoder();
-  const normalizer = new TranscriptNormalizer();
+  const normalizer = opts.normalizer ?? new TranscriptNormalizer();
 
   let closed = false;
   let watcher: FSWatcher | null = null;

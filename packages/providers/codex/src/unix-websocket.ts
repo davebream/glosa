@@ -8,6 +8,7 @@ const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_FRAME_BYTES = 1024 * 1024;
 
 export interface UnixWebSocketOptions {
+  onConnect?: () => void;
   signal?: AbortSignal;
   handshakeTimeoutMs?: number;
   socketFactory?: (path: string) => Socket;
@@ -114,6 +115,7 @@ export class UnixWebSocket {
       socket.once("close", onClose);
       socket.on("data", onHandshakeData);
       socket.once("connect", () => {
+        options.onConnect?.();
         socket.write(
           `GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
         );

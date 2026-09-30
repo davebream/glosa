@@ -49,8 +49,30 @@ export interface CodexAttachOptions {
   socketPath?: string;
 }
 
+export type CodexAttachStage = "socket" | "handshake" | "initialize" | "resume" | "register" | "stream";
+export interface CodexAttachDiagnostic {
+  stage: CodexAttachStage;
+  state: "starting" | "failed" | "connected" | "retrying" | "parked";
+  reason?: "socket-missing" | "socket-refused" | "socket-denied" | "timeout" | "request-rejected" | "connection-ended";
+  retryInMs?: number;
+}
+
+function failureReason(error: unknown): CodexAttachDiagnostic["reason"] {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  if (code === "ENOENT") return "socket-missing";
+  if (code === "ECONNREFUSED") return "socket-refused";
+  if (code === "EACCES" || code === "EPERM") return "socket-denied";
+  if (error instanceof Error && error.message.includes("timed out")) return "timeout";
+  return "request-rejected";
+}
+
 export interface CodexAttachDeps {
-  createControlClient(path: string, signal: AbortSignal): Promise<CodexControlClient>;
+  onDiagnostic?(event: CodexAttachDiagnostic): void;
+  createControlClient(
+    path: string,
+    signal: AbortSignal,
+    onStage?: (stage: CodexAttachStage) => void,
+  ): Promise<CodexControlClient>;
   createDaemonClient(signal: AbortSignal): Promise<{
     register(input: {
       session_id: string;
@@ -130,8 +152,12 @@ export class CodexJsonRpcClient implements CodexControlClient {
     );
   }
 
-  static async connect(path: string, signal: AbortSignal): Promise<CodexJsonRpcClient> {
-    const socket = await UnixWebSocket.connect(path, { signal });
+  static async connect(
+    path: string,
+    signal: AbortSignal,
+    onStage?: (stage: CodexAttachStage) => void,
+  ): Promise<CodexJsonRpcClient> {
+    const socket = await UnixWebSocket.connect(path, { signal, onConnect: () => onStage?.("handshake") });
     const client = new CodexJsonRpcClient(socket);
     const closeOnAbort = () => client.close();
     signal.addEventListener("abort", closeOnAbort, { once: true });
@@ -141,6 +167,7 @@ export class CodexJsonRpcClient implements CodexControlClient {
       throw new Error("Codex app-server connection aborted");
     }
     try {
+      onStage?.("initialize");
       await client.request("initialize", {
         clientInfo: { name: "glosa", title: "glosa local review transport", version: "1" },
         capabilities: null,
@@ -307,6 +334,18 @@ export async function runCodexAttachment(
   signal: AbortSignal = AbortSignal.any([]),
 ): Promise<void> {
   let attempt = 0;
+  let stage: CodexAttachStage = "socket";
+  const report = (event: CodexAttachDiagnostic) => {
+    try {
+      deps.onDiagnostic?.(event);
+    } catch {
+      /* Diagnostics cannot break delivery. */
+    }
+  };
+  const starting = (next: CodexAttachStage) => {
+    stage = next;
+    report({ stage, state: "starting" });
+  };
   while (!signal.aborted) {
     const attemptAbort = new AbortController();
     const combined = AbortSignal.any([signal, attemptAbort.signal]);
@@ -314,8 +353,11 @@ export async function runCodexAttachment(
     let removeCompleted: (() => void) | undefined;
     let superseded = false;
     try {
-      control = await deps.createControlClient(options.socketPath ?? codexControlSocketPath(), combined);
+      starting("socket");
+      control = await deps.createControlClient(options.socketPath ?? codexControlSocketPath(), combined, starting);
+      starting("resume");
       await control.resume(options.sessionId);
+      starting("register");
       const daemon = await deps.createDaemonClient(combined);
       await daemon.register({
         session_id: options.sessionId,
@@ -327,7 +369,8 @@ export async function runCodexAttachment(
       if (!daemon.openSessionStream || !daemon.acknowledgeStreamTransport) {
         throw new Error("generic session stream is unavailable");
       }
-      const connectedAt = Date.now();
+      starting("stream");
+      const connectedAt = deps.now();
       const stream = daemon.openSessionStream(
         options.sessionId,
         "codex_app_server",
@@ -336,7 +379,7 @@ export async function runCodexAttachment(
           await daemon.acknowledgeStreamTransport!(options.sessionId, entry.id);
         },
         combined,
-        undefined,
+        () => report({ stage: "stream", state: "connected" }),
         // Issue #155: the same `[glosa signal <id>]` line the Claude monitor prints, steered into the
         // thread, then acknowledged with the token only this session's frame carries.
         async (notice) => {
@@ -352,21 +395,26 @@ export async function runCodexAttachment(
         stream.then((result) => ({ via: "stream" as const, result })),
         control.closed.then(() => ({ via: "closed" as const })),
       ]);
-      if (Date.now() - connectedAt >= 20_000) attempt = 0;
+      if (deps.now() - connectedAt >= 20_000) attempt = 0;
       superseded = outcome.via === "stream" && outcome.result.ended === "superseded";
-    } catch {
+      if (!superseded && !signal.aborted) report({ stage, state: "failed", reason: "connection-ended" });
+    } catch (error) {
       if (signal.aborted) return;
+      report({ stage, state: "failed", reason: failureReason(error) });
     } finally {
       removeCompleted?.();
       attemptAbort.abort();
       control?.close();
     }
     if (superseded) {
+      report({ stage: "stream", state: "parked" });
       await parkUntilFree(options.sessionId, deps, signal);
       attempt = 0;
       continue;
     }
-    await deps.sleep(codexAttachRetryDelay(attempt, deps.random), signal);
+    const retryInMs = codexAttachRetryDelay(attempt, deps.random);
+    if (!signal.aborted) report({ stage, state: "retrying", retryInMs });
+    await deps.sleep(retryInMs, signal);
     attempt = Math.min(attempt + 1, 31);
   }
 }

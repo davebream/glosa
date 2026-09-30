@@ -173,7 +173,7 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
               .parse(await req.json());
             service.list(workspace); // Validate registration and lifecycle before storing an association.
             const session = deps.sessionRegistry
-              ?.forWorkspace(workspace.path)
+              ?.explicitlyBoundForWorkspace(workspace.path, { includeStale: true })
               .find((item) => item.session_id === input.sessionId && item.source !== "managed-chat");
             if (!session)
               throw new ManagedAgentError(

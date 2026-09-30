@@ -435,6 +435,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const closeWorkspaceResources = async (): Promise<void> => {
     await managedChats?.close();
     await supervisor.close();
+    sessionRegistry.close();
     await claimSweeper.stop();
     await artifactWatcherAllocation.stop();
     await Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]);
@@ -442,6 +443,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const releaseWorkspaceResourcesForExit = async (): Promise<void> => {
     await managedChats?.close();
     await supervisor.close();
+    sessionRegistry.close();
     // Watchers first and synchronously, so no quiet-window capture can start against a bus that
     // is closing, and no warm-up step opens a new watch that nothing will ever use. The claim
     // sweeper stops first for the same reason: no expiry may start against a closing bus.
