@@ -1,0 +1,13 @@
+{"type":"queue-operation","operation":"enqueue","content":"Run a neutral tool and report completion."}
+{"type":"queue-operation","operation":"dequeue"}
+{"type":"user","uuid":"user-neutral","isSidechain":false,"message":{"role":"user","content":"Run a neutral tool and report completion."},"permissionMode":"bypassPermissions","promptSource":"sdk","turnOrigin":"sdk","entrypoint":"sdk-cli"}
+{"type":"attachment","uuid":"attachment-environment","isSidechain":false,"attachment":{"type":"environment","snapshot":{"workingDirectory":"/workspace/neutral","isWorktree":true,"isGitRepo":true,"platform":"darwin","shell":"/bin/zsh"}},"rendered":[{"content":"<system-reminder>Neutral environment context</system-reminder>"}],"renderedRole":"system","entrypoint":"sdk-cli"}
+{"type":"attachment","uuid":"attachment-project","isSidechain":false,"attachment":{"type":"project_instructions"},"rendered":[{"content":"<system-reminder>Neutral project instructions</system-reminder>"}],"renderedRole":"user","entrypoint":"sdk-cli"}
+{"type":"last-prompt","lastPrompt":"Run a neutral tool and report completion.","leafUuid":"user-neutral"}
+{"type":"atis-latch","atis":""}
+{"type":"assistant","uuid":"assistant-tool","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-neutral","name":"Bash","input":{"command":"printf \"neutral-tool-output\\n\"","description":"Print the neutral fixture output line"},"caller":{"type":"direct"}}]},"entrypoint":"sdk-cli"}
+{"type":"user","uuid":"user-result","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"tool-neutral","type":"tool_result","content":"neutral-tool-output","is_error":false}]},"toolUseResult":{"stdout":"neutral-tool-output","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false},"entrypoint":"sdk-cli"}
+{"type":"assistant","uuid":"assistant-final","isSidechain":false,"message":{"role":"assistant","content":[{"type":"text","text":"Neutral Claude checkpoint complete."}]},"entrypoint":"sdk-cli"}
+{"type":"system","uuid":"system-stop","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"neutral hook"}]}
+{"type":"last-prompt","lastPrompt":"Run a neutral tool and report completion.","leafUuid":"assistant-final"}
+{"type":"cost-state","totalCostUSD":1,"totalAPIDuration":1000,"totalToolDuration":100,"totalDuration":2000,"modelUsage":{}}
