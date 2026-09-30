@@ -45,7 +45,12 @@ export interface AgentCapabilities {
   permissions: boolean;
   mcp: boolean;
 }
-export interface RuntimeManifest {
+export interface RuntimeTarget {
+  platform: "darwin" | "linux";
+  architecture: "arm64" | "x64";
+  libc?: "glibc";
+}
+export interface RuntimeManifest extends RuntimeTarget {
   id: string;
   provider: string;
   version: string;

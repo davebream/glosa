@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import { fileURLToPath } from "node:url";
-import type { RuntimeCandidate } from "../../../daemon/src/agents/runtimes.ts";
+import { runtimeTarget, type RuntimeCandidate } from "../../../daemon/src/agents/runtimes.ts";
 
 /** A candidate is installable for explicit qualification, not a claim of native compatibility. */
-export function claudeRuntimeCandidate(architecture = process.arch): RuntimeCandidate {
-  const native = `@anthropic-ai/claude-code-darwin-${architecture}`;
+export function claudeRuntimeCandidate(target = runtimeTarget()): RuntimeCandidate {
+  const { platform, architecture } = runtimeTarget(target.platform, target.architecture, target.libc);
+  const native = `@anthropic-ai/claude-code-${platform}-${architecture}`;
   return {
-    lockFile: fileURLToPath(new URL(`./runtime-locks/darwin-${architecture}.lock`, import.meta.url)),
+    ...target,
+    lockFile: fileURLToPath(new URL(`./runtime-locks/${platform}-${architecture}.lock`, import.meta.url)),
     provider: "claude-code",
     version: "2.1.280",
     sdkVersion: "0.3.280",

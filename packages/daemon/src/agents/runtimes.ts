@@ -21,7 +21,13 @@ import { privateDirectory } from "../chats/journal.ts";
 import { fsyncContainingDir } from "../bus/io.ts";
 import { assertInstallUnchanged } from "../lifecycle/install-guard.ts";
 import { managedEnvironment } from "./environment.ts";
-import { ManagedAgentError, type OwnedProcess, type ProcessLauncher, type RuntimeManifest } from "./interface.ts";
+import {
+  ManagedAgentError,
+  type OwnedProcess,
+  type ProcessLauncher,
+  type RuntimeManifest,
+  type RuntimeTarget,
+} from "./interface.ts";
 import { writeOwnership } from "./ownership.ts";
 
 // The pinned native archive can exceed 125 MiB; a foreground install must tolerate
@@ -37,7 +43,27 @@ export interface RuntimeInstallationProgress {
   bytesCompleted: number;
 }
 
-export interface RuntimeCandidate {
+/** Platform facts only. Providers retain all knowledge of vendor distributions. */
+export function runtimeTarget(
+  platform: string = process.platform,
+  architecture: string = process.arch,
+  libc: string | undefined = platform === "linux"
+    ? (process.report?.getReport() as { header?: { glibcVersionRuntime?: string } })?.header?.glibcVersionRuntime
+      ? "glibc"
+      : undefined
+    : undefined,
+): RuntimeTarget {
+  if (platform === "darwin" && (architecture === "arm64" || architecture === "x64") && libc === undefined)
+    return { platform, architecture };
+  if (platform === "linux" && architecture === "x64" && libc === "glibc") return { platform, architecture, libc };
+  throw new ManagedAgentError(
+    "runtime-unqualified",
+    "Managed runtimes require macOS arm64/x64 or Linux x86_64/glibc.",
+    422,
+  );
+}
+
+export interface RuntimeCandidate extends RuntimeTarget {
   provider: string;
   version: string;
   lockFile: string;
@@ -62,7 +88,9 @@ const manifestSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
     treeSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    platform: z.enum(["darwin", "linux"]),
     architecture: z.enum(["arm64", "x64"]),
+    libc: z.literal("glibc").optional(),
     bun: z.string(),
     source: z.literal("https://registry.npmjs.org/"),
     installedAt: z.iso.datetime(),
@@ -75,6 +103,7 @@ function hashFile(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 function files(root: string): string[] {
+  if (!lstatSync(root).isDirectory()) throw new Error("unsafe runtime directory");
   const result: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
@@ -124,10 +153,21 @@ export class RuntimeCatalog {
     const candidate = this.candidates.find((item) => item.provider === provider);
     if (!candidate)
       throw new ManagedAgentError("runtime-unqualified", "No runtime candidate is configured for this agent.", 422);
+    const host = runtimeTarget();
+    if (
+      candidate.platform !== host.platform ||
+      candidate.architecture !== host.architecture ||
+      candidate.libc !== host.libc
+    )
+      throw new ManagedAgentError(
+        "runtime-unqualified",
+        "This runtime candidate does not match this operating system, architecture or libc.",
+        422,
+      );
     return candidate;
   }
   private tuple(candidate: RuntimeCandidate): string {
-    return `${candidate.provider}-${candidate.version}-${process.arch}-${hashFile(candidate.lockFile).slice(0, 16)}`;
+    return `${candidate.provider}-${candidate.version}-${candidate.platform}-${candidate.architecture}${candidate.libc ? `-${candidate.libc}` : ""}-${hashFile(candidate.lockFile).slice(0, 16)}`;
   }
   private directory(candidate: RuntimeCandidate): string {
     return join(this.root, "runtimes", this.tuple(candidate));
@@ -137,41 +177,7 @@ export class RuntimeCatalog {
       root = this.directory(candidate);
     if (!existsSync(join(root, "manifest.json"))) return undefined;
     try {
-      privateDirectory(root);
-      const fd = openSync(join(root, "manifest.json"), constants.O_RDONLY | constants.O_NOFOLLOW);
-      let value: z.infer<typeof manifestSchema>;
-      try {
-        const stat = fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 65536) throw new Error("unsafe runtime manifest");
-        value = manifestSchema.parse(JSON.parse(readFileSync(fd, "utf8")));
-      } finally {
-        closeSync(fd);
-      }
-      if (value.id !== this.tuple(candidate) || hashFile(join(root, "bun.lock")) !== hashFile(candidate.lockFile))
-        throw new Error("wrong dependency lock");
-      if (
-        value.provider !== candidate.provider ||
-        value.version !== candidate.version ||
-        value.architecture !== process.arch
-      )
-        throw new Error("wrong runtime tuple");
-      for (const path of [value.executable, value.sdkModule].filter((path): path is string => !!path)) {
-        if (!isAbsolute(path) || !realpathSync(path).startsWith(`${root}/`))
-          throw new Error("runtime escaped its directory");
-      }
-      if (
-        hashFile(value.executable) !== value.executableSha256 ||
-        (value.sdkModule && hashFile(value.sdkModule) !== value.sdkSha256) ||
-        treeHash(root) !== value.treeSha256
-      )
-        throw new Error("runtime was modified");
-      return {
-        ...value,
-        qualified: candidate.qualified,
-        reason: candidate.qualified
-          ? undefined
-          : "Installed; native compatibility and release qualification are pending.",
-      };
+      return this.verify(candidate, root);
     } catch {
       throw new ManagedAgentError(
         "runtime-unqualified",
@@ -180,17 +186,70 @@ export class RuntimeCatalog {
       );
     }
   }
+  private selectedFiles(candidate: RuntimeCandidate, root: string) {
+    const binaries = files(join(root, "node_modules", candidate.binaryPackage)).filter(
+      (path) => path.split("/").pop() === candidate.binaryName,
+    );
+    if (binaries.length !== 1) throw new Error("native executable could not be uniquely selected");
+    return {
+      binary: binaries[0]!,
+      sdk: candidate.sdkPackage ? join(root, "node_modules", candidate.sdkPackage, "sdk.mjs") : undefined,
+    };
+  }
+  /** The same checks run on staging before quarantine and on every launch. */
+  private verify(candidate: RuntimeCandidate, root: string, publishedRoot = root): RuntimeManifest {
+    privateDirectory(root);
+    const fd = openSync(join(root, "manifest.json"), constants.O_RDONLY | constants.O_NOFOLLOW);
+    let value: z.infer<typeof manifestSchema>;
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > 65536) throw new Error("unsafe runtime manifest");
+      value = manifestSchema.parse(JSON.parse(readFileSync(fd, "utf8")));
+    } finally {
+      closeSync(fd);
+    }
+    if (value.id !== this.tuple(candidate) || hashFile(join(root, "bun.lock")) !== hashFile(candidate.lockFile))
+      throw new Error("wrong dependency lock");
+    if (
+      value.provider !== candidate.provider ||
+      value.version !== candidate.version ||
+      value.platform !== candidate.platform ||
+      value.architecture !== candidate.architecture ||
+      value.libc !== candidate.libc
+    )
+      throw new Error("wrong runtime tuple");
+    const { binary, sdk } = this.selectedFiles(candidate, root);
+    if (
+      value.executable !== join(publishedRoot, relative(root, binary)) ||
+      value.sdkModule !== (sdk ? join(publishedRoot, relative(root, sdk)) : undefined) ||
+      (sdk ? !value.sdkSha256 : value.sdkSha256 !== undefined)
+    )
+      throw new Error("wrong executable or SDK");
+    for (const path of [binary, sdk].filter((path): path is string => !!path)) {
+      if (!isAbsolute(path) || !realpathSync(path).startsWith(`${root}/`))
+        throw new Error("runtime escaped its directory");
+    }
+    if (
+      hashFile(binary) !== value.executableSha256 ||
+      (sdk && hashFile(sdk) !== value.sdkSha256) ||
+      treeHash(root) !== value.treeSha256
+    )
+      throw new Error("runtime was modified");
+    return {
+      ...value,
+      qualified: candidate.qualified,
+      reason: candidate.qualified
+        ? undefined
+        : "Installed; native compatibility and release qualification are pending.",
+    };
+  }
   async install(provider: string, launcher: ProcessLauncher): Promise<RuntimeManifest> {
     const candidate = this.candidate(provider);
     const previous = this.installations.get(provider);
     if (previous && !["complete", "failed"].includes(previous.phase))
       throw new ManagedAgentError("management-busy", "Runtime installation is already running.");
-    if (
-      process.platform !== "darwin" ||
-      !["arm64", "x64"].includes(process.arch) ||
-      Bun.semver.order(Bun.version, "1.4.2") < 0
-    )
-      throw new ManagedAgentError("runtime-unqualified", "Managed runtimes require macOS and Bun 1.4.2 or newer.", 422);
+    if (Bun.semver.order(Bun.version, "1.4.2") < 0)
+      throw new ManagedAgentError("runtime-unqualified", "Managed runtimes require Bun 1.4.2 or newer.", 422);
     try {
       const installed = this.manifest(provider);
       if (installed) return installed;
@@ -296,12 +355,8 @@ export class RuntimeCatalog {
       await child.stop();
       if (exit.code !== 0 || !exit.groupEmpty) throw new Error("install failed");
       phase("verifying");
-      const binaryRoot = join(staging, "node_modules", candidate.binaryPackage);
-      const binaries = files(binaryRoot).filter((path) => path.split("/").pop() === candidate.binaryName);
-      if (binaries.length !== 1) throw new Error("native executable could not be uniquely selected");
-      const binary = binaries[0]!;
+      const { binary, sdk } = this.selectedFiles(candidate, staging);
       chmodSync(binary, 0o700);
-      const sdk = candidate.sdkPackage ? join(staging, "node_modules", candidate.sdkPackage, "sdk.mjs") : undefined;
       const root = this.directory(candidate);
       const descriptor = manifestSchema.parse({
         id: this.tuple(candidate),
@@ -311,7 +366,9 @@ export class RuntimeCatalog {
         executableSha256: hashFile(binary),
         ...(sdk ? { sdkModule: join(root, relative(staging, sdk)), sdkSha256: hashFile(sdk) } : {}),
         treeSha256: treeHash(staging),
-        architecture: process.arch,
+        platform: candidate.platform,
+        architecture: candidate.architecture,
+        ...(candidate.libc ? { libc: candidate.libc } : {}),
         bun: Bun.version,
         source: "https://registry.npmjs.org/",
         installedAt: new Date().toISOString(),
@@ -321,13 +378,25 @@ export class RuntimeCatalog {
       writeOwnership(join(staging, "manifest.json"), descriptor);
       rmSync(join(staging, "cache"), { recursive: true, force: true });
       rmSync(installHome, { recursive: true, force: true });
+      this.verify(candidate, staging, root);
+      let quarantine: string | undefined;
       if (existsSync(root)) {
         privateDirectory(root);
-        renameSync(root, `${root}.quarantine-${randomUUID()}`);
+        quarantine = `${root}.quarantine-${randomUUID()}`;
+        renameSync(root, quarantine);
       }
-      renameSync(staging, root);
-      fsyncContainingDir(root);
-      const installed = this.manifest(provider)!;
+      let installed: RuntimeManifest;
+      try {
+        renameSync(staging, root);
+        fsyncContainingDir(root);
+        installed = this.manifest(provider)!;
+      } catch (error) {
+        // Publication failure must not strand the rejected installation under a new name.
+        if (existsSync(root)) renameSync(root, staging);
+        if (quarantine) renameSync(quarantine, root);
+        fsyncContainingDir(root);
+        throw error;
+      }
       phase("complete");
       return installed;
     } catch (error) {
