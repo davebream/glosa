@@ -3719,7 +3719,7 @@ export function createArtifactPane(host, deps) {
     for (const control of controls) control.disabled = true;
     const status = card.querySelector(".glosa-agent-status");
     status.hidden = false;
-    status.textContent = "Sending your answer…";
+    status.textContent = request.action === "review" ? "Sending your response…" : "Sending your answer…";
     try {
       await dataAccess.respondToAttention(slug, request.id, { outcome, response, chose });
       answerDrafts.delete(request.id);
@@ -3734,7 +3734,12 @@ export function createArtifactPane(host, deps) {
       if (!noticeEl.hidden) noticeEl.querySelector(".glosa-ask-notice-go, .glosa-ask-notice-back")?.focus?.();
     } catch (error) {
       for (const control of controls) control.disabled = false;
-      status.textContent = error instanceof Error ? error.message : "The answer could not be sent.";
+      status.textContent =
+        error instanceof Error
+          ? error.message
+          : request.action === "review"
+            ? "The response could not be sent."
+            : "The answer could not be sent.";
       status.setAttribute("role", "alert");
       card.querySelector(".glosa-agent-input")?.focus();
     }
@@ -3790,11 +3795,20 @@ export function createArtifactPane(host, deps) {
   function buildAgentCard(request, { floating = false } = {}) {
     const identity = agentIdentity(request, { providerName: providerDisplayName() });
     const anchored = Boolean(request.passage) && Boolean(rangeForPassage(request.passage));
+    // A review request asks for a verdict, not an answer (R9): the daemon accepts only `approved` or
+    // `changes_requested` for it, so its card offers exactly those two, in the tray's words.
+    const review = request.action === "review";
     const card = el("div", {
       className: "glosa-agent-card",
       "data-entry": request.id,
       "data-anchored": String(anchored),
-      ...(floating ? { "data-floating": "true", role: "group", "aria-label": "Question at its passage" } : {}),
+      ...(floating
+        ? {
+            "data-floating": "true",
+            role: "group",
+            "aria-label": review ? "Review request at its passage" : "Question at its passage",
+          }
+        : {}),
     });
     // The thread between a card and its mark, both ways: hovering or focusing the card thickens
     // its bracket and deepens its words, the way a note lights its passage.
@@ -3904,8 +3918,8 @@ export function createArtifactPane(host, deps) {
       // The escape hatch is unconditional. A session supplies its own words; it never gets to
       // close the reviewer's. That guarantee is glosa's, not the session's, so this field is
       // present whether or not options were offered.
-      placeholder: options.length > 0 ? "Or answer in your own words…" : "Your answer…",
-      "aria-label": "Your answer",
+      placeholder: review ? "Optional response" : options.length > 0 ? "Or answer in your own words…" : "Your answer…",
+      "aria-label": review ? "Your response (optional)" : "Your answer",
     });
     input.value = draft.text;
     input.addEventListener("input", () => {
@@ -3914,29 +3928,33 @@ export function createArtifactPane(host, deps) {
     group.append(input);
 
     const status = el("p", { className: "glosa-agent-status", hidden: true, role: "status", "aria-live": "polite" });
+    const verdict = (outcome) => () =>
+      void submitAnswer(request, card, {
+        outcome,
+        response: input.value,
+        ...(draft.chose ? { chose: draft.chose } : {}),
+      });
     const send = el("button", {
       className: "glosa-primary-button",
       type: "button",
-      textContent: "Send answer",
-      onClick: () =>
-        void submitAnswer(request, card, {
-          outcome: request.action === "review" ? "changes_requested" : "done",
-          response: input.value,
-          ...(draft.chose ? { chose: draft.chose } : {}),
-        }),
+      textContent: review ? "Approve" : "Send answer",
+      onClick: review ? verdict("approved") : verdict("done"),
     });
-    const decline = el("button", {
-      className: "glosa-secondary-button",
-      type: "button",
-      // Names what it does to the waiting session, not how the reviewer feels about it: the turn
-      // resumes with no answer rather than staying blocked.
-      textContent: "Can't answer",
-      onClick: () =>
-        void submitAnswer(request, card, {
-          outcome: request.action === "review" ? "changes_requested" : "done",
-          response: "",
-        }),
-    });
+    const decline = review
+      ? el("button", {
+          className: "glosa-secondary-button",
+          type: "button",
+          textContent: "Request changes",
+          onClick: verdict("changes_requested"),
+        })
+      : el("button", {
+          className: "glosa-secondary-button",
+          type: "button",
+          // Names what it does to the waiting session, not how the reviewer feels about it: the turn
+          // resumes with no answer rather than staying blocked.
+          textContent: "Can't answer",
+          onClick: () => void submitAnswer(request, card, { outcome: "done", response: "" }),
+        });
     card.append(group, el("div", { className: "glosa-agent-actions" }, [decline, send]), status);
     dictationController?.attachField(input, {
       controls: () => [decline, send, ...group.querySelectorAll("input")],
