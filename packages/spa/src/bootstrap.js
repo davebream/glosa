@@ -270,7 +270,7 @@ export function watchRouteChanges({
 
   /** Whether an address can be shown by the mounted view without a reload. @param {string} target */
   function followable(target) {
-    if (!target.startsWith(page() + "#") && target !== page()) return false;
+    if (!target.startsWith(`${page()}#`) && target !== page()) return false;
     const route = readRoute({ hash: hashOf(target) });
     return Boolean(route.artifact && !route.durableToken && !route.presentationToken && sameView(route, acceptedRoute));
   }
