@@ -570,7 +570,7 @@ input,
 
 /* ---------- 4. App topology ---------- */
 
-/* The navigator is a column the work sits beside, at every width, or it is not there at all. The
+/* The navigator is a column the work sits beside, at every width, or hidden behind its toggle. The
    banner row collapses to nothing while the connection holds. */
 .glosa-app {
   height: 100%;
@@ -586,7 +586,7 @@ input,
     "main";
 }
 
-.glosa-app[data-surface="workspace"][data-nav-open="true"] {
+.glosa-app[data-nav-open="true"] {
   min-width: calc(var(--nav-width) + 360px);
   grid-template-columns: var(--nav-width) minmax(0, 1fr);
   grid-template-areas:
@@ -596,13 +596,6 @@ input,
 }
 
 .glosa-app[data-nav-open="false"] .glosa-sidebar {
-  display: none;
-}
-
-/* A single presented document has no workspace to navigate. Last, so it outranks every navigator
-   rule above rather than depending on the `hidden` attribute the shell also sets. */
-.glosa-app[data-surface="document"] .glosa-nav-toggle,
-.glosa-app[data-surface="document"] .glosa-sidebar {
   display: none;
 }
 
@@ -686,10 +679,6 @@ input,
   width: calc(var(--nav-width) - 1px);
   background: var(--desk);
   border-top: 1px solid var(--border);
-}
-
-.glosa-app[data-surface="document"] .glosa-nav-foot {
-  display: none;
 }
 
 .glosa-nav-toggle {

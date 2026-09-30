@@ -283,9 +283,11 @@
   and bind work without invoking a browser launcher. Plain success output is exactly the URL
   plus a newline; `--json` retains the F26 envelope with
   `data:{slug,path,url,focus?,surface,mode,preview,bound_session?,state_dir?}`.
-- A document URL renders a single pane with the navigator hidden. Opening it in an already-mounted
-  tab, including hash/history navigation, uses the same bootstrap after the existing pane discard
-  guards consent. Cancellation keeps unsaved editor text and the current secret-free URL; document
+- A document URL renders a single pane with the navigator closed behind its toggle. Opening another
+  document from it adds a history entry, and Back/Forward to a document of the same workspace and
+  surface is shown in place after the pane's discard guard consents. Opening it in an
+  already-mounted tab by any other hash/history navigation uses the same bootstrap after the
+  existing pane discard guards consent. Cancellation keeps unsaved editor text and the current secret-free URL; document
   visits do not replace the saved workspace layout. Surface, mode and read lock are honored on both
   initial and reused-tab opens (R6).
 - `--bind` after successful registration is nonfatal on unknown/stale sessions: the URL is still
