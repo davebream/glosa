@@ -8,11 +8,11 @@ beside it serving a browser SPA. Claude Code is the deep, required integration; 
 agent-agnostic (Codex and other push/MCP-capable CLIs supported through one provider interface).
 
 Status: **experimental public alpha.** The implementation and deterministic acceptance suites exist,
-and token rotation/revocation has shipped. The recorded
-[T8 rehearsal](docs/compatibility/2026-07-22-t8-manual-rehearsal.md) passed the generic scenarios it
-exercised, but maintainer sign-off and the expanded real-session conversation-delivery scenario
-remain pending; the rehearsal is re-sequenced behind Phases 0–2 (#19). This is not yet approved for
-a live document week.
+and token rotation/revocation has shipped. The latest
+[T8 rehearsal](docs/compatibility/2026-09-30-t8-manual-rehearsal.md) failed: an agent's source edit
+from a class-F note is not credited to its session, a review request could not be approved, and
+Codex push delivery was not reached. Maintainer sign-off remains pending (#19). This is not yet
+approved for a live document week.
 
 ## Read this before writing any code
 
