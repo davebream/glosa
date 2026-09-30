@@ -20,7 +20,7 @@ import { createImagePane } from "./image-pane.js";
 import { createFileActions } from "./file-actions.js";
 import { droppedImages } from "./image-insertion.js";
 import { mountAgentFeedback } from "./agent-feedback.js";
-import { isQuestion, selectArrivals } from "./agent-request.js";
+import { needsResponse, requestNotice, selectArrivals } from "./agent-request.js";
 import { mountAgentSettings } from "./agent-settings.js";
 import { actionMenu, agentName } from "./agent-ui.js";
 import { mountAppearanceControl } from "./appearance.js";
@@ -260,7 +260,6 @@ export function mountApp(
     shortcutsToggle,
     topbarOverlays,
     appearanceHost,
-    attentionHost,
     toolsTrigger,
     toolsMenu,
     tools,
@@ -798,11 +797,9 @@ export function mountApp(
   }
 
   const toolControls = () =>
-    [
-      attentionHost.querySelector(".glosa-attention-trigger"),
-      appearanceHost.querySelector(".glosa-appearance-trigger"),
-      shortcutsToggle,
-    ].filter((control) => control && !control.disabled && !control.hidden);
+    [appearanceHost.querySelector(".glosa-appearance-trigger"), shortcutsToggle].filter(
+      (control) => control && !control.disabled && !control.hidden,
+    );
 
   function setToolsOpen(open, { restoreFocus = false } = {}) {
     tools.setAttribute("data-open", String(open));
@@ -882,7 +879,7 @@ export function mountApp(
       // mark that is new draws itself in once.
       pane.refreshAgentRequests?.({ arrived });
     }
-    const question = arrivals.find(isQuestion);
+    const question = arrivals.find(needsResponse);
     if (question) announceQuestion(question);
   }
 
@@ -904,9 +901,7 @@ export function mountApp(
   function announceQuestion(request) {
     const path = request.target_path ?? request.target;
     if (!path) return;
-    announce(
-      `${feedbackController.providerName() ?? "A session"} is asking about a passage in ${path.split("/").pop()}.`,
-    );
+    announce(requestNotice(request, { file: path.split("/").pop() }));
   }
 
   /** The reader pressed "Go to it" for a question about an artifact that was not open. */
@@ -1481,8 +1476,8 @@ export function mountApp(
       loadHistoryPane,
       loadRichEditor,
       getAttentionEntries: () => attentionEntries,
-      refreshAttention: () => attentionTray.refresh(),
       getProviderName: () => feedbackController.providerName() ?? "An agent session",
+      refreshAttention: () => attentionTray.refresh(),
       isArtifactOpen: (artifactPath) => panes.has(artifactPanelId(artifactPath)),
       goToRequestElsewhere: (request) => goToRequestIn(request),
       openArtifactInThisPane: (nextPath) => replacePanel(id, nextPath),

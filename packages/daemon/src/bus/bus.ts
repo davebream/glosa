@@ -164,7 +164,12 @@ export interface AttentionTarget {
   quote: { exact: string; prefix?: string; suffix?: string };
 }
 
+export type AttentionRequester =
+  | { source: "command_line" }
+  | { source: "session"; session_id: string; provider: string; display_name?: string };
+
 export interface AttentionRequestPayload {
+  requester?: AttentionRequester;
   kind: "attention_request";
   message?: string;
   action: string;
@@ -1104,7 +1109,8 @@ export class WorkspaceBus {
       // every drain for an entry that was never meant to be offered. This is the single gate
       // feeding BOTH `previewDelivery` and `prepareDelivery` (A5 §F23), so one exclusion covers
       // both; a fold added later is outside this method's reach.
-      if (isExternalEditEntry(entry)) continue;
+      // Attention requests address the person, never an agent work queue.
+      if (kind === "attention" || isExternalEditEntry(entry)) continue;
       const payload = readInboxEntry(this.workspace, id);
       if (payload && typeof payload === "object") {
         const target = (payload as Record<string, unknown>).target_session_id;

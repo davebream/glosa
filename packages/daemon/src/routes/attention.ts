@@ -96,6 +96,8 @@ function mapError(error: unknown, pathname: string): Response {
         pathname,
       );
     }
+    case "unknown-session":
+      return problem(404, "not-found", "unknown requester session", undefined, pathname);
     case "unknown-attention":
       return problem(404, "not-found", "unknown attention request", undefined, pathname);
     case "invalid-review-outcome":
@@ -208,12 +210,16 @@ async function create(deps: AttentionDependencies, req: Request) {
   if (parsed.approval_mode !== undefined && typeof parsed.approval_mode !== "boolean") {
     return problem(400, "validation-failed", "approval_mode must be a boolean", undefined, pathname);
   }
+  if (parsed.session_id !== undefined && (typeof parsed.session_id !== "string" || parsed.session_id.length === 0)) {
+    return problem(400, "validation-failed", "session_id must be a non-empty string", undefined, pathname);
+  }
   if (parsed.agent_label !== undefined && typeof parsed.agent_label !== "string") {
     return problem(400, "validation-failed", "agent_label must be a string", undefined, pathname);
   }
   try {
     const result = await createAttention(deps, {
       path: parsed.path,
+      ...(typeof parsed.session_id === "string" ? { sessionId: parsed.session_id } : {}),
       action: typeof parsed.action === "string" ? parsed.action : "review",
       approvalMode: parsed.approval_mode === true,
       ...(typeof parsed.message === "string" ? { message: parsed.message } : {}),

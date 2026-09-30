@@ -1050,19 +1050,6 @@ input,
   color: var(--ink);
 }
 
-/* Waiting attention entries surface as a dot on the trigger — the signal survives the collapse. */
-.glosa-tools:has(.glosa-attention-badge:not([hidden])) .glosa-tools-trigger::after {
-  content: "";
-  position: absolute;
-  top: 0.2rem;
-  right: 0.2rem;
-  width: 0.4rem;
-  height: 0.4rem;
-  border: 1px solid var(--surface);
-  border-radius: var(--radius-pill);
-  background: var(--primary);
-}
-
 .glosa-tools-menu {
   display: none;
   position: fixed;
@@ -4594,6 +4581,7 @@ input,
 }
 
 .glosa-agent-provider {
+  overflow-wrap: anywhere;
   font-weight: 600;
   color: var(--ink);
 }
@@ -6128,7 +6116,13 @@ input,
    pane's own collapse ladder handles the same pressure closer to where it is felt. */
 @media (max-width: 640px) {
   .glosa-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    max-width: 100vw;
     gap: var(--space-1);
+  }
+
+  .glosa-topbar-lead {
+    display: none;
   }
 
   /* No keyboard to advertise, and no room for a wide field: the trigger shrinks to its title. */
@@ -9745,4 +9739,10 @@ button:is(
 }
 [data-read-only="true"] > .glosa-tree-row {
   color: var(--muted);
+}
+
+@media (max-width: 600px) {
+  .glosa-attention-label {
+    display: none;
+  }
 }

@@ -7,6 +7,7 @@ import {
   ApprovalConflictError,
   ApprovalUniquenessUnprovableError,
   type AttentionTarget,
+  type AttentionRequester,
   type AttentionVerdict,
 } from "../bus/bus.ts";
 import { currentPayload } from "../bus/path-identity.ts";
@@ -20,6 +21,8 @@ import { confinePath } from "../security/confine-path.ts";
 import { findWorkspace, getOrRegisterWorkspace, type WorkspaceAccess, workspaceBus } from "./workspace-access.ts";
 
 export interface AttentionDependencies extends WorkspaceAccess {
+  providerDisplayName?: (provider: string, target: { path: string; slug: string }) => string | undefined;
+  sessionRegistry: { get: (id: string) => { session_id: string; provider: string } | null };
   workspaceRegistration: Pick<WorkspaceIndex, "upsertWorkspace" | "get" | "activeForgetOperationForCanonicalPath">;
 }
 
@@ -32,6 +35,7 @@ export const ANSWER_OPTIONS_MAX = 8;
 export const ANSWER_OPTION_MAX_BYTES = 96;
 
 export type AttentionErrorCode =
+  | "unknown-session"
   | "invalid-workspace-path"
   | "message-too-large"
   | "action-too-large"
@@ -167,6 +171,7 @@ export function listAttention(deps: AttentionDependencies, slug: string) {
         target: targetPath,
         target_path: targetPath,
         approval_mode: payload.approval_mode === true,
+        requester: payload.requester ?? null,
         agent_label: typeof payload.agent_label === "string" ? payload.agent_label : null,
         passage,
         answer_options: Array.isArray(payload.answer_options) ? (payload.answer_options as string[]) : null,
@@ -266,6 +271,7 @@ export async function withdrawAttention(deps: AttentionDependencies, rawPath: st
 }
 
 export interface CreateAttentionInput {
+  sessionId?: string;
   path: string;
   message?: string;
   action: string;
@@ -279,6 +285,11 @@ export interface CreateAttentionInput {
 }
 
 export async function createAttention(deps: AttentionDependencies, input: CreateAttentionInput) {
+  const session = input.sessionId !== undefined ? deps.sessionRegistry.get(input.sessionId) : null;
+  if (input.sessionId !== undefined && !session) throw new AttentionError("unknown-session");
+  const requester: AttentionRequester = session
+    ? { source: "session", session_id: session.session_id, provider: session.provider }
+    : { source: "command_line" };
   const root = canonicalWorkspace(input.path);
   if (input.message !== undefined && Buffer.byteLength(input.message, "utf8") > 4096) {
     throw new AttentionError("message-too-large");
@@ -323,10 +334,15 @@ export async function createAttention(deps: AttentionDependencies, input: Create
     normalizedTargetPath = match.path;
   }
 
+  if (requester.source === "session") {
+    const name = deps.providerDisplayName?.(requester.provider, { path: root, slug: workspace.slug });
+    if (name) requester.display_name = name;
+  }
   const id = entryId();
   try {
     await bus.createAttentionRequest(id, {
       kind: "attention_request",
+      requester,
       ...(input.message !== undefined ? { message: input.message } : {}),
       action: input.action,
       ...(input.approvalMode

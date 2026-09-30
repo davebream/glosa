@@ -885,6 +885,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
           // which completes with `done` and asserts no verdict nobody gave; a bare pointer is
           // `point`, for the same reason. `review` stays what `glosa request-review` means.
           action: question === undefined ? "point" : "ask",
+          sessionId: identity().session_id,
           ...(label !== undefined ? { agentLabel: label } : {}),
           ...(quote !== undefined ? { target: { quote } } : {}),
           ...(options !== undefined ? { answerOptions: options } : {}),

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+import { agentIdentity, requestKind } from "./agent-request.js";
+
 // Workspace-scoped attention badge and tray. It never changes the active workspace.
 function node(tag, props = {}, children = []) {
   const element = document.createElement(tag);
@@ -199,6 +201,11 @@ export function mountAttentionTray(
 
       const children = [
         node("div", { className: "glosa-attention-meta" }, [
+          node("span", { textContent: agentIdentity(entry).provider }),
+          node("span", {
+            textContent:
+              requestKind(entry) === "review" ? "Review" : requestKind(entry) === "question" ? "Question" : "Pointer",
+          }),
           node("span", { textContent: STATUS_LABELS[entry.status] ?? entry.status }),
           ...(targetPath ? [node("code", { textContent: targetPath })] : []),
         ]),

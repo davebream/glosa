@@ -30,7 +30,10 @@ import {
   lineBoxes,
   locateQuote,
   mergeSpans,
-  openQuestions,
+  openRequests,
+  needsResponse,
+  requestKind,
+  requestNotice,
   requestsForArtifact,
   stackTabs,
 } from "./agent-request.js";
@@ -351,8 +354,6 @@ export function createArtifactPane(host, deps) {
     loadHistoryPane,
     loadRichEditor,
     getAttentionEntries = () => [],
-    /** Proven half of a session's identity. Supplied by the viewer from the workspace's own
-     * provider record — never guessed here, and never taken from the request payload. */
     getProviderName = () => "An agent session",
     refreshAttention = () => Promise.resolve(),
     /** Whether some pane already shows this artifact. A question about a document nobody has open
@@ -853,7 +854,7 @@ export function createArtifactPane(host, deps) {
     className: "glosa-ask-notice",
     hidden: true,
     role: "region",
-    "aria-label": "A session's question",
+    "aria-label": "Attention request",
   });
   const previewEl = el("div", { className: "glosa-annotation-preview", hidden: true });
   // The open draft floats at its passage at every width. A draft stacked into the rail beside the
@@ -3211,11 +3212,6 @@ export function createArtifactPane(host, deps) {
   /** The session requests that belong beside the open artifact. Derived on every read rather than
    * cached: the inbox is refreshed by the same journal events that repaint everything else, and a
    * second copy of this list is a second thing that can be stale. */
-  function providerDisplayName() {
-    const name = getProviderName();
-    return typeof name === "string" && name.trim().length > 0 ? name : "An agent session";
-  }
-
   function agentRequests() {
     return requestsForArtifact(getAttentionEntries(), currentArtifact?.source_path ?? null);
   }
@@ -3322,7 +3318,6 @@ export function createArtifactPane(host, deps) {
     const dx = paneMain.scrollLeft - main.left;
     const dy = paneMain.scrollTop - main.top;
     const x = columnLeft() + dx - SESSION_BRACKET_INSET;
-    const provider = providerDisplayName();
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("class", "glosa-session-svg");
     svg.setAttribute("aria-hidden", "true");
@@ -3358,13 +3353,15 @@ export function createArtifactPane(host, deps) {
         -1,
       );
       members.forEach(({ request, range, question }, index) => {
+        const provider = agentIdentity(request).provider;
+        const kind = requestKind(request);
         const address = addressForRange(contentEl, range) ?? "";
         const tab = el("button", {
           className: "glosa-session-tab",
           type: "button",
           "data-entry": request.id,
           "data-kind": question ? "question" : "pointer",
-          "aria-label": `${address ? `${address} · ` : ""}${question ? "Question" : "Pointer"} from ${provider}. Go to its card.`,
+          "aria-label": `${address ? `${address} · ` : ""}${kind === "review" ? "Review" : question ? "Question" : "Pointer"} from ${provider}. Go to its card.`,
           onClick: () => goToRequest(request),
         });
         if (arrivedRequestIds.has(request.id)) tab.setAttribute("data-arrived", "true");
@@ -3548,7 +3545,7 @@ export function createArtifactPane(host, deps) {
    * pane in a split would raise the same notice.
    */
   function noticeCandidate() {
-    const all = openQuestions(getAttentionEntries());
+    const all = openRequests(getAttentionEntries());
     const mine = currentArtifact?.source_path ?? null;
     const active = paneEl.getAttribute("data-active") !== "false";
     for (const request of all) {
@@ -3600,7 +3597,7 @@ export function createArtifactPane(host, deps) {
       noticeEl.append(
         el("p", {
           className: "glosa-ask-notice-text",
-          textContent: answerJustSent ? "Answer sent." : "You are at the passage a session asked about.",
+          textContent: answerJustSent ? "Response sent." : "You are at the requested passage.",
         }),
         el("span", { className: "glosa-ask-notice-gap" }),
         back,
@@ -3614,25 +3611,21 @@ export function createArtifactPane(host, deps) {
     }
 
     const { request, range, foreign } = candidate;
-    noticeEl.setAttribute("data-kind", "question");
+    noticeEl.setAttribute("data-kind", requestKind(request));
     const file = String(request.target_path ?? request.target ?? "")
       .split("/")
       .pop();
-    const text = el("p", { className: "glosa-ask-notice-text" }, [
-      el("span", { className: "glosa-ask-notice-provider", textContent: providerDisplayName() }),
-      // Says what is true and no more. A passage that cannot be located is not "a passage" the
-      // reader can be taken to, and the notice must not promise one.
-      document.createTextNode(
-        lost
-          ? " is asking about a passage that could not be located in the current text"
-          : foreign
-            ? ` is asking about a passage in ${file}`
-            : " is asking about a passage",
-      ),
-    ]);
+    const text = el("p", {
+      className: "glosa-ask-notice-text",
+      textContent: requestNotice(request, { file: foreign ? file : "", lost: Boolean(lost) }),
+    });
     const address = range ? (addressForRange(contentEl, range) ?? "") : "";
     noticeEl.append(
-      el("span", { className: "glosa-ask-notice-glyph", "aria-hidden": "true", textContent: "?" }),
+      el("span", {
+        className: "glosa-ask-notice-glyph",
+        "aria-hidden": "true",
+        textContent: requestKind(request) === "review" ? "↗" : "?",
+      }),
       text,
       ...(address ? [el("span", { className: "glosa-address glosa-ask-notice-address", textContent: address })] : []),
       el("span", { className: "glosa-ask-notice-gap" }),
@@ -3643,7 +3636,7 @@ export function createArtifactPane(host, deps) {
       el("button", {
         className: "glosa-primary-button glosa-ask-notice-go",
         type: "button",
-        textContent: lost ? "Show the question" : "Go to it",
+        textContent: lost ? (requestKind(request) === "review" ? "Show the review" : "Show the question") : "Go to it",
         onClick: () => {
           if (foreign) void goToRequestElsewhere(request);
           else goToRequest(request);
@@ -3735,7 +3728,7 @@ export function createArtifactPane(host, deps) {
   /** A located question as the tray lists it: who, which words, what is asked, and one button that
    * does what the notice's "Go to it" does. The answer form lives at the passage. */
   function buildAgentRow(request) {
-    const identity = agentIdentity(request, { providerName: providerDisplayName() });
+    const identity = agentIdentity(request);
     const row = el("div", {
       className: "glosa-agent-card glosa-agent-row",
       "data-entry": request.id,
@@ -3760,7 +3753,7 @@ export function createArtifactPane(host, deps) {
         el("button", {
           className: "glosa-secondary-button",
           type: "button",
-          textContent: "Answer at the passage",
+          textContent: requestKind(request) === "review" ? "Review at the passage" : "Answer at the passage",
           onClick: () => {
             setTrayOpen(false);
             goToRequest(request);
@@ -3780,7 +3773,7 @@ export function createArtifactPane(host, deps) {
    * be presenting a claim as a fact.
    */
   function buildAgentCard(request, { floating = false } = {}) {
-    const identity = agentIdentity(request, { providerName: providerDisplayName() });
+    const identity = agentIdentity(request);
     const anchored = Boolean(request.passage) && Boolean(rangeForPassage(request.passage));
     // A review request asks for a verdict, not an answer (R9): the daemon accepts only `approved` or
     // `changes_requested` for it, so its card offers exactly those two, in the tray's words.
@@ -3837,7 +3830,7 @@ export function createArtifactPane(host, deps) {
       // The one card over the manuscript needs a way out that is not "answer it".
       const close = dismissButton(leaveRequest);
       close.className = "glosa-ask-notice-dismiss glosa-agent-close";
-      close.setAttribute("aria-label", "Close this question; it stays open in the list");
+      close.setAttribute("aria-label", `Close this ${review ? "review" : "question"}; it stays open in the list`);
       who.append(el("span", { className: "glosa-ask-notice-gap" }), close);
     }
     card.append(who);
@@ -4300,14 +4293,15 @@ export function createArtifactPane(host, deps) {
         // floating card; the tray lists it. Two live copies of one answer form would let a reader
         // type in one and send the other. A pointer, and a question with nowhere to float, keep
         // their whole card here.
-        const atPassage = cardHost === trayListEl && isQuestion(request) && Boolean(rangeForPassage(request.passage));
+        const atPassage =
+          cardHost === trayListEl && needsResponse(request) && Boolean(rangeForPassage(request.passage));
         cardHost.append(atPassage ? buildAgentRow(request) : buildAgentCard(request));
       }
     }
     askLayerEl.textContent = "";
     if (!isSideMargin() && focusedRequestId) {
       const focused = requests.find((r) => r.id === focusedRequestId);
-      if (focused && isQuestion(focused) && rangeForPassage(focused.passage)) {
+      if (focused && needsResponse(focused) && rangeForPassage(focused.passage)) {
         askLayerEl.append(buildAgentCard(focused, { floating: true }));
       }
     }

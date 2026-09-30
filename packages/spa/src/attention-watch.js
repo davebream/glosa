@@ -19,6 +19,8 @@
 // with nothing waiting is known-empty without a read, so the first request it ever gets is news;
 // one that already has requests is read once to seed, and that read never notifies.
 
+import { requestKind, requestNotice } from "./agent-request.js";
+
 const RUNNING = new Set(["running", "waiting", "dispatching", "stopping"]);
 const FINISHED = new Set(["completed", "failed"]);
 const BODY_LIMIT = 240;
@@ -38,17 +40,17 @@ function truncate(text) {
 /** Whether an attention request is worth interrupting someone for: it asks something. A bare
  * pointer ("look here") is not; an approval request is, although the tray treats it apart. */
 export function asksSomething(entry) {
-  if (!entry || typeof entry !== "object") return false;
-  if (entry.approval_mode === true) return true;
-  if (typeof entry.message === "string" && entry.message.trim().length > 0) return true;
-  return entry.action === "review";
+  return (
+    Boolean(entry) &&
+    (requestKind(entry) === "review" ||
+      (requestKind(entry) === "question" && typeof entry.message === "string" && entry.message.trim().length > 0))
+  );
 }
 
-/** The notification body for a request that asks something. */
+/** Notifications identify the actual source and requested action before optional prose. */
 export function attentionBody(entry) {
-  if (typeof entry.message === "string" && entry.message.trim().length > 0) return truncate(entry.message);
-  if (entry.approval_mode === true) return "An agent asks for your approval.";
-  return "An agent asks for a review.";
+  const notice = requestNotice(entry);
+  return truncate(`${notice}${entry.message ? ` ${entry.message}` : ""}`);
 }
 
 /**
