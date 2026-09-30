@@ -12,13 +12,18 @@
 /** Folds a flat list of normalized `TranscriptEvent`s into render items: `meta` events are
  * dropped entirely (F16/R6: "meta hidden" — never rendered, not even collapsed), and consecutive
  * `subagent` events are collapsed into one `{type: "subagent_group", items: [...]}` — the "grouped
- * subagents" normalized kind the task brief calls for. Every other event passes through
- * unchanged. Pure — no DOM — so this is the one piece of rendering LOGIC this module unit-tests
+ * subagents" normalized kind the task brief calls for. Unknown records become one count notice. Pure — no DOM — so this is the one piece of rendering LOGIC this module unit-tests
  * directly; `renderItem` below (DOM-producing) is exercised only lightly by comparison. */
 export function groupEvents(events) {
   const out = [];
   let currentGroup = null;
+  let skipped = 0;
   for (const ev of events) {
+    if (ev.type === "unknown") {
+      skipped++;
+      currentGroup = null;
+      continue;
+    }
     if (ev.type === "meta") {
       currentGroup = null; // a meta event breaks a run of subagent turns, same as any other kind
       continue;
@@ -34,6 +39,7 @@ export function groupEvents(events) {
     currentGroup = null;
     out.push(ev);
   }
+  if (skipped) out.unshift({ type: "unknown_group", count: skipped });
   return out;
 }
 
@@ -93,10 +99,8 @@ function newMessageId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-/** Renders one grouped item (the output of `groupEvents`) to a DOM node. `unknown` events (the
- * normalizer's own quarantine kind, A2 §F16) render as a small, clearly-marked placeholder rather
- * than being silently dropped — the human should be able to tell "the mirror skipped something
- * here" apart from "there was nothing here", even though neither is actionable. */
+/** Render normalized content only. Quarantined records share one count notice; raw previews
+ * never enter the DOM. System events are explicitly attributed to the harness. */
 function renderItem(item) {
   switch (item.type) {
     case "prose":
@@ -107,8 +111,17 @@ function renderItem(item) {
       return renderToolResult(item);
     case "subagent_group":
       return renderSubagentGroup(item);
-    case "unknown":
-      return el("p", { className: "glosa-conv-unknown", textContent: "⚠ unrecognized transcript line: skipped" });
+    case "system":
+      return el("p", {
+        className: "glosa-conv-prose glosa-conv-system",
+        "data-speaker": "System",
+        textContent: item.content,
+      });
+    case "unknown_group":
+      return el("p", {
+        className: "glosa-conv-unknown",
+        textContent: `${item.count} unsupported transcript record${item.count === 1 ? "" : "s"} skipped. Use the terminal for the complete conversation.`,
+      });
     default:
       return el("p", { className: "glosa-conv-unknown", textContent: "⚠ unrecognized event" });
   }
@@ -285,7 +298,7 @@ export function mountConversationPane(
     setDeliveryStatus(
       result?.state === "transport_accepted"
         ? "Message reached the session transport. Waiting for the agent to acknowledge it…"
-        : "Message queued. Waiting for the agent…",
+        : "Message queued. Waiting for this session to reconnect or pull.",
     );
     storePending(pending);
   }

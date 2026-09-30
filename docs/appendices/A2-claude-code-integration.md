@@ -106,6 +106,12 @@ over `AF_UNIX`, initializes the app-server protocol, and calls
 connection: stdin EOF, SIGHUP, parent loss, or replacement by a newer Codex bind closes it within the
 same bounded shutdown path as the MCP server.
 
+Foreground `glosa codex-attach` reports the first failure stage and safe recovery guidance on stderr.
+`--verbose` also reports connection stages and retry delays. The connected diagnostic is emitted only
+when the generic daemon stream opens, not when a socket merely accepts a connection. Repeated identical
+failures are suppressed outside verbose mode. MCP stdout remains protocol-only. Diagnostics omit raw
+provider errors, transcripts and credentials.
+
 The attachment never enumerates threads and never starts, stops, or repairs the app-server. A missing
 socket, a pre-rollout `thread/resume` failure, or any ordinary stream end retries with jittered
 exponential backoff from five to sixty seconds while MCP pull remains usable. A stream that ends with
@@ -256,9 +262,18 @@ nothing and exits 0 for every event and provider.
 
 ## F16 — conversation mirror
 
-The mirror is read-only. It tails the registered transcript using a vendored normalizer and never
+The mirror is read-only. It tails the registered transcript using a provider-owned normalizer and never
 writes JSONL. The composer sends a new user message through the provider delivery path; it does not
 append to or edit the transcript.
+
+The daemon owns JSONL framing, bounded content, cursors and quarantine accounting; provider packages
+own native record interpretation. Claude harness notifications become system events when their
+synthetic/metadata envelope proves their origin. A person quoting notification markup remains the
+speaker. Codex uses rollout `response_item` records for prose and tools, ignoring duplicate
+`event_msg` presentations and hidden reasoning. Unknown completed records retain quarantine counts
+and produce one summary notice. A missing normalizer leaves the composer usable with an unavailable
+mirror. Synthetic parser fixtures prove these mappings, not live vendor compatibility; neutral
+recordings and the attended delivery rehearsal remain the qualification gate.
 
 Required parser behavior:
 

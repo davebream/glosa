@@ -11,20 +11,22 @@ describe("checkContractVersion", () => {
     expect(checkContractVersion(null)).toEqual({ status: "ok" });
   });
 
-  test("exact match (1.28) → ok", () => {
+  test("exact match (current contract) → ok", () => {
     expect(checkContractVersion(CONTRACT_VERSION)).toEqual({ status: "ok" });
   });
 
-  test("N-1 minor (1.12) → stale-minor", () => {
-    expect(checkContractVersion("1.12")).toEqual({ status: "stale-minor" });
+  test("N-1 minor → stale-minor", () => {
+    const [major, minor] = CONTRACT_VERSION.split(".").map(Number);
+    expect(checkContractVersion(`${major}.${minor! - 1}`)).toEqual({ status: "stale-minor" });
   });
 
   test("previous minor (1.0) → stale-minor", () => {
     expect(checkContractVersion("1.0")).toEqual({ status: "stale-minor" });
   });
 
-  test("minor mismatch, same major (1.29) → stale-minor", () => {
-    expect(checkContractVersion("1.29")).toEqual({ status: "stale-minor" });
+  test("next minor, same major → stale-minor", () => {
+    const [major, minor] = CONTRACT_VERSION.split(".").map(Number);
+    expect(checkContractVersion(`${major}.${minor! + 1}`)).toEqual({ status: "stale-minor" });
   });
 
   test("major mismatch (2.0) → mismatch", () => {

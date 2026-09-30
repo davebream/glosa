@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { ClaudeTranscriptNormalizer } from "./transcript.ts";
 // @glosa/providers-claude-code — the Claude Code AgentProvider (R7). Implements the R4 delivery
 // ladder for Claude specifically:
 //   rung 1  monitor   the plugin session monitor's open stream (A2 §F06/§F07) — pushes into an
@@ -103,6 +104,10 @@ export class ClaudeCodeProvider implements AgentProvider {
 
   liveness(session: SessionBinding): Liveness {
     return this.deps.liveness.liveness(session.session_id);
+  }
+
+  createTranscriptNormalizer() {
+    return new ClaudeTranscriptNormalizer();
   }
 
   transcriptRoots(): readonly string[] {

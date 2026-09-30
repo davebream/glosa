@@ -898,6 +898,17 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       const values = withGlobals(context);
       const { createHttpDaemonClient } = await import("./daemon-client.ts");
       const { codexAttachmentRuntime, runCodexAttachment } = await import("../../providers/codex/src/app-server.ts");
+      let lastDiagnostic = "";
+      const guidance: Record<string, string> = {
+        socket: "Check --socket or CODEX_HOME and start the app-server yourself if needed. MCP pull remains available.",
+        handshake: "Check that this socket serves the Codex app-server WebSocket protocol. MCP pull remains available.",
+        initialize: "Check the Codex client and app-server protocol versions. MCP pull remains available.",
+        resume:
+          "Check that this exact thread belongs to this app-server and has completed its first turn. MCP pull remains available.",
+        register: "Check that the glosa daemon is reachable and this thread is bound to the intended workspace.",
+        stream:
+          "Check the glosa daemon connection. Another attachment may own this session. MCP pull remains available.",
+      };
       const shutdown = new AbortController();
       const stop = () => shutdown.abort();
       process.once("SIGTERM", stop);
@@ -913,6 +924,27 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
           },
           {
             ...codexAttachmentRuntime,
+            onDiagnostic: (event) => {
+              const key = `${event.stage}:${event.state}:${event.reason ?? ""}`;
+              if (
+                !values.verbose &&
+                event.state !== "failed" &&
+                event.state !== "connected" &&
+                event.state !== "parked"
+              )
+                return;
+              if (!values.verbose && key === lastDiagnostic) return;
+              lastDiagnostic = key;
+              const detail =
+                event.state === "failed"
+                  ? ` (${event.reason}). ${guidance[event.stage]}`
+                  : event.state === "retrying"
+                    ? ` in ${Math.ceil((event.retryInMs ?? 0) / 1000)}s`
+                    : event.state === "parked"
+                      ? ": another attachment owns this session; waiting for it to disconnect"
+                      : "";
+              process.stderr.write(`glosa codex-attach: ${event.stage} ${event.state}${detail}\n`);
+            },
             createDaemonClient: (signal) => createHttpDaemonClient({ signal }),
           },
           shutdown.signal,

@@ -128,41 +128,37 @@ export async function sendComposerMessage(
   }
 
   const allBound = deps.sessionRegistry.explicitlyBoundForWorkspace(workspace.canonical_path, { includeStale: true });
-  const liveBound = allBound.filter((record) => deps.sessionRegistry.liveness(record.session_id) === "alive");
   if (allBound.length === 0) {
     throw new ComposerError("no-bound-session", {
       recovery: "Start or resume an agent session and bind it to this workspace.",
     });
   }
-  if (liveBound.length === 0) {
-    throw new ComposerError("bound-session-stale", { recovery: "Resume the bound agent session and try again." });
-  }
 
   let target = immutableTargetSession
-    ? liveBound.find((record) => record.session_id === immutableTargetSession && record.provider === immutableProvider)
+    ? allBound.find((record) => record.session_id === immutableTargetSession && record.provider === immutableProvider)
     : input.sessionHint
-      ? liveBound.find((record) => record.session_id === input.sessionHint)
+      ? allBound.find((record) => record.session_id === input.sessionHint)
       : undefined;
   if (immutableTargetSession && !target) {
     throw new ComposerError("bound-session-stale", {
-      title: "the target session is not live",
-      recovery: "Resume the originally targeted agent session and try again.",
+      title: "the target session is no longer bound",
+      recovery: "Rebind the originally targeted session and try again.",
     });
   }
   if (!immutableTargetSession && input.sessionHint && !target) {
     throw new ComposerError("session-selection-required", {
-      title: "the selected session is not a live binding",
-      candidates: candidates(liveBound),
+      title: "the selected session is not bound to this workspace",
+      candidates: candidates(allBound),
     });
   }
-  if (!target && liveBound.length > 1) {
-    throw new ComposerError("session-selection-required", { candidates: candidates(liveBound) });
+  if (!target && allBound.length > 1) {
+    throw new ComposerError("session-selection-required", { candidates: candidates(allBound) });
   }
-  target ??= liveBound[0];
+  target ??= allBound[0];
   if (!target) {
     throw new ComposerError("bound-session-stale", {
       title: "the selected session is not live",
-      candidates: candidates(liveBound),
+      candidates: candidates(allBound),
     });
   }
 
@@ -191,6 +187,27 @@ export async function sendComposerMessage(
     source: target.source,
     ...(target.transcript_path ? { transcript_path: target.transcript_path } : {}),
   };
+  if (deps.sessionRegistry.liveness(target.session_id) !== "alive") {
+    const state = bus.state.entries[messageId];
+    if (!state) throw new ComposerError("internal");
+    // A retry after a failed transport is now parked for pull. Persist that recovery so the
+    // receipt and a later status read agree, without invoking a stale session's provider.
+    const attempts = Array.isArray(state.deliveryAttempts) ? state.deliveryAttempts : [];
+    if (attempts.at(-1)?.outcome === "failed") {
+      await recordDelivery(
+        bus,
+        messageId,
+        session,
+        { via: "mcp_pull", outcome: "attempted" },
+        {
+          durable: true,
+          idem: `conversation:${messageId}:delivery:${attempts.length + 1}`,
+        },
+      );
+    }
+    return resultBody(messageId, bus.state.entries[messageId]!);
+  }
+
   let delivery: DeliveryResult;
   try {
     const deliverable = buildDeliveryPresentation(messageId, payload, { status: "pending" });

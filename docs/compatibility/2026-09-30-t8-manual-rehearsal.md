@@ -157,6 +157,22 @@ Each defect is tracked in an issue that groups the work to be fixed and retested
 | Codex over MCP | PASS for binding with the thread id. |
 | Codex app-server push | NOT REACHED. The Codex app-server daemon was running with its control socket present. After binding, `glosa status` reported the session's push as disconnected, and a foreground `glosa codex-attach` did not change that. The Codex TUI was started through a terminal wrapper; whether it was a client of that app-server daemon was not established. Still untested for Codex: push delivery of notes and messages, a restart between queueing and presentation, composer delivery, and acknowledgement of a pushed entry. Next step: start the TUI as a confirmed client of the running app-server, then bind and check `glosa status`. Tracked in #460. |
 
+## Issue #460 attended follow-up
+
+An attended, isolated follow-up completed the checks requested by #460. This was a focused
+compatibility checkpoint. It did not rerun this rehearsal, resolve its other blockers or sign T8.
+
+| Check | Result |
+|---|---|
+| Codex topology | PASS. The installed terminal wrapper used Codex CLI 0.159.0. The exact test thread was owned by the already-running 0.159.2 app-server daemon through its control socket. The checkpoint did not start, repair or replace the app-server or substitute another thread. |
+| Attachment diagnostics | PASS. Verbose foreground diagnostics reached socket, handshake, initialize, exact-thread resume, daemon registration and stream connection in order. Connected status was reported only after the daemon stream opened. The earlier silent failure did not recur, so no transport correction was made. |
+| Live push | PASS. The exact thread received and presented one note and one composer message. Connected push status, journal transport acceptance, provider presentation and the conversation receipt agreed. |
+| Restarted queue | PASS. A composer message accepted for a stale explicit binding remained queued across daemon restart. Restoring that exact binding delivered only to its target thread, whose pushed `[glosa <id>]` entry was acknowledged and committed as delivered. |
+| Transcript compatibility | PASS. Fresh neutral Claude Code 2.1.285 and Codex 0.159.2 records were sanitized into regression fixtures. Their provider normalizers emitted user and assistant prose plus paired tool events, hid recognized harness and bookkeeping records, and quarantined zero records. |
+
+Raw transcripts, identifiers, tokens, configuration paths and journal evidence remain ignored. Only
+neutralized record shapes and this behavior summary are tracked.
+
 ## Setup notes for the next rehearsal
 
 - Serve the daemon, the CLI and every agent session from a separate, clean checkout of the

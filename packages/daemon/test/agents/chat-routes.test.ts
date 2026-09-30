@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
+import { SessionRegistry } from "../../src/registry/session-registry.ts";
 import type { ManagedChatService } from "../../src/chats/service.ts";
 import { chatRoutes } from "../../src/routes/chats.ts";
 import type { BunServer } from "../../src/routes/types.ts";
@@ -161,4 +162,57 @@ test("a consent grant records the consent text the page showed, and an older pag
     [profileId, true, 1],
     [profileId, true, 2],
   ]);
+});
+
+test("opening a stale explicit terminal binding remembers it without renewing its lease; cwd-only and foreign sessions are refused", async () => {
+  const registry = new SessionRegistry({ now: () => new Date(1000) });
+  const remembered: unknown[] = [];
+  const path = "/w/test/chats/external";
+  const route = chatRoutes(
+    {
+      sessionRegistry: registry,
+      workspaceIndex: {
+        getBySlug: () => ({ registration_id: "a".repeat(64), first_seen: "epoch", canonical_path: "/workspace" }),
+      },
+      service: {
+        bindAuthorization() {},
+        list() {},
+        store: {
+          rememberExternal: (...args: unknown[]) => {
+            remembered.push(args);
+            return { sessionId: args[2] };
+          },
+        },
+      },
+    } as unknown as Parameters<typeof chatRoutes>[0],
+    "POST",
+    path,
+  )!;
+  const open = (sessionId: string) =>
+    route.handle(
+      new Request(`http://localhost${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      }),
+    );
+  try {
+    await registry.register({
+      session_id: "stale",
+      provider: "codex",
+      source: "mcp",
+      cwd: "/workspace",
+      workspace_binding: "/workspace",
+      lease_expiry: new Date(0).toISOString(),
+    });
+    expect((await open("stale")).status).toBe(200);
+    expect(registry.liveness("stale")).toBe("stale");
+    expect(remembered).toEqual([["a".repeat(64), "epoch", "stale", "codex"]]);
+    await registry.register({ session_id: "cwd", provider: "codex", source: "mcp", cwd: "/workspace" });
+    expect((await open("cwd")).status).toBe(404);
+    await registry.bind("foreign", "/elsewhere", { provider: "codex" });
+    expect((await open("foreign")).status).toBe(404);
+  } finally {
+    registry.close();
+  }
 });

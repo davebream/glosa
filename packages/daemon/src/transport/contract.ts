@@ -97,7 +97,9 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 // v1.26 (#448): separate read-only inventory/content, per-folder views and ephemeral invalidations.
 // v1.27 (#458): source-scoped claims, status-only rejection, annotation resolutions and MCP identity/conflicts.
 // v1.28 (#459): human-only attention delivery and immutable requester identity.
-export const CONTRACT_VERSION = "1.28";
+// v1.29 (#460): stale bound composer queueing, terminal-session invalidations and provider-normalized system events.
+// Existing receipts and chats_changed frames retain their shapes; older pages render unknown events safely.
+export const CONTRACT_VERSION = "1.29";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

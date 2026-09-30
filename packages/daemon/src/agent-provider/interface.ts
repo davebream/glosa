@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import type { TranscriptNormalizer } from "../transcript/normalize.ts";
 // @glosa/daemon — R7's AgentProvider interface (a first-class v1 deliverable, not a Claude-only
 // concern): the seam every push/MCP-capable agent CLI implements ONE of to plug into glosa's
 // delivery ladder (R4). Defined here — not inside packages/providers/claude-code — so both the
@@ -159,6 +160,8 @@ export interface AgentProvider {
   transcriptPath(session: SessionBinding): string | null;
   /** Provider-owned allowlist; discovery never widens it based on a client-supplied path. */
   transcriptRoots?(): readonly string[];
+  /** Provider-owned record format; omission means mirroring is unavailable. */
+  createTranscriptNormalizer?(): TranscriptNormalizer;
 }
 
 /** Generic provider lookup owned by the composition root. The daemon depends only on this

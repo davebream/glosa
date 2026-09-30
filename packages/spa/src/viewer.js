@@ -290,6 +290,8 @@ export function mountApp(
     rememberedExternal = [],
     agentStatus,
     chatsRefreshTimer,
+    chatsRefreshGeneration = 0,
+    workspaceSelectionGeneration = 0,
     stopChatsStream,
     /** @type {undefined | (() => void)} */ stopBrowserRequests,
     creatingChat = false;
@@ -442,14 +444,21 @@ export function mountApp(
   async function refreshChats() {
     if (!dataAccess.getChats || !currentSlug || singlePane) return;
     const slug = currentSlug;
+    const generation = ++chatsRefreshGeneration;
+    const identity = workspaceLayoutIdentity();
+    const stale = () =>
+      slug !== currentSlug ||
+      unmounted ||
+      generation !== chatsRefreshGeneration ||
+      identity !== workspaceLayoutIdentity();
     const result = await dataAccess.getChats(slug, {
       archived: archivedChats.checked,
     });
-    if (slug !== currentSlug || unmounted) return;
+    if (stale()) return;
+    const [aggregate, accounts] = await Promise.all([dataAccess.getStatus?.(), dataAccess.getAgentStatus?.()]);
+    if (stale()) return;
     chatList = result.chats;
     rememberedExternal = result.external ?? [];
-    const [aggregate, accounts] = await Promise.all([dataAccess.getStatus?.(), dataAccess.getAgentStatus?.()]);
-    if (slug !== currentSlug || unmounted) return;
     agentStatus = accounts;
     const workspace = workspaces.find((entry) => entry.slug === slug);
     externalSessions = (aggregate?.sessions ?? []).filter(
@@ -465,11 +474,7 @@ export function mountApp(
     renderChats();
   }
   async function openExternalChat(sessionId) {
-    const slug = currentSlug;
-    if (!rememberedExternal.some((item) => item.sessionId === sessionId))
-      await dataAccess.rememberExternalChat(slug, sessionId);
-    if (slug !== currentSlug || unmounted) return;
-    if (!dock) return;
+    if (!dock || unmounted) return;
     const id = externalPanelId(sessionId),
       panel = dock.api.getPanel(id);
     if (panel) {
@@ -1400,7 +1405,11 @@ export function mountApp(
       let disposed = false,
         unmount;
       const paneSlug = currentSlug;
-      const element = el("section", { className: "glosa-external-chat" });
+      const paneSelection = workspaceSelectionGeneration;
+      const paneIdentity = workspaceLayoutIdentity();
+      const stale = () =>
+        disposed || paneSelection !== workspaceSelectionGeneration || paneIdentity !== workspaceLayoutIdentity();
+      const element = el("section", { className: "glosa-external-chat", "data-session-id": params.sessionId });
       host.append(element);
       const pane = {
         kind: "external-chat",
@@ -1412,8 +1421,15 @@ export function mountApp(
           element.remove();
         },
       };
-      void loadConversationPane().then((mount) => {
-        if (!disposed)
+      const load = async () => {
+        element.replaceChildren(el("p", { role: "status", textContent: "Opening this terminal session…" }));
+        try {
+          if (!rememberedExternal.some((item) => item.sessionId === params.sessionId))
+            await dataAccess.rememberExternalChat(paneSlug, params.sessionId);
+          if (stale()) return;
+          const mount = await loadConversationPane();
+          if (stale()) return;
+          element.replaceChildren();
           unmount = mount(element, {
             dataAccess,
             slug: paneSlug,
@@ -1421,7 +1437,15 @@ export function mountApp(
             embedded: true,
             dictationController,
           });
-      });
+        } catch (error) {
+          if (stale()) return;
+          element.replaceChildren(
+            el("p", { role: "alert", textContent: `Couldn't open this session: ${error.message}` }),
+            el("button", { type: "button", textContent: "Retry", onClick: () => void load() }),
+          );
+        }
+      };
+      void load();
       panes.set(id, pane);
       return pane;
     }
@@ -2134,8 +2158,12 @@ export function mountApp(
   }
 
   async function selectWorkspace(slug) {
+    const selection = ++workspaceSelectionGeneration;
+    const stale = () => unmounted || selection !== workspaceSelectionGeneration;
     palette.close();
     stopChatsStream?.();
+    clearTimeout(chatsRefreshTimer);
+    chatsRefreshGeneration++;
     currentSlug = slug;
     readOnlyGeneration++;
     knownReadOnly.clear();
@@ -2165,7 +2193,9 @@ export function mountApp(
     // The folder's default style is read before any pane mounts, so a document that follows it is
     // set in it from its first paint rather than repainted once the answer arrives.
     await Promise.all([refreshArtifactList(), styleStore.loadFolder(slug)]);
+    if (stale()) return;
     await refreshChats().catch(chatFailed("Couldn't load chats"));
+    if (stale()) return;
     mountDock();
     // The dock was just emptied, so the bar must stop naming the previous workspace's document.
     refreshTopbarTitle();

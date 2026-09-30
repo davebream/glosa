@@ -2828,22 +2828,25 @@ async function handleStream(
   const bus = await resolveBus(ctx, resolved.entry);
   return createJournalStreamResponse(resolved.entry, bus, req, server, {
     shutdownSignal: lifecycleSignal(ctx, authSignal),
-    subscribeChats: ctx.managedChats
-      ? (listener) => {
-          const store = ctx.managedChats!.store;
-          // #389: name the workspace whose chat changed, when the chat can be tied to a live
-          // registration of the same epoch; otherwise the frame says "something changed".
-          const relay = ({ chatId }: { chatId?: string }) => {
-            const owner = chatId === undefined ? undefined : store.workspaceOf(chatId);
-            const entry = owner ? ctx.workspaceIndex.getWorkspaceByRegistration(owner.workspaceId) : null;
-            listener(entry && owner && entry.first_seen === owner.workspaceEpoch ? { slug: entry.slug } : {});
-          };
-          store.listeners.add(relay);
-          return () => {
-            store.listeners.delete(relay);
-          };
+    subscribeChats: (listener) => {
+      const store = ctx.managedChats?.store;
+      const relay = ({ chatId }: { chatId?: string }) => {
+        const owner = chatId === undefined ? undefined : store?.workspaceOf(chatId);
+        const entry = owner ? ctx.workspaceIndex.getWorkspaceByRegistration(owner.workspaceId) : null;
+        listener(entry && owner && entry.first_seen === owner.workspaceEpoch ? { slug: entry.slug } : {});
+      };
+      store?.listeners.add(relay);
+      const unsubscribe = ctx.sessionRegistry.subscribe((paths) => {
+        for (const path of paths) {
+          const entry = ctx.workspaceIndex.get(path);
+          listener(entry ? { slug: entry.slug } : {});
         }
-      : undefined,
+      });
+      return () => {
+        store?.listeners.delete(relay);
+        unsubscribe();
+      };
+    },
     subscribeAttention: ctx.attentionFeed ? (listener) => ctx.attentionFeed!.subscribe(listener) : undefined,
     // #440: a desk window in the desktop app says it hosts browser tabs by asking with `browser=1`.
     subscribeBrowser:
@@ -2915,6 +2918,9 @@ function handleTranscriptStream(
       candidates: sessionCandidates(sessions),
     });
   }
+  const normalizer = ctx.providerRegistry?.get(sessions[0]!.provider)?.createTranscriptNormalizer?.();
+  if (!normalizer)
+    return problem(404, "not-found", "mirror unavailable for this provider: use the terminal", undefined, url.pathname);
   const transcriptPath = sessions[0]!.transcript_path as string;
 
   const confined = confineTranscriptPath(
@@ -2932,6 +2938,7 @@ function handleTranscriptStream(
   }
 
   return createTranscriptStreamResponse(confined.realPath, req, server, {
+    normalizer,
     shutdownSignal: lifecycleSignal(
       ctx,
       authSignal,
