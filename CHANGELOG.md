@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- An unpackaged desktop shell now uses its checkout's CLI and its own Electron profile, so it can
+  run beside an installed app without sharing the recorded executable or browser data. The bundled
+  CLI offers `glosa install select` to keep that app selected across later terminal CLI runs, and
+  `glosa install auto` to return to automatic recording. A switch waits for any foreign daemon to
+  be stopped by the person; it never stops one itself.
+
 ## [0.1.0-alpha.37] · 2026-09-29
 
 ### Added

@@ -56,6 +56,10 @@ and `GLOSA_PORT` unset it derives `~/.glosa-dev/<install-id>` and a deterministi
 workspaces even when your installed glosa has several: the checkout deliberately does not read
 `~/.glosa`, so working on glosa cannot disturb the glosa you use for real documents.
 
+`bun run --cwd packages/shell start` uses the checkout CLI and a separate Electron profile for this
+checkout. It can stay open beside the installed app. `GLOSA_SHELL_CLI` explicitly overrides the CLI
+for a test or a deliberate cross-install probe.
+
 To point a checkout at your real state anyway, say so explicitly:
 
 ```sh
