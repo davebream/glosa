@@ -40,6 +40,21 @@ function parseClaudeRecord(obj: Record<string, unknown>, lineNum: number, rawLin
   const uuid = typeof obj.uuid === "string" && obj.uuid.length > 0 ? obj.uuid : `line-${lineNum}`;
 
   const content = flattenText((obj.message as Record<string, unknown> | undefined)?.content);
+  const queuedContent = flattenText(obj.content);
+  if (
+    obj.type === "queue-operation" &&
+    obj.operation === "enqueue" &&
+    queuedContent.trimStart().startsWith("<task-notification>")
+  ) {
+    const summary = /<summary>([\s\S]*?)<\/summary>/.exec(queuedContent)?.[1];
+    return [
+      {
+        type: "system",
+        content: capText(summary ?? "Background task notification", PROSE_CONTENT_CAP_BYTES).content,
+        id: uuid,
+      },
+    ];
+  }
   if (
     obj.type === "user" &&
     (obj.isMeta === true || obj.isSynthetic === true) &&
@@ -54,7 +69,17 @@ function parseClaudeRecord(obj: Record<string, unknown>, lineNum: number, rawLin
       },
     ];
   }
-  if (["progress", "queue-operation", "file-history-snapshot", "last-prompt"].includes(String(obj.type))) {
+  if (
+    [
+      "progress",
+      "queue-operation",
+      "file-history-snapshot",
+      "last-prompt",
+      "attachment",
+      "atis-latch",
+      "cost-state",
+    ].includes(String(obj.type))
+  ) {
     return [{ type: "meta", kind: String(obj.type), id: uuid }];
   }
 

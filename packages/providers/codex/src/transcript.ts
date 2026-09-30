@@ -17,9 +17,27 @@ export class CodexTranscriptNormalizer extends TranscriptNormalizer {
   }
 }
 
+function flattenToolOutput(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value))
+    return value
+      .map((block) => {
+        if (!block || typeof block !== "object") return "";
+        const text = (block as Record<string, unknown>).text;
+        return typeof text === "string" ? text : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  return JSON.stringify(value ?? "");
+}
+
 function parseCodexRecord(record: Record<string, unknown>, lineNum: number, raw: string): TranscriptEvent[] {
   const id = typeof record.id === "string" ? record.id : `line-${lineNum}`;
-  if (["session_meta", "turn_context", "event_msg", "compacted"].includes(String(record.type)))
+  if (
+    ["session_meta", "turn_context", "event_msg", "compacted", "world_state", "token_usage_record"].includes(
+      String(record.type),
+    )
+  )
     return [{ type: "meta", kind: String(record.type), id }];
   if (record.type !== "response_item" || !record.payload || typeof record.payload !== "object")
     return [unknownEvent(raw, lineNum)];
@@ -29,6 +47,12 @@ function parseCodexRecord(record: Record<string, unknown>, lineNum: number, raw:
     if (item.role === "developer" || item.role === "system") return [];
     if ((item.role !== "user" && item.role !== "assistant") || !Array.isArray(item.content))
       return [unknownEvent(raw, lineNum)];
+    if (item.role === "user") {
+      const metadata = item.internal_chat_message_metadata_passthrough as Record<string, unknown> | undefined;
+      const kinds = metadata?.content_item_kinds;
+      if (Array.isArray(kinds) && kinds.every((kind) => kind !== "user.text"))
+        return [{ type: "meta", kind: "codex_harness_message", id }];
+    }
     const role = item.role;
     return item.content.flatMap((block, index): TranscriptEvent[] => {
       if (!block || typeof block !== "object") return [];
@@ -62,7 +86,7 @@ function parseCodexRecord(record: Record<string, unknown>, lineNum: number, raw:
     ];
   }
   if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
-    const text = typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "");
+    const text = flattenToolOutput(item.output);
     const capped = capText(text, TOOL_RESULT_CAP_BYTES, TOOL_RESULT_KEEP_END_CHARS);
     return [{ type: "tool_result", tool_id: typeof item.call_id === "string" ? item.call_id : id, ...capped, id }];
   }
