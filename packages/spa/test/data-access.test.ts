@@ -321,6 +321,25 @@ describe("createDataAccess — request shape", () => {
   /** The classification runs after the rejected call settles; let its microtasks drain. */
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+  test.each(["new-install", "other-install"])("401 uses the replacement pairing identity against %s", async (seen) => {
+    const storage = fakeStorage({ glosa_token: "fresh" });
+    let unauthorized = 0;
+    let foreign = 0;
+    const da = createDataAccess({
+      storage,
+      expectedInstallId: "old-install",
+      fetchFn: rejectingFetch({ contract_version: "1.6", paired: true, install_id: seen }),
+      onUnauthorized: () => unauthorized++,
+      onForeignDaemon: () => foreign++,
+    });
+    da.setExpectedInstallId("new-install");
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
+    expect(unauthorized).toBe(seen === "new-install" ? 1 : 0);
+    expect(foreign).toBe(seen === "new-install" ? 0 : 1);
+    expect(storage.getItem("glosa_token")).toBe(seen === "new-install" ? null : "fresh");
+  });
+
   test("401 from the daemon this tab paired with clears the credential, once", async () => {
     const storage = fakeStorage({ glosa_token: "stale" });
     let unauthorized = 0;

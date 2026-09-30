@@ -344,7 +344,7 @@ export function openTranscriptStream(
 export function createDataAccess(deps = {}) {
   const fetchFn = deps.fetchFn ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : undefined);
   const storage = deps.storage ?? (typeof localStorage !== "undefined" ? localStorage : undefined);
-  const expectedInstallId = deps.expectedInstallId ?? null;
+  let expectedInstallId = deps.expectedInstallId ?? null;
   let unauthorizedHandled = false;
   const onUnauthorized =
     deps.onUnauthorized ??
@@ -970,6 +970,11 @@ export function createDataAccess(deps = {}) {
      * its own. Returns null when nothing answers. */
     daemonIdentity() {
       return readHandshake();
+    },
+    /** Bind this client to the identity bootstrap recorded after pairing.
+     * @param {string | null} installId */
+    setExpectedInstallId(installId) {
+      expectedInstallId = installId;
     },
     /** @param {string} slug
      *  @param {{ onEvent?: StreamEventHandler, onReconnect?: () => void,

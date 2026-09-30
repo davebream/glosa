@@ -89,7 +89,7 @@ export function canonicalMode(raw) {
 /** @typedef {"down" | "unpaired" | "mismatch" | "foreign-daemon" | "ready"} Screen */
 /** @typedef {{ hash: string }} FragmentLocation */
 /** @typedef {FragmentLocation & { pathname: string, search: string }} AddressLocation */
-/** @typedef {Pick<Storage, "getItem" | "setItem">} TokenStorage */
+/** @typedef {Pick<Storage, "getItem" | "setItem" | "removeItem">} TokenStorage */
 /** @typedef {Pick<History, "replaceState">} HistoryWriter */
 /** @typedef {Pick<History, "replaceState" | "pushState">} HistoryNavigator */
 /** What the mounted view did with an address the browser moved to within this page: `handled`
@@ -181,7 +181,10 @@ export function readRoute(loc) {
 export function scrubSecrets(loc, storage, history, route = readRoute(loc), redeemedToken = null) {
   const durable = redeemedToken || route.durableToken;
   const hadSecret = Boolean(route.durableToken || route.presentationToken || redeemedToken);
-  if (durable) storage.setItem("glosa_token", durable);
+  if (durable) {
+    storage.setItem("glosa_token", durable);
+    storage.removeItem(INSTALL_KEY);
+  }
   if (hadSecret) {
     const nextHash = focusHash({
       slug: route.slug,
@@ -538,7 +541,7 @@ async function main() {
   }
   if (navigation.isNavigating()) return;
   const token = scrubSecrets(window.location, window.localStorage, window.history, route, redeemed);
-  const pairedInstall = window.localStorage.getItem(INSTALL_KEY);
+  let pairedInstall = window.localStorage.getItem(INSTALL_KEY);
 
   const pageBuildId = pageBuildIdFrom(document);
   const updateNotice = createUpdateNotice({
@@ -582,7 +585,10 @@ async function main() {
   if (screen === "foreign-daemon" && pairedInstall) {
     void enterForeignDaemon(dataAccess, pairedInstall);
   }
-  if (screen === "ready") rememberDaemonIdentity(window.localStorage, handshake, token);
+  if (screen === "ready") {
+    pairedInstall = rememberDaemonIdentity(window.localStorage, handshake, token);
+    dataAccess.setExpectedInstallId(pairedInstall);
+  }
   if (screen === "mismatch") {
     // R5's third failure screen reloads to fetch the fresh shell + bootstrap the daemon
     // just advertised (A1 §3).

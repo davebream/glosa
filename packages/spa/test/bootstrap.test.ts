@@ -619,6 +619,51 @@ describe("scrubSecrets — preserves non-secret route state", () => {
 });
 
 describe("selectScreen", () => {
+  test.each(["presentation", "durable"])("fresh %s pairing replaces a stored foreign install immediately", (kind) => {
+    const storage = fakeStorage();
+    storage.setItem("glosa_token", "old-token");
+    storage.setItem("glosa_install", "old-install");
+    const location = new URL(
+      `http://127.0.0.1:4646/#w=notes&a=draft.md&${kind === "presentation" ? "p=once" : "t=new-token"}`,
+    );
+    const history = {
+      replaceState(_state: unknown, _title: string, url: string) {
+        location.href = new URL(url, location).href;
+      },
+    };
+    const token = scrubSecrets(
+      location,
+      storage,
+      history,
+      readRoute(location),
+      kind === "presentation" ? "new-token" : null,
+    );
+    const handshake = { contract_version: CONTRACT_VERSION, paired: true, install_id: "new-install" };
+    expect(selectScreen(handshake, token, storage.getItem("glosa_install"))).toBe("ready");
+    rememberDaemonIdentity(storage, handshake, token);
+    expect(storage.getItem("glosa_install")).toBe("new-install");
+    expect(storage.getItem("glosa_token")).toBe("new-token");
+    expect(location.hash).toBe("#w=notes&a=draft.md");
+    expect(selectScreen({ ...handshake, contract_version: "2.0" }, token, null)).toBe("mismatch");
+  });
+
+  test.each(["#p=expired", ""])("unsuccessful pairing or ordinary reload preserves the stored install: %s", (hash) => {
+    const storage = fakeStorage();
+    storage.setItem("glosa_token", "old-token");
+    storage.setItem("glosa_install", "old-install");
+    const location = new URL(`http://127.0.0.1:4646/${hash}`);
+    const token = scrubSecrets(location, storage, { replaceState() {} });
+    expect(token).toBe("old-token");
+    expect(storage.getItem("glosa_install")).toBe("old-install");
+    expect(
+      selectScreen(
+        { contract_version: CONTRACT_VERSION, paired: true, install_id: "new-install" },
+        token,
+        storage.getItem("glosa_install"),
+      ),
+    ).toBe("foreign-daemon");
+  });
+
   test("the bundled SPA advertises contract 1.26", () => {
     expect(CONTRACT_VERSION).toBe("1.26");
   });

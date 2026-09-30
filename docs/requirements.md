@@ -538,8 +538,8 @@ registration epochs prevent filename collisions and restoration into a replaceme
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
   `token rotate|revoke`, `dictation configure --provider wispr-flow|status|disable`, `doctor`
-  (18 enumerated checks incl. live artifact-update state + Claude-monitor suppression + transcript-root confinement + orphaned
-  journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152), `status`,
+  (19 enumerated checks incl. live artifact-update state + Claude-monitor suppression + transcript-root confinement + orphaned
+  journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152 + MCP install diagnosis, #461), `status`,
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
   workspace's registration, journal, inbox, and shadow-git history — including any historical
   loose-file source sealed into it by adoption — while never touching work-tree files; refuses
