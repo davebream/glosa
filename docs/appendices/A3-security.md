@@ -68,6 +68,12 @@ the programmatic API now lives on a Unix socket instead.
   daemon's `install_id` is recorded beside it as `glosa_install`, in the same store and therefore at
   the same scope; it is not a secret (the tokenless handshake publishes it) and exists so a rejection
   can be attributed.
+- A freshly accepted pairing credential replaces any stored install identity (#461). Successful
+  presentation-token redemption (or the supported durable-token fragment) clears the old identity;
+  the compatible ready handshake records the issuing install and updates the same data-access
+  client's rejection classifier before mounting the workspace. A rejected or expired presentation
+  token does not clear the previous pairing. With no fresh credential, the foreign-daemon guard and
+  bounded recovery wait remain in force. Contract-major mismatches still refuse the ready screen.
 - Token state has two durable forms: **active** = `~/.glosa/token` contains one 128-bit hex token at
   mode 0600; **revoked** = that file is absent. `glosa token rotate` writes a fresh mode-0600 temp,
   fsyncs it, then atomically renames it over the active file. `glosa token revoke` atomically unlinks
