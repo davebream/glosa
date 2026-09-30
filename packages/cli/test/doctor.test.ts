@@ -196,6 +196,36 @@ describe("glosa doctor", () => {
       expect(row.detail).toContain("glosa never replaces it");
     });
 
+    test("install: a Glosa-managed app selection names its owner and a missing target", () => {
+      const selected = installCheck(
+        makeDeps({
+          packageRoot: () => APP_ROOT,
+          readRecordedExecutable: (h) => ({
+            path: join(h, "bin", "glosa"),
+            state: "managed-pin",
+            target: APP_LAUNCHER,
+            resolved: APP_LAUNCHER,
+          }),
+        }).deps,
+      );
+      expect(selected.status).toBe("pass");
+      expect(selected.detail).toContain(`${APP_LAUNCHER} (selected, this install)`);
+
+      const missing = installCheck(
+        makeDeps({
+          readRecordedExecutable: (h) => ({
+            path: join(h, "bin", "glosa"),
+            state: "managed-pin",
+            target: APP_LAUNCHER,
+            resolved: null,
+          }),
+        }).deps,
+      );
+      expect(missing.status).toBe("warn");
+      expect(missing.detail).toContain("selected, missing");
+      expect(missing.detail).toContain("glosa install auto");
+    });
+
     test("install: an app-bundle CLI reports its kind and recognises its own launcher", () => {
       const { deps } = makeDeps({
         packageRoot: () => APP_ROOT,
