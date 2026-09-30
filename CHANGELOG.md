@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Pinned Claude Code and Codex runtime candidates for Linux x86_64/glibc, with frozen locks,
+  platform-specific identities and verified staging before repair. Existing runtime installations
+  require explicit reinstall; their directories, account profiles and chat history are preserved.
+  Candidates remain unqualified and managed chats remain gated pending native and release checks (#433).
 - An unpackaged desktop shell now uses its checkout's CLI and its own Electron profile, so it can
   run beside an installed app without sharing the recorded executable or browser data. The bundled
   CLI offers `glosa install select` to keep that app selected across later terminal CLI runs, and

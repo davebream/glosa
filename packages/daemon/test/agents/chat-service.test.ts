@@ -27,11 +27,157 @@ import type { DeliverableEntry } from "../../src/agent-provider/interface.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
 import { AgentStore } from "../../src/chats/store.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
+import { runtimeTarget } from "../../src/agents/runtimes.ts";
+import { RuntimeSupervisor } from "../../src/agents/supervisor.ts";
+import { waitUntil } from "../helpers.ts";
+import { ClaudeManagedAdapter } from "../../../providers/claude-code/src/managed.ts";
+import { CodexManagedAdapter } from "../../../providers/codex/src/managed.ts";
+import { chatRoutes } from "../../src/routes/chats.ts";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0)) await close();
 });
+
+test.each([
+  [false, true, "managed-unavailable"],
+  [true, false, "runtime-unqualified"],
+] as const)(
+  "release=%s qualification=%s refuses native login and API activation",
+  async (released, qualified, code) => {
+    const h = setup({
+      releaseEnabled: released,
+      manifest: () => ({
+        ...runtimeTarget(),
+        id: "fixture",
+        provider: "fixture",
+        version: "1",
+        executable: "/fixture",
+        executableSha256: "0".repeat(64),
+        qualified,
+      }),
+    });
+    // releaseEnabled=true is the existing daemon preview flag's only effect. It cannot qualify bytes.
+    await expect(h.service.login(h.profile.id)).rejects.toMatchObject({ code });
+    await expect(h.service.discoverModels(h.profile.id)).rejects.toMatchObject({ code });
+    const path = `/api/agents/profiles/${h.profile.id}/login`;
+    const route = chatRoutes(
+      {
+        service: h.service,
+        workspaceIndex: {} as WorkspaceIndex,
+        getWorkspaceBus: () => {
+          throw new Error("unexpected workspace access");
+        },
+      },
+      "POST",
+      path,
+    )!;
+    const response = await route.handle(
+      new Request(`http://127.0.0.1:4646${path}`, {
+        method: "POST",
+        body: JSON.stringify({ qualified: true, released: true, GLOSA_MANAGED_PREVIEW: "1" }),
+      }),
+    );
+    expect(response.status).toBe(503);
+    expect((await response.json()).type).toEndWith(`/errors/${code}`);
+    expect(h.spawns()).toBe(0);
+  },
+);
+
+test.each(["claude-code", "codex"])(
+  "%s login carries real PTY input, resize and loopback callback, and cancellation releases its owned tree",
+  async (provider) => {
+    let supervisor!: RuntimeSupervisor,
+      executable = "";
+    const children: OwnedProcess[] = [];
+    const h = setup({
+      launcher: {
+        async spawn(options) {
+          const child = await supervisor.spawn(options);
+          children.push(child);
+          return child;
+        },
+      },
+      manifest: () => ({
+        ...runtimeTarget(),
+        id: "fixture",
+        provider: "fixture",
+        version: "1",
+        executable,
+        executableSha256: "0".repeat(64),
+        qualified: true,
+      }),
+    });
+    supervisor = new RuntimeSupervisor(join(h.root, "owner"));
+    executable = join(h.root, "native-login");
+    const native = provider === "claude-code" ? new ClaudeManagedAdapter() : new CodexManagedAdapter();
+    h.adapter.loginArgs = () => native.loginArgs();
+    h.adapter.profileEnvironment = (dir) => native.profileEnvironment(dir);
+    // A fake vendor callback/login protocol in a real terminal. No browser or vendor is contacted.
+    writeFileSync(
+      executable,
+      `#!${process.execPath}
+import {createInterface} from "node:readline";
+const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+ if(new URL(request.url).searchParams.get("state")!=="fixture-state")return new Response("wrong state",{status:400});
+ console.log("CALLBACK_OK"); return new Response("local callback");
+}});
+Bun.spawn(["/bin/sleep","60"],{stdin:"ignore",stdout:"ignore",stderr:"ignore"});
+console.log("ARGS="+JSON.stringify(process.argv.slice(2)));
+console.log("TTY="+Boolean(process.stdin.isTTY&&process.stdout.isTTY));
+console.log("CALLBACK=http://127.0.0.1:"+server.port+"/?state=fixture-state");
+for await(const line of createInterface({input:process.stdin})) {
+ if(line==="approved")process.exit(0);
+ const size=Bun.spawnSync(["/bin/stty","size"],{stdin:"inherit",stdout:"pipe",stderr:"pipe"});
+ console.log("INPUT="+line+" SIZE="+size.stdout.toString().trim());
+}
+`,
+      { mode: 0o700 },
+    );
+    try {
+      for (const complete of [true, false]) {
+        const operation = await h.service.login(h.profile.id);
+        const output = () =>
+          h.service
+            .loginOutput(operation.id, operation.secret, 0)
+            .output.split("\n")
+            .filter(Boolean)
+            .map((line) => Buffer.from(line, "base64").toString())
+            .join("");
+        expect(await waitUntil(() => output().includes("CALLBACK=http"))).toBe(true);
+        expect(output()).toContain("TTY=true");
+        expect(output()).toContain(`ARGS=${JSON.stringify(native.loginArgs())}`);
+        h.service.loginResize(operation.id, operation.secret, 72, 19);
+        await h.service.loginInput(operation.id, operation.secret, "native-code\n");
+        expect(await waitUntil(() => output().includes("INPUT=native-code SIZE=19 72"))).toBe(true);
+        const callback = /CALLBACK=(http:\/\/127\.0\.0\.1:[0-9]+\/\?state=fixture-state)/.exec(output())![1]!;
+        if (complete) {
+          expect((await fetch(callback.replace("fixture-state", "wrong"))).status).toBe(400);
+          expect(output()).not.toContain("CALLBACK_OK");
+          expect(await (await fetch(callback)).text()).toBe("local callback");
+          expect(await waitUntil(() => output().includes("CALLBACK_OK"))).toBe(true);
+          await h.service.loginInput(operation.id, operation.secret, "approved\n");
+          expect(
+            await waitUntil(() => h.service.loginOutput(operation.id, operation.secret, 0).state === "completed"),
+          ).toBe(true);
+        }
+        await h.service.finishLogin(operation.id, operation.secret);
+        expect(() => output()).toThrow("not available");
+        await expect(h.service.loginInput(operation.id, operation.secret, "late-code")).rejects.toThrow(
+          "not available",
+        );
+        await expect(fetch(callback)).rejects.toThrow();
+        expect((await children.at(-1)!.exited).groupEmpty).toBe(true);
+        expect(supervisor.activeCount).toBe(0);
+        expect(supervisor.recoveryRequired).toBe(false);
+      }
+    } finally {
+      await h.service.close();
+      await supervisor.close();
+    }
+  },
+  15_000,
+);
 
 test("model discovery releases management after an exit races its fence, but uncertain cleanup stays blocked", async () => {
   let stops = 0,
@@ -291,6 +437,7 @@ function setup(options: Partial<ChatServiceOptions> = {}) {
     launcher,
     workspace: () => workspace,
     manifest: () => ({
+      ...runtimeTarget(),
       id: "fixture",
       provider: "fixture",
       version: "1",

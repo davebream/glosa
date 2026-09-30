@@ -776,3 +776,175 @@ transcript push. All four passed in a separate focused run. The browser-morph fa
 on unchanged baseline source. This evidence does not establish the cause of the other failures or
 make the full suite green. Authenticated skill invocation with linked native configuration remains
 an attended verification task; this change does not close the provider activation gates.
+
+## Linux native qualification handoff (#433 to #435)
+
+**Status: candidates, not supported native sessions.** Linux x86_64/glibc uses Claude Code 2.1.280,
+Agent SDK 0.3.280 and Codex 0.156.1 on Bun 1.4.2. Both release-owned `qualified` values remain false.
+An isolated Linux artifact witness installed both through `RuntimeCatalog` with frozen locks and
+lifecycle scripts disabled, verified their trees, then checked ELF64/x86_64, native version commands
+and SDK import with networking disabled. Codex's archive uses `vendor/x86_64-unknown-linux-musl`:
+that is the vendor's static executable, not permission to admit a musl host. Bun's generated lock
+does not retain npm's `libc` metadata; the Claude package choice and Glosa's host/manifest checks
+enforce the glibc boundary.
+
+Deterministic tests exercise real disk integrity/repair, guardian ownership, PTY input/resize, local
+callback listeners and provider transport with simulated vendor responses. They prove local plumbing,
+not subscription refresh, native isolation or offering permission.
+
+### Preconditions and native driver
+
+A maintainer must attend and authorize the native run and disclosed provider traffic. Resolve G1
+before using the SDK offering. Use an installed Manjaro x86_64/glibc app candidate, its bundled Bun
+and sources, two genuinely different subscription identities per provider, and synthetic documents.
+Record package/source revision, `uname -m`, `getconf GNU_LIBC_VERSION`, Bun version, candidate IDs
+and lock hashes. Privately record before/after hashes of ordinary CLI configuration/credential files
+and credential-store entry metadata where applicable. Never export credential values or use API billing.
+
+Run the following in **Bash**. For source-only diagnosis, substitute absolute paths to the matching
+checkout and pinned Bun, and label the result source-level rather than installed-app evidence.
+
+```bash
+export GLOSA_QUAL_SOURCE=/opt/glosa/resources/glosa
+export GLOSA_QUAL_BUN=/opt/glosa/resources/bin/bun
+export GLOSA_QUAL_ROOT="$(mktemp -d /tmp/glosa-native-qualification.XXXXXX)"
+chmod 700 "$GLOSA_QUAL_ROOT"
+mkdir "$GLOSA_QUAL_ROOT/workspace"
+printf 'Synthetic qualification document.\n' > "$GLOSA_QUAL_ROOT/workspace/notes.md"
+"$GLOSA_QUAL_BUN" --version
+uname -m
+getconf GNU_LIBC_VERSION
+```
+
+Save this driver as `$GLOSA_QUAL_ROOT/qualify.ts`. It calls the shipped adapters and supervisor from
+a standalone attended test process. It does not start the public daemon, edit a manifest, change
+qualification or introduce a public gate override. Keep native login URLs and account identities
+private. This driver exercises private profiles; linked configuration is covered separately below.
+
+```typescript
+import { mkdirSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+const root = process.env.GLOSA_QUAL_ROOT!, source = process.env.GLOSA_QUAL_SOURCE!;
+if (!root || !source) throw new Error("Set the qualification root and source first");
+const load = (path: string) => import(pathToFileURL(join(source, path)).href);
+const { RuntimeCatalog } = await load("packages/daemon/src/agents/runtimes.ts");
+const { RuntimeSupervisor } = await load("packages/daemon/src/agents/supervisor.ts");
+const { managedEnvironment } = await load("packages/daemon/src/agents/environment.ts");
+const { claudeRuntimeCandidate } = await load("packages/providers/claude-code/src/runtime.ts");
+const { codexRuntimeCandidate } = await load("packages/providers/codex/src/runtime.ts");
+const { ClaudeManagedAdapter } = await load("packages/providers/claude-code/src/managed.ts");
+const { CodexManagedAdapter } = await load("packages/providers/codex/src/managed.ts");
+const [mode, provider, account, text] = process.argv.slice(2);
+if (!["claude-code", "codex"].includes(provider!) || !["a", "b"].includes(account!))
+  throw new Error("Usage: qualify.ts install|login|probe|models|turn|mcp-login claude-code|codex a|b [text/server-id]");
+const supervisor = new RuntimeSupervisor(join(root, "agents"));
+const catalog = new RuntimeCatalog(join(root, "agents"), [claudeRuntimeCandidate(), codexRuntimeCandidate()]);
+const adapter = provider === "claude-code" ? new ClaudeManagedAdapter() : new CodexManagedAdapter();
+const configRoot = join(root, provider!, account!, "native"), neutral = join(root, provider!, account!, "login");
+for (const path of [configRoot, neutral]) mkdirSync(path, { recursive: true, mode: 0o700 });
+let connection: any;
+const ended = Promise.withResolvers<void>();
+const shutdown = () => { ended.resolve(); void supervisor.close(); };
+process.on("SIGTERM", shutdown); process.on("SIGINT", shutdown);
+const deadline = setTimeout(shutdown, 10 * 60_000);
+console.log(JSON.stringify({ driverPid: process.pid, provider, account, ownerRoot: join(root, "agents") }));
+try {
+  if (mode === "install") console.log(await catalog.install(provider!, supervisor));
+  else {
+    const manifest = catalog.manifest(provider!);
+    if (!manifest) throw new Error("Run install first");
+    const file = join(root, "mcp.json"), servers = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
+    const spec = { manifest, configRoot, cwd: neutral, probeCwd: neutral, servers,
+      env: managedEnvironment(process.env, adapter.profileEnvironment(configRoot)),
+      profile: { id: `${provider}-${account}`, auth: { state: "unknown" } } };
+    if (mode === "login" || mode === "mcp-login") {
+      const args = mode === "login" ? adapter.loginArgs() : adapter.mcpLoginArgs(servers, text);
+      const child = await supervisor.spawn({ command: manifest.executable, args, cwd: neutral,
+        env: spec.env, terminal: true, onData: (_channel: string, bytes: Uint8Array) => process.stdout.write(bytes) });
+      process.stdin.setRawMode?.(true);
+      process.stdin.on("data", (bytes) => void child.write(bytes.toString()).catch(shutdown));
+      const resize = () => child.resize(process.stdout.columns || 100, process.stdout.rows || 24);
+      process.stdout.on("resize", resize); resize();
+      console.log(await child.exited); await child.stop();
+      process.stdout.off("resize", resize);
+    } else {
+      const auth = await adapter.probe(spec, supervisor); console.log(auth);
+      if (mode !== "probe") {
+        if (auth.state !== "authenticated") throw new Error("Native subscription login required");
+        const settings = { model: process.env.GLOSA_QUAL_MODEL || "", effort: process.env.GLOSA_QUAL_EFFORT || "", permissionMode: "default" };
+        connection = await adapter.connect({ ...spec, profile: { ...spec.profile, auth },
+          cwd: join(root, "workspace"), settings, sessionId: `${provider}-${account}`,
+          runId: crypto.randomUUID(), generation: 1, nativeId: process.env.GLOSA_QUAL_NATIVE_ID,
+        }, supervisor, (event: any) => {
+          console.log(JSON.stringify(event));
+          if (event.type === "completed" || event.type === "failed") ended.resolve();
+        });
+        console.log(connection.capabilities);
+        if (mode === "turn") {
+          if (!settings.model || !settings.effort || !text) throw new Error("Select a reported model/effort and supply synthetic text");
+          let pending = "";
+          process.stdin.on("data", (bytes) => {
+            pending += bytes.toString();
+            const lines = pending.split("\n"); pending = lines.pop()!;
+            for (const line of lines) try {
+              const answer = JSON.parse(line);
+              void (answer.stop ? connection.interrupt() : connection.answer(answer.id, answer.choice, answer.text)).catch(shutdown);
+            } catch { console.error("Enter one JSON decision answer per line, or {\"stop\":true}"); }
+          });
+          await connection.startTurn({ turnId: crypto.randomUUID(), text, settings, attachments: [] });
+          await ended.promise;
+        } else if (mode !== "models") throw new Error("Unknown mode");
+      }
+    }
+  }
+} finally {
+  clearTimeout(deadline);
+  process.stdin.setRawMode?.(false); process.stdin.removeAllListeners("data"); process.stdin.pause();
+  await connection?.close(); await supervisor.close();
+  if (supervisor.activeCount || supervisor.recoveryRequired) throw new Error("Owned cleanup is unproved");
+}
+```
+
+Run these for **both providers**, and repeat login/probe/models/turn with account `b`. Two copies
+of one subscription are not two-account evidence. Click the native sign-in link if its opener is
+unavailable. Enter codes in the native terminal, never in a Glosa credential field.
+
+```bash
+"$GLOSA_QUAL_BUN" "$GLOSA_QUAL_ROOT/qualify.ts" install claude-code a
+"$GLOSA_QUAL_BUN" "$GLOSA_QUAL_ROOT/qualify.ts" login claude-code a
+"$GLOSA_QUAL_BUN" "$GLOSA_QUAL_ROOT/qualify.ts" probe claude-code a
+"$GLOSA_QUAL_BUN" "$GLOSA_QUAL_ROOT/qualify.ts" models claude-code a
+# Use values actually reported by models for this account.
+export GLOSA_QUAL_MODEL='<reported model>' GLOSA_QUAL_EFFORT='<reported effort>'
+"$GLOSA_QUAL_BUN" "$GLOSA_QUAL_ROOT/qualify.ts" turn claude-code a 'Remember the synthetic token ORCHARD. Reply with it.'
+export GLOSA_QUAL_NATIVE_ID='<native ID from this provider/account session event>'
+"$GLOSA_QUAL_BUN" "$GLOSA_QUAL_ROOT/qualify.ts" turn claude-code a 'What synthetic token did I give you?'
+unset GLOSA_QUAL_NATIVE_ID
+```
+
+Replace `claude-code` with `codex` for Codex; install it explicitly first. Clear the native ID when
+changing provider/account. For MCP OAuth, put an array of `{id, enabled:true, transport:"http", url}`
+in `$GLOSA_QUAL_ROOT/mcp.json`, naming a consented test server with revocable OAuth credentials.
+Run `mcp-login <provider> <account> <server-id>`, then exercise that server through `turn`. Record
+server version/scopes privately. This driver does not emulate Glosa's built-in MCP grant.
+
+### Gate matrix and observable outcomes
+
+| Gate | Procedure and passing observation |
+| --- | --- |
+| G1: offering | Record distributions, native subscription login, SDK use, current vendor conditions and the maintainer's explicit determination. Unresolved or incompatible conditions block release qualification; a working login is not permission. |
+| G2: identity/configuration | Sign in distinct A/B subscriptions for each provider. Alternate probes, turns and native resumes; check each identity. Compare ordinary CLI configuration/credential hashes and OS credential-store metadata before/after. Observe actual refresh and expiry/revocation, then relogin: A must not repair B or fall back to API billing. Unobserved expiry stays pending. |
+| G2: native behavior | Select reported models/efforts and verify effective settings, streaming, tool approval allowed once and denied, native questions, interruption and same-account resume. Enter decision JSON using the emitted ID. Exercise MCP OAuth, revoke it and relogin. Inspect private native settings and observed traffic for telemetry/update suppression; fixture flags alone are insufficient. |
+| G3: containment | Resize the native login terminal, submit a code, finish/cancel login, repeat after expiry, and exercise successful/rejected callbacks. During a synthetic long-running tool submit `{"stop":true}` and observe descendant exit. From a second terminal kill only the recorded driver PID with `kill -KILL <driverPid>`; separately terminate the recorded native process/wrapper. Preserve run-owned guardian receipts and independently check PIDs/groups with `ps`. Keep an unrelated sentinel process alive. Uncertain/escaped ownership fails this row and blocks replacement. |
+| G4: installed app/T8 | After G1–G3 pass, #435 supplies a maintainer-reviewed qualification build for installed-app evidence; #433 adds no public bypass. Verify built-in MCP discovery, annotation delivery/acknowledgement, claim-bracketed edits/provenance, human-save precedence, model/effort and approval/question UI, account/MCP login, linked-config consent, stop/crash cleanup, offline history and restart. Run repository/browser gates and the expanded `test/acceptance/T8-GATE.md` procedure with both providers. Only the maintainer signs T8. |
+
+Before public activation, attach sanitized evidence for every row to #435, keyed by exact installed
+package, target, lock hashes and vendor versions. A source driver result cannot substitute for a
+desktop UI result. Test old native sessions after explicit reinstall, and confirm held turns with
+another runtime ID are refused without rewriting history. A changed tuple invalidates qualification.
+No environment variable, API request or local manifest satisfies these gates.
+
+For teardown, use owned shutdown paths, confirm guardian receipts and `ps` agree that run-owned
+processes exited, and revoke only the test accounts' MCP credentials. Preserve private evidence
+before deleting the temporary root. Never kill by executable name or delete ordinary provider profiles.

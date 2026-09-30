@@ -321,4 +321,11 @@ is used for chat output. xterm is restricted to the native authentication ceremo
 
 The candidate versions are not support claims. Both public execution paths remain gated; native
 multi-account/keychain isolation, SDK supervision, resumability and process containment still require
-attended qualification on each supported architecture. See the implementation contract’s G1–G4.
+attended qualification on each supported OS/architecture/libc tuple. Linux x86_64/glibc now has
+installable candidates for Claude Code 2.1.280 / Agent SDK 0.3.280 and Codex 0.156.1, all still
+unqualified. Vendor distribution names and frozen locks belong to the providers; platform identity,
+integrity and process ownership remain generic. PTY login uses the same controlled profile environment
+and guardian as other operations. Sign-in links open only on the person's action; the native provider
+owns its callback and credentials. No Linux-specific credential import or alternate launcher exists.
+See the implementation contract’s G1–G4 and its
+[Linux qualification procedure](../design/2026-09-23-agent-chat-implementation.md#linux-native-qualification-handoff-433-to-435).

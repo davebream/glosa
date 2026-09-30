@@ -398,18 +398,34 @@ success with remaining historical damage warns. Other doctor checks retain their
 ## Managed runtime distribution (2026-09-23)
 
 The existing companion application floor remains Bun 1.2.7. Managed runtime installation/execution
-requires Bun 1.4.2 or newer on supported macOS architectures, including Bun.Terminal for native login.
+requires Bun 1.4.2 or newer on macOS arm64/x64 or Linux x86_64/glibc, including Bun.Terminal for native login.
 No application bundle/transpile step or native addon is introduced for managed runtimes. The Electron
 shell is a separate, unpublished package (`packages/shell`, outside the root workspaces and the npm
 file list) whose only build is its own packaging (requirements §4 exception); the packaged app
 carries a Bun at the toolchain pin and the published sources, unbundled (§F30, #371). Browser-ready
 xterm/Markdown assets and their licenses ship inside the existing package file list.
 
-Pinned provider candidates carry committed per-architecture dependency locks. Installation is an
+Pinned provider candidates carry committed per-platform/architecture dependency locks. Linux uses
+Claude Code 2.1.280 with Agent SDK 0.3.280 and Codex 0.156.1. The Claude package is explicitly glibc;
+Codex's Linux archive contains its vendor-supplied static musl-targeted executable, usable on the
+glibc host. This does not extend Glosa support to musl systems. Installation is an
 explicit foreground action using a private install home/cache, fixed npm registry, frozen lock,
 copy-file backend and disabled lifecycle scripts. Glosa checks the complete installed tree and
-selected executable/SDK hashes before launching. Repair preserves the invalid tuple in quarantine
-until the replacement is verified. It does not overwrite the user's system CLI or import its config.
+selected executable/SDK hashes before launching. Runtime IDs include provider, version, OS,
+architecture, Linux libc and dependency-lock hash; manifests must match that target and the selected
+executable and required SDK. Unsupported targets fail before installation or launch. A Darwin tree
+cannot qualify as a Linux installation even if copied into its expected directory.
+
+Repair verifies the complete staging tree before quarantining an invalid installation, then verifies
+publication; failed publication restores the prior directory. Successful repair retains quarantine.
+Legacy runtime IDs without an OS are never adopted automatically. Settings shows the current candidate
+as not installed until the person reinstalls it explicitly. Old directories, profiles, credentials,
+chat history and historical runtime IDs remain intact; held turns retain the runtime-change refusal.
+Installation does not overwrite the user's system CLI or import its config.
 Candidate installation never means qualified support. There is no public override to bypass the
 joint release gate; native compatibility is separately recorded against the exact tuple. A custom
 system executable is not an initial supported runtime path.
+
+Linux artifact installation and offline process fixtures are not native-session qualification.
+The [Linux qualification procedure](../design/2026-09-23-agent-chat-implementation.md#linux-native-qualification-handoff-433-to-435)
+separates these observations from G1–G4 and installed Manjaro acceptance in #435.

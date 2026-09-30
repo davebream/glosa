@@ -10,6 +10,8 @@ export const REQUIRED_PACK_FILES: readonly string[] = [
   "packages/daemon/src/index.ts",
   "packages/providers/claude-code/src/index.ts",
   "packages/providers/codex/src/index.ts",
+  "packages/providers/claude-code/src/runtime-locks/linux-x64.lock",
+  "packages/providers/codex/src/runtime-locks/linux-x64.lock",
   "packages/providers/wispr-flow/src/index.ts",
   "packages/providers/wispr-flow/src/browser.js",
   "packages/providers/wispr-flow/src/wispr-flow-worklet.js",

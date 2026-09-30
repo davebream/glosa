@@ -142,7 +142,9 @@ On Linux, install the source package with Bun and use `glosa open` as below. Bro
 cannot be confirmed within five seconds, glosa keeps the workspace registered and prints its URL
 with a warning. `glosa open --url <path>` works without a graphical session or opener. Open the
 link within 60 seconds; run the command again for a fresh link. The Ubuntu Linux checks cover core
-CLI and process behavior; installed-app qualification on Manjaro remains pending.
+CLI and process behavior; installed-app qualification on Manjaro remains pending. Pinned Linux
+Claude/Codex runtimes are installable candidates, not qualified native sessions; managed execution
+remains gated until the native and release checks pass.
 
 Install the alpha CLI globally:
 

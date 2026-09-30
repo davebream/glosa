@@ -587,7 +587,7 @@ registration epochs prevent filename collisions and restoration into a replaceme
   discovery or network access in open, doctor, update and MCP startup. Linux uses `xdg-open` with
   a five-second confirmation deadline; failure preserves the workspace and URL with a warning.
   URL-only and MCP presentation never launch a browser. The desktop app builds as an x86_64 pacman
-  package verified in Arch Linux containers (#432); native managed-chat qualification (#433),
+  package verified in Arch Linux containers (#432); installable managed-runtime candidates (#433), native qualification (#435),
   dictation (#434) and installed Manjaro desktop qualification and publication (#435) remain
   pending, and no installed Manjaro release is claimed.
 - **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
