@@ -1239,12 +1239,13 @@ describe("desk browser tabs: what a page may reach, and what reaches it (#440, A
   });
 
   test("the user agent names neither Electron nor glosa", () => {
-    const fallback =
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) glosa/0.1.0-alpha.36 Chrome/152.0.7977.130 Electron/44.4.5 Safari/537.36";
-    const ua = browserUserAgent(fallback);
-    expect(ua).not.toMatch(/glosa|Electron/i);
-    expect(ua).toContain("Chrome/152.0.7977.130");
-    expect(ua).toContain("Safari/537.36");
+    for (const product of ["glosa", "glosadev"]) {
+      const fallback = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ${product}/0.1.0-alpha.36 Chrome/152.0.7977.130 Electron/44.4.5 Safari/537.36`;
+      const ua = browserUserAgent(fallback);
+      expect(ua).not.toMatch(/glosa|Electron/i);
+      expect(ua).toContain("Chrome/152.0.7977.130");
+      expect(ua).toContain("Safari/537.36");
+    }
   });
 
   test("glosa's chords work with a page focused; everything else is the page's", () => {
