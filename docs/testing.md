@@ -160,3 +160,10 @@ daemon outliving the window.
 
 Local Linux containers must provide init, system Git/ps and executable temporary storage for the
 launcher fixtures so process-lifetime tests observe their intended topology. Container evidence does not qualify an installed Manjaro desktop app.
+
+Since #433, `linux-core` also executes runtime-tree verification/repair, managed-chat admission and
+login, both providers' managed protocol tests, and the SPA chat/login wiring tests. The added process
+fixtures use real supervised pipes, PTYs and loopback callback listeners with simulated provider
+behavior. They contact no vendor and do not prove native account compatibility. Frozen vendor
+installation, executable-format checks and offline SDK import are recorded separately from CI;
+attended G1–G4 qualification remains required.
