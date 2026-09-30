@@ -310,7 +310,7 @@ describe("Review mode — the agent's half of the margin", () => {
   });
 
   test("answering sends the typed words and the chosen option together", async () => {
-    const da = fakeDataAccess([askAboutPremise({ answer_options: ["covered", "thin"] })]);
+    const da = fakeDataAccess([askAboutPremise({ action: "ask", answer_options: ["covered", "thin"] })]);
     const { host } = await mountPane(da);
     await goToIt(host);
     qa(host, ".glosa-agent-option input")[1].click();
@@ -328,14 +328,61 @@ describe("Review mode — the agent's half of the margin", () => {
   });
 
   test("'Can't answer' resolves the request without inventing an answer", async () => {
-    const da = fakeDataAccess([askAboutPremise()]);
+    const da = fakeDataAccess([askAboutPremise({ action: "ask" })]);
     const { host } = await mountPane(da);
     await goToIt(host);
-    q(atPassage(host), ".glosa-agent-actions .glosa-secondary-button").click();
+    const decline = q(atPassage(host), ".glosa-agent-actions .glosa-secondary-button");
+    expect(decline.textContent).toBe("Can't answer");
+    decline.click();
     await paint();
     expect(da.answered).toHaveLength(1);
-    expect(da.answered[0]!.response).toBe("");
+    expect(da.answered[0]).toMatchObject({ outcome: "done", response: "" });
     expect(da.answered[0]!.chose).toBeUndefined();
+  });
+
+  describe("a review request asks for a verdict, not an answer (R9)", () => {
+    // `glosa request-review` sends action "review", and the daemon accepts only `approved` or
+    // `changes_requested` for it. Every button on this card used to send `changes_requested`, so
+    // a person could never approve and `request-review --wait` always reported changes requested.
+    test("its card offers Request changes and Approve, and no answer buttons", async () => {
+      const { host } = await mountPane(fakeDataAccess([askAboutPremise({ action: "review" })]));
+      await goToIt(host);
+      const card = atPassage(host);
+      expect(card.getAttribute("aria-label")).toBe("Review request at its passage");
+      expect(q(card, ".glosa-agent-actions .glosa-secondary-button").textContent).toBe("Request changes");
+      expect(q(card, ".glosa-agent-actions .glosa-primary-button").textContent).toBe("Approve");
+      const input = q(card, ".glosa-agent-input");
+      expect(input.getAttribute("placeholder")).toBe("Optional response");
+      expect(input.getAttribute("aria-label")).toBe("Your response (optional)");
+    });
+
+    test("Approve resolves it as approved, with the optional response", async () => {
+      const da = fakeDataAccess([askAboutPremise({ action: "review" })]);
+      const { host } = await mountPane(da);
+      await goToIt(host);
+      const card = atPassage(host);
+      q(card, ".glosa-agent-input").value = "Reads right.";
+      q(card, ".glosa-agent-actions .glosa-primary-button").click();
+      await paint();
+      expect(da.answered).toHaveLength(1);
+      expect(da.answered[0]).toMatchObject({ id: "inb-1", outcome: "approved", response: "Reads right." });
+    });
+
+    test("Request changes resolves it as changes_requested, carrying what to change", async () => {
+      const da = fakeDataAccess([askAboutPremise({ action: "review" })]);
+      const { host } = await mountPane(da);
+      await goToIt(host);
+      const card = atPassage(host);
+      q(card, ".glosa-agent-input").value = "Say why the reader would accept it.";
+      q(card, ".glosa-agent-actions .glosa-secondary-button").click();
+      await paint();
+      expect(da.answered).toHaveLength(1);
+      expect(da.answered[0]).toMatchObject({
+        id: "inb-1",
+        outcome: "changes_requested",
+        response: "Say why the reader would accept it.",
+      });
+    });
   });
 
   test("a half-typed answer survives the rail being rebuilt by unrelated session activity", async () => {
