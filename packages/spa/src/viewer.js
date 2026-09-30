@@ -46,7 +46,7 @@ import {
 } from "./panel-identity.js";
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
 import { createViewerFeedbackController } from "./viewer-feedback.js";
-import { createNavigatorController } from "./viewer-navigator.js";
+import { createNavigatorController, NAV_OPEN_DOCUMENT_STORAGE_KEY, NAV_OPEN_STORAGE_KEY } from "./viewer-navigator.js";
 import { createElement as el, createSectionToggle, createViewerShell } from "./viewer-shell.js";
 
 /** The workspace this browser last had selected, so a reload with several live lands back on it. */
@@ -213,8 +213,13 @@ export function mountApp(
   const panes = new Map(); // panel id → pane handle
   let activePanelId = null;
   let requestedMode = MODES.includes(initialMode) ? initialMode : "review";
+  // While an open is switching documents, the path it is switching to, and whether the address
+  // it lands on is a new history entry (#455) or a description of the view that replaces one.
+  let switchingTo = null;
+  let historyIntent = "replace";
 
-  // A single presented document is one document: no tab strip, no dock (brief §4).
+  // A single presented document is one document at a time: no tab strip, no dock (brief §4). The
+  // navigator still reaches the rest of the workspace, closed until the reader opens it (#455).
   const singlePane = surface === "document";
   // Desk browser tabs (#440): web pages open in the dock only in a desktop app whose shell hosts
   // them, and says which version it is; in a plain browser the same actions hand the address to
@@ -922,7 +927,10 @@ export function mountApp(
   const sidebarNav = createNavigatorController({
     root,
     elements: { navToggle, sidebarEl, artifactList, starredToggle, starredSection, starredList },
-    enabled: surface !== "document",
+    // Its own preference, closed by default: a desk reader's open navigator must not open in every
+    // document an agent presents.
+    preferenceKey: singlePane ? NAV_OPEN_DOCUMENT_STORAGE_KEY : NAV_OPEN_STORAGE_KEY,
+    defaultOpen: !singlePane,
     // Stars are a desk affordance (decision 2026-09-25); a companion surface never lists them.
     desk,
   });
@@ -1550,7 +1558,7 @@ export function mountApp(
     const panel = dock?.api.getPanel(id);
     const group = panel?.api.group;
     panel?.api.close();
-    await openArtifact(nextPath, { mode: "edit", group });
+    await openArtifact(nextPath, { mode: "edit", group, history: "replace" });
     return true;
   }
 
@@ -1569,6 +1577,7 @@ export function mountApp(
       existing.api.setActive();
       return true;
     }
+    closeSinglePane();
     dock.api.addPanel({
       id,
       component: "pane",
@@ -1584,10 +1593,47 @@ export function mountApp(
     return true;
   }
 
-  async function openArtifact(path, { mode, group } = {}) {
-    if (!path || !currentSlug) return false;
-    if (knownImages.has(path)) return openImage(path, group);
-    if (knownReadOnly.has(path)) return openImage(path, group, "read-only");
+  /** A presented document holds one pane, so before another opens every open pane must agree to
+   * close; a draft is never dropped by opening the next document. */
+  async function makeRoomFor(panelId) {
+    if (!dock || dock.api.getPanel(panelId)) return "ready";
+    const current = dock;
+    for (const pane of [...panes.values()]) {
+      if (!(await (pane.confirmClose?.() ?? true))) return "declined";
+      if (unmounted || dock !== current) return "failed";
+    }
+    return "ready";
+  }
+
+  /** Opening a document is the one focus change a person asks for, so by default it adds a history
+   * entry (#455): Back returns to the document it replaced. Restoring and replacing a pane pass
+   * `history: "replace"`. */
+  async function openArtifact(path, options = {}) {
+    return (await openArtifactOutcome(path, options)) === "opened";
+  }
+
+  async function openArtifactOutcome(path, { mode, group, history = "push" } = {}) {
+    if (!path || !currentSlug) return "failed";
+    const kind = knownImages.has(path) ? "image" : knownReadOnly.has(path) ? "read-only" : "artifact";
+    const panelId = kind === "artifact" ? artifactPanelId(path) : JSON.stringify([kind, path]);
+    if (singlePane) {
+      const room = await makeRoomFor(panelId);
+      if (room !== "ready") return room;
+      if (unmounted) return "failed";
+    }
+    const previous = focusedPath();
+    switchingTo = path;
+    historyIntent = history === "push" && path !== previous ? "push" : "replace";
+    try {
+      const opened = kind === "artifact" ? addArtifactPanel(path, { mode, group }) : openImage(path, group, kind);
+      return opened ? "opened" : "failed";
+    } finally {
+      switchingTo = null;
+      historyIntent = "replace";
+    }
+  }
+
+  function addArtifactPanel(path, { mode, group }) {
     if (mode) requestedMode = mode;
     const existing = dock?.api.getPanel(artifactPanelId(path));
     if (existing) {
@@ -1597,9 +1643,7 @@ export function mountApp(
       return true;
     }
     if (!dock) return false;
-    if (singlePane) {
-      for (const openId of [...panes.keys()]) dock.api.getPanel(openId)?.api.close();
-    }
+    closeSinglePane();
     dock.api.addPanel({
       id: artifactPanelId(path),
       component: "pane",
@@ -1613,6 +1657,11 @@ export function mountApp(
     markActivePane();
     markNavigatorOpenSet();
     return true;
+  }
+
+  function closeSinglePane() {
+    if (!singlePane || !dock) return;
+    for (const openId of [...panes.keys()]) dock.api.getPanel(openId)?.api.close();
   }
 
   function openDiff({ path, from, to }) {
@@ -1653,15 +1702,29 @@ export function mountApp(
     );
   }
 
+  /** The workspace file the active pane shows: a document, an image or a read-only file. */
+  function focusedPath() {
+    if (!activePanelId) return null;
+    const [kind, path] = decodePanelId(activePanelId);
+    return ["artifact", "image", "read-only"].includes(kind) ? path : null;
+  }
+
   function reflectFocus() {
     const pane = activePane();
-    // §10: the URL keeps describing ONE focused artifact — the active pane — which preserves the
+    const artifact = focusedPath();
+    // Mid-switch, the dock can report the pane being closed or nothing at all before the new one
+    // is active. Reflecting that would overwrite the entry Back must return to.
+    if (switchingTo !== null && artifact !== switchingTo) return;
+    const history = historyIntent;
+    historyIntent = "replace";
+    // §10: the URL keeps describing ONE focused file — the active pane — which preserves the
     // `glosa open <file>` deep-link contract and keeps a shared URL short and legible. The
     // arrangement itself is never serialized into the address bar.
     onFocusChange?.({
       slug: currentSlug,
-      artifact: pane && pane.kind === "artifact" ? pane.path : null,
+      artifact,
       mode: pane?.getMode?.() ?? requestedMode,
+      history,
     });
     document.title = documentTitle();
   }
@@ -2134,7 +2197,7 @@ export function mountApp(
     if (initialArtifact) {
       const focus = initialArtifact;
       initialArtifact = undefined;
-      await openArtifact(focus, { mode: requestedMode });
+      await openArtifact(focus, { mode: requestedMode, history: "replace" });
     } else if (!restored) {
       reflectFocus();
     } else {
@@ -2428,6 +2491,17 @@ export function mountApp(
       if (!(await (pane.confirmClose?.() ?? true))) return false;
     }
     return true;
+  };
+  // Back and Forward to another document in this view (#455): shown in place, replacing the entry
+  // the browser moved to rather than adding one. "unhandled" hands the address to a reload.
+  unmount.followRoute = async ({ artifact, mode } = {}) => {
+    if (unmounted || !dock || !currentSlug || !artifact) return "unhandled";
+    const outcome = await openArtifactOutcome(artifact, {
+      mode: MODES.includes(mode) ? mode : undefined,
+      history: "replace",
+    });
+    if (outcome === "opened") return "handled";
+    return outcome === "declined" ? "declined" : "unhandled";
   };
   return unmount;
 }

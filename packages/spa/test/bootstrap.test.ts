@@ -30,6 +30,9 @@ describe("same-tab route navigation (#145)", () => {
       replaceState(_state: unknown, _title: string, url?: string | URL | null) {
         location.href = new URL(String(url), location).href;
       },
+      pushState(_state: unknown, _title: string, url?: string | URL | null) {
+        location.href = new URL(String(url), location).href;
+      },
     };
     const controller = watchRouteChanges({
       location,
@@ -171,6 +174,213 @@ describe("same-tab route navigation (#145)", () => {
     expect(app.reloaded).toEqual([]);
     expect(app.location.hash).toBe(accepted);
     expect(app.controller.isNavigating()).toBe(false);
+    app.controller.stop();
+  });
+});
+
+describe("history for document switches (#455)", () => {
+  type Outcome = "handled" | "declined" | "unhandled";
+  const PRESENTED = "#w=one&a=first.md&surface=document&mode=review&kind=companion";
+  /** A browser history stack: push truncates the forward entries, Back and Forward move the
+   * address and fire popstate then hashchange, the way a browser does for a fragment change. */
+  function setup({
+    hash = PRESENTED,
+    confirmLeave = async () => true,
+    followFocus,
+  }: {
+    hash?: string;
+    confirmLeave?: () => Promise<boolean>;
+    followFocus?: (focus: { artifact: string; mode: string | null }) => Promise<Outcome>;
+  } = {}) {
+    const location = new URL(`http://127.0.0.1:9999/${hash}`);
+    const events = new EventTarget();
+    const reloaded: string[] = [];
+    const followed: Array<{ artifact: string; mode: string | null }> = [];
+    const entries = [location.href];
+    let index = 0;
+    const history = {
+      pushState(_state: unknown, _title: string, url?: string | URL | null) {
+        location.href = new URL(String(url), location).href;
+        entries.splice(index + 1, entries.length, location.href);
+        index = entries.length - 1;
+      },
+      replaceState(_state: unknown, _title: string, url?: string | URL | null) {
+        location.href = new URL(String(url), location).href;
+        entries[index] = location.href;
+      },
+    };
+    const controller = watchRouteChanges({
+      location,
+      history,
+      events,
+      confirmLeave,
+      reload: () => void reloaded.push(location.hash),
+      ...(followFocus
+        ? {
+            followFocus: (focus: { artifact: string; mode: string | null }) => {
+              followed.push(focus);
+              return followFocus(focus);
+            },
+          }
+        : {}),
+    });
+    function traverse(delta: number) {
+      index += delta;
+      location.href = entries[index] as string;
+      events.dispatchEvent(new Event("popstate"));
+      events.dispatchEvent(new Event("hashchange"));
+    }
+    return {
+      location,
+      controller,
+      reloaded,
+      followed,
+      hashes: () => entries.map((entry) => new URL(entry).hash),
+      index: () => index,
+      back: () => traverse(-1),
+      forward: () => traverse(1),
+      link(next: string) {
+        location.hash = next;
+        events.dispatchEvent(new Event("hashchange"));
+      },
+    };
+  }
+  const tick = () => Bun.sleep(0);
+  const focusOf = (artifact: string, mode = "review") => ({
+    slug: "one",
+    artifact,
+    surface: "document" as const,
+    mode: mode as "review",
+    kind: "companion" as const,
+  });
+
+  test("an explicit open pushes one entry and later focus reflection replaces it", () => {
+    const app = setup();
+    app.controller.reflectFocus(focusOf("second.md"), { push: true });
+    expect(app.hashes()).toEqual([PRESENTED, "#w=one&a=second.md&surface=document&mode=review&kind=companion"]);
+    app.controller.reflectFocus(focusOf("second.md", "edit"));
+    app.controller.reflectFocus(focusOf("second.md", "edit"), { push: true });
+    expect(app.hashes()).toEqual([PRESENTED, "#w=one&a=second.md&surface=document&mode=edit&kind=companion"]);
+    app.controller.stop();
+  });
+
+  test("a pushed address never carries the pairing secret the link arrived with", () => {
+    const app = setup({ hash: `#p=presentation-secret&t=durable-secret&${PRESENTED.slice(1)}` });
+    app.controller.reflectFocus(focusOf("second.md"), { push: true });
+    for (const hash of app.hashes().slice(1)) {
+      expect(hash).not.toContain("secret");
+    }
+    expect(app.location.hash).toBe("#w=one&a=second.md&surface=document&mode=review&kind=companion");
+    app.controller.stop();
+  });
+
+  test("popstate to a document in the same workspace is followed in place: no reload, Back then Forward", async () => {
+    let app!: ReturnType<typeof setup>;
+    app = setup({
+      followFocus: async ({ artifact, mode }) => {
+        app.controller.reflectFocus(focusOf(artifact, mode ?? "review"));
+        return "handled";
+      },
+    });
+    app.controller.reflectFocus(focusOf("second.md"), { push: true });
+    app.back();
+    await tick();
+    expect(app.followed).toEqual([{ artifact: "first.md", mode: "review" }]);
+    expect(app.location.hash).toBe(PRESENTED);
+    expect(app.index()).toBe(0);
+    app.forward();
+    await tick();
+    expect(app.followed.map((focus) => focus.artifact)).toEqual(["first.md", "second.md"]);
+    expect(app.location.hash).toBe("#w=one&a=second.md&surface=document&mode=review&kind=companion");
+    expect(app.hashes()).toHaveLength(2);
+    expect(app.reloaded).toEqual([]);
+    app.controller.stop();
+  });
+
+  test("a declined follow restores the accepted address without a reload", async () => {
+    const app = setup({ followFocus: async () => "declined" });
+    app.controller.reflectFocus(focusOf("second.md"), { push: true });
+    const onScreen = app.location.hash;
+    app.back();
+    await tick();
+    expect(app.followed).toHaveLength(1);
+    expect(app.location.hash).toBe(onScreen);
+    expect(app.reloaded).toEqual([]);
+    app.controller.stop();
+  });
+
+  test("an unhandled follow falls back to consent and reload", async () => {
+    let prompts = 0;
+    const app = setup({
+      followFocus: async () => "unhandled",
+      confirmLeave: async () => {
+        prompts++;
+        return true;
+      },
+    });
+    app.controller.reflectFocus(focusOf("second.md"), { push: true });
+    app.back();
+    await tick();
+    expect(app.followed).toHaveLength(1);
+    expect(prompts).toBe(1);
+    expect(app.reloaded).toEqual([PRESENTED]);
+    app.controller.stop();
+  });
+
+  for (const [label, hash] of <Array<[string, string]>>[
+    ["workspace", "#w=two&a=first.md&surface=document&mode=review&kind=companion"],
+    ["surface", "#w=one&a=first.md&mode=review&kind=companion"],
+    ["kind", "#w=one&a=first.md&surface=document&mode=review&kind=desk"],
+    ["lock", "#w=one&a=first.md&surface=document&mode=read&lock=read&kind=companion"],
+  ]) {
+    test(`a popped route for another ${label} is never followed in place`, async () => {
+      const app = setup({ hash, followFocus: async () => "handled" });
+      app.controller.reflectFocus(focusOf("second.md"), { push: true });
+      app.back();
+      await tick();
+      expect(app.followed).toEqual([]);
+      expect(app.reloaded).toEqual([hash]);
+      app.controller.stop();
+    });
+  }
+
+  test("the follow hook is not consulted for a route without a document", async () => {
+    const app = setup({ followFocus: async () => "handled" });
+    app.link("#w=one&surface=document&kind=companion");
+    await tick();
+    expect(app.followed).toEqual([]);
+    expect(app.reloaded).toEqual(["#w=one&surface=document&kind=companion"]);
+    app.controller.stop();
+  });
+
+  test("a link carrying a pairing secret is never followed in place", async () => {
+    const app = setup({ followFocus: async () => "handled" });
+    const next = `#p=presentation-secret&w=one&a=second.md&surface=document&kind=companion`;
+    app.link(next);
+    await tick();
+    expect(app.followed).toEqual([]);
+    expect(app.reloaded).toEqual([next]);
+    app.controller.stop();
+  });
+
+  test("a later link during an in-place follow still wins", async () => {
+    let finish!: (outcome: Outcome) => void;
+    const app = setup({
+      followFocus: (focus) =>
+        focus.artifact === "first.md"
+          ? new Promise<Outcome>((done) => {
+              finish = done;
+            })
+          : Promise.resolve("unhandled"),
+    });
+    app.controller.reflectFocus(focusOf("second.md"), { push: true });
+    app.back();
+    const later = "#w=two&a=elsewhere.md&surface=document&kind=companion";
+    app.link(later);
+    finish("handled");
+    await tick();
+    expect(app.followed.map((focus) => focus.artifact)).toEqual(["first.md"]);
+    expect(app.reloaded).toEqual([later]);
     app.controller.stop();
   });
 });

@@ -605,8 +605,13 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           return { surface: root?.getAttribute('data-surface'),
             text: active?.querySelector('.glosa-content')?.textContent ?? '',
             panes: root?.querySelectorAll('.glosa-pane').length,
-            navigatorHidden: root?.querySelector('.glosa-nav-toggle')?.hidden,
-            sidebarHidden: root?.querySelector('.glosa-sidebar')?.hidden,
+            // #455: a presented document keeps the navigator behind its toggle, closed by default.
+            toggleShown: Boolean(root?.querySelector('.glosa-nav-toggle')?.getBoundingClientRect().width),
+            sidebarShown: (() => {
+              const sidebar = root?.querySelector('.glosa-sidebar');
+              return Boolean(sidebar) && getComputedStyle(sidebar).display !== 'none';
+            })(),
+            navOpen: root?.getAttribute('data-nav-open'),
             mode: active?.getAttribute('data-mode'),
             readLocked: root?.getAttribute('data-preview-lock') === 'true',
             hash: location.hash, paired: localStorage.getItem('glosa_token') !== null };
@@ -985,14 +990,15 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     );
 
     test(
-      "#145: a document fragment reaches one rendered pane without navigator",
+      "#145: a document fragment reaches one rendered pane with the navigator closed behind its toggle",
       async () => {
         const { client } = await launchBrowser({ initialUrl: documentUrl("document") });
         cdp = client;
         const state = await waitForRoute(client, "document", "A paragraph with a deliberate single newline");
         expect(state.panes).toBe(1);
-        expect(state.navigatorHidden).toBe(true);
-        expect(state.sidebarHidden).toBe(true);
+        expect(state.toggleShown).toBe(true);
+        expect(state.navOpen).toBe("false");
+        expect(state.sidebarShown).toBe(false);
         expect(state.paired).toBe(true);
         expect(new URLSearchParams(state.hash.slice(1)).has("t")).toBe(false);
       },
@@ -1010,8 +1016,10 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
         const state = await waitForRoute(client, "document", "A callout");
         expect(state.panes).toBe(1);
-        expect(state.navigatorHidden).toBe(true);
-        expect(state.sidebarHidden).toBe(true);
+        // The workspace's own navigator was open; the presented document's stays closed.
+        expect(state.toggleShown).toBe(true);
+        expect(state.navOpen).toBe("false");
+        expect(state.sidebarShown).toBe(false);
         expect(state.paired).toBe(true);
         expect(new URLSearchParams(state.hash.slice(1)).has("t")).toBe(false);
         expect(await client.evaluate<string>("JSON.stringify(localStorage)")).toBe(layoutBefore);
@@ -1039,7 +1047,8 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         const state = await waitForRoute(client, "document", "A callout");
         expect(state.readLocked).toBe(true);
         expect(state.mode).toBe("read");
-        expect(state.navigatorHidden).toBe(true);
+        expect(state.navOpen).toBe("false");
+        expect(state.sidebarShown).toBe(false);
       },
       TEST_TIMEOUT_MS,
     );

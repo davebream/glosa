@@ -53,7 +53,6 @@ export function createViewerShell(
   root,
   {
     dataAccess,
-    surface,
     appearance,
     mountAppearanceControl,
     mountAttentionTray,
@@ -229,13 +228,6 @@ export function createViewerShell(
     mainEl,
     shortcutsEl,
   );
-  if (surface === "document") {
-    // A presented single document has no workspace to navigate: the navigator is not hidden
-    // behind a toggle, it does not exist.
-    navToggle.hidden = true;
-    sidebarEl.hidden = true;
-    root.setAttribute("data-nav-open", "false");
-  }
   const artifactNavigator = createArtifactTreeNavigator(artifactList, { onOpen: onOpenArtifact });
 
   return {

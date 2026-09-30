@@ -165,7 +165,8 @@ navigator tree, the top bar's workspace-scoped controls, and every copy string i
 document is one document.
 
 > **Shipped delta (2026-09-21).** It is one PANE of the same dock, not a second route — one tab
-> group holding one panel, the navigator hidden, and `storage: null` so a presented document never
+> group holding one panel, the navigator closed behind its toggle (hidden entirely until #455; see
+> decisions.md, 2026-09-30), and `storage: null` so a presented document never
 > writes over the workspace's saved arrangement. That is #145's fold: the difference between the
 > two surfaces is a layout and a flag, not a parallel viewer. Gated by the browser tests in
 > `test/acceptance/rich-editor-browser-roundtrip.test.ts`.

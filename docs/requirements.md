@@ -393,10 +393,14 @@ registration epochs prevent filename collisions and restoration into a replaceme
   fragment (A3 "Desktop shell"). Which face a workspace shows is decided by who registered it, never
   by the window (`docs/design/2026-09-25-desktop-shell-feature-map.md`).
 - **Document links and same-tab navigation**: a `surface=document` fragment renders one pane with
-  the navigator hidden, without restoring or overwriting the workspace's saved tab layout. External
-  fragment changes and history traversal re-enter bootstrap after every open pane's discard guard
-  consents. Cancellation preserves the mounted editor and restores its secret-free focus URL.
-  Workspace, artifact, surface, mode and read lock follow the requested fragment.
+  the navigator closed behind its toggle, without restoring or overwriting the workspace's saved tab
+  layout. Opening another document (navigator, Go to, the Attention tray, a question's "Go to it")
+  adds a browser history entry; every other focus change replaces the current one. Back and Forward
+  to another document in the same workspace, surface, kind and read lock are shown in place, after
+  the pane it replaces consents. Other external fragment changes and history traversal re-enter
+  bootstrap after every open pane's discard guard consents. Cancellation preserves the mounted
+  editor and restores its secret-free focus URL. Workspace, artifact, surface, mode and read lock
+  follow the requested fragment.
 - **One page per artifact in three states, per pane**, named for what the HUMAN is doing rather than
   for who the counterparty is. **Review** is the default page: the anchored two-way margin, where
   the reviewer's own comments AND a session's questions and pointers about a passage are answered

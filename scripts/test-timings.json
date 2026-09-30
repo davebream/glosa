@@ -311,8 +311,8 @@
       "reason": "Initial local Bun 1.4.2 estimate for the theme validator over the shipped theme files and the rendered stylesheet (pure, no DOM, no process); replace with measured CI medians."
     },
     "test/acceptance/workbench-real-engine.test.ts": {
-      "seconds": 22.0,
-      "reason": "Measured 9.00038 s in CI before #409; #409 adds one real-engine test (a daemon, a browser, a document, Settings) that takes about 10 s of the file's 26 s locally, and #410 one more (three palettes, each reloaded and painted in light, dark and more contrast, then Settings) that takes about 12 s, 33.4 s for the file locally, so about 22 s in CI; replace with measured CI medians."
+      "seconds": 23.0,
+      "reason": "Measured 9.00038 s in CI before #409; #409 adds one real-engine test (a daemon, a browser, a document, Settings) that takes about 10 s of the file's 26 s locally, #410 one more (three palettes, each reloaded and painted in light, dark and more contrast, then Settings) that takes about 12 s, 33.4 s for the file locally, so about 22 s in CI; #455 adds one more (a presented document, Go to, Back and Forward) at about 1.2 s locally; replace with measured CI medians."
     },
     "packages/spa/test/composer-real-engine.test.ts": {
       "seconds": 4.0,

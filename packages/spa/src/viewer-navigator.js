@@ -17,6 +17,8 @@
 // now means the same thing at every width.
 
 export const NAV_OPEN_STORAGE_KEY = "glosa_nav_open";
+/** A presented document's navigator (#455) remembers its own choice, closed by default. */
+export const NAV_OPEN_DOCUMENT_STORAGE_KEY = "glosa_nav_open_document";
 export const NAV_STARRED_STORAGE_KEY = "glosa_nav_starred";
 
 function defaultStorage() {
@@ -51,7 +53,8 @@ function writeFlag(storage, key, value) {
  *   root: any,
  *   elements: any,
  *   storage?: any,
- *   enabled?: boolean,
+ *   preferenceKey?: string,
+ *   defaultOpen?: boolean,
  *   desk?: boolean,
  * }} options
  */
@@ -59,21 +62,20 @@ export function createNavigatorController({
   root,
   elements,
   storage = defaultStorage(),
-  enabled = true,
+  preferenceKey = NAV_OPEN_STORAGE_KEY,
+  defaultOpen = true,
   desk = true,
 } = {}) {
   const { navToggle, sidebarEl, artifactList, starredToggle, starredSection, starredList } = elements;
 
   let starredExpanded = readFlag(storage, NAV_STARRED_STORAGE_KEY, true);
   let starredAvailable = false;
-  // A presented single document has no workspace to navigate, so there is nothing to show and no
-  // preference to honour.
-  let open = enabled && readFlag(storage, NAV_OPEN_STORAGE_KEY, true);
+  let open = readFlag(storage, preferenceKey, defaultOpen);
 
   function syncInteractivity() {
     // A hidden navigator is display:none, and therefore already out of the focus order; `inert`
     // and `aria-hidden` state it anyway so nothing depends on the CSS having loaded.
-    const unreachable = enabled && !open;
+    const unreachable = !open;
     sidebarEl.inert = unreachable;
     if (unreachable) sidebarEl.setAttribute("aria-hidden", "true");
     else sidebarEl.removeAttribute("aria-hidden");
@@ -89,7 +91,7 @@ export function createNavigatorController({
     navToggle.setAttribute("aria-expanded", String(open));
     navToggle.setAttribute("aria-label", open ? "Hide navigator" : "Show navigator");
     navToggle.title = open ? "Hide navigator" : "Show navigator"; /* the same name the tools beside it show */
-    if (persist) writeFlag(storage, NAV_OPEN_STORAGE_KEY, open);
+    if (persist) writeFlag(storage, preferenceKey, open);
     syncInteractivity();
     // A column appearing beside the work must not pull the reader out of the text, so showing it
     // never moves focus. Hiding it returns focus to the control that hid it.

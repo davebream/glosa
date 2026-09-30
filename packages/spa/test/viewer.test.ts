@@ -1853,20 +1853,197 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     unmount();
   });
 
-  test("document surface hides navigator chrome", async () => {
-    const root = dom.document.createElement("div");
-    dom.document.body.append(root);
-    (mountApp as any)(root, {
-      dataAccess: fakeDataAccess(),
-      surface: "document",
-      initialSlug: "ws-1",
-      initialArtifact: "notes.md",
+  describe("a presented document keeps its workspace within reach (#455)", () => {
+    const settle = async () => {
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+    };
+    /** A companion document surface presented on notes.md, in a workspace that also holds other.md. */
+    async function present(overrides: Partial<Record<string, unknown>> = {}) {
+      dom.window.localStorage.removeItem("glosa_nav_open_document");
+      const root = dom.document.createElement("div");
+      dom.document.body.append(root);
+      const focus: Array<Record<string, unknown>> = [];
+      const da = fakeDataAccess({
+        getArtifacts: async () => [
+          { path: "notes.md", class: "R" },
+          { path: "other.md", class: "R" },
+        ],
+        ...overrides,
+      });
+      const app = (mountApp as any)(root, {
+        dataAccess: da,
+        surface: "document",
+        surfaceKind: "companion",
+        initialSlug: "ws-1",
+        initialArtifact: "notes.md",
+        onFocusChange: (next: Record<string, unknown>) => focus.push(next),
+      });
+      await settle();
+      const cleanup = () => {
+        app();
+        root.remove();
+        dom.window.localStorage.removeItem("glosa_nav_open_document");
+      };
+      return { root, app, da, focus, cleanup };
+    }
+    const artifactFocus = (focus: Array<Record<string, unknown>>) =>
+      focus.filter((entry) => entry.artifact).map((entry) => [entry.artifact, entry.history]);
+
+    test("the navigator stays behind its toggle, closed by default", async () => {
+      const { root, cleanup } = await present();
+      expect(root.getAttribute("data-surface")).toBe("document");
+      const toggle = root.querySelector(".glosa-nav-toggle") as any;
+      const sidebar = root.querySelector(".glosa-sidebar") as any;
+      expect(toggle.hidden).toBe(false);
+      expect(sidebar.hidden).toBe(false);
+      expect(root.getAttribute("data-nav-open")).toBe("false");
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(root.querySelector('.glosa-tree-row[title="other.md"]')).not.toBeNull();
+      expect(dom.document.title).toBe("notes.md");
+      toggle.click();
+      expect(root.getAttribute("data-nav-open")).toBe("true");
+      expect(dom.window.localStorage.getItem("glosa_nav_open_document")).toBe("true");
+      // The desk's own preference is untouched: a presented document remembers its own choice.
+      expect(dom.window.localStorage.getItem("glosa_nav_open")).toBeNull();
+      cleanup();
     });
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect(root.getAttribute("data-surface")).toBe("document");
-    expect((root.querySelector(".glosa-nav-toggle") as any).hidden).toBe(true);
-    expect((root.querySelector(".glosa-sidebar") as any).hidden).toBe(true);
-    expect(dom.document.title).toBe("notes.md");
+
+    test("the first open replaces the entry, and a navigator click replaces the pane with a push", async () => {
+      const { root, focus, cleanup } = await present();
+      expect(artifactFocus(focus).every(([, history]) => history === "replace")).toBe(true);
+      expect(artifactFocus(focus).at(-1)?.[0]).toBe("notes.md");
+      focus.length = 0;
+      (root.querySelector('.glosa-tree-row[title="other.md"]') as any).click();
+      await settle();
+      expect(root.querySelectorAll(".glosa-pane")).toHaveLength(1);
+      // Exactly one entry is pushed, for the document the reader asked for, and nothing reflected
+      // mid-switch (the closing pane, or no pane at all) overwrote the entry Back returns to.
+      expect(focus.filter((entry) => entry.history === "push")).toEqual([
+        expect.objectContaining({ artifact: "other.md", history: "push" }),
+      ]);
+      expect(focus[0]).toEqual(expect.objectContaining({ artifact: "other.md", history: "push" }));
+      expect(focus.every((entry) => entry.artifact === "other.md")).toBe(true);
+      cleanup();
+    });
+
+    test("Go to from the Attention tray pushes history and keeps a single pane", async () => {
+      const ask = {
+        id: "inb-9",
+        created_at: "2026-09-30T10:00:00Z",
+        status: "open",
+        action: "ask",
+        target_path: "other.md",
+        message: "Does this section still hold?",
+        passage: { quote: { exact: "Body." } },
+        approval_mode: false,
+      };
+      const { root, focus, cleanup } = await present({
+        getInbox: async () => ({ pending_count: 1, attention: [ask] }),
+      });
+      focus.length = 0;
+      (root.querySelector(".glosa-attention-trigger") as any).click();
+      await settle();
+      const goTo = Array.from(root.querySelectorAll(".glosa-attention-actions button")).find(
+        (button: any) => button.textContent === "Go to the passage",
+      ) as any;
+      expect(goTo).toBeDefined();
+      goTo.click();
+      await settle();
+      expect(root.querySelectorAll(".glosa-pane")).toHaveLength(1);
+      expect(focus[0]).toEqual(expect.objectContaining({ artifact: "other.md", history: "push" }));
+      expect(focus.filter((entry) => entry.history === "push")).toHaveLength(1);
+      cleanup();
+    });
+
+    test("following a route back to the earlier document replaces rather than pushes", async () => {
+      const { root, app, focus, cleanup } = await present();
+      (root.querySelector('.glosa-tree-row[title="other.md"]') as any).click();
+      await settle();
+      focus.length = 0;
+      expect(await app.followRoute({ artifact: "notes.md", mode: "review" })).toBe("handled");
+      await settle();
+      expect(root.querySelectorAll(".glosa-pane")).toHaveLength(1);
+      expect(focus.length).toBeGreaterThan(0);
+      expect(focus.every((entry) => entry.artifact === "notes.md" && entry.history === "replace")).toBe(true);
+      expect(await app.followRoute({ artifact: null, mode: null })).toBe("unhandled");
+      cleanup();
+    });
+
+    test("switching documents asks before an unsaved draft goes, and declining keeps it", async () => {
+      const { root, app, focus, cleanup } = await present();
+      const pane = root.querySelector(".glosa-pane") as any;
+      pane.querySelector(".glosa-tools-edit-source").click();
+      await settle();
+      pane.querySelector(".glosa-face-source").click();
+      const textarea = pane.querySelector(".glosa-edit-area");
+      textarea.value = "# edited\n";
+      textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      await settle();
+      focus.length = 0;
+      const dialogTitle = () => dom.document.querySelector(".glosa-dialog h2")?.textContent ?? null;
+      const decline = () => (dom.document.querySelector(".glosa-dialog .glosa-btn-ghost") as any).click();
+
+      (root.querySelector('.glosa-tree-row[title="other.md"]') as any).click();
+      await settle();
+      expect(dialogTitle()).toBe("Discard unsaved edits?");
+      decline();
+      await settle();
+      expect(Array.from(root.querySelectorAll(".glosa-pane")).map((el: any) => el.getAttribute("aria-label"))).toEqual([
+        "notes.md",
+      ]);
+      expect(focus.filter((entry) => entry.history === "push")).toEqual([]);
+
+      const followed = app.followRoute({ artifact: "other.md", mode: "review" });
+      await settle();
+      expect(dialogTitle()).toBe("Discard unsaved edits?");
+      decline();
+      expect(await followed).toBe("declined");
+      expect((root.querySelector(".glosa-edit-area") as any)?.value).toBe("# edited\n");
+      cleanup();
+    });
+
+    test("the connection control shows: Connect agent when unbound, Agent connected when bound", async () => {
+      let sessions: unknown[] = [];
+      const { root, da, cleanup } = await present({
+        getStatus: async () => ({
+          workspaces: [
+            {
+              slug: "ws-1",
+              path: "/tmp/ws-1",
+              pending_count: 0,
+              connect: {
+                providers: [{ provider: "claude-code", display_name: "Claude Code", instruction: "Bind Claude." }],
+                cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
+              },
+            },
+          ],
+          sessions,
+        }),
+      });
+      const host = root.querySelector(".glosa-agent-feedback") as any;
+      const control = root.querySelector(".glosa-agent-feedback-trigger") as any;
+      expect(host.hidden).toBe(false);
+      expect(control.getAttribute("data-state")).toBe("unbound");
+      expect(control.textContent).toContain("Connect agent");
+      expect(control.disabled).toBe(false);
+      sessions = [
+        {
+          session_id: "live-claude-session",
+          provider: "claude-code",
+          cwd: "/tmp/ws-1",
+          workspace_binding: "/tmp/ws-1",
+          last_active_at: "2026-09-30T10:01:00.000Z",
+          liveness: "alive",
+        },
+      ];
+      (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
+      await settle();
+      expect(control.getAttribute("data-state")).toBe("connected");
+      expect(control.textContent).toContain("Agent connected");
+      cleanup();
+    });
   });
 
   test("single-document history renders a selected comparison inline because tabs are unavailable", async () => {

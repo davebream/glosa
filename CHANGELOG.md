@@ -22,6 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   The card now offers Request changes and Approve, as the attention tray does, with an optional
   response that goes back with either one. Questions from `glosa_ask` keep Send answer and
   Can't answer.
+- A document an agent presented no longer strands its reader after following "Go to" into another
+  document. Opening another document now adds a browser history entry, so Back returns to the first
+  one and Forward to the second, in place and without reloading, and a document with unsaved edits
+  asks before it is replaced. The navigator is available there too, closed until the reader opens it
+  from the corner, and remembers that choice apart from the desk's (#455).
 
 ## [0.1.0-alpha.37] · 2026-09-29
 

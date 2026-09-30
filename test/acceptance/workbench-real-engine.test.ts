@@ -1243,6 +1243,108 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   );
 
   test(
+    "a companion document follows Go to into another document, and Back returns to the first without a reload (#455)",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, `${pairedUrl(ALPHA)}&surface=document&kind=companion`);
+      await waitForState(
+        tab,
+        "alpha presented",
+        (state) => state.screens.includes("ready") && Boolean(paneFor(state, ALPHA)?.text.length),
+      );
+      // Survives only while the page does: a reload would clear it.
+      await tab.evaluate("window.__glosaMarker = 'same page'; true");
+      const startLength = await tab.evaluate<number>("history.length");
+
+      const res = await fetch(`${origin()}/api/workspaces/attention-request`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TOKEN}`, Origin: origin(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: workspaceRoot,
+          target_path: BETA,
+          action: "ask",
+          message: "Does the second document still agree with the first?",
+        }),
+      });
+      expect(res.status, `attention-request: ${await res.clone().text()}`).toBe(201);
+
+      const pressed = async (label: string, selector: string, text?: string) => {
+        for (let attempt = 0; attempt < 200; attempt++) {
+          const clicked = await tab.evaluate<boolean>(`(() => {
+            const target = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
+              .find((el) => ${text === undefined ? "true" : `el.textContent === ${JSON.stringify(text)}`});
+            if (!target || target.disabled) return false;
+            target.click();
+            return true;
+          })()`);
+          if (clicked) return;
+          await Bun.sleep(50);
+        }
+        throw new Error(`${label}: ${selector} never became pressable`);
+      };
+      await pressed("the tray", ".glosa-attention-trigger:not([hidden])");
+      await pressed("Go to", ".glosa-attention-actions button", "Go to the passage");
+
+      const atBeta = await waitForState(
+        tab,
+        "beta after Go to",
+        (state) => state.panes.length === 1 && Boolean(paneFor(state, BETA)?.text.length),
+      );
+      expect(new URLSearchParams(atBeta.hash.slice(1)).get("a")).toBe(BETA);
+      expect(await tab.evaluate<number>("history.length")).toBe(startLength + 1);
+
+      await tab.evaluate("history.back(); true");
+      const backAtAlpha = await waitForState(
+        tab,
+        "alpha after Back",
+        (state) => state.panes.length === 1 && Boolean(paneFor(state, ALPHA)?.text.length),
+      );
+      expect(paneFor(backAtAlpha, ALPHA)?.text).toContain(ALPHA_TEXT);
+      expect(new URLSearchParams(backAtAlpha.hash.slice(1)).get("a")).toBe(ALPHA);
+      expect(await tab.evaluate<string>("window.__glosaMarker")).toBe("same page");
+
+      await tab.evaluate("history.forward(); true");
+      const forwardAtBeta = await waitForState(
+        tab,
+        "beta after Forward",
+        (state) => state.panes.length === 1 && Boolean(paneFor(state, BETA)?.text.length),
+      );
+      expect(paneFor(forwardAtBeta, BETA)?.text).toContain(BETA_TEXT);
+      expect(await tab.evaluate<string>("window.__glosaMarker")).toBe("same page");
+      expect(await tab.evaluate<number>("history.length")).toBe(startLength + 1);
+
+      // The rest of the workspace is one visible control away, and the connection is on screen.
+      // Opened, the navigator is a column beside the document, never stacked above or over it.
+      const chrome = await tab.evaluate<{
+        toggle: number;
+        sidebar: { left: number; right: number; top: number; height: number };
+        pane: { left: number; top: number };
+        connection: string;
+      }>(`(() => {
+        const box = (el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, height: r.height, width: r.width };
+        };
+        const toggle = box(document.querySelector('.glosa-nav-toggle'));
+        document.querySelector('.glosa-nav-toggle').click();
+        return {
+          toggle: toggle.width * toggle.height,
+          sidebar: box(document.querySelector('.glosa-sidebar')),
+          pane: box(document.querySelector('.glosa-pane')),
+          connection: document.querySelector('.glosa-agent-feedback-trigger')?.textContent ?? '',
+        };
+      })()`);
+      expect(chrome.toggle).toBeGreaterThan(0);
+      expect(chrome.sidebar.height).toBeGreaterThan(0);
+      expect(chrome.sidebar.left).toBe(0);
+      expect(chrome.pane.left).toBeGreaterThanOrEqual(chrome.sidebar.right);
+      expect(chrome.sidebar.top).toBeLessThanOrEqual(chrome.pane.top);
+      expect(chrome.connection).toContain("Connect agent");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
     "ended native logins remove browser links, reject terminal input and explain recovery",
     async () => {
       const { browser, cdpPort } = await launchBrowser();

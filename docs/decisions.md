@@ -1843,3 +1843,27 @@ Use CodeMirror 6 directly as a lazy, locally vendored ES module, with bounded te
 virtualized rendering. This adds no framework, runtime build, egress, worker or CSP exception to
 the browser. Binary and oversized files show metadata. Root and nested `.gitignore` affect only
 the new tier. A visible 10,000-file cap and incomplete-scan warning avoid silent omissions.
+
+## 2026-09-30: A presented document keeps its workspace within reach (#455)
+
+A `surface=document` page (what `glosa_present` and `glosa open <file>` produce) used to remove the
+navigator and reflect every document switch with `history.replaceState`. After the Attention tray's
+"Go to" opened another document, the first one's pane was closed, Back was disabled and nothing on
+screen led back to it.
+
+The surface stays single-pane. The navigator now exists there, closed by default, with its own
+remembered choice (`glosa_nav_open_document`) so a desk reader's open navigator does not open in
+every presented document. An open a person asks for (navigator, Go to, the tray, a question's "Go
+to it") pushes a history entry; focus reflection (tab clicks, layout restore, a pane closing, mode
+changes) replaces. The address names the focused file, including an image or read-only file, so
+every pushed entry can be returned to.
+
+Back and Forward to another document in the same workspace, surface, kind and read lock are
+followed in place: the pane it replaces is asked to close first, and nothing reloads. Any other
+popped address, a link carrying a pairing secret, or a route without a document still goes through
+consent and a reload. A declined follow rewrites the popped entry to what is still on screen, the
+same trade-off a declined link already makes.
+
+**Rejected.** Letting the document surface grow tabs (the brief keeps it one document); a separate
+in-app Back button (browser history already carries the path, and the navigator covers
+discovery); sharing the desk's navigator preference.

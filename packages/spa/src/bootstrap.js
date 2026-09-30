@@ -91,6 +91,10 @@ export function canonicalMode(raw) {
 /** @typedef {FragmentLocation & { pathname: string, search: string }} AddressLocation */
 /** @typedef {Pick<Storage, "getItem" | "setItem">} TokenStorage */
 /** @typedef {Pick<History, "replaceState">} HistoryWriter */
+/** @typedef {Pick<History, "replaceState" | "pushState">} HistoryNavigator */
+/** What the mounted view did with an address the browser moved to within this page: `handled`
+ * shows it in place, `declined` means a pane refused to close, `unhandled` leaves it to a reload.
+ * @typedef {"handled" | "declined" | "unhandled"} FollowOutcome */
 /** @typedef {{
  *   slug: string | null,
  *   artifact: string | null,
@@ -112,7 +116,9 @@ export function canonicalMode(raw) {
 /** One definition, in the module that owns the daemon boundary — two copies of this shape drifted
  * apart the moment `install_id` was added to one of them.
  * @typedef {import("./data-access.js").Handshake} Handshake */
-/** @typedef {{ slug?: string, artifact?: string, mode?: Mode }} FocusChange */
+/** `history: "push"` marks a focus change a person asked for by opening another document; every
+ * other change only describes the view and replaces the current entry.
+ * @typedef {{ slug?: string, artifact?: string, mode?: Mode, history?: "push" | "replace" }} FocusChange */
 /** @typedef {{
  *   dataAccess: ReturnType<typeof createDataAccess>,
  *   initialSlug?: string,
@@ -209,31 +215,65 @@ export function focusHash({ slug, artifact, surface, mode, readLock, kind } = {}
 }
 
 /**
- * Reflect the on-screen focus into the address bar via `history.replaceState` — no new history
- * entry per artifact, so reload/refresh restores the view and the URL stays shareable. Rebuilds
- * `pathname + search + focusHash(...)` from scratch (same shape scrub leaves behind), which is
- * why secrets can never reappear.
+ * Reflect the on-screen focus into the address bar via `history.replaceState`, so reload/refresh
+ * restores the view and the URL stays shareable. Rebuilds `pathname + search + focusHash(...)`
+ * from scratch (same shape scrub leaves behind), which is why secrets can never reappear.
  */
 /** @param {AddressLocation} loc @param {HistoryWriter} history @param {Focus} focus */
 export function writeFocus(loc, history, focus) {
   history.replaceState(null, "", loc.pathname + loc.search + focusHash(focus));
 }
 
-/** Follow external same-tab links through the normal bootstrap. Internal focus reflection uses
- * replaceState and updates the accepted address without creating a navigation. While a discard
- * dialog is open, later history/hash events replace the requested target, not the mounted view.
- * @param {{ location: AddressLocation, history: HistoryWriter, events: EventTarget,
- *   confirmLeave: () => Promise<boolean>, reload: () => void }} deps
+/** Whether two routes name the same mounted view: a popped address that differs only in its
+ * document and mode can be shown in place; anything else needs a fresh bootstrap.
+ * @param {Focus} a @param {Focus} b */
+function sameView(a, b) {
+  return (
+    (a.slug ?? null) === (b.slug ?? null) &&
+    (a.surface ?? "workspace") === (b.surface ?? "workspace") &&
+    (a.kind ?? "companion") === (b.kind ?? "companion") &&
+    Boolean(a.readLock) === Boolean(b.readLock)
+  );
+}
+
+/** Follow the browser's own navigation within this page (#455). Opening another document pushes an
+ * entry; every other focus change replaces the current one, and neither fires an event. Back and
+ * Forward to a document in the mounted view are shown in place through `followFocus`; any other
+ * address (another workspace, surface, kind or lock, a link carrying a pairing secret, a route
+ * with no document) goes through consent and a reload. While a discard dialog is open, later
+ * history/hash events replace the requested target, not the mounted view.
+ * @param {{ location: AddressLocation, history: HistoryNavigator, events: EventTarget,
+ *   confirmLeave: () => Promise<boolean>, reload: () => void,
+ *   followFocus?: (focus: { artifact: string, mode: Mode | null }) => Promise<FollowOutcome> }} deps
  */
-export function watchRouteChanges({ location, history, events, confirmLeave, reload }) {
+export function watchRouteChanges({
+  location,
+  history,
+  events,
+  confirmLeave,
+  reload,
+  followFocus = async () => "unhandled",
+}) {
   const address = () => location.pathname + location.search + location.hash;
+  const page = () => location.pathname + location.search;
+  /** @param {string} value */
+  const hashOf = (value) => (value.includes("#") ? value.slice(value.indexOf("#")) : "");
   // A cancelled link must never put the original pairing secret back in the address bar.
-  let accepted = location.pathname + location.search + focusHash(readRoute(location));
+  let accepted = page() + focusHash(readRoute(location));
+  /** @type {Focus} */
+  let acceptedRoute = readRoute(location);
   let requested = accepted;
   let visibleRequested = accepted;
   let pending = false;
   let reloading = false;
   let stopped = false;
+
+  /** Whether an address can be shown by the mounted view without a reload. @param {string} target */
+  function followable(target) {
+    if (!target.startsWith(page() + "#") && target !== page()) return false;
+    const route = readRoute({ hash: hashOf(target) });
+    return Boolean(route.artifact && !route.durableToken && !route.presentationToken && sameView(route, acceptedRoute));
+  }
 
   async function navigate() {
     if (stopped || reloading) return;
@@ -242,12 +282,30 @@ export function watchRouteChanges({ location, history, events, confirmLeave, rel
     // consent settles; only a genuinely different link replaces it.
     if (!pending || incoming !== visibleRequested) {
       requested = incoming;
-      visibleRequested = location.pathname + location.search + focusHash(readRoute(location));
+      visibleRequested = page() + focusHash(readRoute(location));
       if (requested !== visibleRequested) history.replaceState(null, "", visibleRequested);
     }
     if (pending || requested === accepted) return;
     pending = true;
     try {
+      // Back and Forward within the view. A link that arrives while one is being followed wins.
+      while (followable(requested)) {
+        const target = requested;
+        const route = readRoute({ hash: hashOf(target) });
+        const outcome = await followFocus({ artifact: /** @type {string} */ (route.artifact), mode: route.mode });
+        if (stopped) return;
+        if (outcome === "unhandled") break;
+        if (outcome === "declined") {
+          // Same trade-off as a declined link: the popped entry now names what is still on screen.
+          history.replaceState(null, "", accepted);
+          return;
+        }
+        if (requested === target) {
+          if (address() !== accepted) history.replaceState(null, "", accepted);
+          return;
+        }
+        if (requested === accepted) return;
+      }
       const allowed = await confirmLeave();
       if (stopped) return;
       if (!allowed) {
@@ -269,10 +327,17 @@ export function watchRouteChanges({ location, history, events, confirmLeave, rel
   events.addEventListener("hashchange", onNavigate);
   events.addEventListener("popstate", onNavigate);
   return {
-    /** @param {Focus} focus */
-    reflectFocus(focus) {
-      accepted = location.pathname + location.search + focusHash(focus);
-      if (!pending && !reloading && !stopped) history.replaceState(null, "", accepted);
+    /** Record what the view shows. `push` adds a history entry when the address changes, so Back
+     * returns to the document it replaced; it never fires hashchange or popstate.
+     * @param {Focus} focus @param {{ push?: boolean }} [options] */
+    reflectFocus(focus, { push = false } = {}) {
+      const next = page() + focusHash(focus);
+      const changed = next !== accepted;
+      accepted = next;
+      acceptedRoute = focus;
+      if (pending || reloading || stopped) return;
+      if (push && changed) history.pushState(null, "", next);
+      else history.replaceState(null, "", next);
     },
     isNavigating: () => pending || reloading || stopped,
     stop() {
@@ -446,12 +511,15 @@ async function enterForeignDaemon(dataAccess, paired) {
 async function main() {
   const route = readRoute(window.location); // before scrub — it strips secrets from the fragment
   let confirmLeave = async () => true;
+  /** @type {(focus: { artifact: string, mode: Mode | null }) => Promise<FollowOutcome>} */
+  let followFocus = async () => "unhandled";
   const navigation = watchRouteChanges({
     location: window.location,
     history: window.history,
     events: window,
     confirmLeave: () => confirmLeave(),
     reload: () => window.location.reload(),
+    followFocus: (focus) => followFocus(focus),
   });
   let redeemed = null;
   const presentation = await resolvePresentationToken(
@@ -528,10 +596,10 @@ async function main() {
     const readLock = Boolean(route.readLock);
     // viewer.js is intentionally not yet checked; adapt its incomplete inferred parameter type
     // at this one import seam while keeping bootstrap's full call contract explicit.
-    const mountReadyApp =
-      /** @type {(root: Element, options: BootstrapMountOptions) => { confirmClose: () => Promise<boolean> }} */ (
-        /** @type {unknown} */ (mountApp)
-      );
+    const mountReadyApp = /** @type {(root: Element, options: BootstrapMountOptions) => {
+     *   confirmClose: () => Promise<boolean>,
+     *   followRoute: (focus: { artifact: string, mode: Mode | null }) => Promise<FollowOutcome>,
+     * }} */ (/** @type {unknown} */ (mountApp));
     const app = mountReadyApp(/** @type {Element} */ (readyEl), {
       // The SAME data-access instance the handshake came from, so the app inherits the identity
       // check rather than building a second, unconfigured client (R6: one module, one decision).
@@ -546,16 +614,20 @@ async function main() {
       textSize,
       // The desktop shell's bridge, present only in its own window on the SPA's origin (R-P3).
       shell: /** @type {any} */ (window).glosaShell ?? null,
-      onFocusChange: (next) =>
-        navigation.reflectFocus({
-          ...next,
-          surface,
-          kind: route.kind,
-          mode: next.mode ?? initialMode,
-          readLock,
-        }),
+      onFocusChange: ({ history, ...next }) =>
+        navigation.reflectFocus(
+          {
+            ...next,
+            surface,
+            kind: route.kind,
+            mode: next.mode ?? initialMode,
+            readLock,
+          },
+          { push: history === "push" },
+        ),
     });
     confirmLeave = () => app.confirmClose();
+    followFocus = (focus) => app.followRoute(focus);
   }
 }
 
