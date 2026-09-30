@@ -201,7 +201,8 @@ describe("Review mode — the agent's half of the margin", () => {
     id: "inb-1",
     created_at: "2026-09-05T10:00:00Z",
     status: "open",
-    action: "review",
+    action: "ask",
+    requester: { source: "session", provider: "claude-code", display_name: "Claude Code", session_id: "requester-a" },
     target_path: "notes.md",
     message: "Is that ok already? Is argument X covered enough?",
     agent_label: "api-refactor",
@@ -235,7 +236,7 @@ describe("Review mode — the agent's half of the margin", () => {
       expect(hl.words("glosa-session-points", host)).toEqual([]);
       expect(hl.words("glosa-anchors", host)).toEqual([]);
       // Not by colour alone: the question's mark names its author in words, and has a tab.
-      expect(q(host, ".glosa-session-by").textContent).toBe("Claude Code asks");
+      expect(q(host, ".glosa-session-by").textContent).toBe("Claude Code · requester-a asks");
       expect(q(host, ".glosa-session-tab").getAttribute("aria-label")).toContain("Question from Claude Code");
     } finally {
       hl.restore();
@@ -281,13 +282,13 @@ describe("Review mode — the agent's half of the margin", () => {
   test("proven provider and claimed label are rendered as separate things", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
     const card = q(host, ".glosa-agent-card");
-    expect(q(card, ".glosa-agent-provider").textContent).toBe("Claude Code");
+    expect(q(card, ".glosa-agent-provider").textContent).toBe("Claude Code · requester-a");
     expect(q(card, ".glosa-agent-claimed").textContent).toBe("api-refactor");
   });
 
   test("no session label leaves the provider standing alone rather than inventing a name", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise({ agent_label: null })]));
-    expect(q(host, ".glosa-agent-provider").textContent).toBe("Claude Code");
+    expect(q(host, ".glosa-agent-provider").textContent).toBe("Claude Code · requester-a");
     expect(q(host, ".glosa-agent-claimed")).toBeNull();
   });
 
@@ -485,7 +486,7 @@ describe("Review mode — the agent's half of the margin", () => {
       const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
       const notice = q(host, ".glosa-ask-notice");
       expect(notice.hidden).toBe(false);
-      expect(notice.textContent).toContain("Claude Code is asking about a passage");
+      expect(notice.textContent).toContain("Claude Code · requester-a is asking about a passage");
       expect(q(notice, ".glosa-ask-notice-go").textContent).toBe("Go to it");
     });
 

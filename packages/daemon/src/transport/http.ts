@@ -3069,6 +3069,9 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (claimRoute) return claimRoute;
   const attentionRoute = attentionRoutes(
     {
+      sessionRegistry: ctx.sessionRegistry,
+      providerDisplayName: (provider, target) =>
+        ctx.providerRegistry?.get(provider)?.connectPrompt(target).display_name,
       workspaceIndex: ctx.workspaceIndex,
       workspaceRegistration: ctx.workspaceIndex,
       getWorkspaceBus: ctx.getWorkspaceBus,

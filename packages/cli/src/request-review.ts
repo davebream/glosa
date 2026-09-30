@@ -25,6 +25,7 @@ export interface RequestReviewArgs {
   action?: string;
   requireApproval?: boolean;
   waitMs?: number; // undefined = don't wait
+  sessionId?: string;
   agentLabel?: string;
   target?: { quote: { exact: string; prefix?: string; suffix?: string } };
   answerOptions?: string[];
@@ -90,6 +91,7 @@ export async function runRequestReview(
       action: args.action ?? "review",
       targetPath: args.path,
       ...(args.requireApproval ? { approvalMode: true } : {}),
+      ...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
       ...(args.agentLabel !== undefined ? { agentLabel: args.agentLabel } : {}),
       ...(args.target !== undefined ? { target: args.target } : {}),
       ...(args.answerOptions !== undefined ? { answerOptions: args.answerOptions } : {}),

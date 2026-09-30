@@ -581,7 +581,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     // sheet. Copy source, Print and History moved into the pane that holds their artifact.
     expect(
       menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance"),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
+    expect(menu.querySelector(".glosa-attention")).toBeNull();
+    expect(root.querySelector(".glosa-topbar-actions > .glosa-attention .glosa-attention-trigger")).not.toBeNull();
     expect(menu.querySelector(".glosa-conversation-toggle")).toBeNull();
     expect(menu.querySelector(".glosa-tools-copy-source")).toBeNull();
     expect(menu.querySelector(".glosa-tools-print")).toBeNull();
@@ -2583,6 +2585,39 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       expect(live?.textContent).toContain("is asking about a passage in notes.md");
       expect(live?.textContent).not.toContain("Switched");
       unmount();
+    });
+
+    test("sessionless reviews are announced as reviews for current and unopened documents", async () => {
+      for (const target_path of ["notes.md", "other.md"]) {
+        const review = {
+          ...question,
+          action: "review",
+          message: null,
+          passage: null,
+          target_path,
+          requester: { source: "command_line" },
+        };
+        const { root, unmount } = await arrive([review], { open: true });
+        try {
+          const notice = root.querySelector(".glosa-ask-notice-text")?.textContent;
+          expect(notice).toContain("A request from the command line asks you to review");
+          expect(notice).not.toContain("question");
+          expect(root.querySelector('.glosa-visually-hidden[role="status"]')?.textContent).toContain(
+            `review ${target_path}`,
+          );
+          const badge = root.querySelector(".glosa-topbar-actions > .glosa-attention .glosa-attention-badge") as any;
+          expect(badge.textContent).toBe("1");
+          expect(badge.hidden).toBe(false);
+          if (target_path === "notes.md") {
+            (root.querySelector(".glosa-ask-notice-go") as any).click();
+            await flush();
+            expect(root.querySelector(".glosa-agent-provider")?.textContent).toBe("A request from the command line");
+          }
+        } finally {
+          unmount();
+          root.remove();
+        }
+      }
     });
 
     test("with nothing open, nothing is opened for the reader either — the Attention tray lists it", async () => {

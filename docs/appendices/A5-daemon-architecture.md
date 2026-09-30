@@ -134,6 +134,11 @@
 - GC (on start + throttled ≥60s): missing path → soft `present:false` (keeps slug for history); hard-remove only when gone AND no live session AND the registration's bus holds zero journal-derived pending entries AND present:false ≥ grace (or `glosa forget <slug>`, which stays forceful). Conservative on every axis: an unreadable journal counts as "has pending" — never remove on uncertainty. Resource eviction receives the removed registration, not an ambiguous path, and addresses the bus and watcher by immutable registration ID. Deterministic registration ids (sha256 of kind+canonical path) make same-path re-open reclaim a surviving home-redirected bus, so parked entries in `~/.glosa/state/<id>` outlive an accidental removal; `GET /api/status` additionally reports `orphaned_state` (state dirs with pending entries and no registration) so doctor can surface them.
 
 ## F23 — inbox/attention lifecycle
+- Attention entries are excluded by the shared delivery eligibility gate before preview or
+  preparation, including targeted requests, restart/registration drains and managed work queues.
+  No monitor, Codex push or MCP pull attempt is recorded for them. This applies to legacy entries
+  and entries with historical delivery attempts. SPA presentation/completion still advances the
+  existing attention lifecycle; explicit retrieval and held verdict reads remain available.
 - Inbox files **immutable**; status field frozen `pending`, non-authoritative. **Authoritative status = journal replay fold** (overrides R3's cross-file rewrite per F04). `resolve` appends ONE journal line, never rewrites the entry.
 - **Two separate axes**: (1) lifecycle status (small state machine, one legal writer/transition, idempotent); (2) `delivery_attempt` events = NOT transitions. Re-nudging a `delivered` entry emits new delivery_attempt (status stays delivered); per-rung "delivered" semantics live in `attempt.outcome`.
 - Conversation entries use terminal `pending → delivered`. The transition is appended only with a

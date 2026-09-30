@@ -75,9 +75,11 @@ describe("what interrupts someone", () => {
   });
 
   test("the body is the agent's message, or plain words for a review or approval without one", () => {
-    expect(attentionBody({ message: "Check the intro." })).toBe("Check the intro.");
-    expect(attentionBody({ action: "review" })).toBe("An agent asks for a review.");
-    expect(attentionBody({ approval_mode: true })).toBe("An agent asks for your approval.");
+    expect(attentionBody({ message: "Check the intro." })).toBe(
+      "Requester unknown is asking about a passage. Check the intro.",
+    );
+    expect(attentionBody({ action: "review" })).toBe("Requester unknown asks you to review this document.");
+    expect(attentionBody({ approval_mode: true })).toBe("Requester unknown asks you to approve this document.");
     expect(attentionBody({ message: "x".repeat(500) }).length).toBe(240);
   });
 });
@@ -132,7 +134,13 @@ describe("notifications", () => {
     w.add("b", { id: "q1", message: "Should the second section go?" });
     watch.handleFrame({ event: "attention_changed", data: { slug: "b" } });
     await watch.flush();
-    expect(w.notes()).toEqual([{ id: "attention:b:q1", title: "beta", body: "Should the second section go?" }]);
+    expect(w.notes()).toEqual([
+      {
+        id: "attention:b:q1",
+        title: "beta",
+        body: "Requester unknown is asking about a passage. Should the second section go?",
+      },
+    ]);
   });
 
   test("nothing is shown while the window is focused", async () => {

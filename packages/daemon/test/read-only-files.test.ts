@@ -161,6 +161,21 @@ test("worker listing and shared live invalidation stay independent of the worksp
     await new Promise<void>((resolve) => {
       signal = resolve;
     });
+    // The resync above is a queued microtask, not a filesystem-watcher readiness signal.
+    // Prove a real event first; otherwise the single measured save can race native startup.
+    await new Promise<void>((resolve, reject) => {
+      let probe = 0;
+      const interval = setInterval(() => put("watch-ready.ts", String(++probe)), 50);
+      const timer = setTimeout(() => {
+        clearInterval(interval);
+        reject(new Error("Filesystem watcher did not become ready"));
+      }, 3000);
+      signal = () => {
+        clearInterval(interval);
+        clearTimeout(timer);
+        resolve();
+      };
+    });
     const changed = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("No file invalidation")), 3000);
       signal = () => {

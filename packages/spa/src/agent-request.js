@@ -135,43 +135,52 @@ export function requestsForArtifact(entries, artifactPath) {
     .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
 }
 
-/**
- * Names the request entries the margin actually holds. A non-empty message is the same boundary
- * the card and arrival logic use for a question; an entry without one is a pointer. Session
- * identity is deliberately absent: the request payload carries no verified requester id, and a
- * claimed label is not evidence that two entries came from the same session.
- */
-export function agentRequestSummary(requests) {
-  let questions = 0;
-  let pointers = 0;
-  for (const request of requests ?? []) {
-    if (typeof request?.message === "string" && request.message.length > 0) questions += 1;
-    else pointers += 1;
-  }
+/** Classify the requested action before considering optional message text. */
+export function requestKind(entry) {
+  if (entry?.approval_mode === true || entry?.action === "review") return "review";
+  if (entry?.action === "ask") return "question";
+  if (entry?.action === "point") return "pointer";
+  return typeof entry?.message === "string" && entry.message.length > 0 ? "question" : "pointer";
+}
 
-  return [
-    questions > 0 ? `${questions} ${questions === 1 ? "question" : "questions"}` : null,
-    pointers > 0 ? `${pointers} ${pointers === 1 ? "pointer" : "pointers"}` : null,
-  ]
-    .filter(Boolean)
+export function agentRequestSummary(requests) {
+  const counts = { question: 0, review: 0, pointer: 0 };
+  for (const request of requests ?? []) counts[requestKind(request)] += 1;
+  return Object.entries(counts)
+    .filter(([, count]) => count > 0)
+    .map(([kind, count]) => `${count} ${kind}${count === 1 ? "" : "s"}`)
     .join(" · ");
 }
 
-/** A request that carries a question. A question holds its session until it is answered; a
- * pointer ("look here") does not, and the two are treated differently everywhere downstream. */
 export function isQuestion(entry) {
-  return (
-    Boolean(entry) && entry.approval_mode !== true && typeof entry.message === "string" && entry.message.length > 0
-  );
+  return Boolean(entry) && entry.approval_mode !== true && requestKind(entry) === "question";
 }
 
-/** Every open question in the inbox, oldest first. The order is the order they are offered in:
- * the session that has waited longest is the one the reader is pointed to first (#308). */
-export function openQuestions(entries) {
+/** Questions and ordinary reviews both need a notice; final approvals own their strip. */
+export function needsResponse(entry) {
+  return Boolean(entry) && entry.approval_mode !== true && requestKind(entry) !== "pointer";
+}
+
+export function openRequests(entries) {
   return (entries ?? [])
-    .filter(isQuestion)
+    .filter(needsResponse)
     .slice()
     .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+}
+
+export function openQuestions(entries) {
+  return openRequests(entries).filter(isQuestion);
+}
+
+/** Wording shared by the visible notice, live announcement and desktop notification. */
+export function requestNotice(entry, { file = "", lost = false } = {}) {
+  const who = agentIdentity(entry).provider;
+  const kind = requestKind(entry);
+  if (kind === "review") {
+    return `${who} asks you to ${entry.approval_mode === true ? "approve" : "review"} ${file || "this document"}.`;
+  }
+  if (kind === "pointer") return `${who} points to a passage${file ? ` in ${file}` : ""}.`;
+  return `${who} is asking about a passage${lost ? " that could not be located in the current text" : file ? ` in ${file}` : ""}.`;
 }
 
 /**
@@ -286,15 +295,14 @@ export function stackTabs(wanted, { size = 20, gap = 4 } = {}) {
   return out;
 }
 
-/**
- * How a session is named on a card.
- *
- * Two halves with different standing, and the card must not blur them: the provider is derived
- * from a session binding glosa verified, while the label is a string the session sent about
- * itself. Invariant 3 forbids presenting the second as if it carried the weight of the first, so
- * they are returned separately and styled separately — never concatenated into one name.
- */
-export function agentIdentity(request, { providerName = "An agent session" } = {}) {
+/** Recorded requester identity is independent of the currently selected/live session. */
+export function agentIdentity(request) {
+  const requester = request?.requester;
   const label = typeof request?.agent_label === "string" ? request.agent_label.trim() : "";
-  return { provider: providerName, claimed: label.length > 0 ? label : null };
+  let provider = "Requester unknown";
+  if (requester?.source === "command_line") provider = "A request from the command line";
+  else if (requester?.source === "session" && requester.session_id && requester.provider) {
+    provider = `${requester.display_name || requester.provider} · ${requester.session_id}`;
+  }
+  return { provider, claimed: label.length > 0 ? label : null };
 }

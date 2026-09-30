@@ -278,6 +278,7 @@ function longDocument(): string {
 }
 
 interface AskState {
+  attentionBadgeHidden: boolean;
   mode: string | null;
   scrollTop: number;
   scrollMax: number;
@@ -327,6 +328,7 @@ const askStateExpression = `(() => {
   const cardEl = pane.querySelector('.glosa-ask-layer .glosa-agent-card');
   const para = [...pane.querySelectorAll('.glosa-content p')].find((p) => p.textContent.includes('The remedy is fewer tools'));
   return {
+    attentionBadgeHidden: document.querySelector('.glosa-attention-badge')?.hidden ?? true,
     mode: pane.getAttribute('data-mode'),
     scrollTop: Math.round(main.scrollTop),
     scrollMax: Math.round(main.scrollHeight - main.clientHeight),
@@ -529,6 +531,65 @@ describe("#308 — an agent's question in a real engine", () => {
     );
   const click = (page: CdpClient, selector: string) =>
     page.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+
+  test(
+    "top-bar attention is visible at compact widths and returns keyboard focus after review",
+    async () => {
+      const id = await ask({ action: "review" });
+      const page = await launch("1000,800");
+      await page.send("Emulation.setDeviceMetricsOverride", {
+        width: 390,
+        height: 844,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await page.navigate(pairedUrl("read"));
+      await waitFor(
+        page,
+        "review notice",
+        (s) => s.notice?.hidden === false && s.notice.text.includes("asks you to review"),
+      );
+      const control = await page.evaluate<{ visible: boolean; label: string; count: string; bounds: string }>(`(() => {
+      const button = document.querySelector('.glosa-topbar-actions > .glosa-attention .glosa-attention-trigger');
+      const r = button.getBoundingClientRect();
+      return { visible: r.width > 0 && r.left >= 0 && r.right <= innerWidth && getComputedStyle(button).visibility === 'visible',
+        bounds: JSON.stringify({left:r.left,right:r.right,width:innerWidth}), label: button.getAttribute('aria-label'), count: button.querySelector('.glosa-attention-badge').textContent };
+    })()`);
+      expect(control.visible, control.bounds).toBe(true);
+      expect(control).toMatchObject({ label: "Attention requests, 1 pending", count: "1" });
+      await page.evaluate("document.querySelector('.glosa-attention-trigger').focus()");
+      for (const type of ["keyDown", "keyUp"])
+        await page.send("Input.dispatchKeyEvent", {
+          type,
+          key: "Enter",
+          code: "Enter",
+          text: type === "keyDown" ? "\r" : undefined,
+          windowsVirtualKeyCode: 13,
+        });
+      expect(await page.evaluate<boolean>("document.querySelector('.glosa-attention-tray').hidden")).toBe(false);
+      for (const type of ["keyDown", "keyUp"])
+        await page.send("Input.dispatchKeyEvent", { type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      expect(await page.evaluate<boolean>("document.activeElement.classList.contains('glosa-attention-trigger')")).toBe(
+        true,
+      );
+      await click(page, ".glosa-ask-notice-go");
+      await waitFor(page, "review opened", (s) => s.mode === "review");
+      const verdict = await fetch(`http://127.0.0.1:${port}/w/${slug}/inbox/${id}/response`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ outcome: "approved" }),
+      });
+      expect(verdict.status).toBe(200);
+      await waitFor(
+        page,
+        "review completed",
+        (s) =>
+          s.attentionBadgeHidden && (!s.notice || s.notice.hidden || !s.notice.text.includes("asks you to review")),
+      );
+      expect(await page.evaluate<boolean>("document.querySelector('.glosa-attention-badge').hidden")).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   test(
     "below the rail: told where, never moved, there in one action, and answered beside the words",

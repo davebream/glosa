@@ -2605,6 +2605,34 @@ describe("A1 §5 route catalog", () => {
     expect(await generic.json()).toMatchObject({ status: "done", detail: { outcome: "done" } });
   });
 
+  test("attention records its actual requester and rejects an unknown session", async () => {
+    await sessionRegistry.register({ session_id: "requester-a", provider: "codex", cwd: root, source: "mcp" });
+    const create = (extra: Record<string, unknown>) =>
+      fetchFn(
+        stateChangingReq("/api/workspaces/attention-request", {
+          method: "POST",
+          body: JSON.stringify({ path: root, action: "review", ...extra }),
+        }),
+      );
+    const sessionRequest = await (await create({ session_id: "requester-a" })).json();
+    const cliRequest = await (await create({})).json();
+    expect((await create({ session_id: "missing" })).status).toBe(404);
+    expect((await create({ session_id: 4 })).status).toBe(400);
+    await sessionRegistry.deregister("requester-a");
+    const inbox = await (await fetchFn(req(`/w/${slug}/inbox`))).json();
+    expect(inbox.attention.find((entry: { id: string }) => entry.id === sessionRequest.id).requester).toEqual({
+      source: "session",
+      session_id: "requester-a",
+      provider: "codex",
+    });
+    expect(inbox.attention.find((entry: { id: string }) => entry.id === cliRequest.id).requester).toEqual({
+      source: "command_line",
+    });
+    expect(ctx.getWorkspaceBus(root).readEntry(sessionRequest.id)?.payload).toMatchObject({
+      requester: { source: "session", session_id: "requester-a", provider: "codex" },
+    });
+  });
+
   test("approval mode stores a normalized target, exposes it in inbox, and records an exact revision verdict", async () => {
     writeFileSync(join(root, "notes.md"), "# Approval\r\n");
     const create = await fetchFn(
@@ -2625,6 +2653,7 @@ describe("A1 §5 route catalog", () => {
       kind: "attention_request",
       action: "proofread",
       message: "Check the citations",
+      requester: { source: "command_line" },
       target_path: "notes.md",
       approval_mode: true,
     });
@@ -2644,6 +2673,7 @@ describe("A1 §5 route catalog", () => {
           approval_mode: true,
           // An approval request carries no passage, no session label, and no answer options —
           // present as explicit nulls so a client never has to tell "absent" from "unsupported".
+          requester: { source: "command_line" },
           agent_label: null,
           passage: null,
           answer_options: null,

@@ -150,6 +150,21 @@ describe("composite cwd-ancestor session drain (R2/W34)", () => {
     writeFileSync(path, damaged);
   }
 
+  test("registration and composite drains leave human requests in the attention tray", async () => {
+    const workspace = await child("attention", "2026-01-01T00:00:00.000Z");
+    await workspace.bus.createAttentionRequest("human-review", { kind: "attention_request", action: "review" });
+    await registerSession();
+    const response = await drain();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ count: 0, has_more: false });
+    expect(workspace.bus.state.entries["human-review"]?.deliveryAttempts).toHaveLength(0);
+    const inbox = await fetchFn(req(`/w/${workspace.entry.slug}/inbox`));
+    expect(await inbox.json()).toMatchObject({
+      pending_count: 1,
+      attention: [{ id: "human-review", requester: null }],
+    });
+  });
+
   test("an unbound ancestor combines every routable present workspace, globally oldest first, with byte-stable ties and workspace labels", async () => {
     const first = await child("first", "2026-01-01T00:00:00.000Z");
     const second = await child("second", "2026-01-01T00:00:00.000Z");

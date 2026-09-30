@@ -131,7 +131,7 @@ export function createViewerShell(
   const toolsMenu = el(
     "div",
     { id: "glosa-tools-menu", className: "glosa-tools-menu", role: "group", "aria-label": "Workspace tools" },
-    [attentionHost, appearanceHost, shortcutsToggle],
+    [appearanceHost, shortcutsToggle],
   );
   const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
 
@@ -216,7 +216,7 @@ export function createViewerShell(
     el("header", { className: "glosa-topbar" }, [
       el("div", { className: "glosa-topbar-lead" }, [brandMark]),
       el("div", { className: "glosa-topbar-title" }, [goToTrigger]),
-      el("div", { className: "glosa-topbar-actions" }, [agentFeedbackHost, tools]),
+      el("div", { className: "glosa-topbar-actions" }, [agentFeedbackHost, attentionHost, tools]),
       topbarOverlays,
     ]),
     bannersEl,

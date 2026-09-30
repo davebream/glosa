@@ -346,6 +346,7 @@ export interface GlosaApiClient {
       action?: string;
       targetPath?: string;
       approvalMode?: boolean;
+      sessionId?: string;
       agentLabel?: string;
       target?: { quote: { exact: string; prefix?: string; suffix?: string } };
       answerOptions?: string[];
@@ -543,6 +544,7 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
           ...(opts.action !== undefined ? { action: opts.action } : {}),
           ...(opts.targetPath !== undefined ? { target_path: opts.targetPath } : {}),
           ...(opts.approvalMode === true ? { approval_mode: true } : {}),
+          ...(opts.sessionId !== undefined ? { session_id: opts.sessionId } : {}),
           ...(opts.agentLabel !== undefined ? { agent_label: opts.agentLabel } : {}),
           ...(opts.target !== undefined ? { target: opts.target } : {}),
           ...(opts.answerOptions !== undefined ? { answer_options: opts.answerOptions } : {}),

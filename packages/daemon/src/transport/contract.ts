@@ -96,7 +96,8 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 // folder restore. Additive HTTP; writable upgraded buses require a path-identity-aware reader.
 // v1.26 (#448): separate read-only inventory/content, per-folder views and ephemeral invalidations.
 // v1.27 (#458): source-scoped claims, status-only rejection, annotation resolutions and MCP identity/conflicts.
-export const CONTRACT_VERSION = "1.27";
+// v1.28 (#459): human-only attention delivery and immutable requester identity.
+export const CONTRACT_VERSION = "1.28";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

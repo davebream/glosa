@@ -360,7 +360,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.27: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.28: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -555,6 +555,12 @@ registration epochs prevent filename collisions and restoration into a replaceme
   as "not initialized". A workspace remains usable SPA-only without any agent.
 
 ### R9 — attention model  (detail: A5 §F23)
+- Attention requests are human-only: no agent push or ordinary MCP drain offers them. Answers still
+  return through the requesting call's terminal-status wait. Creation records the supplied registered
+  session and provider, or command-line origin when no session is supplied. Historical requests with
+  no recorded origin use a neutral label; the selected session is never evidence of the requester.
+  Reviews are announced and counted as reviews. The top-bar Attention control shows the current
+  workspace's pending count and remains reachable at compact widths without opening More.
 - Agents **knock, never barge**: `attention_request` entries retain their immutable `message`, `action`,
   and `target` and surface as workspace-switcher badges plus an
   attention tray (+ optional OS notification, deferred if it complicates persistent state). The SPA

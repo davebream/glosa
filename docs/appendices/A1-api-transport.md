@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.27", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.28", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -415,6 +415,17 @@ that stored `path` are projected into both fields. `approval_mode` is always a b
 `target_path` to resolve to an existing tracked artifact; the daemon stores its normalized relative
 path and permits at most one non-terminal approval-mode request per workspace/path. A duplicate
 returns **409 approval-conflict**. Omitting the flag preserves ordinary review behavior.
+
+Contract 1.28 adds optional `session_id` to attention creation. A supplied value must be a
+non-empty string naming a registered session (400 for malformed input, 404 for an unknown session).
+The daemon records an immutable `requester` snapshot: `{source:"session",session_id,provider,
+display_name?}` using the registered provider and its own display name, or `{source:"command_line"}`
+when no session was supplied. `GET /w/:slug/inbox` exposes this snapshot; historical payloads return
+`requester:null` and display "Requester unknown". Labels never fall back to the currently selected
+session. `agent_label` remains separately styled, caller-claimed text.
+
+Attention requests are addressed to the person and excluded from every agent push and MCP drain,
+including targeted drains. Explicit inbox retrieval and terminal-status waits remain available.
 
 It also accepts three optional fields that let a session point at a passage and ask about it:
 

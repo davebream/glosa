@@ -1261,7 +1261,10 @@ describe("official TypeScript MCP SDK contract", () => {
 
     test("an answered question returns the human's words and their chosen option", async () => {
       const { api, calls, created } = askApi(1, { outcome: "done", response: "Thin — say why.", chose: "thin" });
-      const connected = await connect(deps(new FakeDaemonClient(), api));
+      const connected = await connect({
+        ...deps(new FakeDaemonClient(), api),
+        session: () => ({ session_id: "asking-session", provider: "codex", cwd: "/workspace" }),
+      });
       try {
         const result = await callTool(connected.client, {
           name: "glosa_ask",
@@ -1284,6 +1287,7 @@ describe("official TypeScript MCP SDK contract", () => {
         });
         // The passage, the label and the options reached the daemon as sent.
         expect(created[0]).toMatchObject({
+          sessionId: "asking-session",
           agentLabel: "api-refactor",
           target: { quote: { exact: "the premise readers accept" } },
           answerOptions: ["covered", "thin"],
