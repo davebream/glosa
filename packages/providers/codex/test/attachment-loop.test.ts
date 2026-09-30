@@ -13,6 +13,7 @@ import {
   CODEX_PARK_PROBE_JITTER_MS,
   CODEX_PARK_PROBE_REQUEST_TIMEOUT_MS,
   type CodexAttachDeps,
+  type CodexAttachDiagnostic,
   type CodexControlClient,
   codexParkProbeDelay,
   runCodexAttachment,
@@ -575,4 +576,70 @@ describe("Codex attachment park/retry state machine (#206, socket-free)", () => 
       ],
     });
   });
+});
+
+test("attachment diagnostics identify resume failure and announce connection only after stream readiness", async () => {
+  const controller = new AbortController();
+  const events: CodexAttachDiagnostic[] = [];
+  let resumes = 0;
+  await runCodexAttachment(
+    { sessionId: "exact", workspace: "/workspace", cwd: "/agent" },
+    {
+      onDiagnostic: (event) => events.push(event),
+      createControlClient: async (_path, _signal, stage) => {
+        stage?.("handshake");
+        stage?.("initialize");
+        return fakeControl({
+          resume: async () => {
+            if (++resumes === 1) throw new Error("private payload must not escape");
+          },
+        });
+      },
+      createDaemonClient: async () => ({
+        register: async () => {},
+        heartbeat: async () => {},
+        acknowledgeStreamTransport: async () => {},
+        openSessionStream: async (_id, _transport, _entry, _signal, onOpen) => {
+          expect(events.some((event) => event.state === "connected")).toBe(false);
+          onOpen?.();
+          controller.abort();
+          return { ended: "eof" };
+        },
+      }),
+      random: () => 0,
+      now: () => 0,
+      sleep: async () => {},
+    },
+    controller.signal,
+  );
+  expect(events).toContainEqual({ stage: "resume", state: "failed", reason: "request-rejected" });
+  expect(events).toContainEqual({ stage: "resume", state: "retrying", retryInMs: 5000 });
+  expect(events.at(-1)).toEqual({ stage: "stream", state: "connected" });
+  expect(JSON.stringify(events)).not.toContain("private payload");
+});
+
+test("missing socket diagnostics retain a safe reason and never register a session", async () => {
+  const controller = new AbortController();
+  const events: CodexAttachDiagnostic[] = [];
+  await runCodexAttachment(
+    { sessionId: "exact", workspace: "/workspace", cwd: "/agent" },
+    {
+      onDiagnostic: (event) => events.push(event),
+      createControlClient: async () => {
+        throw Object.assign(new Error("/private/token"), { code: "ENOENT" });
+      },
+      createDaemonClient: async () => {
+        throw new Error("must not register");
+      },
+      random: () => 0,
+      now: () => 0,
+      sleep: async () => {
+        controller.abort();
+      },
+    },
+    controller.signal,
+  );
+  expect(events).toContainEqual({ stage: "socket", state: "failed", reason: "socket-missing" });
+  expect(events.some((event) => event.state === "connected")).toBe(false);
+  expect(JSON.stringify(events)).not.toContain("/private/token");
 });

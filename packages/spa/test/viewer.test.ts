@@ -1807,6 +1807,165 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     }
   });
 
+  test("an older chat refresh cannot replace a newly registered terminal session", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let releaseOld: (value: unknown) => void = () => {};
+    let hold = false;
+    let sessions: unknown[] = [];
+    const da = fakeDataAccess({
+      getChats: async () => ({ chats: [], external: [] }),
+      getStatus: () =>
+        hold
+          ? new Promise((resolve) => {
+              releaseOld = resolve;
+            })
+          : Promise.resolve({ sessions }),
+    });
+    const unmount = mountApp(root, { dataAccess: da });
+    const settle = async () => {
+      for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    try {
+      await settle();
+      const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh chats")!;
+      hold = true;
+      refresh.click();
+      await settle();
+      hold = false;
+      sessions = [{ session_id: "new-session", provider: "codex", workspace_binding: "/tmp/ws-1", liveness: "alive" }];
+      refresh.click();
+      await settle();
+      expect(root.querySelectorAll(".glosa-chat-list-item")).toHaveLength(1);
+      releaseOld({ sessions: [] });
+      await settle();
+      expect(root.querySelector(".glosa-chat-list-item")?.getAttribute("data-panel-id")).toBe(
+        JSON.stringify(["external-chat", "new-session"]),
+      );
+    } finally {
+      unmount();
+    }
+  });
+
+  test("failed external chat opening selects an error pane, preserving the previous session draft", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess({
+      getChats: async () => ({ chats: [], external: [] }),
+      getStatus: async () => ({
+        sessions: ["a", "b"].map((session_id) => ({
+          session_id,
+          provider: "codex",
+          workspace_binding: "/tmp/ws-1",
+          liveness: "alive",
+        })),
+      }),
+      rememberExternalChat: async (_slug: string, id: string) => {
+        if (id === "b") throw new Error("Session is no longer bound");
+      },
+      openSessionTranscript: () => () => {},
+    });
+    const unmount = mountApp(root, { dataAccess: da });
+    const settle = async () => {
+      for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    try {
+      await settle();
+      (root.querySelectorAll(".glosa-chat-list-item")[0] as any).click();
+      await settle();
+      const draft = root.querySelector(".glosa-conv-composer-input") as any;
+      draft.value = "Keep this draft for A";
+      (root.querySelectorAll(".glosa-chat-list-item")[1] as any).click();
+      await settle();
+      const errorPane = root.querySelector('.glosa-external-chat[data-session-id="b"]');
+      expect(errorPane).not.toBeNull();
+      expect(errorPane?.textContent).toContain("Session is no longer bound");
+      expect(errorPane?.querySelector("textarea")).toBeNull();
+      expect(root.querySelector('.glosa-chat-list-item[aria-current="page"]')?.getAttribute("data-panel-id")).toBe(
+        JSON.stringify(["external-chat", "b"]),
+      );
+      expect(draft.value).toBe("Keep this draft for A");
+    } finally {
+      unmount();
+    }
+  });
+
+  test("late external-chat validation never takes focus back from the session selected next", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let releaseA = () => {};
+    const pendingA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const da = fakeDataAccess({
+      getChats: async () => ({ chats: [], external: [] }),
+      getStatus: async () => ({
+        sessions: ["a", "b"].map((session_id) => ({ session_id, provider: "codex", workspace_binding: "/tmp/ws-1" })),
+      }),
+      rememberExternalChat: (_slug: string, session: string) => (session === "a" ? pendingA : Promise.resolve()),
+      openSessionTranscript: () => () => {},
+    });
+    const unmount = mountApp(root, { dataAccess: da });
+    try {
+      await settle();
+      (root.querySelectorAll(".glosa-chat-list-item")[0] as any).click();
+      expect(root.querySelector('.glosa-external-chat[data-session-id="a"]')?.textContent).toContain("Opening");
+      (root.querySelectorAll(".glosa-chat-list-item")[1] as any).click();
+      await settle();
+      releaseA();
+      await settle();
+      expect(root.querySelector('.glosa-chat-list-item[aria-current="page"]')?.getAttribute("data-panel-id")).toBe(
+        JSON.stringify(["external-chat", "b"]),
+      );
+      expect(root.querySelector('.glosa-external-chat[data-session-id="b"] textarea')).not.toBeNull();
+    } finally {
+      releaseA();
+      unmount();
+    }
+  });
+
+  test("external-chat validation from a departed workspace cannot mount into the next workspace", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mirrored: string[] = [];
+    const da = fakeDataAccess({
+      getWorkspaces: async () => [
+        { slug: "ws-1", path: "/tmp/ws-1" },
+        { slug: "ws-2", path: "/tmp/ws-2" },
+      ],
+      getChats: async () => ({ chats: [], external: [] }),
+      getStatus: async () => ({ sessions: [{ session_id: "a", provider: "codex", workspace_binding: "/tmp/ws-1" }] }),
+      rememberExternalChat: () => pending,
+      openSessionTranscript: (slug: string) => {
+        mirrored.push(slug);
+        return () => {};
+      },
+    });
+    const unmount = mountApp(root, { dataAccess: da });
+    try {
+      await settle();
+      (root.querySelector(".glosa-chat-list-item") as any).click();
+      (root.querySelector(".glosa-goto-trigger") as any).click();
+      const input = root.querySelector(".glosa-palette-input") as any;
+      input.value = "@";
+      input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await settle();
+      release();
+      await settle();
+      expect(mirrored).toEqual([]);
+      expect(root.querySelector(".glosa-external-chat")).toBeNull();
+    } finally {
+      release();
+      unmount();
+    }
+  });
+
   test("external sessions open as exact-session tabs while artifact history stays in its own pane", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);

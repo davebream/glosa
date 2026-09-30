@@ -58,13 +58,19 @@ describe("groupEvents — meta hidden, subagent turns grouped, everything else p
     expect(grouped[1]).toEqual({ type: "subagent_group", items: [events[2]] });
   });
 
-  test("tool_use/tool_result/unknown all pass through unchanged", () => {
+  test("tools remain readable while unknown records collapse into one notice", () => {
     const events = [
       { type: "tool_use", tool_name: "Bash", tool_id: "t1", input: {}, id: "1" },
       { type: "tool_result", tool_id: "t1", content: "ok", size_bytes: 2, size_original: 2, truncated: false, id: "2" },
       { type: "unknown", raw: "???", line_num: 5 },
     ];
-    expect(groupEvents(events)).toEqual(events);
+    expect(groupEvents(events)).toEqual([{ type: "unknown_group", count: 1 }, ...events.slice(0, 2)]);
+  });
+
+  test("hundreds of unsupported lines produce one summary alongside system events", () => {
+    const system = { type: "system", content: "Background task completed", id: "system" };
+    const events = Array.from({ length: 534 }, (_, line_num) => ({ type: "unknown", raw: "private", line_num }));
+    expect(groupEvents([...events, system])).toEqual([{ type: "unknown_group", count: 534 }, system]);
   });
 
   test("empty input → empty output", () => {
@@ -283,6 +289,24 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("No live agent session is bound");
   });
 
+  test("system notices have a System speaker and unknown floods have one visible summary", () => {
+    const root = dom.document.createElement("div");
+    const da = fakeDataAccess();
+    const unmount = mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    try {
+      da.emit({ event: "transcript", data: { type: "system", content: "Neutral task complete", id: "notice" } });
+      for (let line_num = 0; line_num < 534; line_num++)
+        da.emit({ event: "transcript", data: { type: "unknown", raw: "must not render", line_num } });
+      expect(root.querySelector(".glosa-conv-system")?.getAttribute("data-speaker")).toBe("System");
+      expect(root.querySelector('[data-speaker="You"]')).toBeNull();
+      expect(root.querySelectorAll(".glosa-conv-unknown")).toHaveLength(1);
+      expect(root.querySelector(".glosa-conv-unknown")?.textContent).toContain("534 unsupported");
+      expect(root.textContent).not.toContain("must not render");
+    } finally {
+      unmount();
+    }
+  });
+
   test("an accepted but undelivered message keeps the draft rather than claiming it was sent", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
@@ -298,7 +322,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     expect(input.value).toBe("keep this draft");
-    expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("Waiting for the agent");
+    expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("Waiting for this session");
     expect((root.querySelector(".glosa-conv-composer-send") as any).disabled).toBe(true);
   });
 

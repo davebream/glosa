@@ -532,3 +532,51 @@ describe("glosa update — command boundary", () => {
     expect(JSON.parse(r.stdout)).toMatchObject({ command: "update", error: { code: "usage" } });
   });
 });
+
+test("foreground codex-attach reports a missing socket on stderr without starting a daemon", async () => {
+  const home = freshDir();
+  const child = Bun.spawn({
+    cmd: [
+      process.execPath,
+      CLI_PATH,
+      "codex-attach",
+      "neutral-thread",
+      "--workspace",
+      home,
+      "--socket",
+      join(home, "missing.sock"),
+      "--verbose",
+    ],
+    env: { ...Bun.env, GLOSA_HOME: home, CODEX_HOME: home, ANTHROPIC_API_KEY: undefined },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const reader = child.stderr.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let output = "";
+  try {
+    await Promise.race([
+      (async () => {
+        while (!output.includes("MCP pull remains available.")) {
+          const next = await reader.read();
+          if (next.done) break;
+          output += new TextDecoder().decode(next.value);
+        }
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`no attachment diagnostic: ${output}`)), 5000);
+      }),
+    ]);
+    expect(output).toContain("socket failed (socket-missing)");
+    expect(output).toContain("Check --socket or CODEX_HOME");
+    expect(output).not.toContain("stream connected");
+    expect(await Bun.file(join(home, "daemon.lock")).exists()).toBe(false);
+  } finally {
+    clearTimeout(timer);
+    child.kill("SIGTERM");
+    await child.exited;
+    await reader.cancel();
+  }
+  expect(await new Response(child.stdout).text()).toBe("");
+});

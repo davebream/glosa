@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { APP_VERSION, BUILD_ID } from "../src/lifecycle/build-id.ts";
+import { CONTRACT_VERSION } from "../src/transport/contract.ts";
 import { tokenPath } from "../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
@@ -95,7 +96,7 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     const res = await fetch(apiUrl("/api/handshake"));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.contract_version).toBe("1.28");
+    expect(body.contract_version).toBe(CONTRACT_VERSION);
     expect(body.daemon_version).toBe(APP_VERSION);
     expect(body.build_id).toBe(BUILD_ID);
     expect(body.paired).toBe(true); // token file exists

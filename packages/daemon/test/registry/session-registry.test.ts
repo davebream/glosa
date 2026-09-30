@@ -330,3 +330,77 @@ describe("SessionRegistry.register — rollback on index failure", () => {
     expect(registry.get("s1")).toEqual(first);
   });
 });
+
+test("session observers see binding moves, lease expiry and revival without renewing stale leases", async () => {
+  let now = 0;
+  let timer: { run: () => void; at: number } | undefined;
+  const registry = new SessionRegistry({
+    now: () => new Date(now),
+    leaseTtlMs: 60,
+    scheduleExpiry(run, delay) {
+      timer = { run, at: now + delay };
+      return () => {
+        timer = undefined;
+      };
+    },
+  });
+  const changes: string[][] = [];
+  let allocationChanges = 0;
+  registry.setOnSessionsChanged(() => {
+    allocationChanges++;
+  });
+  const stop = registry.subscribe((paths) => changes.push([...paths]));
+  try {
+    await registry.bind("s", "/one");
+    expect(timer?.at).toBe(60);
+    now = 20;
+    await registry.heartbeat("s");
+    expect(timer?.at).toBe(80);
+    expect(changes).toEqual([["/one"]]);
+    now = 80;
+    timer!.run();
+    expect(registry.liveness("s")).toBe("stale");
+    expect(changes).toEqual([["/one"], ["/one"]]);
+    expect(timer).toBeUndefined();
+    await registry.heartbeat("s");
+    expect(registry.liveness("s")).toBe("alive");
+    await registry.bind("s", "/two");
+    expect(changes.at(-1)).toEqual(["/one", "/two"]);
+    await registry.deregister("s");
+    expect(changes.at(-1)).toEqual(["/two"]);
+    expect(allocationChanges).toBe(changes.length);
+    stop();
+    await registry.bind("s", "/three");
+    expect(changes).toHaveLength(5);
+  } finally {
+    registry.close();
+  }
+  expect(timer).toBeUndefined();
+});
+
+test("a peer heartbeat cannot cancel an already-due expiry notification", async () => {
+  let now = 0;
+  const changes: string[][] = [];
+  const registry = new SessionRegistry({
+    now: () => new Date(now),
+    leaseTtlMs: 60,
+    // Deliberately leave the due callback queued while the heartbeat runs first.
+    scheduleExpiry: () => () => {},
+  });
+  registry.subscribe((paths) => changes.push([...paths]));
+  try {
+    await registry.bind("a", "/one");
+    now = 20;
+    await registry.bind("b", "/two");
+    changes.length = 0;
+    now = 60;
+    await registry.heartbeat("b");
+    expect(registry.liveness("a")).toBe("stale");
+    expect(changes).toEqual([["/one"]]);
+    now = 70;
+    await registry.heartbeat("b");
+    expect(changes).toEqual([["/one"]]);
+  } finally {
+    registry.close();
+  }
+});

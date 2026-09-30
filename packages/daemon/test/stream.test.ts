@@ -35,6 +35,7 @@ interface Harness {
   server: ReturnType<typeof Bun.serve>;
   busRegistry: WorkspaceBusRegistry;
   metadataRegistry: WorkspaceMetadataRegistry;
+  sessionRegistry: SessionRegistry;
   slug: string;
 }
 
@@ -76,10 +77,11 @@ async function buildHarness(opts: { home?: string; root?: string; port?: number 
     await server.stop(true);
     throw new Error(`stream test server did not answer its handshake on port ${port}`);
   }
-  return { home, root, port, server, busRegistry, metadataRegistry, slug: entry.slug };
+  return { home, root, port, server, busRegistry, metadataRegistry, sessionRegistry, slug: entry.slug };
 }
 
 async function teardownHarness(h: Harness): Promise<void> {
+  h.sessionRegistry.close();
   await h.server.stop(true);
   await h.busRegistry.close(h.root);
   rmSync(h.home, { recursive: true, force: true });
@@ -156,6 +158,21 @@ describe("GET /w/:slug/stream — SSE protocol (A1 §8)", () => {
 
   afterEach(async () => {
     await teardownHarness(h);
+  });
+
+  test("session registration and deregistration invalidate chats over the shared stream without managed chats", async () => {
+    const { reader, disconnect } = await connect(h);
+    try {
+      expect((await readEvent(reader)).event).toBe("snapshot");
+      await h.sessionRegistry.bind("terminal", h.root, { provider: "codex" });
+      const registered = await readEvent(reader);
+      expect(registered.event).toBe("chats_changed");
+      expect(JSON.parse(registered.data).slugs).toEqual([h.slug]);
+      await h.sessionRegistry.deregister("terminal");
+      expect((await readEvent(reader)).event).toBe("chats_changed");
+    } finally {
+      await disconnect();
+    }
   });
 
   test("first connect: one snapshot frame with the artifact list + per-artifact source_sha256 + inbox state, id = current cursor", async () => {

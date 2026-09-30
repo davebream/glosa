@@ -27,6 +27,8 @@ import { type ParsedSseEvent, parseSseStream } from "../../src/transport/sse.ts"
 import { randomPort } from "../helpers.ts";
 import { CodexProvider } from "../../../providers/codex/src/provider.ts";
 
+import { ClaudeTranscriptNormalizer } from "../../../providers/claude-code/src/transcript.ts";
+
 const TOKEN = "transcript-test-token-0123456789abcdef";
 
 interface Harness {
@@ -72,6 +74,7 @@ async function buildHarness(
   if (opts.withProvider !== false) {
     const provider: AgentProvider = {
       id: "claude-code",
+      createTranscriptNormalizer: () => new ClaudeTranscriptNormalizer(),
       connectPrompt: () => ({ display_name: "Claude Code", instruction: "Bind this test session." }),
       capabilities: () => ({ push: true, mcpPull: true }),
       detectSession: () => null,
@@ -115,6 +118,7 @@ async function buildHarness(
 }
 
 async function teardownHarness(h: Harness): Promise<void> {
+  h.sessionRegistry.close();
   await h.server.stop(true);
   if (h.savedClaudeConfigDir === undefined) delete Bun.env.CLAUDE_CONFIG_DIR;
   else Bun.env.CLAUDE_CONFIG_DIR = h.savedClaudeConfigDir;
@@ -206,13 +210,18 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
     const directory = join(h.claudeConfigDir, "sessions", "2026", "09", "06");
     mkdirSync(directory, { recursive: true });
     writeTranscriptLine(join(directory, "rollout-exact-thread.jsonl"), {
-      type: "user",
-      uuid: "fixture-turn",
-      message: { role: "user", content: "available later" },
+      type: "response_item",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "available later" }] },
     });
     const available = await fetch(transcriptStreamUrl(h), { headers: { Authorization: `Bearer ${TOKEN}` } });
     expect(available.status).toBe(200);
-    await available.body!.cancel();
+    const reader = available.body!.getReader();
+    try {
+      const event = await readEvent(reader);
+      expect(JSON.parse(event.data)).toMatchObject({ type: "prose", role: "user", content: "available later" });
+    } finally {
+      await reader.cancel();
+    }
   });
 
   test("multiple equally eligible transcript sessions require explicit selection instead of guessing", async () => {
@@ -598,7 +607,7 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
     expect((await res.json()).type).toContain("no-bound-session");
   });
 
-  test("only stale explicit bindings return a recoverable conflict", async () => {
+  test("stale explicit bindings queue durably without invoking the provider or refreshing the lease", async () => {
     await h.sessionRegistry.register({
       session_id: "s1",
       provider: "claude-code",
@@ -608,8 +617,96 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
       lease_expiry: "2000-01-01T00:00:00.000Z",
     });
     const res = await composeReq({ message_id: MESSAGE_ID, text: "hello" });
-    expect(res.status).toBe(409);
-    expect((await res.json()).type).toContain("bound-session-stale");
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ state: "queued", accepted: true, delivered: false });
+    expect(h.delivered).toHaveLength(0);
+    expect(h.sessionRegistry.liveness("s1")).toBe("stale");
+    const bus = await h.busRegistry.get(h.root);
+    expect(bus.readEntry(MESSAGE_ID)?.payload).toMatchObject({ target_session_id: "s1", text: "hello" });
+    expect(bus.state.entries[MESSAGE_ID]?.status).toBe("pending");
+    const retry = await composeReq({ message_id: MESSAGE_ID, text: "hello", session_hint: "s1" });
+    expect(retry.status).toBe(202);
+    expect(h.delivered).toHaveLength(0);
+    await h.sessionRegistry.bind("other", h.root, { provider: "claude-code" });
+    const ambiguous = await composeReq({ text: "choose" });
+    expect(ambiguous.status).toBe(409);
+    expect((await ambiguous.json()).type).toContain("session-selection-required");
+    await h.sessionRegistry.bind("s1", "/another-workspace");
+    const moved = await composeReq({ text: "must not move", session_hint: "s1" });
+    expect(moved.status).toBe(409);
+    expect(h.delivered).toHaveLength(0);
+  });
+
+  test("a stale-target message survives daemon reconstruction and only its restored session can present it", async () => {
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "mcp",
+      lease_expiry: "2000-01-01T00:00:00.000Z",
+    });
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "after restart", session_hint: "s1" })).status).toBe(202);
+    const prior = h;
+    prior.sessionRegistry.close();
+    await prior.server.stop(true);
+    await prior.busRegistry.closeAll();
+    h = await buildHarness({
+      home: prior.home,
+      root: prior.root,
+      claudeConfigDir: prior.claudeConfigDir,
+      port: prior.port,
+    });
+    h.savedClaudeConfigDir = prior.savedClaudeConfigDir;
+    expect((await composeReq({ text: "new send", session_hint: "s1" })).status).toBe(404);
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "after restart", session_hint: "s1" })).status).toBe(202);
+    const headers = {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
+      Origin: `http://127.0.0.1:${h.port}`,
+    };
+    const drain = (session: string) =>
+      fetch(`http://127.0.0.1:${h.port}/api/sessions/${session}/drain`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ via: "mcp_pull" }),
+      });
+    await h.sessionRegistry.bind("other", h.root, { provider: "claude-code" });
+    expect((await (await drain("other")).json()).drained).toEqual([]);
+    await h.sessionRegistry.bind("s1", h.root, { provider: "claude-code" });
+    const pulled = await (await drain("s1")).json();
+    expect(pulled.drained.map((entry: { id: string }) => entry.id)).toEqual([MESSAGE_ID]);
+    const ack = await fetch(`http://127.0.0.1:${h.port}/api/sessions/s1/deliveries/${pulled.delivery_id}/ack`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ outcome: "presented" }),
+    });
+    expect(ack.status).toBe(200);
+    expect((await h.busRegistry.get(h.root)).state.entries[MESSAGE_ID]?.status).toBe("delivered");
+    const status = await composeReq({ message_id: MESSAGE_ID, text: "after restart", session_hint: "s1" });
+    expect(await status.json()).toMatchObject({ delivered: true, state: "presented" });
+  });
+
+  test("retrying a failed message after lease expiry parks it for pull and persists the queued receipt", async () => {
+    await h.sessionRegistry.bind("s1", h.root, { provider: "claude-code" });
+    h.deliveryResult.current = { via: "mcp_pull", outcome: "failed" };
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "retry later", session_hint: "s1" })).status).toBe(502);
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      source: "mcp",
+      lease_expiry: "2000-01-01T00:00:00.000Z",
+    });
+    const retry = await composeReq({ message_id: MESSAGE_ID, text: "retry later", session_hint: "s1" });
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toMatchObject({ state: "queued", delivered: false });
+    expect(h.delivered).toHaveLength(1);
+    const status = await fetch(`http://127.0.0.1:${h.port}/w/${h.slug}/transcript/compose/${MESSAGE_ID}`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(await status.json()).toMatchObject({ state: "queued" });
+    expect(h.sessionRegistry.liveness("s1")).toBe("stale");
   });
 
   test("a zero-provider daemon remains valid and reports delivery unavailable safely", async () => {
