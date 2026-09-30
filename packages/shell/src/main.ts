@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // glosa desktop shell — the Electron main process. A window on the daemon-served SPA and nothing
-// more: the daemon and SPA are whatever the recorded executable (~/.glosa/bin/glosa) is, served
+// more: a packaged shell uses the recorded executable, while an unpackaged one uses its checkout;
+// the chosen CLI supplies the daemon and SPA, served
 // unbundled. Packaged, the app also carries a CLI and a Bun of its own under Contents/Resources,
 // used only when nothing is recorded (#371). Every rule here is a call into policy.ts; this file
 // is wiring.
@@ -9,7 +10,7 @@
 // docs/research/2026-09-25-desktop-shell-readiness.md §3 (what Electron's defaults leave open),
 // docs/appendices/A3-security.md "Desktop shell".
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +45,7 @@ import {
   contrastPush,
   contrastPushReaches,
   contrastReply,
+  devProfilePath,
   downloadName,
   egressDecision,
   externalLinkDecision,
@@ -82,10 +84,21 @@ import {
 } from "./policy.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-// The name the app menu, About panel and userData path use. The Dock and the app switcher read the
-// bundle instead: packaged, that is productName in package.json; unpackaged, scripts/brand-electron.ts
-// rewrites node_modules/electron's bundle after install so a `bun run start` also says glosa.
-app.setName("glosa");
+const checkoutRoot = app.isPackaged ? null : realpathSync(join(here, "..", "..", ".."));
+const checkoutCli = checkoutRoot === null ? null : join(checkoutRoot, "packages", "cli", "src", "main.ts");
+// The name the app menu and About panel use. The Dock reads the bundle instead: packaged, that is
+// productName in package.json; unpackaged, scripts/brand-electron.ts brands the dev bundle.
+app.setName(app.isPackaged ? "glosa" : "glosa dev");
+// The real-engine suite needs a private profile without changing the user's Chromium data.
+const devProfileOverride =
+  checkoutRoot !== null && process.env.GLOSA_SHELL_HIDDEN === "yes" ? process.env.GLOSA_SHELL_TEST_PROFILE : null;
+if (checkoutRoot !== null && (devProfileOverride || !app.commandLine.hasSwitch("user-data-dir"))) {
+  const profile = devProfileOverride || devProfilePath(app.getPath("appData"), checkoutRoot);
+  const sessionData = join(profile, "session");
+  mkdirSync(sessionData, { recursive: true, mode: 0o700 });
+  app.setPath("userData", profile);
+  app.setPath("sessionData", sessionData);
+}
 const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")) as {
   version: string;
   glosa: { minimumDaemon: string; releases: string };
@@ -122,11 +135,16 @@ function resolveCli(): string {
     glosaHome: process.env.GLOSA_HOME,
     homeDir: homedir(),
     resourcesPath: app.isPackaged ? process.resourcesPath : null,
+    checkoutCli: checkoutCli ?? undefined,
     platform: process.platform,
   });
   // existsSync follows symlinks, so a dangling recorded executable reads as absent. An override is
   // used as given: the harness names exactly what it wants run.
   if (process.env.GLOSA_SHELL_CLI) return candidates[0] ?? "glosa";
+  if (!app.isPackaged) {
+    if (checkoutCli && existsSync(checkoutCli)) return checkoutCli;
+    throw new Error("The development shell cannot find this checkout's CLI. Restore packages/cli/src/main.ts.");
+  }
   for (const c of candidates) if (c === "glosa" || existsSync(c)) return c;
   return "glosa";
 }
@@ -869,7 +887,7 @@ function installEgressGate(): void {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
 }
 
-app.setAboutPanelOptions({ applicationName: "glosa", applicationVersion: pkg.version });
+app.setAboutPanelOptions({ applicationName: app.isPackaged ? "glosa" : "glosa dev", applicationVersion: pkg.version });
 
 // ---------- glosa:// links arrive before, at and after launch (#392) ----------
 

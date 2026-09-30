@@ -631,6 +631,18 @@ export function installCheck(deps: DoctorDeps): CheckResult {
       recordedText = `${recorded.target} (dangling)`;
       hint = "The recorded executable points at a removed install; the next glosa run replaces it.";
       break;
+    case "managed-pin":
+      if (recorded.resolved === null) {
+        recordedText = `${recorded.target} (selected, missing)`;
+        hint =
+          "The selected app is missing. Run `glosa install auto` from another current Glosa CLI to restore automatic recording.";
+      } else if (mine(recorded.resolved)) {
+        recordedText = `${recorded.target} (selected, this install)`;
+      } else {
+        recordedText = `${recorded.target} (selected, another install)`;
+        hint = "Another install is selected; the Claude Code plugin and desktop app run that one.";
+      }
+      break;
     case "file":
       recordedText = `${recorded.path} (a regular file)`;
       hint = "A hand-pinned file; glosa never replaces it.";
