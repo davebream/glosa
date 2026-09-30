@@ -1011,7 +1011,7 @@ export function lockGuestPreferences(prefs: Record<string, unknown>): void {
  * from beaconing its version). */
 export function browserUserAgent(fallback: string): string {
   return fallback
-    .replace(/\s(?:glosa|Electron)\/\S+/gi, "")
+    .replace(/\s(?:glosadev|glosa|Electron)\/\S+/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
