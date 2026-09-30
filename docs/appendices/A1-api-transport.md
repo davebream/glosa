@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.28", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.29", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -906,11 +906,15 @@ completed.
 { "message_id": "<client UUID, optional>", "text": "<exact UTF-8 text>", "session_hint": "<optional session id>" }
 ```
 
-The daemon resolves only live sessions whose explicit `workspace_binding` equals the workspace;
-cwd-ancestor fallback is forbidden. No binding returns **404 no-bound-session**; only stale bindings
-return **409 bound-session-stale**; ambiguous live bindings return **409
-session-selection-required** with only `{session_id,provider,last_active_at}` candidates. Blank or
-over-16-KiB presentations return **400 validation-failed** and are never truncated.
+Contract 1.29 resolves sessions whose explicit `workspace_binding` equals the workspace, including
+stale bindings; cwd-ancestor fallback is forbidden. An exact `session_hint` must match that binding.
+No binding returns **404 no-bound-session**; multiple bindings without a hint or a hint outside the
+workspace return **409 session-selection-required** with only `{session_id,provider,last_active_at}`
+candidates. A stale target accepts a durable **202 queued** message without invoking its provider or
+renewing its lease. Only that exact session can pull it after reconnecting. Blank or over-16-KiB
+presentations return **400 validation-failed** and are never truncated. After daemon restart, queued
+messages survive, but new messages require explicitly restored bindings; remembered chat associations
+are not bindings. An existing message ID always retains its original target.
 
 The immutable `conversation_message` stores exact text and target session. Reusing an id with
 different text or target returns **409 idempotency-conflict**. A failed attempt may re-nudge the same
@@ -1600,3 +1604,15 @@ The SPA requests this subscription only on desks and exposes controls only for d
 Documents only hides read-only rows without closing their tabs. Changing Show ignored files
 revalidates open tabs. Old daemons returning 404 hide the unsupported controls. The read-only
 viewer has its own persisted panel kind and never falls back to a document editor.
+
+
+### Terminal-session invalidation and mirror events (contract 1.29)
+
+The shared workspace stream's existing `chats_changed` frame also covers terminal-session
+registration, re-registration, rebinding, deregistration, lease expiry and revival. Rebinding names
+both workspaces. These advisory events have no journal cursor and require no managed chat runtime.
+
+Transcript events are normalized by the selected provider. The additive
+`{type:"system", content, id}` event identifies harness notifications, never a person's message.
+The page consolidates quarantined records into one skipped-record notice rather than a row per line.
+A provider without a normalizer reports mirror unavailable while inbox delivery remains usable.

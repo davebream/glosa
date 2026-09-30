@@ -196,7 +196,8 @@ generic.**
   also registers unknown identities and refreshes stale ones; missing provider identity uses generic
   `mcp`, which a subsequent concrete provider may enrich. Omitted registration fields preserve
   bindings/transcripts; conflicting concrete providers fail. Bindings remain in memory and require
-  explicit restoration after daemon restart.
+  explicit restoration after daemon restart. Session registration, rebinding, deregistration and
+  lease transitions invalidate the desk chat list through the shared workspace stream.
 - **Routing precedence**: (1) an **explicit session binding** supplied through the API, CLI, or MCP
   contract (authoritative); (2) the generic cwd-ancestor fallback. This supports artifact workspaces
   that differ from the agent process cwd without teaching glosa about an external workflow. Two sessions bound to one
@@ -360,7 +361,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.28: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.29: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -502,6 +503,7 @@ registration epochs prevent filename collisions and restoration into a replaceme
     liveness(session): "alive" | "stale"         // lease/heartbeat, never kill(pid,0)
     transcriptPath(session): string | null       // explicit path or exact provider-owned discovery
     transcriptRoots?(): readonly string[]          // provider-owned confinement allowlist
+    createTranscriptNormalizer?(): TranscriptNormalizer // provider-owned record interpretation
   }
   ```
   v1 ships: **Claude Code provider** (`push` = a monitor is connected for this session; plugin MCP
