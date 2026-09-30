@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 18 enumerated checks. Uses REAL directories
+// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 19 enumerated checks. Uses REAL directories
 // and a REAL shadow-git repo (built the same way the daemon itself would, via `WorkspaceBus`) for
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
 import { afterEach, describe, expect, test } from "bun:test";
-import { unlinkSync, chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  unlinkSync,
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { journalPath, tokenPath, WorkspaceBus } from "@glosa/daemon";
@@ -22,6 +33,10 @@ import {
 } from "../src/doctor.ts";
 import { daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { useTempHome } from "./home.ts";
+import { computeInstallId } from "../../daemon/src/lifecycle/install.ts";
+import { selectRecordedExecutable } from "../src/install-link.ts";
+import type { HandshakeResponse } from "../../daemon/src/lifecycle/handshake.ts";
+import { LAUNCHER } from "../../shell/scripts/package-app.ts";
 import { captureStdout } from "./test-utils.ts";
 
 useTempHome();
@@ -62,6 +77,8 @@ function makeDeps(overrides: Partial<DoctorDeps> = {}): { deps: DoctorDeps; clie
       return realRunVersionProbe(cmd);
     },
     glosaHome: () => home,
+    homeDir: () => home,
+    env: {},
     claudeConfigDir: () => freshDir(),
     // A machine with no account switcher: the active root is the only root. Tests that care about
     // several roots override this — nothing here may read the developer's real `~/.ccs`.
@@ -88,6 +105,176 @@ const APP_ROOT = "/Applications/glosa.app/Contents/Resources/glosa";
 const APP_LAUNCHER = "/Applications/glosa.app/Contents/Resources/bin/glosa";
 const PACMAN_ROOT = "/opt/glosa/resources/glosa";
 const PACMAN_LAUNCHER = "/opt/glosa/resources/bin/glosa";
+
+function mcpFixture() {
+  const userHome = freshDir();
+  const dir = freshDir();
+  const configRoot = freshDir();
+  const root = freshDir();
+  const other = freshDir();
+  for (const install of [root, other]) {
+    mkdirSync(join(install, "packages/cli/src"), { recursive: true });
+    writeFileSync(join(install, "packages/cli/src/main.ts"), "// fixture entrypoint\n", { mode: 0o700 });
+    writeFileSync(join(install, "package.json"), JSON.stringify({ name: "@davebream/glosa" }));
+  }
+  const handshake: HandshakeResponse = {
+    protocol_version: "1.0",
+    instance_id: "fixture",
+    pid: 1,
+    started_at: new Date(0).toISOString(),
+    install_id: computeInstallId(root),
+  };
+  const { deps } = makeDeps({
+    homeDir: () => userHome,
+    claudeConfigDir: () => configRoot,
+    claudeConfigRoots: () => [configRoot],
+    env: { CODEX_HOME: join(userHome, ".codex") },
+    // The daemon, not the inspecting CLI, is the comparison baseline.
+    packageRoot: () => other,
+    realpath: (path) => {
+      try {
+        return realpathSync(path);
+      } catch {
+        return null;
+      }
+    },
+    readHandshake: async () => handshake,
+  });
+  const write = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value));
+  const entry = (install: string) => ({
+    command: "bun",
+    args: ["run", "--silent", join(install, "packages/cli/src/main.ts"), "mcp"],
+  });
+  return { userHome, dir, configRoot, root, other, deps, write, entry };
+}
+
+describe("MCP install diagnosis", () => {
+  test("Claude user registry names a foreign install and removal without changing the file", async () => {
+    const f = mcpFixture();
+    const path = join(f.userHome, ".claude.json");
+    f.write(path, { mcpServers: { glosa: f.entry(f.other) } });
+    const before = readFileSync(path);
+    const result = await runDoctor(f.dir, f.deps);
+    const row = findCheck(result.data.checks, "mcp-config");
+    expect(row?.status).toBe("warn");
+    for (const text of ["Claude user", path, "mcpServers.glosa", realpathSync(f.other), "another install", "remove"])
+      expect(row?.detail).toContain(text);
+    expect(readFileSync(path)).toEqual(before);
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("same-install Claude and Codex entries including symlinks and PATH are not legacy leftovers", async () => {
+    const f = mcpFixture();
+    const bin = freshDir();
+    symlinkSync(join(f.root, "packages/cli/src/main.ts"), join(bin, "glosa"));
+    f.deps.which = (cmd, options) => (cmd === "glosa" && options?.PATH === bin ? join(bin, "glosa") : null);
+    f.write(join(f.userHome, ".claude.json"), { mcpServers: { glosa: f.entry(f.root) } });
+    mkdirSync(join(f.userHome, ".codex"));
+    writeFileSync(
+      join(f.userHome, ".codex/config.toml"),
+      `[mcp_servers."glosa"]\ncommand = "glosa"\nargs = ["mcp"]\n[mcp_servers.glosa.env]\nPATH = ${JSON.stringify(bin)}\n`,
+    );
+    const result = await runDoctor(f.dir, f.deps);
+    expect(findCheck(result.data.checks, "mcp-config")?.status).toBe("pass");
+    expect(findCheck(result.data.checks, "legacy-config")?.status).toBe("pass");
+  });
+
+  test("custom Claude roots include only the selected workspace's local entries", async () => {
+    const f = mcpFixture();
+    f.write(join(f.configRoot, ".claude.json"), {
+      mcpServers: { glosa: f.entry(f.root) },
+      projects: {
+        [f.dir]: { mcpServers: { glosa: f.entry(f.other) } },
+        "/unrelated": { mcpServers: { glosa: { command: "ignored" } } },
+      },
+    });
+    const row = findCheck((await runDoctor(f.dir, f.deps)).data.checks, "mcp-config");
+    for (const text of [join(f.configRoot, ".claude.json"), "Claude local", "another install"])
+      expect(row?.detail).toContain(text);
+    expect(row?.detail).not.toContain("unrelated");
+  });
+
+  test("workspace Codex foreign install is diagnosed separately from retired configuration", async () => {
+    const f = mcpFixture();
+    mkdirSync(join(f.dir, ".codex"));
+    const path = join(f.dir, ".codex/config.toml");
+    writeFileSync(
+      path,
+      `[mcp_servers.glosa]\ncommand = 'bun'\nargs = ['${join(f.other, "packages/cli/src/main.ts")}', 'mcp']\n`,
+    );
+    const before = readFileSync(path);
+    const result = await runDoctor(f.dir, f.deps);
+    const row = findCheck(result.data.checks, "mcp-config");
+    expect(row?.status).toBe("warn");
+    for (const text of ["Codex workspace", "mcp_servers.glosa", "another install", path])
+      expect(row?.detail).toContain(text);
+    expect(findCheck(result.data.checks, "legacy-config")?.status).toBe("pass");
+    expect(readFileSync(path)).toEqual(before);
+  });
+
+  test("a generated selection resolves without executing the configured command", async () => {
+    const f = mcpFixture();
+    const selected = selectRecordedExecutable(f.deps.glosaHome(), join(f.root, "packages/cli/src/main.ts"));
+    f.write(join(f.userHome, ".claude.json"), { mcpServers: { glosa: { command: selected, args: ["mcp"] } } });
+    expect(findCheck((await runDoctor(f.dir, f.deps)).data.checks, "mcp-config")?.status).toBe("pass");
+  });
+
+  test.each(["app", "pacman"])("the shipped %s launcher resolves its bundled install", async (kind) => {
+    const f = mcpFixture();
+    const resources = join(freshDir(), kind === "app" ? "glosa.app/Contents/Resources" : "resources");
+    const root = join(resources, "glosa");
+    mkdirSync(join(root, "packages/cli/src"), { recursive: true });
+    mkdirSync(join(resources, "bin"));
+    writeFileSync(join(root, "packages/cli/src/main.ts"), "// bundled entrypoint");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@davebream/glosa" }));
+    const launcher = join(resources, "bin/glosa");
+    writeFileSync(launcher, LAUNCHER, { mode: 0o700 });
+    if (kind === "pacman") {
+      writeFileSync(join(resources, "package-type"), "pacman");
+      delete f.deps.readPackageType;
+    }
+    f.write(join(f.userHome, ".claude.json"), { mcpServers: { glosa: { command: launcher, args: ["mcp"] } } });
+    const row = findCheck((await runDoctor(f.dir, f.deps)).data.checks, "mcp-config");
+    expect(row?.status).toBe("warn");
+    expect(row?.detail).toContain(realpathSync(root));
+    expect(row?.detail).toContain("another install");
+    // A different wrapper at the same conventional path must not be credited to the bundle.
+    writeFileSync(launcher, "#!/bin/sh\nexit 99\n");
+    expect(findCheck((await runDoctor(f.dir, f.deps)).data.checks, "mcp-config")?.detail).toContain("unverified");
+  });
+
+  test("invalid Codex TOML is unverified and unrelated servers are ignored", async () => {
+    const f = mcpFixture();
+    mkdirSync(join(f.userHome, ".codex"));
+    const path = join(f.userHome, ".codex/config.toml");
+    writeFileSync(path, "[mcp_servers.glosa\n");
+    expect(findCheck((await runDoctor(f.dir, f.deps)).data.checks, "mcp-config")?.detail).toContain("unverified");
+    writeFileSync(path, '[mcp_servers.other]\ncommand = "arbitrary"\n');
+    const row = findCheck((await runDoctor(f.dir, f.deps)).data.checks, "mcp-config");
+    expect(row?.status).toBe("pass");
+    expect(row?.detail).toBe("no explicit glosa MCP entries found");
+  });
+
+  test.each(["wrapper", "missing", "malformed", "daemon-down"])(
+    "unverified %s never claims an install match",
+    async (kind) => {
+      const f = mcpFixture();
+      const path = join(f.userHome, ".claude.json");
+      const server =
+        kind === "wrapper"
+          ? { command: "/bin/sh", args: ["-c", "exit 99"] }
+          : f.entry(kind === "missing" ? "/missing-install" : f.root);
+      f.write(path, { mcpServers: { glosa: server } });
+      if (kind === "malformed") writeFileSync(path, "{bad json");
+      if (kind === "daemon-down") f.deps.readHandshake = async () => null;
+      const row = findCheck((await runDoctor(f.dir, f.deps)).data.checks, "mcp-config");
+      expect(row?.status).toBe("warn");
+      expect(row?.detail).toContain("unverified");
+      expect(row?.detail).not.toContain("another install");
+      expect(row?.detail).not.toContain("same install");
+    },
+  );
+});
 
 function findCheck(checks: { name: string; status: string; detail: string }[], name: string) {
   return checks.find((c) => c.name === name);
@@ -117,11 +304,11 @@ describe("glosa doctor", () => {
   });
 
   describe("install row (#371)", () => {
-    test("the row is named install and is the last one", async () => {
+    test("the install row remains named install", async () => {
       const { deps } = makeDeps();
       const result = await runDoctor(freshDir(), deps);
       expect(INSTALL_CHECK).toBe("install");
-      expect(result.data.checks.at(-1)?.name).toBe(INSTALL_CHECK);
+      expect(result.data.checks.find((row) => row.name === INSTALL_CHECK)?.name).toBe(INSTALL_CHECK);
     });
 
     test("install: pass when the recorded executable resolves to this install", () => {
@@ -475,7 +662,7 @@ describe("glosa doctor", () => {
     const expectedBytes = statSync(journalPath(dir)).size;
     const result = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(result.data.checks, "workspace");
-    expect(result.data.checks).toHaveLength(18);
+    expect(result.data.checks).toHaveLength(19);
     expect(workspaceCheck?.status).toBe("pass");
     expect(workspaceCheck?.detail).toContain(`${expectedBytes} journal byte(s)`);
     expect(workspaceCheck?.detail).toContain("3 physical journal line(s)");
@@ -521,7 +708,7 @@ describe("glosa doctor", () => {
     mkdirSync(journalPath(dir));
     const unreadable = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(unreadable.data.checks, "workspace");
-    expect(unreadable.data.checks).toHaveLength(18);
+    expect(unreadable.data.checks).toHaveLength(19);
     expect(workspaceCheck?.status).toBe("warn");
     expect(workspaceCheck?.detail).toContain("journal metrics unavailable");
   });
@@ -550,6 +737,7 @@ describe("glosa doctor", () => {
       "workspace-root",
       "legacy-config",
       "install",
+      "mcp-config",
     ]);
     // The removed command may be NAMED (so a user recognises leftovers) but never prescribed.
     for (const check of result.data.checks) expect(check.detail).not.toMatch(/run `glosa init/);
@@ -612,10 +800,8 @@ describe("glosa doctor", () => {
       join(dir, ".claude", "settings.json"),
       join(dir, ".claude", "settings.local.json"),
       join(claudeConfig, "settings.json"),
-      join(dir, ".mcp.json"),
       join(dir, ".codex", "hooks.json"),
       join(userHome, ".codex", "hooks.json"),
-      join(dir, ".codex", "config.toml"),
       join(dir, ".glosa", "init-manifest.json"),
       join(dir, ".claude", ".glosa-init.json"),
       join(glosaHome, "init-manifest.json"),
@@ -824,7 +1010,7 @@ describe("glosa doctor", () => {
     );
     expect(parsed.command).toBe("doctor");
     expect(Array.isArray(parsed.data.checks)).toBe(true);
-    expect(parsed.data.checks).toHaveLength(18);
+    expect(parsed.data.checks).toHaveLength(19);
   });
 
   test("pending-delivery: queued entries with no live session -> WARN; with a live bound session -> pass; daemon down -> SKIP", async () => {
