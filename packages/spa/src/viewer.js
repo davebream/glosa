@@ -2009,6 +2009,7 @@ export function mountApp(
     for (const [id, pane] of panes) {
       if (!isArtifactPanel(id)) continue;
       if (!knownArtifacts.has(pane.path)) pane.markMissing();
+      else void pane.refreshAnnotationsFor?.();
     }
     refreshTabs();
   }
@@ -2017,6 +2018,7 @@ export function mountApp(
     const pane = panes.get(artifactPanelId(path));
     if (pane) void pane.refreshArtifact?.();
     for (const [id, diffPane] of panes) {
+      if (diffPane !== pane) void diffPane.refreshAnnotationsFor?.(path);
       if (decodePanelId(id)[0] === "diff" && splitDiffId(id)[1] === path) void diffPane.refreshArtifact();
     }
   }

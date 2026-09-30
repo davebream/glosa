@@ -321,6 +321,8 @@ describe("replay — legacy apply-lease events fold forward as claims (issue #15
     expect(first.entries).toEqual(second.entries);
     expect(first.claims["entry:e1"]?.exclusive).toBeNull(); // apply_end ends the claim
     expect(first.claims["entry:e1"]?.last).toEqual({
+      paths: [],
+      mode: "exclusive",
       claim_id: "L1",
       holder_session: "sess-1",
       fence: null,

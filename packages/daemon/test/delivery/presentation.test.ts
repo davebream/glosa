@@ -155,7 +155,7 @@ describe("actionable inbox presentations", () => {
     expect(withAddress?.bytes).toBeLessThanOrEqual(MAX_ENTRY_PRESENTATION_BYTES);
   });
 
-  test("every annotation tells the agent how to take the apply-lease and resolve the entry", () => {
+  test("every annotation explains claims, claim-free decisions and how to obtain its own identity", () => {
     // A4 §F05's lease is the only thing that can attribute a change to a session, and the only
     // thing that leaves a `pre_apply` checkpoint for the human to roll back to. Both commands
     // shipped and were tested, but nothing told the agent they existed — so no lease was ever
@@ -163,7 +163,7 @@ describe("actionable inbox presentations", () => {
     // was attributed `unknown`. The instruction is the half that was missing.
     const result = buildDeliveryPresentation("inb-a", annotation("Tighten this."), { status: "pending" });
     const text = result?.text ?? "";
-    expect(text).toContain("glosa apply-begin inb-a --session");
+    expect(text).toContain("glosa claim entry:inb-a --session");
     expect(text).toContain("glosa resolve inb-a applied --session");
     // Both commands default to the caller's cwd, which is not necessarily this entry's workspace
     // — an agent reviewing documents outside its own repo would otherwise act on the wrong one.
@@ -172,12 +172,24 @@ describe("actionable inbox presentations", () => {
     // instead of an entry left open forever.
     expect(text).toContain("rejected");
     expect(text).toContain("deferred");
+    expect(text).toContain("does not release an existing claim");
+    expect(text).toContain("no claim is needed");
+    expect(text).toContain("get your own session_id from glosa_inbox_pull");
+    const delivered = buildDeliveryPresentation("inb-a", annotation("Tighten this."), {
+      status: "pending",
+      sessionId: "sess-recipient",
+    });
+    expect(delivered?.text).toContain("glosa claim entry:inb-a --session 'sess-recipient'");
+    expect(delivered?.text).toContain("your session_id: sess-recipient");
+    expect(text).not.toContain("apply-lease");
+    expect(text).not.toContain("—");
     // And it stays inside the entry budget rather than being appended past it.
     expect(utf8Bytes(text)).toBeLessThanOrEqual(MAX_ENTRY_PRESENTATION_BYTES);
   });
 
   test("UTF-8 truncation is byte-exact and gives stable CLI/MCP continuation instructions", () => {
-    const result = buildDeliveryPresentation("inb-u", annotation("żółć🙂".repeat(10_000)), { status: "pending" });
+    const body = Array.from({ length: 10_000 }, (_, i) => `${i}: żółć🙂`).join("\n");
+    const result = buildDeliveryPresentation("inb-u", annotation(body), { status: "pending" });
     expect(result).not.toBeNull();
     expect(utf8Bytes(result?.text ?? "")).toBeLessThanOrEqual(MAX_ENTRY_PRESENTATION_BYTES);
     expect(result?.truncation?.truncated).toBe(true);
@@ -185,7 +197,7 @@ describe("actionable inbox presentations", () => {
     expect(result?.text).toContain("glosa inbox get inb-u --cursor");
     expect(result?.text).toContain("MCP glosa_inbox_get");
 
-    const next = buildDeliveryPresentation("inb-u", annotation("żółć🙂".repeat(10_000)), {
+    const next = buildDeliveryPresentation("inb-u", annotation(body), {
       status: "pending",
       cursor: result?.retrieval?.cursor,
     });
@@ -241,7 +253,7 @@ describe("actionable inbox presentations", () => {
 
     const watched = buildDeliveryPresentation("inb-ext-1", externalEdit(), { status: "pending", watched: true });
     expect(watched?.text).toContain("this is a record, not a");
-    expect(watched?.text).toContain("session explicitly called glosa_watch — nobody");
+    expect(watched?.text).toContain("session explicitly called glosa_watch; nobody");
     expect(watched?.text).toContain("else was nudged by it");
     expect(watched?.text).toContain("`glosa inbox dismiss inb-ext-1` closes it.");
     // Same underlying facts either way — only the framing sentence differs.

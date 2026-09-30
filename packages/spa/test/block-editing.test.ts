@@ -10,8 +10,7 @@
 //     exists to prevent. Asserted on the written string, not on the editor's own report.
 //   * Clicking is how you edit and dragging is how you annotate. If a drag-selection opened an
 //     editor, the annotation gesture would be stolen out from under the reader's hand.
-//   * Editing must stay unavailable while a session holds the apply lease. A version that checked
-//     only at click time would still open a run if the lease arrived during the module fetch.
+//   * A claim never blocks a person's Edit action or inline editor.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createArtifactPane } from "../src/artifact-pane.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
@@ -152,12 +151,20 @@ describe("per-block editing (#271)", () => {
     expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(0);
   });
 
-  test("a run cannot open while a session holds the apply lease", async () => {
-    const { host, pane } = await mountPane(fakeDataAccess());
-    pane.setApplyPause({ id: "lease-1" });
+  test("a person can enter Edit and open a run while a session holds a claim", async () => {
+    const { host, pane } = await mountPane(fakeDataAccess(), { initialMode: "read" });
+    pane.setApplyPause({ id: "claim-1", who: "Session A" });
+    expect(pane.canEdit()).toBe(true);
+    expect(q(host, '[data-control="edit"]').title).toContain("Session A is working here");
+    pane.setApplyPause({ id: "claim-2", who: "Session B" });
+    expect(q(host, '[data-control="edit"]').title).toContain("Session B is working here");
+    expect(q(host, '[data-control="edit"]').disabled).toBe(false);
+    expect(q(host, '[aria-label="Edit source"]').disabled).toBe(false);
+    pane.toggleEdit();
     await paint();
-    await clickBlock(host, 2, { expectEditor: false });
-    expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(0);
+    await clickBlock(host, 2);
+    expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(1);
+    expect(host.textContent).not.toContain("save when it finishes");
   });
 
   test("a click that changes nothing restores the block and writes nothing", async () => {

@@ -253,6 +253,8 @@ generic.**
 - **Provenance / attribution (honest)**: agent edits are bracketed by an explicit **exclusive claim**
   over the entry or file (`glosa apply-begin` / `glosa claim` → pre-checkpoint of the claimed paths;
   `glosa resolve` → post-checkpoint of the same paths; the proven `pre..post` diff → `session:<id>`).
+  An annotation entry claim also covers a currently resolved, tracked source file, including the
+  Markdown source of a class-F note; the journal records that scope when the claim starts.
   Claims are per resource (issue #155): two sessions on two different files get two disjoint
   intervals, and a second session over the same file is told who holds it. Edits made in glosa's own
   editor → `human` by construction. **Every other watcher-observed write → `unknown`, never falsely
@@ -263,6 +265,9 @@ generic.**
   checkpointing is idempotent, one taken mid-claim would become the claim's own `post_sha` and make the
   journal credit a session for a commit trailered `unknown`. The claim's `pre..post` pair brackets that
   interval instead, and a foreign commit found inside it makes the interval `unknown`.
+- An unclaimed `rejected` annotation records only a session decision, with no file interval or
+  checkpoint. Existing terminal, stale-claim and overlapping-holder guards still apply. `deferred`
+  remains nonterminal and does not acquire or release a claim.
 - **The human wins** (issue #155). A person is never blocked by an agent's claim. An editor save over
   a claimed file with the holder's edits still on disk releases the claim `by:"human"`, records those
   edits as `unknown`, and then saves — the reviewer is credited with what they typed, the holder with
@@ -355,7 +360,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.26: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.27: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its

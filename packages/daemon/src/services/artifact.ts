@@ -41,7 +41,7 @@ import { type MatchedFile, resolveTrackedFiles } from "../matcher.ts";
 import type { WorkspaceEntry } from "../registry/workspace-index.ts";
 import type { CapabilityStore } from "../security/capability.ts";
 import { confinePath } from "../security/confine-path.ts";
-import type { WorkspaceTarget } from "../workspace.ts";
+import { type WorkspaceTarget, workspaceWorktree } from "../workspace.ts";
 import { findWorkspace, type WorkspaceAccess, workspaceBus } from "./workspace-access.ts";
 
 export interface ArtifactAccessDependencies extends WorkspaceAccess {
@@ -79,8 +79,8 @@ function id(): string {
   return `inb-${Math.floor(Date.now() / 1000)}-${randomBytes(2).toString("hex")}`;
 }
 
-function trackedArtifact(workspace: WorkspaceEntry, rawPath: string) {
-  const confined = confinePath(workspace.worktree_path, rawPath);
+function trackedArtifact(workspace: WorkspaceTarget, rawPath: string) {
+  const confined = confinePath(workspaceWorktree(workspace), rawPath);
   if (!confined.ok) throw new ArtifactError("invalid-path");
   const normalized = rawPath
     .split("/")
@@ -252,14 +252,18 @@ export async function saveArtifact(deps: ArtifactAccessDependencies, prepared: P
   };
 }
 
-function anchoringContext(deps: ArtifactAccessDependencies, workspace: WorkspaceEntry, artifactPath: string) {
+function anchoringContext(
+  deps: Pick<ArtifactAccessDependencies, "adapterRegistry">,
+  workspace: WorkspaceTarget,
+  artifactPath: string,
+) {
   let match: MatchedFile;
   try {
     match = trackedArtifact(workspace, artifactPath);
   } catch {
     return null;
   }
-  const root = workspace.worktree_path;
+  const root = workspaceWorktree(workspace);
   const adapter = deps.adapterRegistry?.forWorkspace(workspace);
   const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path), workspace);
   if (cls === "R") {
@@ -301,6 +305,47 @@ function deliveredAddress(source: string, resolution: Resolution): string | null
   return passageAddressOf(source, resolution.start_line, last);
 }
 
+/** Resolves current annotation context without touching the bus. Claim acquisition calls this
+ * under its mutex, and records only proven, tracked source paths in the journal. */
+export function resolveAnnotation(
+  deps: Pick<ArtifactAccessDependencies, "adapterRegistry">,
+  workspace: WorkspaceTarget,
+  payload: unknown,
+): { resolution: Resolution; address?: string } | undefined {
+  if (!payload || typeof payload !== "object") return;
+  const record = payload as Record<string, unknown>;
+  if (record.kind !== "annotation" || typeof record.artifact_path !== "string") return;
+  const built = anchoringContext(deps, workspace, record.artifact_path);
+  if (!built) return;
+  const resolution = resolveAnchor(
+    { body: record.body, intent: record.intent, target: record.target },
+    built.artifact,
+    {
+      ...built.resolveCtx,
+      ...(typeof record.captured_rendered_sha256 === "string"
+        ? { capturedRenderedSha256: record.captured_rendered_sha256 }
+        : {}),
+    },
+  );
+  const address = built.artifact.class === "R" ? deliveredAddress(built.artifact.source, resolution) : null;
+  return { resolution, ...(address ? { address } : {}) };
+}
+
+export function annotationClaimPaths(
+  deps: Pick<ArtifactAccessDependencies, "adapterRegistry">,
+  workspace: WorkspaceTarget,
+  payload: unknown,
+): string[] {
+  const resolution = resolveAnnotation(deps, workspace, payload)?.resolution;
+  if (resolution?.kind !== "source_range") return [];
+  // A resolution is not permission to read/checkpoint an untracked or escaping path.
+  try {
+    return [trackedArtifact(workspace, resolution.path).path];
+  } catch {
+    return [];
+  }
+}
+
 export function actionablePresentation(
   deps: ArtifactAccessDependencies,
   workspace: WorkspaceEntry,
@@ -308,33 +353,20 @@ export function actionablePresentation(
   payload: unknown,
   status: string,
   cursor?: string,
-  opts: { watched?: boolean; claims?: readonly PresentationClaim[] } = {},
+  opts: { watched?: boolean; claims?: readonly PresentationClaim[]; sessionId?: string } = {},
 ): (DeliverableEntry & { workspace: string }) | null {
   payload = currentPayload(peekJournal(workspace).state, entryId, payload);
   const record =
     payload !== null && typeof payload === "object" && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)
       : null;
-  let resolution: Resolution | undefined;
-  let address: string | null = null;
-  if (record?.kind === "annotation" && typeof record.artifact_path === "string") {
-    const built = anchoringContext(deps, workspace, record.artifact_path);
-    if (built) {
-      resolution = resolveAnchor({ body: record.body, intent: record.intent, target: record.target }, built.artifact, {
-        ...built.resolveCtx,
-        ...(typeof record.captured_rendered_sha256 === "string"
-          ? { capturedRenderedSha256: record.captured_rendered_sha256 }
-          : {}),
-      });
-      // Markdown only. A class-F document is HTML in glosa's sandboxed viewer: the page numbers no
-      // blocks there, so there is no label to repeat, even when its manifest maps the note into a
-      // Markdown source.
-      if (built.artifact.class === "R") address = deliveredAddress(built.artifact.source, resolution);
-    }
-  }
+  const resolved = resolveAnnotation(deps, workspace, record);
+  const resolution = resolved?.resolution;
+  const address = resolved?.address;
   const workspaceLine = `workspace: ${workspace.canonical_path}`;
   const presentation = buildDeliveryPresentation(entryId, payload, {
     status,
+    ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
     ...(resolution ? { resolution } : {}),
     ...(address ? { address } : {}),
     ...(cursor ? { cursor } : {}),
@@ -361,21 +393,16 @@ export async function createAnnotation(deps: ArtifactAccessDependencies, slug: s
   const workspace = findWorkspace(deps, slug);
   const bus = await workspaceBus(deps, workspace);
   const entryId = id();
-  await bus.createEntry(entryId, {
+  const payload = {
     kind: "annotation",
     artifact_path: input.artifactPath,
     ...(input.capturedRenderedSha256 !== undefined ? { captured_rendered_sha256: input.capturedRenderedSha256 } : {}),
     body: input.body,
     intent: input.intent,
     target: input.target,
-  });
-  const built = anchoringContext(deps, workspace, input.artifactPath);
-  const resolution = built
-    ? resolveAnchor({ body: input.body, intent: input.intent, target: input.target }, built.artifact, {
-        ...built.resolveCtx,
-        ...(input.capturedRenderedSha256 !== undefined ? { capturedRenderedSha256: input.capturedRenderedSha256 } : {}),
-      })
-    : undefined;
+  };
+  await bus.createEntry(entryId, payload);
+  const resolution = resolveAnnotation(deps, workspace, payload)?.resolution;
   return { id: entryId, status: "pending" as const, ...(resolution ? { resolution } : {}) };
 }
 
@@ -409,6 +436,7 @@ export interface AnnotationListItem {
   intent: unknown;
   target: unknown;
   captured_rendered_sha256?: string;
+  resolution?: Resolution;
   /** Delivery attempts recorded against this entry — a separate axis from `status` (R3), which is
    * why a re-nudged note can read "sent 3 times" while its status has not moved. */
   attempts: number;
@@ -495,7 +523,10 @@ export async function listAnnotations(
       continue;
     }
     const item = annotationListItem(id, entry, payload, artifactPath);
-    if (item) items.push(item);
+    if (item) {
+      const resolved = resolveAnnotation(deps, workspace, payload);
+      items.push({ ...item, ...(resolved ? { resolution: resolved.resolution } : {}) });
+    }
   }
   return items;
 }

@@ -125,7 +125,7 @@ describe("Review mode — the agent's half of the margin", () => {
     return { host, pane };
   }
 
-  describe("one page: a notes toggle, Edit as a state of it, and a pause while a session applies", () => {
+  describe("one page: a notes toggle, Edit as a state of it, and a notice while a session works", () => {
     const control = (host: any, name: string) => q(host, `.glosa-modebar [data-control="${name}"]`);
 
     test("Note and Edit turn each other off, and neither pressed is the plain page", async () => {
@@ -160,28 +160,32 @@ describe("Review mode — the agent's half of the margin", () => {
       expect(control(host, "edit")).not.toBeNull();
     });
 
-    test("a session's apply lease pauses Edit, keeps an open draft, and lifts when the lease ends", async () => {
+    test("a session's claim allows Edit and source editing, keeps an open draft, and names concurrent work", async () => {
       const { host, pane } = await mountPane(fakeDataAccess([]));
-      pane.setApplyPause({ lease_id: "L1", expires_at: null });
+      pane.setApplyPause({ lease_id: "L1", who: "Session A", expires_at: null });
       await paint();
-      expect(editSource(host).disabled).toBe(true);
-      expect(editSource(host).getAttribute("aria-label")).toContain("paused");
-      // The mode control's own Edit button says why it will not go, rather than quietly doing nothing.
-      expect(control(host, "edit").disabled).toBe(true);
+      expect(editSource(host).disabled).toBe(false);
+      expect(editSource(host).getAttribute("aria-label")).not.toContain("paused");
+      expect(control(host, "edit").disabled).toBe(false);
+      expect(control(host, "edit").title).toContain("Session A is working here");
       pane.setMode("edit");
-      expect(pane.getMode()).toBe("review");
-
+      expect(pane.getMode()).toBe("edit");
+      editSource(host).click();
+      await paint();
+      q(host, ".glosa-face-source").click();
+      const area = q(host, ".glosa-edit-area");
+      area.value = SOURCE + "My unsaved sentence.\n";
+      area.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      pane.setApplyPause({ lease_id: "L2", who: "Session B", expires_at: null });
+      await paint();
+      expect(pane.getMode()).toBe("edit");
+      expect(area.value).toBe(SOURCE + "My unsaved sentence.\n");
+      expect(q(host, ".glosa-edit-status").textContent).toContain("Session B is working here");
       pane.setApplyPause(null);
       await paint();
       expect(editSource(host).disabled).toBe(false);
-      pane.setMode("edit");
-      expect(pane.getMode()).toBe("edit");
-
-      // A lease that starts while a draft is open does not throw the draft away; it says why to wait.
-      pane.setApplyPause({ lease_id: "L2", expires_at: null });
-      await paint();
-      expect(pane.getMode()).toBe("edit");
-      expect(q(host, ".glosa-edit-status").textContent).toContain("session is applying a change");
+      expect(editSource(host).title).toBe("");
+      expect(area.value).toBe(SOURCE + "My unsaved sentence.\n");
     });
   });
 

@@ -59,31 +59,25 @@ function stringOf(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-/** The two commands that turn "an agent edited a file" into a provable, reversible fact.
- *
- * A4 §F05's lease is the ONLY thing that can attribute a change to a session: `apply-begin`
- * checkpoints the artifact as it stands (`pre_sha`) and opens the lease; `resolve` checkpoints the
- * result (`post_sha`) and closes it, and the proven `pre..post` interval is what carries
- * `session:<id>`. Both halves already existed and were tested — but nothing ever TOLD the agent
- * they existed, so in practice no lease was taken: annotations sat `pending` forever however
- * faithfully they were acted on, every edit was attributed `unknown`, and the reader was never
- * offered the rollback the pre-apply checkpoint would have made possible.
- *
- * It rides on every annotation because the entry is where the agent is looking, and it is worth
- * its ~230 bytes of the 16KB budget: without it the honest-provenance invariant is a mechanism
- * with no caller. Kept imperative and literal so it survives being read by a small model. */
-const APPLY_PROTOCOL = (id: string) =>
-  [
+/** Keep identity and the decision/edit distinction inside the presentation byte budget. */
+const APPLY_PROTOCOL = (id: string, sessionId?: string) => {
+  const session = sessionId ? `'${sessionId.replaceAll("'", "'\\''")}'` : "<session_id returned by glosa_inbox_pull>";
+  return [
     "how to act on this:",
-    `1. before editing: glosa apply-begin ${id} --session <your-session-id> --workspace <the workspace: path above>`,
-    "2. make the change",
-    `3. when done: glosa resolve ${id} applied --session <your-session-id> --workspace <the workspace: path above>`,
-    `   (or 'rejected' with --note if you are not making the change, 'deferred' to re-surface it)`,
-    "pass --workspace explicitly: both commands otherwise act on your current directory, which is",
-    "not necessarily the workspace this entry belongs to.",
-    "the lease is what proves the change was yours and what lets the human undo it; skipping it",
-    "leaves the annotation open forever and the edit attributed to nobody.",
+    ...(sessionId
+      ? [`your session_id: ${sessionId}`]
+      : ["get your own session_id from glosa_inbox_pull (also returned by glosa_inbox_get and glosa_claim)."]),
+    `1. before editing: glosa_claim with resources ["entry:${id}"] and this workspace,`,
+    `   or glosa claim entry:${id} --session ${session} --workspace <the workspace: path above>`,
+    "2. make the change only after the exclusive claim succeeds.",
+    `3. finish: glosa resolve ${id} applied --session ${session} --workspace <the workspace: path above>`,
+    "to decline without editing, resolve rejected with --note; no claim is needed unless another session holds the files.",
+    "resolve deferred records 'not now': it leaves the note open and does not release an existing claim.",
+    `if stopping with a claim: glosa_release, or glosa release <claim_id> --session ${session} --workspace <the workspace: path above>; unfinished edits become unknown.`,
+    "use this same session_id and pass --workspace explicitly: your current directory may be another workspace.",
+    "the claim's recorded files and before/after interval prove authorship; unclaimed edits remain unknown.",
   ].join("\n");
+};
 
 /** Said beside every address, so a session reads it as the reader's label for a passage today and
  * not as a place to find the words: the quote is what locates them. */
@@ -92,6 +86,7 @@ const ADDRESS_NOTE =
 
 export interface BuildPresentationOptions {
   status: string;
+  sessionId?: string;
   resolution?: Resolution;
   cursor?: string;
   maxBytes?: number;
@@ -145,7 +140,7 @@ function annotationPresentation(
   const markerReserve = 512;
   // The protocol is part of the entry, so it is part of the entry's budget. Appending it after
   // the body was sized against `maxBytes` would push every large annotation over the cap.
-  const protocol = APPLY_PROTOCOL(id);
+  const protocol = APPLY_PROTOCOL(id, opts.sessionId);
   const allowedBodyBytes = Math.max(0, maxBytes - utf8Bytes(fixed) - utf8Bytes(protocol) - 1 - markerReserve);
   const sliced = truncateUtf8(remainingBody, allowedBodyBytes);
   const nextOffset = offset + sliced.value.length;
@@ -287,12 +282,12 @@ function externalEditPresentation(
     `artifact: ${path}`,
     `checkpoints: ${since}..${until}`,
     `observed: ${source}${observedAt ? ` at ${observedAt}` : ""}`,
-    `${path} changed on disk outside glosa. attribution is "unknown": no apply-lease and no glosa`,
+    `${path} changed on disk outside glosa. attribution is "unknown": no proven claim interval or glosa`,
     "editor save covered this change, so glosa records WHAT changed and does not guess WHO changed",
-    "it. there is nothing to apply — the change is already in the file. this is a record, not a",
+    "it. there is nothing to apply: the change is already in the file. this is a record, not a",
     ...(opts.watched
       ? [
-          "request. you are seeing it because your session explicitly called glosa_watch — nobody",
+          "request. you are seeing it because your session explicitly called glosa_watch; nobody",
           `else was nudged by it; \`glosa inbox dismiss ${id}\` closes it.`,
         ]
       : [`request; \`glosa inbox dismiss ${id}\` closes it.`]),

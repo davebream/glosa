@@ -95,7 +95,8 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 // v1.25 (#443): directory file actions, path identity, binary asset history and free-path
 // folder restore. Additive HTTP; writable upgraded buses require a path-identity-aware reader.
 // v1.26 (#448): separate read-only inventory/content, per-folder views and ephemeral invalidations.
-export const CONTRACT_VERSION = "1.26";
+// v1.27 (#458): source-scoped claims, status-only rejection, annotation resolutions and MCP identity/conflicts.
+export const CONTRACT_VERSION = "1.27";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

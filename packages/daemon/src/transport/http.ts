@@ -1306,7 +1306,7 @@ async function handleCompositeSessionDrain(
         DRAIN_MAX,
         { session: sessionId, ...(entryId ? { entryId } : {}) },
         (id, payload, status, { claims }) =>
-          buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims }),
+          buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims, sessionId }),
       );
       undisclosedLocalCandidates ||= plan.has_more;
       for (const item of plan.entries) {
@@ -1351,6 +1351,7 @@ async function handleCompositeSessionDrain(
           (id, payload, status, { claims }) =>
             buildArtifactPresentation(artifactAccess(ctx), candidate.workspace, id, payload, status, cursor, {
               claims,
+              sessionId,
             }),
         );
         if (prepared.count !== 1 || prepared.delivery_id === null || prepared.drained[0]?.id !== candidate.id) {
@@ -1530,7 +1531,7 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
     limit,
     { via, session: sessionId, ...(entryId ? { entryId } : {}) },
     (id, payload, status, { claims }) =>
-      buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims }),
+      buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims, sessionId }),
   );
 
   return Response.json(withSignals(ctx, sessionId, prepared));
@@ -1731,7 +1732,10 @@ async function handleSessionStream(
               DRAIN_MAX,
               { session: sessionId, excludeEntryIds: sent },
               (id, payload, status, { claims }) =>
-                buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, undefined, { claims }),
+                buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, undefined, {
+                  claims,
+                  sessionId,
+                }),
             );
             for (const candidate of plan.entries) {
               if (closed || !candidate.presentation) break;
@@ -2222,8 +2226,8 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
       entry,
       status: outcome,
       to: outcome,
-      lease_id: result.leaseId,
-      post_sha: result.postSha,
+      ...(result.leaseId !== undefined ? { lease_id: result.leaseId } : {}),
+      ...(result.postSha !== undefined ? { post_sha: result.postSha } : {}),
       ...(result.fence !== null ? { fence: result.fence } : {}),
       ...(result.replayed ? { replayed: true } : {}),
     });
@@ -2764,6 +2768,7 @@ async function handleWorkspaceWatch(
         buildArtifactPresentation(artifactAccess(ctx), entry, id, payload, status, undefined, {
           watched: true,
           claims,
+          sessionId,
         }),
     );
     // Revalidate the admitted authority before anything leaves this handler (review round 3,

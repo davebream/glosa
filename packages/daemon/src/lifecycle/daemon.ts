@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
-import { type ArtifactAccessDependencies, getArtifact } from "../services/artifact.ts";
+import { type ArtifactAccessDependencies, annotationClaimPaths, getArtifact } from "../services/artifact.ts";
 import { BrowserRelay } from "../agents/browser-relay.ts";
 import { createManagedTools } from "../agents/managed-tools.ts";
 import { connect } from "node:net";
@@ -232,12 +232,13 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   // coordinators would leave the two call paths just as unserialized as having none at all.
   const adoptionCoordinator = new AdoptionCoordinator();
   const sessionRegistry = new SessionRegistry({ index: workspaceIndex, ownershipCoordinator: adoptionCoordinator });
+  const adapterRegistry = new AdapterRegistry();
   const busRegistry = new WorkspaceBusRegistry({
+    entrySourcePaths: (workspace, payload) => annotationClaimPaths({ adapterRegistry }, workspace, payload),
     writeCheckpoint: opts.writeCheckpoint,
     resolveTrackedFilesAsync: asyncTrackedFiles,
     resolveTrackedFilesSync: opts.resolveTrackedFilesSync,
   });
-  const adapterRegistry = new AdapterRegistry();
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
   const dictationRegistry = new DictationProviderRegistry();
