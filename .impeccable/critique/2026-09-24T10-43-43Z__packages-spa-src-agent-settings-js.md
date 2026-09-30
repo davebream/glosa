@@ -10,7 +10,7 @@ Method: dual-agent (A: /root/settings_design_critique · B: /root/settings_evide
 
 # Agent settings critique
 
-Reviewed the account settings renderer at `/Users/dawid/code/glosa/packages/spa/src/agent-settings.js`, shared controls and styles, and the live isolated preview on 2026-09-24. This records the pre-remediation state; no authentication, installation, profile mutation or model call was needed for the review.
+Reviewed the account settings renderer at `packages/spa/src/agent-settings.js`, shared controls and styles, and the live isolated preview on 2026-09-24. This records the pre-remediation state; no authentication, installation, profile mutation or model call was needed for the review.
 
 ## Design health
 
