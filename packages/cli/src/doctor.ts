@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Eighteen enumerated checks: platform,
+// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Nineteen enumerated checks: platform,
 // bun, git, claude-code, browser, daemon+proto, token/pairing, workspace, pending-delivery,
 // live-updates, orphaned-state, claude-monitor, transcript-root, claude-config-roots,
-// orphaned-entries, workspace-root, legacy-config, install.
+// orphaned-entries, workspace-root, legacy-config, install, mcp-config.
 import { browserLauncher, platformProblem, runtimeFloor, type PlatformDeps } from "./platform.ts";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { computeInstallId } from "../../daemon/src/lifecycle/install.ts";
 import { countJournalLines } from "../../daemon/src/bus/tail.ts";
 import { forgetRemedy } from "../../daemon/src/registry/forget-remedy.ts";
 import {
@@ -45,7 +46,7 @@ export interface DoctorDeps extends PlatformDeps {
   createClient: () => Promise<GlosaApiClient>;
   platform: () => NodeJS.Platform;
   bunVersion: () => string;
-  which: (cmd: string) => string | null;
+  which: (cmd: string, options?: { PATH?: string; cwd?: string }) => string | null;
   /** Runs `cmd` and returns its trimmed stdout, or `null` if it couldn't be spawned/exited
    * non-zero — every version-probe check goes through this so doctor never throws on a missing
    * binary, just reports what it can. */
@@ -104,7 +105,7 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     createClient,
     platform: () => process.platform,
     bunVersion: () => Bun.version,
-    which: (cmd) => Bun.which(cmd, { PATH: Bun.env.PATH ?? "" }),
+    which: (cmd, options) => Bun.which(cmd, { PATH: Bun.env.PATH ?? "", ...options }),
     runVersionProbe: realRunVersionProbe,
     glosaHome,
     claudeConfigDir,
@@ -239,13 +240,14 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   // which reuse this one aggregate call instead of re-fetching (and SKIP when it failed).
   let status: StatusSummary | null = null;
   let client: GlosaApiClient | null = null;
+  let handshake: HandshakeResponse | null = null;
   try {
     client = await deps.createClient();
     status = await client.getStatus();
     const compatible = protocolCompatible(PROTOCOL_VERSION, status.daemon.protocol_version);
     // Review answer 6 (#432): a daemon fenced by a changed install is reported, not hidden. Reaching
     // it here means ensureDaemon kept it, which it does only while managed chats are running.
-    const handshake = compatible ? await deps.readHandshake?.(deps.glosaHome()).catch(() => null) : null;
+    handshake = compatible ? ((await deps.readHandshake?.(deps.glosaHome()).catch(() => null)) ?? null) : null;
     const reachable = `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`;
     checks.push(
       compatible && handshake?.install_changed === true
@@ -575,13 +577,11 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   // — this check reports the outcome, it does not re-derive it.
   checks.push(check("workspace-root", "pass", `resolved workspace root: ${dir}`));
 
-  // 17. legacy-config (#152) — glosa entries `glosa init` used to write into agent config. They
-  // are inert now (`glosa hook` is a silent stub for one release, and no MCP entry outside the
-  // plugin is needed), but they are the user's files, so doctor names them and never edits them.
+  // 17. Retired hooks and ownership markers. MCP entries have their own install-aware check.
   const leftovers = scanLegacyConfig(dir, deps);
   checks.push(
     leftovers.length === 0
-      ? check("legacy-config", "pass", "no leftover glosa hook/MCP entries from `glosa init`")
+      ? check("legacy-config", "pass", "no leftover glosa hooks or ownership markers from `glosa init`")
       : check(
           "legacy-config",
           "warn",
@@ -593,6 +593,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
   // every other glosa it can see. The recorded executable is what the Claude Code plugin and the
   // desktop app run, so a mismatch is worth naming; it is a warn, never a fail.
   checks.push(installCheck(deps));
+  checks.push(mcpConfigCheck(dir, deps, handshake?.install_id ?? null));
 
   return checks;
 }
@@ -672,7 +673,7 @@ export function installCheck(deps: DoctorDeps): CheckResult {
 }
 
 /** Read-only scan of the files `glosa init` used to own, in both scopes. A file is listed once
- * when it still carries a `glosa hook` command, a `glosa` MCP server, or a glosa ownership
+ * when it still carries a `glosa hook` command, an enablement marker, or a glosa ownership
  * manifest. Unreadable or invalid files are skipped — this is a hint, not a diagnosis. */
 function scanLegacyConfig(dir: string, deps: DoctorDeps): string[] {
   const home = deps.homeDir?.() ?? homedir();
@@ -685,18 +686,8 @@ function scanLegacyConfig(dir: string, deps: DoctorDeps): string[] {
       if (!parsed || typeof parsed !== "object") return false;
       const hooks = JSON.stringify(parsed.hooks ?? null);
       if (/glosa[^"]*\bhook\b/.test(hooks)) return true;
-      const servers = parsed.mcpServers as Record<string, unknown> | undefined;
-      if (servers && typeof servers === "object" && "glosa" in servers) return true;
       const enabled = parsed.enabledMcpjsonServers;
       return Array.isArray(enabled) && enabled.includes("glosa");
-    } catch {
-      return false;
-    }
-  };
-  const tomlMentionsGlosa = (path: string): boolean => {
-    if (!existsSync(path)) return false;
-    try {
-      return /^\s*\[mcp_servers\.glosa\]/m.test(readFileSync(path, "utf8"));
     } catch {
       return false;
     }
@@ -711,9 +702,6 @@ function scanLegacyConfig(dir: string, deps: DoctorDeps): string[] {
   ]) {
     if (jsonMentionsGlosa(path)) found.push(path);
   }
-  for (const path of [join(dir, ".codex", "config.toml"), join(codexHome, "config.toml")]) {
-    if (tomlMentionsGlosa(path)) found.push(path);
-  }
   for (const path of [
     join(dir, ".glosa", "init-manifest.json"),
     join(dir, ".claude", ".glosa-init.json"),
@@ -722,6 +710,145 @@ function scanLegacyConfig(dir: string, deps: DoctorDeps): string[] {
     if (existsSync(path)) found.push(path);
   }
   return found;
+}
+
+function configObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** Recognize local launch forms without evaluating shell text or starting an MCP server. */
+function mcpInstallRoot(value: unknown, dir: string, deps: DoctorDeps): string | null {
+  const server = configObject(value);
+  if (!server || (server.type !== undefined && server.type !== "stdio")) return null;
+  const { command, args } = server;
+  if (typeof command !== "string" || !Array.isArray(args) || !args.every((arg) => typeof arg === "string")) return null;
+  let executable = command;
+  const rest = [...args];
+  if (basename(command) === "bun") {
+    if (rest[0] === "run") rest.shift();
+    if (rest[0] === "--silent") rest.shift();
+    executable = rest.shift() ?? "";
+    // A relative script's working directory is host-dependent. Never guess it from the config.
+    if (!isAbsolute(executable)) return null;
+  }
+  if (rest.length !== 1 || rest[0] !== "mcp" || !executable) return null;
+  const env = configObject(server.env);
+  const path = env?.PATH ?? deps.env?.PATH;
+  if (path !== undefined && (typeof path !== "string" || path.includes("${"))) return null;
+  if (!isAbsolute(executable)) {
+    if (executable.includes("/") || executable.includes("${")) return null;
+    executable = deps.which(executable, { ...(typeof path === "string" ? { PATH: path } : {}), cwd: dir }) ?? "";
+  }
+  const realpath = deps.realpath ?? realRealpath;
+  let target = executable ? realpath(executable) : null;
+  if (!target) return null;
+  // Generated pins are parsed and byte-validated by the existing install-selection reader.
+  if (basename(target) === "glosa" && basename(dirname(target)) === "bin") {
+    const recorded = readRecordedExecutable(dirname(dirname(target)));
+    if (recorded.state === "managed-pin") target = recorded.resolved;
+  }
+  if (!target) return null;
+  let root: string;
+  if (target.endsWith("/packages/cli/src/main.ts")) {
+    root = join(dirname(target), "../../..");
+  } else if (basename(target) === "glosa" && basename(dirname(target)) === "bin") {
+    root = join(dirname(target), "../glosa");
+    const packageType = (deps.readPackageType ?? readPackageType)(root);
+    if (classifyInstall(root, false, packageType).kind !== "app-bundle" && packageType !== "pacman") return null;
+    // Only the bundled launcher is recognizable here, not an arbitrary executable in bin/.
+    try {
+      const launcher = readFileSync(target, "utf8");
+      if (
+        !launcher.includes("# glosa: runs the CLI this app carries on the Bun runtime it carries (#371).") ||
+        !launcher.endsWith('exec "$resources/bin/bun" --no-install "$resources/glosa/packages/cli/src/main.ts" "$@"\n')
+      )
+        return null;
+    } catch {
+      return null;
+    }
+  } else return null;
+  try {
+    if (configObject(JSON.parse(readFileSync(join(root, "package.json"), "utf8")))?.name !== "@davebream/glosa")
+      return null;
+    if (!statSync(join(root, "packages/cli/src/main.ts")).isFile()) return null;
+    return realpath(root);
+  } catch {
+    return null;
+  }
+}
+
+/** Inspect explicit glosa entries only. Warnings describe config, never claim a process is running. */
+function mcpConfigCheck(dir: string, deps: DoctorDeps, daemonInstall: string | null): CheckResult {
+  const home = deps.homeDir?.() ?? homedir();
+  const codexHome = deps.env?.CODEX_HOME ?? join(home, ".codex");
+  const roots = new Set([deps.claudeConfigDir(), ...deps.claudeConfigRoots()]);
+  const findings: string[] = [];
+  let warned = false;
+  const inspect = (servers: unknown, provider: string, scope: string, path: string, key: string) => {
+    const entries = configObject(servers);
+    if (!entries || !Object.hasOwn(entries, "glosa")) return;
+    const root = mcpInstallRoot(entries.glosa, dir, deps);
+    const identity = root ? computeInstallId(root) : null;
+    const prefix = `${provider} ${scope}: ${path}, ${key}.glosa`;
+    if (identity && daemonInstall && identity === daemonInstall) {
+      findings.push(`${prefix}: ${root} (same install as the daemon)`);
+      return;
+    }
+    warned = true;
+    const remedy = `remove only ${key}.glosa from ${path} if this server is unwanted, then restart the affected session`;
+    if (identity && daemonInstall) {
+      findings.push(`${prefix}: ${root} targets another install (${identity}; daemon ${daemonInstall}); ${remedy}`);
+    } else {
+      findings.push(
+        `${prefix}: unverified (${root ? `${root}; daemon identity unavailable` : "local install target could not be resolved"}); inspect the entry before changing it; ${remedy}`,
+      );
+    }
+  };
+  const read = (path: string, toml = false): Record<string, unknown> | null => {
+    if (!existsSync(path)) return null;
+    try {
+      const text = readFileSync(path, "utf8");
+      const parsed = configObject(toml ? Bun.TOML.parse(text) : JSON.parse(text));
+      if (!parsed) throw new Error("not an object");
+      return parsed;
+    } catch {
+      warned = true;
+      findings.push(`${path}: MCP configuration unverified (unreadable or invalid); inspect the file`);
+      return null;
+    }
+  };
+  const realpath = deps.realpath ?? realRealpath;
+  const workspace = realpath(dir) ?? dir;
+  const registries = new Set([join(home, ".claude.json"), ...[...roots].map((root) => join(root, ".claude.json"))]);
+  for (const path of registries) {
+    const config = read(path);
+    inspect(config?.mcpServers, "Claude", "user", path, "mcpServers");
+    for (const [project, value] of Object.entries(configObject(config?.projects) ?? {})) {
+      if ((realpath(project) ?? project) === workspace)
+        inspect(
+          configObject(value)?.mcpServers,
+          "Claude",
+          "local",
+          path,
+          `projects[${JSON.stringify(project)}].mcpServers`,
+        );
+    }
+  }
+  const claudeFiles = new Map([
+    ...[...roots].map((root) => [join(root, "settings.json"), "user"] as const),
+    [join(dir, ".claude/settings.json"), "workspace"],
+    [join(dir, ".claude/settings.local.json"), "local"],
+    [join(dir, ".mcp.json"), "workspace"],
+  ]);
+  for (const [path, scope] of claudeFiles) inspect(read(path)?.mcpServers, "Claude", scope, path, "mcpServers");
+  for (const [path, scope] of new Map([
+    [join(codexHome, "config.toml"), "user"],
+    [join(dir, ".codex/config.toml"), "workspace"],
+  ]))
+    inspect(read(path, true)?.mcp_servers, "Codex", scope, path, "mcp_servers");
+  return check("mcp-config", warned ? "warn" : "pass", findings.join("; ") || "no explicit glosa MCP entries found");
 }
 
 /** Whether any live session bound to this workspace actually holds a push stream (#306).
