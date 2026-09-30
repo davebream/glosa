@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -10,6 +10,146 @@ import type {
   SessionLaunchSpec,
 } from "../../../daemon/src/agents/interface.ts";
 import { ClaudeEventNormalizer, ClaudeManagedAdapter, type ClaudeQuery, type ClaudeSdk } from "../src/managed.ts";
+import { claudeRuntimeCandidate } from "../src/runtime.ts";
+import { runtimeTarget } from "../../../daemon/src/agents/runtimes.ts";
+import { RuntimeSupervisor } from "../../../daemon/src/agents/supervisor.ts";
+import { managedEnvironment } from "../../../daemon/src/agents/environment.ts";
+import { waitUntil } from "../../../daemon/test/helpers.ts";
+import { createInterface } from "node:readline";
+
+test("Claude candidates select frozen native packages for each supported target and remain unqualified", () => {
+  for (const target of [
+    runtimeTarget("darwin", "arm64"),
+    runtimeTarget("darwin", "x64"),
+    runtimeTarget("linux", "x64", "glibc"),
+  ]) {
+    const candidate = claudeRuntimeCandidate(target);
+    const lock = Bun.JSONC.parse(readFileSync(candidate.lockFile, "utf8")) as {
+      workspaces: Record<string, { dependencies: Record<string, string> }>;
+      packages: Record<string, [string, string, Record<string, string>, string]>;
+    };
+    expect(candidate).toMatchObject({ ...target, qualified: false, version: "2.1.280", sdkVersion: "0.3.280" });
+    expect(candidate.binaryPackage).toBe(`@anthropic-ai/claude-code-${target.platform}-${target.architecture}`);
+    expect(lock.workspaces[""]!.dependencies).toEqual(candidate.packages);
+    expect(lock.packages[candidate.binaryPackage]![2]).toMatchObject({ os: target.platform, cpu: target.architecture });
+    // Bun does not retain npm's libc field in its lock. The non-musl package and host guard select glibc.
+    if (target.platform === "linux")
+      expect(lock.packages[candidate.binaryPackage]![0]).toBe("@anthropic-ai/claude-code-linux-x64@2.1.280");
+    expect(lock.packages[candidate.binaryPackage]![3]).toStartWith("sha512-");
+  }
+});
+
+test("Claude SDK process bridge uses private auth and real supervised pipes, then cancels its owned descendant", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-claude-process-")));
+  const configRoot = join(root, "profile"),
+    cwd = join(root, "workspace"),
+    system = join(root, "system");
+  for (const dir of [configRoot, cwd, system]) mkdirSync(dir);
+  const executable = join(root, "claude"),
+    observed = join(configRoot, "observed.json");
+  writeFileSync(join(system, "claude"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+  writeFileSync(join(system, "settings.json"), '{"apiKeyHelper":"poison"}');
+  // Only the SDK/vendor protocol is simulated. The bridge, native pipes and guardian are production.
+  writeFileSync(
+    executable,
+    `#!${process.execPath}
+import {writeFileSync} from "node:fs";
+import {createInterface} from "node:readline";
+if(process.argv[2]==="auth") {
+ console.log(JSON.stringify({loggedIn:true,authMethod:"claude.ai",apiProvider:"firstParty",email:"writer@example.test",orgId:"org-a"}));
+ process.exit(0);
+}
+const descendant=Bun.spawn(["/bin/sleep","60"],{stdin:"ignore",stdout:"ignore",stderr:"ignore"});
+for await(const line of createInterface({input:process.stdin})) {
+ const value=JSON.parse(line);
+ writeFileSync(${JSON.stringify(observed)},JSON.stringify({cwd:process.cwd(),configRoot:process.env.CLAUDE_CONFIG_DIR,key:process.env.ANTHROPIC_API_KEY,preload:process.env.NODE_OPTIONS,interrupted:!!value.interrupt,descendant:descendant.pid}));
+ console.log(JSON.stringify({type:"assistant",message:{id:"one",content:[{type:"text",text:value.interrupt?"interrupted":value.message.content[0].text}]}}));
+}
+`,
+    { mode: 0o700 },
+  );
+  const abort = new AbortController();
+  const adapter = new ClaudeManagedAdapter(async () => ({
+    query(input) {
+      const child = input.options.spawnClaudeCodeProcess({
+        command: input.options.pathToClaudeCodeExecutable,
+        args: ["--input-format", "stream-json"],
+        cwd: system,
+        env: { ANTHROPIC_API_KEY: "poison" },
+        signal: abort.signal,
+      });
+      child.on("error", () => {});
+      const write = (value: unknown) =>
+        new Promise<void>((resolve, reject) =>
+          child.stdin.write(`${JSON.stringify(value)}\n`, (error) => (error ? reject(error) : resolve())),
+        );
+      void (async () => {
+        for await (const prompt of input.prompt) await write(prompt);
+      })().catch(() => {});
+      return {
+        supportedModels: async () => [{ value: "model", displayName: "Fixture", supportedEffortLevels: ["high"] }],
+        accountInfo: async () => ({ email: "writer@example.test", apiProvider: "firstParty", apiKeySource: "none" }),
+        interrupt: () => write({ interrupt: true }),
+        close: () => abort.abort(),
+        async *[Symbol.asyncIterator]() {
+          for await (const line of createInterface({ input: child.stdout })) yield JSON.parse(line);
+        },
+      };
+    },
+  }));
+  const supervisor = new RuntimeSupervisor(join(root, "owner"));
+  const children: import("../../../daemon/src/agents/interface.ts").OwnedProcess[] = [];
+  const launcher: ProcessLauncher = {
+    async spawn(options) {
+      const child = await supervisor.spawn(options);
+      children.push(child);
+      return child;
+    },
+  };
+  const events: AgentEvent[] = [];
+  const spec = {
+    cwd,
+    configRoot,
+    probeCwd: configRoot,
+    env: managedEnvironment(
+      {
+        HOME: system,
+        PATH: `${system}:/usr/bin:/bin`,
+        CLAUDE_CONFIG_DIR: system,
+        ANTHROPIC_API_KEY: "poison",
+        NODE_OPTIONS: "--require=poison",
+      },
+      adapter.profileEnvironment(configRoot),
+    ),
+    profile: { auth: { identity: "org-a:writer@example.test" } },
+    manifest: { executable, sdkModule: "/simulated/sdk.mjs" },
+    settings: { model: "model", effort: "high", permissionMode: "default" },
+  } as SessionLaunchSpec;
+  let connection: Awaited<ReturnType<typeof adapter.connect>> | undefined;
+  try {
+    connection = await adapter.connect(spec, launcher, (event) => events.push(event));
+    await connection.startTurn({ turnId: "logical", text: "local fixture", settings: spec.settings, attachments: [] });
+    expect(await waitUntil(() => events.some((event) => event.type === "text"))).toBe(true);
+    expect(events.find((event) => event.type === "text")).toMatchObject({ text: "local fixture" });
+    const observation = JSON.parse(readFileSync(observed, "utf8"));
+    expect(observation).toMatchObject({ configRoot, cwd });
+    expect(observation.key).toBeUndefined();
+    expect(observation.preload).toBeUndefined();
+    await connection.interrupt();
+    expect(await waitUntil(() => events.some((event) => event.type === "text" && event.text === "interrupted"))).toBe(
+      true,
+    );
+    expect(readFileSync(join(system, "settings.json"), "utf8")).toBe('{"apiKeyHelper":"poison"}');
+    await connection.close();
+    for (const child of children) expect((await child.exited).groupEmpty).toBe(true);
+    expect(supervisor.activeCount).toBe(0);
+    expect(supervisor.recoveryRequired).toBe(false);
+  } finally {
+    await connection?.close();
+    await supervisor.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
 
 test("Claude streaming output is emitted once when the complete assistant message follows", () => {
   const events: AgentEvent[] = [],

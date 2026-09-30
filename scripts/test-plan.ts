@@ -30,6 +30,13 @@ export const LINUX_CORE_FILES = [
   "packages/daemon/test/lifecycle.test.ts",
   "packages/daemon/test/agents/managed-state.test.ts",
   "packages/daemon/test/agents/supervisor.test.ts",
+  // #433: offline runtime integrity, login and provider protocol fixtures, not native qualification.
+  "packages/daemon/test/agents/runtimes.test.ts",
+  "packages/daemon/test/agents/chat-service.test.ts",
+  "packages/daemon/test/agents/chat-routes.test.ts",
+  "packages/providers/claude-code/test/managed.test.ts",
+  "packages/providers/codex/test/managed.test.ts",
+  "packages/spa/test/chat-pane.test.ts",
   // #432: the Linux package's install kind and recording, its packaging rules, and the install
   // lifetime guard, whose filesystem and clock behaviour is exactly what differs on Linux.
   "packages/cli/test/install-link.test.ts",

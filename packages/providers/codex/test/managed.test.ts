@@ -1,16 +1,138 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent, ProcessLauncher, SessionLaunchSpec } from "../../../daemon/src/agents/interface.ts";
 import { CodexManagedAdapter } from "../src/managed.ts";
 import nativeConfiguration from "./fixtures/codex-0.156.1-config.json";
+import { codexRuntimeCandidate } from "../src/runtime.ts";
+import { runtimeTarget } from "../../../daemon/src/agents/runtimes.ts";
+import { RuntimeSupervisor } from "../../../daemon/src/agents/supervisor.ts";
+import { managedEnvironment } from "../../../daemon/src/agents/environment.ts";
+import { waitUntil } from "../../../daemon/test/helpers.ts";
+
+test("Codex candidates select frozen native packages for each supported target and remain unqualified", () => {
+  for (const target of [
+    runtimeTarget("darwin", "arm64"),
+    runtimeTarget("darwin", "x64"),
+    runtimeTarget("linux", "x64", "glibc"),
+  ]) {
+    const candidate = codexRuntimeCandidate(target);
+    const lock = Bun.JSONC.parse(readFileSync(candidate.lockFile, "utf8")) as {
+      workspaces: Record<string, { dependencies: Record<string, string> }>;
+      packages: Record<string, [string, string, Record<string, string>, string]>;
+    };
+    expect(candidate).toMatchObject({ ...target, qualified: false, version: "0.156.1" });
+    expect(candidate.packages["@openai/codex"]).toBe(`0.156.1-${target.platform}-${target.architecture}`);
+    expect(lock.workspaces[""]!.dependencies).toEqual(candidate.packages);
+    expect(lock.packages["@openai/codex"]![2]).toMatchObject({ os: target.platform, cpu: target.architecture });
+    expect(lock.packages["@openai/codex"]![3]).toStartWith("sha512-");
+  }
+});
 
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+test("Codex stdio transport uses the admitted executable and private config, then stops its owned descendant", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-codex-process-")));
+  roots.push(root);
+  const configRoot = join(root, "profile"),
+    cwd = join(root, "workspace"),
+    system = join(root, "system");
+  for (const dir of [configRoot, cwd, system]) mkdirSync(dir);
+  const executable = join(root, "codex"),
+    observed = join(configRoot, "observed.json");
+  writeFileSync(join(system, "codex"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+  writeFileSync(join(system, "config.toml"), 'model_provider="poison"');
+  // An offline protocol stand-in, not the vendor CLI: real pipes, environment and process ownership.
+  writeFileSync(
+    executable,
+    `#!${process.execPath}
+import {writeFileSync} from "node:fs";
+import {createInterface} from "node:readline";
+const config=${JSON.stringify(nativeConfiguration.config)}, layers=${JSON.stringify(nativeConfiguration.layers)};
+const args=process.argv.slice(2), methods=[];
+for(let i=0;i<args.length;i++) if(args[i]==="-c") {
+  const entry=args[++i], at=entry.indexOf("="), path=entry.slice(0,at).split(".");
+  let target=config; while(path.length>1) {const key=path.shift(); target=target[key]??={};}
+  target[path[0]]=JSON.parse(entry.slice(at+1));
+}
+const descendant=Bun.spawn(["/bin/sleep","60"],{stdin:"ignore",stdout:"ignore",stderr:"ignore"});
+const output=value=>console.log(JSON.stringify(value));
+for await(const line of createInterface({input:process.stdin})) {
+ const frame=JSON.parse(line); if(!frame.method||frame.id===undefined) continue;
+ methods.push(frame.method);
+ writeFileSync(${JSON.stringify(observed)},JSON.stringify({args,methods,cwd:process.cwd(),configRoot:process.env.CODEX_HOME,key:process.env.OPENAI_API_KEY,preload:process.env.NODE_OPTIONS,descendant:descendant.pid}));
+ let result={};
+ if(frame.method==="config/read") result={config,layers};
+ if(frame.method==="account/read") result={account:{type:"chatgpt",email:"writer@example.test",planType:"pro"},requiresOpenaiAuth:true};
+ if(frame.method==="model/list") result={data:[{id:"model",model:"model",displayName:"Fixture",supportedReasoningEfforts:[{reasoningEffort:"high"}]}],nextCursor:null};
+ if(frame.method==="thread/start") result={thread:{id:"thread-a"}};
+ if(frame.method==="turn/start") {
+   output({method:"turn/started",params:{threadId:"thread-a",turn:{id:"turn-a"}}});
+   output({method:"item/agentMessage/delta",params:{threadId:"thread-a",turnId:"turn-a",itemId:"one",delta:frame.params.input[0].text}});
+   result={turn:{id:"turn-a"}};
+ }
+ output({id:frame.id,result});
+}
+`,
+    { mode: 0o700 },
+  );
+  const adapter = new CodexManagedAdapter(),
+    supervisor = new RuntimeSupervisor(join(root, "owner"));
+  const children: import("../../../daemon/src/agents/interface.ts").OwnedProcess[] = [];
+  const launcher: ProcessLauncher = {
+    async spawn(options) {
+      const child = await supervisor.spawn(options);
+      children.push(child);
+      return child;
+    },
+  };
+  const events: AgentEvent[] = [];
+  const spec = {
+    cwd,
+    configRoot,
+    probeCwd: configRoot,
+    env: managedEnvironment(
+      {
+        HOME: system,
+        PATH: `${system}:/usr/bin:/bin`,
+        CODEX_HOME: system,
+        OPENAI_API_KEY: "poison",
+        NODE_OPTIONS: "--require=poison",
+      },
+      adapter.profileEnvironment(configRoot),
+    ),
+    profile: { auth: { identity: "chatgpt:writer@example.test" } },
+    manifest: { executable },
+    settings: { model: "model", effort: "high", permissionMode: "default" },
+  } as SessionLaunchSpec;
+  let connection: Awaited<ReturnType<typeof adapter.connect>> | undefined;
+  try {
+    connection = await adapter.connect(spec, launcher, (event) => events.push(event));
+    await connection.startTurn({ turnId: "logical", text: "local fixture", settings: spec.settings, attachments: [] });
+    expect(await waitUntil(() => events.some((event) => event.type === "text"))).toBe(true);
+    expect(events.find((event) => event.type === "text")).toMatchObject({ text: "local fixture" });
+    await connection.interrupt();
+    const observation = JSON.parse(readFileSync(observed, "utf8"));
+    expect(observation).toMatchObject({ configRoot, cwd: configRoot });
+    expect(observation.key).toBeUndefined();
+    expect(observation.preload).toBeUndefined();
+    expect(observation.args).toContain("app-server");
+    expect(observation.methods).toContain("turn/interrupt");
+    expect(readFileSync(join(system, "config.toml"), "utf8")).toBe('model_provider="poison"');
+    await connection.close();
+    for (const child of children) expect((await child.exited).groupEmpty).toBe(true);
+    expect(supervisor.activeCount).toBe(0);
+    expect(supervisor.recoveryRequired).toBe(false);
+  } finally {
+    await connection?.close();
+    await supervisor.close();
+  }
+}, 15_000);
 
 function fixture(account = { type: "chatgpt", email: "writer@example.test", planType: "pro" }) {
   const root = mkdtempSync(join(tmpdir(), "glosa-codex-policy-"));
