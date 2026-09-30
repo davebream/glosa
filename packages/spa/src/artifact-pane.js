@@ -955,7 +955,7 @@ export function createArtifactPane(host, deps) {
     documentPath: path,
     status: setEditStatus,
     capture(coords, target) {
-      if (destroyed || readLock || applyPause || modeState.mode !== "edit") return null;
+      if (destroyed || readLock || modeState.mode !== "edit") return null;
       if (fullPageEditor && sourceFace) {
         let from = editArea.selectionStart,
           to = editArea.selectionEnd;
@@ -1296,27 +1296,16 @@ export function createArtifactPane(host, deps) {
     if (revealButton) revealButton.hidden = !currentArtifact?.source_path;
     printArtifactButton.hidden = !available;
     compareButton.hidden = !available || !openDiffTab;
-    // The source editor, and the reason it is unavailable when it is. The apply-lease pause used to
-    // live on the mode control's Edit button; with that button gone (#271) it has to be stated
-    // here, or a writer whose editing has been paused by a session would simply find a row that
-    // quietly did nothing.
+    // Claims explain concurrent work; they never block a person's editor.
     const editable = available && canEdit(currentArtifact) && !readLock;
     editSourceButton.hidden = !editable;
-    editSourceButton.disabled = Boolean(applyPause) && !fullPageEditor;
-    editSourceButton.title = editSourceButton.disabled
-      ? `${pauseWho()} is applying a change. Edit when it finishes.`
-      : "";
+    editSourceButton.disabled = false;
+    editSourceButton.title = applyPause ? `${pauseWho()} is working here. You can edit and save.` : "";
     const leaving = fullPageEditor;
     editSourceButton.querySelector("span").textContent = leaving ? "Done editing source" : "Edit source";
     editSourceButton.setAttribute(
       "aria-label",
-      editSourceButton.disabled
-        ? "Edit source, paused while a session applies a change"
-        : isParked(modeState)
-          ? "Edit source, unsaved draft kept"
-          : leaving
-            ? "Done editing source"
-            : "Edit source",
+      isParked(modeState) ? "Edit source, unsaved draft kept" : leaving ? "Done editing source" : "Edit source",
     );
     editSourceButton.toggleAttribute("data-parked", isParked(modeState));
     if (toolsStatusArtifactPath !== artifactPath) {
@@ -1593,16 +1582,13 @@ export function createArtifactPane(host, deps) {
       modeBar.append(note);
       // Absent, not disabled, when this artifact cannot be written to: a control that is there and
       // does nothing is a worse answer than one that is honestly not offered. `canEdit` covers the
-      // artifact; the apply lease is a moment, not a property, so it disables rather than removes.
+      // artifact. An agent's claim does not change the person's ability to edit.
       if (!currentArtifact || canEdit(currentArtifact)) {
         const edit = modeButton(editing ? "read" : "edit", "edit", "Edit");
         edit.setAttribute("aria-label", editing ? "Stop editing" : "Edit this document");
         edit.setAttribute("aria-pressed", String(editing));
         edit.setAttribute("data-control", "edit");
-        if (applyPause && !editing) {
-          edit.disabled = true;
-          edit.title = `${pauseWho()} is applying a change. Edit when it finishes.`;
-        }
+        if (applyPause) edit.title = `${pauseWho()} is working here. You can edit and save.`;
         modeBar.append(edit);
       }
       // The state the reader cannot see: a draft parked off screen says so on whichever control
@@ -1924,7 +1910,7 @@ export function createArtifactPane(host, deps) {
    * passage to comment on, and putting a caret in one — so the page is in exactly one of them, and
    * in neither it is only words. */
   function runEditingAvailable() {
-    if (readLock || applyPause || loading) return false;
+    if (readLock || loading) return false;
     if (modeState.mode !== "edit") return false;
     return Boolean(currentArtifact) && currentArtifact.class === "R" && canEdit(currentArtifact);
   }
@@ -2539,6 +2525,7 @@ export function createArtifactPane(host, deps) {
       annotations.push({
         record,
         id: result?.id ?? null,
+        resolution: result?.resolution,
         state: result?.status === "delivered" ? "delivered" : "waiting",
       });
       // A revision is complete only once the superseded entry is withdrawn. It runs AFTER the new
@@ -4046,12 +4033,29 @@ export function createArtifactPane(host, deps) {
   function applyAnchorVerdict(card, addresses) {
     const item = card._glosaItem;
     const target = item?.record?.target ?? item?.target ?? null;
-    const range = target ? rangeForTarget(target) : null;
-    card.setAttribute("data-anchored", String(Boolean(range)));
+    const classF = currentArtifact?.class === "F";
+    const range = !classF && target ? rangeForTarget(target) : null;
+    const resolved =
+      classF && item?.resolution?.kind === "source_range" && item.resolution.confidence !== "block_range";
+    card.setAttribute("data-anchored", String(Boolean(range) || resolved));
     const addressEl = card.querySelector(".glosa-address");
     if (addressEl) addressEl.textContent = (range ? addressForRange(contentEl, range, addresses) : null) ?? "";
     const lost = card.querySelector(".glosa-annotation-lost");
-    const notice = range ? null : (SETTLED_ELSEWHERE[item?.state] ?? LOST_ITS_PLACE);
+    let notice = range || resolved ? null : (SETTLED_ELSEWHERE[item?.state] ?? LOST_ITS_PLACE);
+    if (classF && !resolved && !SETTLED_ELSEWHERE[item?.state]) {
+      const resolution = item?.resolution;
+      notice = {
+        text:
+          resolution?.kind === "pipeline_feedback"
+            ? "Rendering feedback: no exact source passage."
+            : resolution?.kind === "source_range" && resolution.confidence === "block_range"
+              ? "Source section located; exact passage unavailable."
+              : resolution?.reason === "quote_absent_not_transformed" || resolution?.reason === "hash_mismatch_no_match"
+                ? LOST_ITS_PLACE.text
+                : "Source position unavailable.",
+        settled: false,
+      };
+    }
     if (!notice) {
       lost?.remove();
       return;
@@ -4436,7 +4440,6 @@ export function createArtifactPane(host, deps) {
     void closeRunEditor();
 
     const previousMode = modeState.mode;
-    if (mode === "edit" && previousMode !== "edit" && applyPause) return;
     if (previousMode !== "edit" && mode === "edit") lastViewMode = previousMode;
     if (mode !== "edit") lastViewMode = mode;
     if ((mode === "edit") !== (previousMode === "edit")) pendingScrollTop = paneMain.scrollTop;
@@ -5112,7 +5115,13 @@ export function createArtifactPane(host, deps) {
     if (destroyed || currentArtifact?.source_path !== artifactPath) return;
     for (const row of listed?.annotations ?? []) {
       if (!row?.id) continue;
+      const existing = annotations.find((item) => item.id === row.id);
+      if (existing) {
+        existing.resolution = row.resolution;
+        continue;
+      }
       annotations.push({
+        resolution: row.resolution,
         record: {
           kind: "annotation",
           artifact_path: row.artifact_path,
@@ -5415,6 +5424,8 @@ export function createArtifactPane(host, deps) {
       // A1 §7: "fresh mint per iframe open/reload" — an SSE-driven re-render discards the old
       // iframe and mints a brand new capability rather than trying to reuse the expiring one.
       mountClassFArtifact(true);
+      await hydrateAnnotations(fresh.source_path);
+      if (!destroyed && currentArtifact?.source_path === fresh.source_path) renderMargin();
       return;
     }
     if (fresh.class === "R" && baselineSha) {
@@ -5508,6 +5519,19 @@ export function createArtifactPane(host, deps) {
     get path() {
       return path;
     },
+    async refreshAnnotationsFor(changedPath) {
+      const artifact = currentArtifact;
+      if (artifact?.class !== "F" || annotations.length === 0) return;
+      if (
+        changedPath &&
+        changedPath !== artifact.source_path &&
+        changedPath !== artifact.derived_from &&
+        changedPath !== artifact.manifest_path
+      )
+        return;
+      await hydrateAnnotations(artifact.source_path);
+      if (!destroyed && currentArtifact?.source_path === artifact.source_path) renderMargin();
+    },
     async pauseFileOperation() {
       fileOperationPaused = true;
       if (saveTimer) clearTimeout(saveTimer);
@@ -5566,20 +5590,16 @@ export function createArtifactPane(host, deps) {
       if (!unchanged && currentArtifact) renderMargin();
     },
     /** The workbench's view of the exclusive claim over this file: an object while a session holds
-     * one, null once it ends or expires. Pauses Edit; a draft already open is kept and told why. */
+     * one, null once it ends or expires. Informational only: the person can always edit. */
     setApplyPause(lease) {
       const next = lease ?? null;
-      if ((applyPause === null) === (next === null)) {
-        applyPause = next;
-        return;
-      }
+      const changed = Boolean(applyPause) !== Boolean(next) || applyPause?.who !== next?.who;
       applyPause = next;
+      if (!changed) return;
       renderModeBar();
       renderArtifactTools();
       if (modeState.mode === "edit") {
-        setEditStatus(
-          next ? `${pauseWho()} is applying a change here. Your draft is kept; save when it finishes.` : "",
-        );
+        setEditStatus(next ? `${pauseWho()} is working here. You can edit and save; your changes take priority.` : "");
       }
     },
     /** Hide notes / show notes on the one page: the read ↔ review toggle, for commands. */
@@ -5594,7 +5614,7 @@ export function createArtifactPane(host, deps) {
       if (modeState.mode === "edit") setMode("read");
       else if (!currentArtifact || canEdit(currentArtifact)) setMode("edit");
     },
-    canEdit: () => !readLock && Boolean(currentArtifact) && canEdit(currentArtifact) && !applyPause,
+    canEdit: () => !readLock && Boolean(currentArtifact) && canEdit(currentArtifact),
     /** This document's sections and the one the reader is in, for the workspace's Go to palette. */
     getOutline: () => ({ entries: outlineEntries, current: outlineCurrent }),
     isDirty,

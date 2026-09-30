@@ -98,8 +98,9 @@ export function createManagedTools(
     resolution
       ? actionablePresentation(resolution.deps, resolution.workspaceFor(chat), id, payload, status, extra.cursor, {
           ...(extra.claims ? { claims: extra.claims } : {}),
+          sessionId: chat.sessionId,
         })
-      : buildDeliveryPresentation(id, payload, { status, ...extra });
+      : buildDeliveryPresentation(id, payload, { status, ...extra, sessionId: chat.sessionId });
   return {
     async pending(context) {
       context.assertActive();

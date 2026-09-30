@@ -154,6 +154,7 @@ const signalSchema = z
 
 export const inboxPullOutputSchema = z
   .object({
+    session_id: sessionId,
     entries: z
       .array(inboxPresentationSchema)
       .max(8)
@@ -195,7 +196,7 @@ export const inboxGetInputSchema = z
   })
   .strict();
 
-export const inboxGetOutputSchema = z.object({ presentation: inboxPresentationSchema }).strict();
+export const inboxGetOutputSchema = z.object({ presentation: inboxPresentationSchema, session_id: sessionId }).strict();
 
 export const metadataSetInputSchema = z
   .object({
@@ -271,6 +272,7 @@ export const claimInputSchema = z
 
 export const claimOutputSchema = z
   .object({
+    session_id: sessionId,
     claim_id: z.string().min(1).describe("Pass to glosa_release when done without resolving."),
     fence: z.number().int().min(1).nullable().describe("Fencing token for this claim."),
     expires_at: z.string().min(1).describe("When the claim lapses unless renewed (claiming again renews)."),

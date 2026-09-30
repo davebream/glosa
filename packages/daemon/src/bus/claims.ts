@@ -56,6 +56,9 @@ export interface Claim {
 }
 
 export interface Tombstone {
+  /** Replayed from claim_taken, so stale decisions cannot evade a file-scoped takeover. */
+  paths: string[];
+  mode: ClaimMode;
   claim_id: string;
   holder_session: string;
   fence: number | null;
@@ -115,6 +118,8 @@ function tombstoneOf(claim: Claim, endedAt: string, reason: TombstoneReason): To
     holder_session: claim.holder_session,
     fence: claim.fence,
     ended_at: endedAt,
+    paths: [...claim.paths],
+    mode: claim.mode,
     reason,
   };
 }

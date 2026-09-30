@@ -489,6 +489,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
           ? `${signals.map((notice) => `[glosa signal ${notice.id}] ${notice.kind}: ${notice.message}`).join("\n")}\n\n${entriesText}`
           : entriesText;
       const structuredContent = {
+        session_id: sessionId,
         entries: drained.drained,
         count: drained.count,
         has_more: drained.has_more ?? false,
@@ -522,7 +523,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     async ({ id, cursor, workspace }) => {
       const root = workspace ?? (deps.cwd ?? process.cwd)();
       const retrieved = await (await deps.createApiClient(shutdownAbort.signal)).getInboxPresentation(root, id, cursor);
-      const structuredContent = { presentation: retrieved.presentation };
+      const structuredContent = { presentation: retrieved.presentation, session_id: identity().session_id };
       return toolResult(structuredContent, retrieved.presentation.text);
     },
   );
@@ -670,13 +671,30 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
     async ({ resources, mode, workspace, session_id: requestedSession }) => {
       // The same identity the wrapper just registered: the host's session, never a different one —
-      // one agent cannot claim in another's name through this process. A `claim-held` refusal
-      // surfaces as the daemon's own sentence naming the holder (`apiError` carries it).
+      // one agent cannot claim in another's name through this process.
       const sessionId = identity(requestedSession).session_id;
       const root = workspace ?? (deps.cwd ?? process.cwd)();
       const client = await deps.createApiClient(shutdownAbort.signal);
       if (!client.claim) throw new Error("claims are unavailable from this daemon");
-      return toolResult({ ...(await client.claim(root, resources, sessionId, { ...(mode ? { mode } : {}) })) });
+      try {
+        return toolResult({
+          session_id: sessionId,
+          ...(await client.claim(root, resources, sessionId, { ...(mode ? { mode } : {}) })),
+        });
+      } catch (error) {
+        if (!isApiError(error) || !error.problem?.type?.endsWith("/claim-held")) throw error;
+        const p = error.problem;
+        const conflict = {
+          code: "claim-held",
+          message: p.title ?? "Another session holds an exclusive claim.",
+          ...Object.fromEntries(
+            ["claim_id", "holder_session", "holder_principal", "mode", "since", "expires_at", "fence"]
+              .filter((key) => p[key] !== undefined)
+              .map((key) => [key, p[key]]),
+          ),
+        };
+        return { ...toolResult({ error: conflict }, conflict.message), isError: true };
+      }
     },
   );
 

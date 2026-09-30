@@ -133,7 +133,7 @@ export function isTerminal(kind: EntryKind, status: string): boolean {
  * a transition attempted out of order, a duplicate resolve on an already-terminal entry, a
  * `to` value that isn't even in this kind's vocabulary — is a no-op, not an error. That's what
  * makes replaying the same illegal event twice (or replaying a journal that has one) safe. */
-function canTransition(kind: EntryKind, current: string, to: string): boolean {
+export function canTransition(kind: EntryKind, current: string, to: string): boolean {
   if (isTerminal(kind, current)) return false; // terminal is terminal — nothing leaves it
   const rule = guardsFor(kind)[to];
   if (!rule) return false; // unrecognized `to` for this kind — ignored, never fatal
@@ -226,7 +226,10 @@ function applyGuardedTransition(state: DerivedState, event: JournalEvent): void 
     // The `apply_end` that preceded this transition proves an interval only if the SAME actor
     // then closed the entry. A loser's `apply_end` (it checkpointed before the fold discarded its
     // transition) stays stashed and unattributed.
-    if (entryState.lastApplyEnd && entryState.lastApplyEnd.by === event.by) {
+    if (event.detail?.resolution_mode === "status_only") {
+      delete entryState.appliedInterval;
+      delete entryState.rollbackPreSha;
+    } else if (entryState.lastApplyEnd && entryState.lastApplyEnd.by === event.by) {
       entryState.appliedInterval = entryState.lastApplyEnd;
     }
   }

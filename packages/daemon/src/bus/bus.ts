@@ -50,6 +50,7 @@ import {
 } from "./claims.ts";
 import { EXTERNAL_EDIT_CHECKPOINT_KIND, externalEditDetail, isExternalEditEntry } from "./external-edit.ts";
 import { externalEditPayloads } from "./external-edit-capture.ts";
+import { resolveTrackedFiles } from "../matcher.ts";
 import { readInboxEntry, writeInboxEntryOnce } from "./inbox.ts";
 import { appendEvent, type EventBy, type JournalEvent, JournalWriter } from "./journal.ts";
 import {
@@ -74,6 +75,7 @@ import {
   type DeliveryOutcome,
   type DeliveryReason,
   type DeliveryVia,
+  canTransition,
   entryKindOf,
   isTerminal,
   lifecycleReducer,
@@ -324,6 +326,8 @@ export interface WorkspaceBusDeps {
    * fine for a single WorkspaceBus but wrong if the daemon opens the same workspace root twice —
    * callers doing that must pass a shared instance. */
   mutex?: KeyedMutex<string>;
+  /** Generic content boundary. Called under the bus mutex; must not call back into the bus. */
+  entrySourcePaths?: (workspace: WorkspaceTarget, payload: unknown) => readonly string[];
   ulid?: () => string;
   now?: () => Date;
   reducer?: Reducer;
@@ -339,6 +343,7 @@ export class WorkspaceBus {
   readonly workspace: WorkspaceTarget;
   state: DerivedState = createEmptyState();
 
+  private readonly entrySourcePaths?: WorkspaceBusDeps["entrySourcePaths"];
   private readonly writer: JournalWriter;
   private readonly mutex: KeyedMutex<string>;
   private readonly ulidFn: () => string;
@@ -431,6 +436,7 @@ export class WorkspaceBus {
 
   constructor(workspaceRoot: WorkspaceTarget, deps: WorkspaceBusDeps = {}) {
     this.workspace = workspaceRoot;
+    this.entrySourcePaths = deps.entrySourcePaths;
     this.root = workspaceWorktree(workspaceRoot);
     this.mutexKey = workspaceRegistrationId(workspaceRoot);
     mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
@@ -1306,9 +1312,17 @@ export class WorkspaceBus {
   private entryPathsLocked(entryId: string): string[] {
     const paths = new Set<string>();
     const derived = this.state.entries[entryId];
-    if (typeof derived?.target_path === "string") paths.add(derived.target_path);
-    for (const path of pathsOfPayload(readInboxEntry(this.workspace, entryId))) paths.add(path);
-    return [...paths].map((path) => currentPath(this.state, entryId, path)).sort();
+    if (typeof derived?.target_path === "string") paths.add(currentPath(this.state, entryId, derived.target_path));
+    const payload = currentPayload(this.state, entryId, readInboxEntry(this.workspace, entryId));
+    for (const path of pathsOfPayload(payload)) paths.add(path);
+    const sources = this.entrySourcePaths?.(this.workspace, payload) ?? [];
+    if (sources.length > 0) {
+      const tracked = new Set(resolveTrackedFiles(this.workspace).tracked.map((file) => file.path));
+      for (const path of sources) {
+        if (isConfinedRelativePath(path) && tracked.has(path)) paths.add(path);
+      }
+    }
+    return [...paths].sort();
   }
 
   /** Validates `resources` and returns them deduplicated plus the normalized path set they cover.
@@ -1852,7 +1866,7 @@ export class WorkspaceBus {
    *   3′ my claim's TTL lapsed but nothing closed it yet  → renew and proceed, within one sweeper
    *      interval; past that, expire it here and answer CLAIM_EXPIRED
    *   4. another session holds this entry's paths         → CLAIM_HELD{holder…}
-   *   5. no claim of mine                                 → NO_CLAIM
+   *   5. no claim of mine: unfenced legal rejection records status only; otherwise NO_CLAIM
    *   6. proceed: `post_apply` checkpoint scoped to the claim's paths, then `apply_end` + the
    *      transition. A commit inside pre..post that touched the claimed paths and is neither the
    *      holder's own nor this claim's makes the interval `unknown`; the entry still closes.
@@ -1861,10 +1875,22 @@ export class WorkspaceBus {
    * equal by the time rung 6 runs, but the proof is what the claim recorded. */
   resolveEntry(
     entry: string,
+    outcome: "applied" | "stale",
+    sessionId: string,
+    opts?: { note?: string; fence?: number; assertActive?: () => void },
+  ): Promise<{ leaseId: string; postSha: string; fence: number | null; replayed: boolean }>;
+  resolveEntry(
+    entry: string,
+    outcome: "applied" | "rejected" | "stale",
+    sessionId: string,
+    opts?: { note?: string; fence?: number; assertActive?: () => void },
+  ): Promise<{ leaseId?: string; postSha?: string; fence: number | null; replayed: boolean }>;
+  resolveEntry(
+    entry: string,
     outcome: "applied" | "rejected" | "stale",
     sessionId: string,
     opts: { note?: string; fence?: number; assertActive?: () => void } = {},
-  ): Promise<{ leaseId: string; postSha: string; fence: number | null; replayed: boolean }> {
+  ): Promise<{ leaseId?: string; postSha?: string; fence: number | null; replayed: boolean }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
       opts.assertActive?.();
@@ -1876,8 +1902,11 @@ export class WorkspaceBus {
       if (guard.replay) {
         const interval = guard.entry.appliedInterval;
         return {
-          leaseId: interval?.claim_id ?? "",
-          postSha: interval?.post_sha ?? "",
+          ...(interval
+            ? { leaseId: interval.claim_id, postSha: interval.post_sha }
+            : outcome === "rejected"
+              ? {}
+              : { leaseId: "", postSha: "" }),
           fence: null,
           replayed: true,
         };
@@ -1901,7 +1930,29 @@ export class WorkspaceBus {
 
       // Rung 3: the caller's claim is over. The tombstone says why, and that is what the caller
       // needs — a human took the file, the clock ran out, or someone else took the resource.
-      const tombstone = slot?.last ?? null;
+      const directTombstone = slot?.last;
+      const tombstone =
+        (directTombstone &&
+        directTombstone.mode === "exclusive" &&
+        (directTombstone.holder_session === sessionId ||
+          (opts.fence !== undefined && directTombstone.fence === opts.fence))
+          ? directTombstone
+          : null) ??
+        Object.values(this.state.claims)
+          .map((resourceSlot) => resourceSlot.last)
+          .filter((ended): ended is Tombstone =>
+            Boolean(
+              ended &&
+                ended.mode === "exclusive" &&
+                ended.holder_session === sessionId &&
+                ended.reason !== "resolved" &&
+                (ended.paths.length === 0 ||
+                  request.paths.length === 0 ||
+                  ended.paths.some((path) => request.paths.includes(path))),
+            ),
+          )
+          .sort((a, b) => b.ended_at.localeCompare(a.ended_at) || b.claim_id.localeCompare(a.claim_id))[0] ??
+        null;
       if (!mine) {
         if (
           tombstone &&
@@ -1932,6 +1983,20 @@ export class WorkspaceBus {
         // claim over the same paths, the sweeper, or reconcile all reach the same place.
         const blocker = this.blockingClaimLocked(sessionId, request, now, true);
         if (blocker) throw claimHeldError(holderSnapshot(blocker));
+        // A decision without a file interval: retain all stale-worker/conflict guards above.
+        if (
+          outcome === "rejected" &&
+          opts.fence === undefined &&
+          canTransition(entryKindOf(guard.entry), guard.entry.status, outcome)
+        ) {
+          opts.assertActive?.();
+          this.appendTransitionLocked(entry, outcome, me, {
+            outcome,
+            resolution_mode: "status_only",
+            ...(opts.note !== undefined ? { note: opts.note } : {}),
+          });
+          return { fence: null, replayed: false };
+        }
         // Rung 5.
         throw noClaimError(entry);
       }
