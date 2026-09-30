@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.26", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.27", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -343,6 +343,11 @@ reload, a second pane on the same artifact, and a daemon restart.
 - An entry whose immutable inbox payload cannot be read is skipped rather than failing the
   request: one damaged file must not cost the reader every other note on the page.
 - **404 not-found** — unknown `:slug`.
+
+Contract 1.27 adds optional `resolution` to each listed annotation, using the same current
+`source_range | pipeline_feedback | orphaned` shape as annotation creation and delivery. It is
+recomputed from current content, not stored in the immutable inbox. Class-F cards use it without
+reading across the iframe boundary; missing mapping is unavailable, not proof that words moved.
 
 ### 5.6 `POST /w/:slug/annotations`
 Bearer required, Origin-gated (state-changing route, per R5). Body per R3's `annotation`
@@ -662,7 +667,7 @@ the holder left on the claimed paths is recorded as `unknown`.
 
 **`GET /api/workspaces/claims?path=<workspace>[&artifact=<relative>]`** (authed read) →
 **200** `{claims:[{claim_id, resources, artifacts, mode, holder_session, holder_principal, fence, since,
-expires_at}], tombstones:[{resource, claim_id, holder_session, fence, ended_at, reason}]}`. Resources
+expires_at}], tombstones:[{resource, claim_id, holder_session, fence, ended_at, reason, paths, mode}]}`. Resources
 are always `entry:`/`artifact:<relative>` strings, never an absolute path. `artifact` narrows to claims
 covering that file.
 
@@ -681,12 +686,32 @@ and on stream reconnect, then follows `claim_*` journal frames. **404** for an u
   entry), **409 entry-resolved** `{terminal_by, entry_status}`, **409 claim-revoked | claim-expired |
   claim-superseded** (tombstone members: `claim_id`, `holder_session`, `fence`, `ended_at`, `reason`),
   **409 claim-held** (holder members, as above), **409 no-claim**. Every one is exit 8 in the CLI.
+  Contract 1.27 permits a legal `rejected` decision without a claim after those guards, only when
+  no fence was supplied. Its response omits `lease_id`, `post_sha` and `fence`, including on replay.
+  It records `resolution_mode:"status_only"` and never credits edits. Rejection with a current own
+  claim still closes the proven interval. `applied` and `stale` still require a claim. `deferred`
+  already requires none, keeps the entry nonterminal and does not release a held claim.
+  Claims over annotations include their currently resolved tracked source path; the recorded claim
+  paths remain fixed for the lifetime of that claim. Listed tombstones additionally retain `paths`
+  and `mode` from that claim, including after replay.
 - `POST /api/workspaces/inbox/dismiss` and `POST /w/:slug/annotations/:id/withdraw` answer an already
   closed entry with **409 entry-resolved** (was `conflict`). A dismiss over a claimed entry releases the
   claim `by:"human"` and names it in an additive `released:[{claim_id, holder_session}]`.
 - Delivered presentations (§5.15) may carry `claims:[{session, principal, mode, since, fence}]`.
 - `GET /api/workspaces/inbox` rows carry `holder` — the session holding a live claim, or `null`.
 - `GET /api/status` session rows carry `principal` (reporting only).
+
+**MCP claims and identity (contract 1.27, #458):**
+
+MCP `glosa_inbox_pull`, `glosa_inbox_get` and successful `glosa_claim` results include the tool
+call's own `session_id`. Delivered annotations include the recipient identity when known; an
+unaddressed presentation explains how to retrieve it. Commands use that identity and an explicit
+workspace, including when the agent's working directory differs.
+
+A refused MCP `glosa_claim` returns `isError:true`, readable text and
+`structuredContent.error` containing `code:"claim-held"`, `message`, `claim_id`, `holder_session`,
+`holder_principal`, `mode`, `since`, `expires_at` and `fence` from the daemon's conflict response.
+The JSON text fallback carries the same structure. Success retains its existing fields.
 
 ### 5.11g Signals (contract 1.17, issue #155)
 A signal is a short notice telling one agent session what happened to the claims around it. They are

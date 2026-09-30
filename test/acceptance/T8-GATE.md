@@ -314,8 +314,8 @@ did not, require a successful MCP pull fallback with journaled delivery attempts
 
 | Scenario | Pass condition |
 |---|---|
-| Human editor save | immutable `human_edit`, journal-derived state, shadow history attributed `human` |
-| Verbatim class F | exact source range, actionable delivery, apply lease, source edit, session attribution, regenerated-render pickup |
+| Human editor save | immutable `human_edit`, journal-derived state, shadow history attributed `human`; also open Edit after an exclusive claim starts, save over its unfinished edits, prove their `unknown` checkpoint and the holder's late `claim-revoked` refusal |
+| Verbatim class F | exact source range, actionable delivery, entry claim covering source, source edit, session attribution, regenerated-render pickup |
 | Transformed class F | descriptor-derived pipeline target; no source edit |
 | Parked delivery | entry parks without a live binding and drains after registration/bind |
 | Attention | badge/tray, seen, action-aware response, structured `request-review --wait` completion |

@@ -411,8 +411,8 @@ export function createArtifactPane(host, deps) {
   let modeState = initialModeState(readLock ? "read" : initialMode);
   /** The view Edit returns to: the page with notes shown or hidden, whichever the reader left. */
   let lastViewMode = modeState.mode === "edit" ? "review" : modeState.mode;
-  /** The active apply lease the workbench last heard about, or null. While a session holds one,
-   * Edit is paused (see renderModeBar). */
+  /** The active exclusive claim the workbench last heard about, or null. Names concurrent work
+   * without restricting the person's editor. */
   let applyPause = null;
   // Issue #155: entry id → "who is applying it", for the cards of notes an agent has claimed.
   let claimsByEntry = new Map();
