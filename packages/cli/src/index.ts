@@ -40,6 +40,7 @@ const PUBLIC_COMMANDS = new Set([
   "token",
   "dictation",
   "update",
+  "install",
   "forget",
 ]);
 
@@ -83,6 +84,7 @@ export interface CliRunDependencies {
     glosaHome?: () => string;
   };
   dictation?: import("./dictation.ts").DictationCommandDeps;
+  install?: { selection?: import("./install-selection.ts").InstallSelectionDeps };
 }
 
 function withGlobals<T extends DefaultContext>(context: T): T["values"] & GlobalValues {
@@ -755,6 +757,24 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     },
   );
 
+  const install = lazyHandler(
+    {
+      name: "install",
+      description: "Select the bundled app or reset automatic install recording",
+      args: {
+        ...GLOBAL_ARGS,
+        action: { type: "positional", required: true, description: "select or auto" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      const module = await import("./install-selection.ts");
+      const result = await module.runInstallSelection(values.action as string, deps.install?.selection);
+      module.printInstallSelection(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
   // One-release compatibility stub (#152): machines still carrying `glosa hook <event>` entries
   // in an old `settings.json` / `.codex/hooks.json` must not see a failing hook on every prompt.
   // Prints nothing, reads nothing, exits 0. Deleted in the release after; hooks are not a rail.
@@ -968,6 +988,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     token,
     dictation,
     update,
+    install,
     forget,
     hook,
     mcp,

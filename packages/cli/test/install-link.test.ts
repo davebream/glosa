@@ -17,7 +17,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyInstall, recordingPlan } from "../src/install-kind.ts";
-import { ensureRecordedExecutable, readPackageType, readRecordedExecutable } from "../src/install-link.ts";
+import {
+  ensureRecordedExecutable,
+  readPackageType,
+  readRecordedExecutable,
+  restoreAutomaticRecording,
+  selectRecordedExecutable,
+} from "../src/install-link.ts";
+import { runInstallSelection, type InstallSelectionDeps } from "../src/install-selection.ts";
 
 const roots: string[] = [];
 function tempRoot(): string {
@@ -33,7 +40,7 @@ afterEach(() => {
 function executable(root: string, name: string): string {
   const path = join(root, name, "glosa");
   mkdirSync(join(root, name), { recursive: true });
-  writeFileSync(path, "#!/bin/sh\n");
+  writeFileSync(path, "#!/bin/sh\nprintf 'selected:%s\\n' \"$1\"\n", { mode: 0o755 });
   return path;
 }
 
@@ -134,6 +141,111 @@ describe("readRecordedExecutable", () => {
       target: hop,
       resolved: real,
     });
+  });
+});
+
+describe("explicit bundled-app selection", () => {
+  test("a selected launcher runs with shell quoting and survives later global CLI entries", () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const bundled = executable(root, "bundle's app");
+    const global = executable(root, "global");
+    ensureRecordedExecutable(home, global);
+    const recorded = selectRecordedExecutable(home, bundled);
+    expect(readRecordedExecutable(home)).toEqual({
+      path: recorded,
+      state: "managed-pin",
+      target: bundled,
+      resolved: bundled,
+    });
+    const ran = Bun.spawnSync({ cmd: [recorded, "ok"], stdout: "pipe", stderr: "pipe" });
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout.toString()).toBe("selected:ok\n");
+    ensureRecordedExecutable(home, global);
+    expect(readRecordedExecutable(home).state).toBe("managed-pin");
+    restoreAutomaticRecording(home, global);
+    expect(readlinkSync(recorded)).toBe(global);
+  });
+
+  test("only a generated selection can be replaced or reset", () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const target = executable(root, "bundle");
+    const recorded = join(home, "bin", "glosa");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    writeFileSync(recorded, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    expect(() => selectRecordedExecutable(home, target)).toThrow("hand-pinned");
+    expect(() => restoreAutomaticRecording(home, target)).toThrow("hand-pinned");
+    expect(readFileSync(recorded, "utf8")).toBe("#!/bin/sh\nexit 0\n");
+  });
+
+  test("a selected launcher that was removed stays selected and is visible as missing", () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const target = executable(root, "bundle");
+    selectRecordedExecutable(home, target);
+    rmSync(target);
+    expect(readRecordedExecutable(home)).toEqual({
+      path: join(home, "bin", "glosa"),
+      state: "managed-pin",
+      target,
+      resolved: null,
+    });
+  });
+
+  test("a foreign live daemon blocks selection without stopping it or changing the record", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const target = executable(root, "bundle");
+    const old = executable(root, "global");
+    ensureRecordedExecutable(home, old);
+    let writes = 0;
+    const deps: InstallSelectionDeps = {
+      home: () => home,
+      port: () => 4646,
+      installId: "bundle-id",
+      kind: "app-bundle",
+      executable: target,
+      recorded: readRecordedExecutable,
+      lock: () => ({
+        instance_id: "old",
+        install_id: "global-id",
+        pid: 1234,
+        port: 4646,
+        protocol_version: "1",
+        started_at: "now",
+        host: "127.0.0.1",
+        bun: "bun",
+      }),
+      handshake: async () => ({
+        instance_id: "old",
+        install_id: "global-id",
+        pid: 1234,
+        protocol_version: "1",
+        started_at: "now",
+      }),
+      bindable: async () => false,
+      select: () => {
+        writes++;
+        return "";
+      },
+      auto: () => {
+        writes++;
+        return "";
+      },
+    };
+    const blocked = await runInstallSelection("select", deps);
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error?.code).toBe("foreign-daemon");
+    expect(blocked.error?.message).toContain("kill -TERM 1234");
+    expect(writes).toBe(0);
+    expect(readlinkSync(join(home, "bin", "glosa"))).toBe(old);
+    deps.handshake = async () => null;
+    deps.lock = () => null;
+    deps.bindable = async () => true;
+    deps.select = selectRecordedExecutable;
+    expect((await runInstallSelection("select", deps)).ok).toBe(true);
+    expect(readRecordedExecutable(home).state).toBe("managed-pin");
   });
 });
 

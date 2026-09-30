@@ -8,23 +8,52 @@
 //   (`onlyWhenAbsent`), where a dangling symlink counts as nothing. A live symlink to another
 //   install is left alone, so a terminal install keeps ownership.
 import {
+  accessSync,
+  closeSync,
+  constants,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readlinkSync,
   realpathSync,
   renameSync,
   symlinkSync,
   unlinkSync,
+  writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { packageTypePath } from "./install-kind.ts";
 
 export type RecordedExecutable =
   | { path: string; state: "none" }
   | { path: string; state: "file" }
+  | { path: string; state: "managed-pin"; target: string; resolved: string | null }
   | { path: string; state: "dangling"; target: string }
   | { path: string; state: "symlink"; target: string; resolved: string };
+
+const PIN_MARKER = "# glosa-managed-install-pin-v1";
+
+function pinScript(target: string): string {
+  if (!isAbsolute(target) || /[\r\n\0]/.test(target))
+    throw new Error("install selection needs an absolute executable path");
+  const quoted = `'${target.replaceAll("'", "'\\''")}'`;
+  return `#!/bin/sh\n${PIN_MARKER}\n# target-base64: ${Buffer.from(target).toString("base64")}\nexec ${quoted} "$@"\n`;
+}
+
+function selectedTarget(path: string, size: number): string | null {
+  if (size > 4096) return null;
+  try {
+    const raw = readFileSync(path, "utf8");
+    const match = /^#!\/bin\/sh\n# glosa-managed-install-pin-v1\n# target-base64: ([A-Za-z0-9+/=]+)\n/.exec(raw);
+    if (!match) return null;
+    const target = Buffer.from(match[1] ?? "", "base64").toString("utf8");
+    return raw === pinScript(target) ? target : null;
+  } catch {
+    return null;
+  }
+}
 
 /** What `<home>/bin/glosa` holds right now. Never throws; a missing entry is `none`, a symlink
  *  whose target no longer resolves is `dangling`, and `resolved` is the target's realpath. */
@@ -36,7 +65,17 @@ export function readRecordedExecutable(home: string): RecordedExecutable {
   } catch {
     return { path, state: "none" };
   }
-  if (!stat.isSymbolicLink()) return { path, state: "file" };
+  if (!stat.isSymbolicLink()) {
+    const target = stat.isFile() ? selectedTarget(path, stat.size) : null;
+    if (target === null) return { path, state: "file" };
+    let resolved: string | null = null;
+    try {
+      resolved = realpathSync(target);
+    } catch {
+      // Keep a missing selected app visible to doctor instead of silently falling back.
+    }
+    return { path, state: "managed-pin", target, resolved };
+  }
   let target: string;
   try {
     target = readlinkSync(path);
@@ -60,7 +99,7 @@ export function ensureRecordedExecutable(home: string, executable: string, optio
   const destination = join(home, "bin", "glosa");
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   const recorded = readRecordedExecutable(home);
-  if (recorded.state === "file") return destination;
+  if (recorded.state === "file" || recorded.state === "managed-pin") return destination;
   if (recorded.state === "symlink" && recorded.target === executable) return destination;
   if (options.onlyWhenAbsent && recorded.state === "symlink") return destination;
   const temporary = `${destination}.${process.pid}.tmp`;
@@ -78,6 +117,49 @@ export function ensureRecordedExecutable(home: string, executable: string, optio
     } catch {
       // best effort
     }
+    throw error;
+  }
+  return destination;
+}
+
+/** An explicit selection is a regular executable, so ordinary CLI entrypoints leave it alone. */
+export function selectRecordedExecutable(home: string, executable: string): string {
+  accessSync(executable, constants.X_OK);
+  const destination = join(home, "bin", "glosa");
+  mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+  if (readRecordedExecutable(home).state === "file") throw new Error(`${destination} is a hand-pinned file`);
+  const temporary = `${destination}.${process.pid}.select.tmp`;
+  const fd = openSync(temporary, "wx", 0o700);
+  try {
+    writeSync(fd, pinScript(executable));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    if (readRecordedExecutable(home).state === "file") throw new Error(`${destination} became a hand-pinned file`);
+    renameSync(temporary, destination);
+  } catch (error) {
+    unlinkSync(temporary);
+    throw error;
+  }
+  return destination;
+}
+
+/** Removes only a wrapper glosa generated. The invoking CLI becomes the ordinary recorded link. */
+export function restoreAutomaticRecording(home: string, executable: string): string {
+  const destination = join(home, "bin", "glosa");
+  const recorded = readRecordedExecutable(home);
+  if (recorded.state === "file") throw new Error(`${destination} is a hand-pinned file`);
+  if (recorded.state !== "managed-pin") return ensureRecordedExecutable(home, executable);
+  const temporary = `${destination}.${process.pid}.auto.tmp`;
+  symlinkSync(executable, temporary);
+  try {
+    if (readRecordedExecutable(home).state !== "managed-pin")
+      throw new Error("install selection changed while resetting it");
+    renameSync(temporary, destination);
+  } catch (error) {
+    unlinkSync(temporary);
     throw error;
   }
   return destination;

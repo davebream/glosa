@@ -252,6 +252,18 @@ bin, so the terminal, the plugin and the app see one install; if you already ins
 bun or npm, that install stays the one the plugin uses, and `glosa doctor` says which one is recorded.
 The plugin step is the same, and the cask writes nothing into your agent's configuration.
 
+To make the app's bundled CLI the lasting owner when a bun or npm install is already recorded, stop
+that install's daemon, then run the bundled CLI directly:
+
+```sh
+/Applications/glosa.app/Contents/Resources/bin/glosa install select
+```
+
+If its daemon is still running, the command refuses and names the verified PID and stop command.
+The selection stays in place even if the old terminal CLI runs later. `glosa doctor` shows the owner;
+`glosa install auto` restores automatic recording. If the app has been removed, run `install auto`
+through another current CLI's full path, since the selected app launcher is then unavailable.
+
 Install either the cask or the `glosa` formula, not both. Each links `glosa` into Homebrew's bin,
 so the second one fails to link. The cask already carries the command line.
 

@@ -2,7 +2,7 @@
 // The Dock, the app switcher and the menu bar read an app's name and icon from its bundle, not
 // from anything the main process says. Unpackaged, that bundle is node_modules/electron's own
 // Electron.app, so a `bun run start` shows "Electron" and the atom. This rewrites that one
-// bundle's name and icon to glosa's after install and re-signs it ad hoc, the way it was signed
+// bundle's name and icon to glosa dev's after install and re-signs it ad hoc, the way it was signed
 // before. Idempotent; a missing bundle (Linux, or before install) is a no-op, not an error.
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -15,7 +15,7 @@ const bundle = join(shellRoot, "node_modules", "electron", "dist", "Electron.app
 const plist = join(bundle, "Contents", "Info.plist");
 const icon = join(bundle, "Contents", "Resources", "electron.icns");
 const ours = join(shellRoot, "assets", "icon.icns");
-const name = "glosa";
+const name = "glosa dev";
 
 /** Sets one `<key>` string in a plist's XML. Pure over the text; the file I/O is below. */
 export function withPlistString(xml: string, key: string, value: string): string {

@@ -21,6 +21,7 @@ import {
   contrastPush,
   contrastPushReaches,
   contrastReply,
+  devProfilePath,
   downloadName,
   egressDecision,
   externalLinkDecision,
@@ -399,9 +400,16 @@ describe("CLI lookup (R-O1, #371: the recorded executable first, the app's own C
   test("GLOSA_SHELL_CLI is the only candidate when set", () => {
     expect(cliCandidates({ override: "/t/cli", homeDir: HOME, resourcesPath: RESOURCES })).toEqual(["/t/cli"]);
   });
-  test("the recorded executable comes first and honours GLOSA_HOME", () => {
-    expect(cliCandidates({ glosaHome: "/tmp/h", homeDir: HOME, resourcesPath: null })[0]).toBe("/tmp/h/bin/glosa");
-    expect(cliCandidates({ homeDir: HOME, resourcesPath: null })[0]).toBe("/Users/u/.glosa/bin/glosa");
+  test("an unpackaged shell uses only its checkout CLI, even when another install is recorded", () => {
+    const lookup = {
+      glosaHome: "/tmp/h",
+      homeDir: HOME,
+      resourcesPath: null,
+      checkoutCli: "/checkout/packages/cli/src/main.ts",
+    };
+    expect(cliCandidates(lookup)).toEqual([lookup.checkoutCli]);
+    expect(cliCandidates({ ...lookup, override: "/t/cli" })).toEqual(["/t/cli"]);
+    expect(cliCandidates({ homeDir: HOME, resourcesPath: null })).toEqual([]);
   });
   test("a packaged app's own CLI is second, before every well-known bin", () => {
     expect(cliCandidates({ homeDir: HOME, resourcesPath: RESOURCES })).toEqual([
@@ -410,10 +418,11 @@ describe("CLI lookup (R-O1, #371: the recorded executable first, the app's own C
       ...WELL_KNOWN,
     ]);
   });
-  test("an unpackaged run has no bundle candidate and ends with the bare name", () => {
-    const candidates = cliCandidates({ homeDir: HOME, resourcesPath: null });
-    expect(candidates).toEqual(["/Users/u/.glosa/bin/glosa", ...WELL_KNOWN]);
-    expect(candidates.some((c) => c.includes("/Contents/Resources/"))).toBe(false);
+  test("different checkouts use separate Electron profiles", () => {
+    const one = devProfilePath("/Users/u/Library/Application Support", "/checkout/one");
+    expect(one).toBe(devProfilePath("/Users/u/Library/Application Support", "/checkout/one"));
+    expect(one).not.toBe(devProfilePath("/Users/u/Library/Application Support", "/checkout/two"));
+    expect(one).toContain("/glosa-dev/");
   });
   test("on Linux the package's own CLI is second, and the well-known bins name /usr/bin, never Homebrew (#432)", () => {
     const candidates = cliCandidates({ homeDir: "/home/u", resourcesPath: "/opt/glosa/resources", platform: "linux" });
@@ -428,10 +437,9 @@ describe("CLI lookup (R-O1, #371: the recorded executable first, the app's own C
     expect(candidates.some((c) => c.includes("homebrew"))).toBe(false);
   });
   test("an explicit darwin platform keeps today's macOS list", () => {
-    expect(cliCandidates({ homeDir: HOME, resourcesPath: null, platform: "darwin" })).toEqual([
-      "/Users/u/.glosa/bin/glosa",
-      ...WELL_KNOWN,
-    ]);
+    expect(
+      cliCandidates({ homeDir: HOME, resourcesPath: null, platform: "darwin", checkoutCli: "/checkout/cli" }),
+    ).toEqual(["/checkout/cli"]);
   });
   test("no candidate is a hard-coded /Applications path: the bundle is wherever it was launched from", () => {
     const moved = "/Users/u/Downloads/glosa.app/Contents/Resources";
@@ -1231,12 +1239,13 @@ describe("desk browser tabs: what a page may reach, and what reaches it (#440, A
   });
 
   test("the user agent names neither Electron nor glosa", () => {
-    const fallback =
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) glosa/0.1.0-alpha.36 Chrome/152.0.7977.130 Electron/44.4.5 Safari/537.36";
-    const ua = browserUserAgent(fallback);
-    expect(ua).not.toMatch(/glosa|Electron/i);
-    expect(ua).toContain("Chrome/152.0.7977.130");
-    expect(ua).toContain("Safari/537.36");
+    for (const product of ["glosa", "glosadev"]) {
+      const fallback = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ${product}/0.1.0-alpha.36 Chrome/152.0.7977.130 Electron/44.4.5 Safari/537.36`;
+      const ua = browserUserAgent(fallback);
+      expect(ua).not.toMatch(/glosa|Electron/i);
+      expect(ua).toContain("Chrome/152.0.7977.130");
+      expect(ua).toContain("Safari/537.36");
+    }
   });
 
   test("glosa's chords work with a page focused; everything else is the page's", () => {

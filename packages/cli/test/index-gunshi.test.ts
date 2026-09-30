@@ -7,6 +7,7 @@ import { BUILD_ID } from "../../daemon/src/lifecycle/build-id.ts";
 import { randomPort } from "../../daemon/test/helpers.ts";
 import { createHttpDaemonClient } from "../src/daemon-client.ts";
 import { EXIT_CODES } from "../src/envelope.ts";
+import type { InstallSelectionDeps } from "../src/install-selection.ts";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import { run, type CliRunDependencies } from "../src/index.ts";
 import { FakeGlosaApiClient } from "./fake-api-client.ts";
@@ -32,6 +33,7 @@ const PUBLIC_COMMANDS = [
   "token",
   "dictation",
   "update",
+  "install",
   "forget",
 ] as const;
 
@@ -105,6 +107,32 @@ async function captureRun(
 }
 
 describe("Gunshi command surface", () => {
+  test("install select reaches the bundled selection runner and keeps the JSON envelope", async () => {
+    const home = freshDir();
+    const selection: InstallSelectionDeps = {
+      home: () => home,
+      port: () => 4646,
+      installId: "bundle-id",
+      kind: "app-bundle",
+      executable: "/Applications/glosa.app/Contents/Resources/bin/glosa",
+      recorded: (dir) => ({ path: join(dir, "bin", "glosa"), state: "none" }),
+      lock: () => null,
+      handshake: async () => null,
+      bindable: async () => true,
+      select: (dir) => join(dir, "bin", "glosa"),
+      auto: () => {
+        throw new Error("wrong action");
+      },
+    };
+    const result = await captureRun(["install", "select", "--json"], { install: { selection } });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope.command).toBe("install");
+    expect(envelope.data.mode).toBe("selected");
+    expect(envelope.data.recorded).toBe(join(home, "bin", "glosa"));
+  });
+
   test("root and command help are generated for every public command", () => {
     const root = runCli(["--help"]);
     expect(root.exitCode).toBe(0);

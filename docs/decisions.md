@@ -3,6 +3,18 @@
 This file records current architectural boundaries. `docs/requirements.md` and its normative
 appendices remain the authoritative build input.
 
+## Development shells and explicit install selection
+
+Decided 2026-09-30. An unpackaged Electron shell uses the CLI in its own checkout and a browser
+profile keyed by that checkout. This lets it run beside a packaged app without borrowing the
+packaged app's recorded executable, browser storage or single-instance lock. A missing checkout CLI
+is an error, not permission to use a different install.
+
+The packaged app still follows the recorded executable. A person can explicitly select the bundled
+app by running its CLI's `glosa install select`: a generated regular executable pins the app's
+launcher under the existing regular-file exception. `glosa install auto` removes only a generated
+selection. Neither command stops another install's daemon, and an uncertain owner blocks the change.
+
 ## External integrations are declarative
 
 External integrations own their packages, workflow logic, and domain vocabulary. They register a

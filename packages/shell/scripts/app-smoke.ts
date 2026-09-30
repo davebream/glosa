@@ -32,6 +32,8 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
@@ -282,6 +284,29 @@ async function main(): Promise<void> {
         `the ${SMOKE_INSTALL_ROW} row does not report the launcher as this install: ${row.status} ${row.detail}`,
       );
     passed.push("S7 doctor reports app-bundle, recorded here");
+
+    // S7a: an explicit selection wins over a later checkout CLI entry, then resets to a symlink.
+    const other = join(temp, "other-glosa");
+    writeFileSync(other, "#!/bin/sh\nexit 33\n", { mode: 0o755 });
+    unlinkSync(recorded);
+    symlinkSync(other, recorded);
+    expectOk("S7a", exec(launcher, ["install", "select", "--json"], env), "select the bundled app");
+    if (!lstatSync(recorded).isFile()) fail("S7a", "the selection is not an executable regular file");
+    const throughPin = expectOk("S7a", exec(recorded, ["--version"], env), "selected launcher without Bun on PATH");
+    if (throughPin !== `glosa ${version}\n`) fail("S7a", "the selected launcher did not run the bundle");
+    expectOk(
+      "S7a",
+      exec(process.execPath, [join(repoRoot, "packages", "cli", "src", "main.ts"), "--version"], {
+        ...checkoutEnv,
+        GLOSA_HOME: glosaHome,
+      }),
+      "a later checkout CLI entry",
+    );
+    if (!lstatSync(recorded).isFile()) fail("S7a", "a later CLI entry displaced the selected app");
+    expectOk("S7a", exec(launcher, ["install", "auto", "--json"], env), "reset automatic recording");
+    if (!lstatSync(recorded).isSymbolicLink() || realpathSync(recorded) !== realpathSync(launcher))
+      fail("S7a", "automatic recording did not restore the app launcher symlink");
+    passed.push("S7a explicit app selection survives another CLI and resets cleanly");
 
     // S8: with GLOSA_HOME unset, the CLI derives ~/.glosa. A leaked packages/daemon/test would make it
     // derive ~/.glosa-dev/<install-id> and a dev port instead.
