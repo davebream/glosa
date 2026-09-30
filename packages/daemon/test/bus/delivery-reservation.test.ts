@@ -23,6 +23,37 @@ function payload() {
 }
 
 describe("two-phase delivery reservations", () => {
+  test("human attention never enters agent delivery, including legacy and previously attempted requests", async () => {
+    const root = freshWorkspace();
+    roots.push(root);
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    const build = (id: string, value: unknown, status: string) => buildDeliveryPresentation(id, value, { status });
+    await bus.createAttentionRequest("ask", { kind: "attention_request", action: "ask", message: "Ready?" });
+    await bus.createAttentionRequest("review", { kind: "attention_request", action: "review" });
+    await bus.recordDeliveryAttempt("ask", {
+      via: "monitor",
+      session: "requester",
+      outcome: "transport_accepted",
+      reason: "initial",
+      fsync: true,
+    });
+    await bus.createEntry("note", payload());
+    for (const session of ["requester", "other"]) {
+      expect((await bus.previewDelivery(1, { session }, build)).entries.map((entry) => entry.id)).toEqual(["note"]);
+      for (const via of ["monitor", "codex_app_server", "mcp_pull"] as const) {
+        const prepared = await bus.prepareDelivery(1, { session, via }, build);
+        expect(prepared.drained.map((entry) => entry.id)).toEqual(["note"]);
+        expect(prepared.has_more).toBe(false);
+        await bus.acknowledgeDelivery(prepared.delivery_id!, "failed", "fixture release");
+        expect((await bus.prepareDelivery(8, { session, via, entryId: "ask" }, build)).count).toBe(0);
+      }
+    }
+    expect(bus.state.entries.ask?.deliveryAttempts).toHaveLength(1);
+    expect(bus.state.entries.review?.deliveryAttempts).toHaveLength(0);
+    expect(bus.readEntry("review")?.payload).toMatchObject({ action: "review" });
+    await bus.close();
+  });
+
   test("targeted conversation messages drain and acknowledge only for the exact session", async () => {
     const root = freshWorkspace();
     roots.push(root);

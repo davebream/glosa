@@ -45,12 +45,15 @@ describe("glosa request-review", () => {
     const client = new FakeGlosaApiClient();
     client.attentionRequestResult = { id: "inb-77", slug: "ws-1", status: "open" };
     const { deps } = makeDeps(client);
-    const result = await runRequestReview({ dir: "/repo", path: "notes.md", message: "look at this" }, deps);
+    const result = await runRequestReview(
+      { dir: "/repo", path: "notes.md", message: "look at this", sessionId: "requester-a" },
+      deps,
+    );
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual({ id: "inb-77", slug: "ws-1", status: "open" });
     expect(client.calls[0]).toMatchObject({
       method: "createAttentionRequest",
-      args: ["/repo", { message: "look at this", action: "review", targetPath: "notes.md" }],
+      args: ["/repo", { message: "look at this", action: "review", targetPath: "notes.md", sessionId: "requester-a" }],
     });
   });
 

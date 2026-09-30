@@ -398,10 +398,10 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     expect(specifiers).toHaveLength(0);
   });
 
-  test("attention-tray.js imports nothing (all daemon access is caller-injected)", () => {
+  test("attention-tray.js imports only pure request formatting (all daemon access is caller-injected)", () => {
     const source = read("../src/attention-tray.js");
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
-    expect(specifiers).toHaveLength(0);
+    expect(specifiers.map((match) => match[1])).toEqual(["./agent-request.js"]);
   });
 
   test("agent-feedback.js imports nothing (aggregate status is caller-injected)", () => {

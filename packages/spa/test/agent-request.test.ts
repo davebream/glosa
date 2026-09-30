@@ -9,6 +9,8 @@ import {
   locateQuote,
   mergeSpans,
   openQuestions,
+  openRequests,
+  requestNotice,
   requestsForArtifact,
   selectArrivals,
   stackTabs,
@@ -104,6 +106,17 @@ describe("requestsForArtifact", () => {
 });
 
 describe("agentRequestSummary — count what the margin actually holds", () => {
+  test("reviews count as reviews with or without a message", () => {
+    expect(
+      agentRequestSummary([
+        { action: "review", message: "Check this" },
+        { action: "review" },
+        { action: "ask", message: "Why?" },
+      ]),
+    ).toBe("1 question · 2 reviews");
+    expect(isQuestion({ action: "review", message: "Check this" })).toBe(false);
+  });
+
   test("uses singular labels for one question or one pointer", () => {
     expect(agentRequestSummary([{ message: "Is this clear?" }])).toBe("1 question");
     expect(agentRequestSummary([{ message: null }])).toBe("1 pointer");
@@ -243,5 +256,32 @@ describe("a session's mark — a bracket beside the block, a tab at the words' l
 
   test("tabs already apart stay level with their lines", () => {
     expect(stackTabs([100, 160], { size: 20, gap: 4 })).toEqual([100, 160]);
+  });
+});
+
+describe("attention identity and notices", () => {
+  test("session identity stays distinct and claimed labels never replace it", () => {
+    const request = {
+      requester: { source: "session", provider: "codex", display_name: "Codex", session_id: "first" },
+      agent_label: "Helpful",
+    };
+    expect(agentIdentity(request)).toEqual({ provider: "Codex · first", claimed: "Helpful" });
+    expect(agentIdentity({ ...request, requester: { ...request.requester, session_id: "second" } }).provider).toBe(
+      "Codex · second",
+    );
+    expect(agentIdentity({ requester: { source: "command_line" } }).provider).toBe("A request from the command line");
+    expect(agentIdentity({ agent_label: "Claude Code" })).toEqual({
+      provider: "Requester unknown",
+      claimed: "Claude Code",
+    });
+  });
+  test("reviews remain notice candidates without becoming questions", () => {
+    const review = { id: "review", action: "review", requester: { source: "command_line" } };
+    expect(openRequests([review, { action: "point" }])).toEqual([review]);
+    expect(openQuestions([review])).toEqual([]);
+    expect(requestNotice(review)).toBe("A request from the command line asks you to review this document.");
+    expect(requestNotice(review, { file: "draft.md", lost: true })).toBe(
+      "A request from the command line asks you to review draft.md.",
+    );
   });
 });
