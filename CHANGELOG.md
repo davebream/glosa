@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A review request from `glosa request-review` could never be approved. Its card at the passage
+  offered Send answer and Can't answer, and both resolved the request as changes requested, so
+  `request-review --wait` reported changes requested even when the reply said the text was fine.
+  The card now offers Request changes and Approve, as the attention tray does, with an optional
+  response that goes back with either one. Questions from `glosa_ask` keep Send answer and
+  Can't answer.
+
 ## [0.1.0-alpha.37] · 2026-09-29
 
 ### Added
