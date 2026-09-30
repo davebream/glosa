@@ -512,6 +512,48 @@ describe("the annotation surface", () => {
     };
   }
 
+  test("class-F cards use current daemon resolution on reload and source invalidation, without parent DOM ranges", async () => {
+    let resolution: Record<string, unknown> = { kind: "source_range", path: "source.md", confidence: "exact" };
+    const da = fakeDataAccess({
+      async getArtifact() {
+        return { source_path: "notes.md", class: "F", derived_from: "source.md", source_sha256: "html-1" };
+      },
+      async getAnnotations() {
+        return {
+          annotations: [
+            {
+              id: "class-f-note",
+              status: "pending",
+              artifact_path: "notes.md",
+              body: "Change this",
+              intent: "content",
+              target: { quote: { exact: "Words inside the isolated frame" } },
+              resolution,
+            },
+          ],
+        };
+      },
+    });
+    const { host, pane } = await mountPane(da);
+    const card = () => q(host, '[data-entry-id="class-f-note"]') ?? q(host, ".glosa-annotation");
+    expect(card()).not.toBeNull();
+    expect(card().getAttribute("data-anchored")).toBe("true");
+    expect(card().textContent).not.toContain("Lost its place");
+    resolution = { kind: "pipeline_feedback" };
+    await pane.refreshAnnotationsFor("source.md");
+    expect(card().textContent).toContain("Rendering feedback");
+    expect(card().textContent).not.toContain("Lost its place");
+    resolution = { kind: "orphaned", reason: "quote_absent_not_transformed" };
+    await pane.refreshAnnotationsFor("source.md");
+    expect(card().textContent).toContain("Lost its place");
+    expect(qa(host, ".glosa-annotation")).toHaveLength(1);
+    resolution = { kind: "orphaned", reason: "no_source_map" };
+    await pane.refreshAnnotationsFor("source.md");
+    expect(card().textContent).toContain("Source position unavailable");
+    expect(card().textContent).not.toContain("Lost its place");
+    pane.destroy();
+  });
+
   test("reopening the artifact puts back the cards, the marks and the anchors the journal already holds", async () => {
     const da = fakeDataAccess(
       listing(

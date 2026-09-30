@@ -25,6 +25,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sourceSha256 } from "../../packages/daemon/src/artifact-render.ts";
+import { runGit } from "../../packages/daemon/src/git/shadow.ts";
 import { tokenPath } from "../../packages/daemon/src/security/token.ts";
 import { randomPort, superviseDaemonHome } from "../../packages/daemon/test/helpers.ts";
 
@@ -173,7 +175,7 @@ class CdpClient {
     return () => this.#subscribers.delete(handler);
   }
 
-  send(method: string, params: Record<string, unknown> = {}, timeoutMs = 15_000): Promise<any> {
+  send(method: string, params: Record<string, unknown> = {}, timeoutMs = 15_000, sessionId?: string): Promise<any> {
     if (this.#terminated) return Promise.reject(this.#terminated);
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
@@ -191,7 +193,7 @@ class CdpClient {
           reject(err);
         },
       });
-      this.#ws.send(JSON.stringify({ id, method, params }));
+      this.#ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
 
@@ -492,14 +494,14 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   async function waitForState(
     client: CdpClient,
     label: string,
-    accept: (state: PageState) => boolean,
+    accept: (state: PageState) => boolean | Promise<boolean>,
     attempts = 240,
   ): Promise<PageState> {
     let last: PageState | undefined;
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         last = await client.evaluate<PageState>(pageStateExpression(slug));
-        if (last && accept(last)) return last;
+        if (last && (await accept(last))) return last;
       } catch {
         // execution context torn down mid-reload
       }
@@ -785,6 +787,186 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
           `performance.getEntriesByType('resource').filter(r => !r.name.startsWith(location.origin) && !r.name.startsWith('data:')).map(r=>r.name)`,
         ),
       ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a person opens Edit during an exclusive claim and saves with honest human takeover",
+    async () => {
+      const api = async (route: string, body: unknown) =>
+        fetch(`${origin()}${route}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${TOKEN}`, Origin: origin(), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      const note = await (
+        await api(`/w/${slug}/annotations`, {
+          artifact_path: ALPHA,
+          body: "Revise",
+          intent: "content",
+          target: { quote: { exact: ALPHA_TEXT } },
+        })
+      ).json();
+      const held = await api("/api/workspaces/claims", {
+        path: workspaceRoot,
+        resources: [`entry:${note.id}`],
+        session: "writer-458",
+      });
+      expect(held.status).toBe(201);
+      writeFileSync(join(workspaceRoot, ALPHA), "# Alpha\n\nAgent draft in progress.\n");
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "claimed document opened");
+      await waitForState(tab, "claim badge hydrated", async () =>
+        Boolean(
+          await tab.evaluate(
+            `(() => { const edit = document.querySelector('.glosa-pane [data-control="edit"]'); return edit && !edit.disabled && edit.title.includes('working here'); })()`,
+          ),
+        ),
+      );
+      await clickInPane(tab, ALPHA, '[data-control="edit"]');
+      await waitForState(tab, "Edit available during the claim", (state) => paneFor(state, ALPHA)?.mode === "edit");
+      await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
+      await clickInPane(tab, ALPHA, ".glosa-tools-edit-source");
+      await clickInPane(tab, ALPHA, ".glosa-face-source");
+      await tab.evaluate(
+        `(() => { const area = document.querySelector('.glosa-edit-area'); area.focus(); area.select(); })()`,
+      );
+      await tab.send("Input.insertText", { text: "# Alpha\n\nHuman revision.\n" });
+      await clickInPane(tab, ALPHA, ".glosa-save");
+      await waitForState(
+        tab,
+        "human bytes saved",
+        () => readFileSync(join(workspaceRoot, ALPHA), "utf8") === "# Alpha\n\nHuman revision.\n",
+      );
+      await waitForState(
+        tab,
+        "save acknowledged",
+        async () =>
+          (await tab.evaluate<string>("document.querySelector('.glosa-edit-status')?.textContent")) === "Saved.",
+      );
+      const journal = readFileSync(join(workspaceRoot, ".glosa", "journal.ndjson"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(journal).toContainEqual(
+        expect.objectContaining({
+          event: "claim_released",
+          by: "human",
+          detail: expect.objectContaining({ reason: "released_by_human", holder_session: "writer-458" }),
+        }),
+      );
+      const log = (await runGit(workspaceRoot, ["log", "-3", "--format=%B"])).stdout;
+      expect(log).toContain("Glosa-Attribution: human");
+      expect(log).toContain("Glosa-Attribution: unknown");
+      expect(log).not.toContain("Glosa-Attribution: session:writer-458");
+      const late = await api("/api/workspaces/resolve", {
+        path: workspaceRoot,
+        entry: note.id,
+        outcome: "applied",
+        session: "writer-458",
+      });
+      expect(late.status).toBe(409);
+      expect((await late.json()).type).toEndWith("/claim-revoked");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a new class-F note keeps its exact source position through posting and reload",
+    async () => {
+      const hash = sourceSha256(Buffer.from(`# Alpha\n\n${ALPHA_TEXT}\n`));
+      writeFileSync(join(workspaceRoot, PREVIEW), `<!doctype html><p data-chunk-id="chunk-1">${ALPHA_TEXT}</p>`);
+      writeFileSync(
+        join(workspaceRoot, "manifest.json"),
+        JSON.stringify({
+          manifest_version: 1,
+          source_path: ALPHA,
+          source_sha256: hash,
+          chunks: [
+            { chunk_id: "chunk-1", source_start_line: 0, source_end_line: 3, source_sha256: hash, transformed: false },
+          ],
+        }),
+      );
+      const metadata = await fetch(`${origin()}/w/${slug}/metadata`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${TOKEN}`, Origin: origin(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          version: 1,
+          id: "neutral-preview",
+          artifacts: [
+            { path: ALPHA, class: "R" },
+            {
+              path: PREVIEW,
+              class: "F",
+              derived_from: { path: ALPHA, via: "render" },
+              manifest: { path: "manifest.json", component: "read" },
+            },
+          ],
+        }),
+      });
+      expect(metadata.ok).toBe(true);
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "workspace opened");
+      await openFromNavigator(tab, PREVIEW);
+      await waitForState(tab, "class-F document opened", (state) => Boolean(paneFor(state, PREVIEW)));
+      const deadline = Date.now() + 10000;
+      let composer = false;
+      let frameSession: string | undefined;
+      while (Date.now() < deadline && !composer) {
+        if (!frameSession) {
+          const targets = await browser.send("Target.getTargets");
+          const target = targets.result?.targetInfos?.find(
+            (target: any) => target.type === "iframe" && target.url.includes(`:${port + 1}/`),
+          );
+          if (target) {
+            const attached = await browser.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+            frameSession = attached.result.sessionId;
+          }
+        }
+        if (frameSession) {
+          await browser.send(
+            "Runtime.evaluate",
+            {
+              expression: `(() => { const p=document.querySelector('[data-chunk-id]'); if(!p)return; const r=document.createRange();r.setStart(p.firstChild,0);r.setEnd(p.firstChild,p.firstChild.textContent.length);const selection=getSelection();selection.removeAllRanges();selection.addRange(r);document.dispatchEvent(new MouseEvent('mouseup',{bubbles:true})); })()`,
+            },
+            15000,
+            frameSession,
+          );
+        }
+        composer = await tab.evaluate<boolean>(`!!document.querySelector('.glosa-composer-input')`);
+        if (!composer) await Bun.sleep(25);
+      }
+      expect(composer, "selection inside the sandboxed preview reached the composer").toBe(true);
+      await tab.evaluate(`document.querySelector('.glosa-composer-input').focus()`);
+      await tab.send("Input.insertText", { text: "Please revise this sentence." });
+      await clickInPane(tab, PREVIEW, ".glosa-composer-send");
+      const card = `document.querySelector('.glosa-annotation')`;
+      await waitForState(tab, "class-F note posted", async () =>
+        Boolean(await tab.evaluate(`${card}?.textContent.includes('Please revise this sentence.')`)),
+      );
+      expect(await tab.evaluate(`${card}.textContent`)).not.toContain("Lost its place");
+      expect(await tab.evaluate<string>(`${card}.getAttribute('data-anchored')`)).toBe("true");
+      await tab.reload();
+      await waitForReady(tab, "class-F note reloaded");
+      await waitForState(tab, "class-F note hydrated", async () => Boolean(await tab.evaluate(card)));
+      expect(await tab.evaluate(`${card}.textContent`)).not.toContain("Lost its place");
+      const annotations = await (
+        await fetch(`${origin()}/w/${slug}/annotations?artifact=${PREVIEW}`, {
+          headers: { Authorization: `Bearer ${TOKEN}` },
+        })
+      ).json();
+      const note = annotations.annotations[0];
+      expect(note.resolution).toMatchObject({ kind: "source_range", path: ALPHA });
+      const claim = await fetch(`${origin()}/api/workspaces/claims`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TOKEN}`, Origin: origin(), "Content-Type": "application/json" },
+        body: JSON.stringify({ path: workspaceRoot, resources: [`entry:${note.id}`], session: "class-f-writer" }),
+      });
+      expect(claim.status).toBe(201);
+      expect((await claim.json()).paths).toEqual([ALPHA, PREVIEW]);
     },
     TEST_TIMEOUT_MS,
   );

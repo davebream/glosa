@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AdapterRegistry } from "../../src/adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "../../src/adapters/workspace-metadata.ts";
+import { annotationClaimPaths } from "../../src/services/artifact.ts";
+import { runGit } from "../../src/git/shadow.ts";
 import { sourceSha256 } from "../../src/artifact-render.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
 import { SessionRegistry } from "../../src/registry/session-registry.ts";
@@ -34,10 +36,12 @@ describe("declarative metadata adapter — HTTP hydration and class-F resolution
 
     const index = new WorkspaceIndex({ home });
     const sessions = new SessionRegistry({ index });
-    buses = new WorkspaceBusRegistry();
     const metadata = new WorkspaceMetadataRegistry();
     const adapters = new AdapterRegistry();
     adapters.register(metadata.adapter());
+    buses = new WorkspaceBusRegistry({
+      entrySourcePaths: (workspace, payload) => annotationClaimPaths({ adapterRegistry: adapters }, workspace, payload),
+    });
     slug = (await index.upsertWorkspace(root, "glosa-open")).slug;
     await metadata.set(root, {
       version: 1,
@@ -113,6 +117,116 @@ describe("declarative metadata adapter — HTTP hydration and class-F resolution
       derived_from: "source.md",
       manifest_path: "manifest.json",
     });
+  });
+
+  test("a class-F entry claim protects its resolved source from watcher capture and credits the source edit", async () => {
+    const created = await (
+      await fetchFn(request(`/w/${slug}/annotations`, { method: "POST", body: JSON.stringify(annotation()) }))
+    ).json();
+    const claimResponse = await fetchFn(
+      request("/api/workspaces/claims", {
+        method: "POST",
+        body: JSON.stringify({ path: root, resources: [`entry:${created.id}`], session: "source-writer" }),
+      }),
+    );
+    expect(claimResponse.status).toBe(201);
+    const claim = await claimResponse.json();
+    const preSha = (await runGit(root, ["rev-parse", "HEAD"])).stdout.trim();
+    expect(claim.paths).toEqual(["rendered.html", "source.md"]);
+    const competing = await fetchFn(
+      request("/api/workspaces/claims", {
+        method: "POST",
+        body: JSON.stringify({ path: root, resources: ["artifact:source.md"], session: "other-writer" }),
+      }),
+    );
+    expect(competing.status).toBe(409);
+    expect((await competing.json()).holder_session).toBe("source-writer");
+    writeFileSync(join(root, "source.md"), SOURCE.replace("Exact source words.", "Revised source words."));
+    const bus = buses.get(root);
+    await bus.captureExternalEdit();
+    // Reclaiming renews the recorded scope even though the original quote no longer resolves.
+    expect((await bus.claim([`entry:${created.id}`], "exclusive", "source-writer", "unknown")).paths).toEqual(
+      claim.paths,
+    );
+    const resolved = await fetchFn(
+      request("/api/workspaces/resolve", {
+        method: "POST",
+        body: JSON.stringify({ path: root, entry: created.id, outcome: "applied", session: "source-writer" }),
+      }),
+    );
+    expect(resolved.status).toBe(200);
+    const result = await resolved.json();
+    expect((await runGit(root, ["show", "-s", "--format=%B", result.post_sha])).stdout).toContain(
+      "Glosa-Attribution: session:source-writer",
+    );
+    expect((await runGit(root, ["diff", preSha, result.post_sha, "--", "source.md"])).stdout).toContain(
+      "+Revised source words.",
+    );
+    expect(
+      Object.keys(bus.state.entries)
+        .map((id) => bus.readEntry(id)?.payload)
+        .filter((p: any) => p?.kind === "external_edit"),
+    ).toEqual([]);
+    await bus.reconcile();
+    expect(bus.state.entries[created.id]?.appliedInterval).toMatchObject({
+      by: "session:source-writer",
+      paths: ["rendered.html", "source.md"],
+    });
+  });
+
+  test("claims do not invent source coverage for transformed or unresolved class-F notes or enlarge on renewal", async () => {
+    writeManifest(true);
+    for (const [id, target] of [
+      ["transformed", annotation().target],
+      ["missing", { chunk_id: "missing", quote: { exact: "Unknown" } }],
+    ] as const) {
+      const bus = buses.get(root);
+      await bus.reconcileOnce();
+      await bus.createEntry(id, { kind: "annotation", ...annotation(), target });
+      const held = await bus.claim([`entry:${id}`], "exclusive", "writer", "unknown");
+      expect(held.paths).toEqual(["rendered.html"]);
+      if (id === "transformed") {
+        writeManifest(false);
+        // A source mapping that appears later belongs only to the next claim's interval.
+        expect((await bus.claim([`entry:${id}`], "exclusive", "writer", "unknown")).paths).toEqual(held.paths);
+        await bus.release(held.claimId, "session", "writer");
+        const next = await bus.claim([`entry:${id}`], "exclusive", "writer", "unknown");
+        expect(next.paths).toEqual(["rendered.html", "source.md"]);
+        await bus.release(next.claimId, "session", "writer");
+        writeManifest(true);
+      } else await bus.release(held.claimId, "session", "writer");
+    }
+  });
+
+  test("HTTP rejection without a claim omits attribution identifiers on the decision and its replay", async () => {
+    const note = await (
+      await fetchFn(request(`/w/${slug}/annotations`, { method: "POST", body: JSON.stringify(annotation()) }))
+    ).json();
+    const reject = () =>
+      fetchFn(
+        request("/api/workspaces/resolve", {
+          method: "POST",
+          body: JSON.stringify({ path: root, entry: note.id, outcome: "rejected", session: "decider" }),
+        }),
+      );
+    const first = await reject();
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ entry: note.id, status: "rejected", to: "rejected" });
+    expect(await (await reject()).json()).toEqual({
+      entry: note.id,
+      status: "rejected",
+      to: "rejected",
+      replayed: true,
+    });
+  });
+
+  test("listed class-F resolutions follow the current source instead of a saved verdict", async () => {
+    await fetchFn(request(`/w/${slug}/annotations`, { method: "POST", body: JSON.stringify(annotation()) }));
+    const listing = async () =>
+      (await (await fetchFn(request(`/w/${slug}/annotations?artifact=rendered.html`))).json()).annotations;
+    expect((await listing())[0].resolution).toMatchObject({ kind: "source_range", path: "source.md" });
+    writeFileSync(join(root, "source.md"), "# Title\n\nA different passage.\n");
+    expect((await listing())[0].resolution.kind).toBe("orphaned");
   });
 
   test("verbatim and transformed chunks resolve to source range and descriptor-owned pipeline feedback", async () => {

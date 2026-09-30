@@ -485,7 +485,7 @@ describe("official TypeScript MCP SDK contract", () => {
     }
   });
 
-  test("glosa_claim acts as the host session and turns a claim-held refusal into the daemon's own sentence naming the holder", async () => {
+  test("glosa_claim acts as the host session and returns structured claim-held details and its own identity", async () => {
     const hook = new FakeDaemonClient();
     const seen: unknown[][] = [];
     let conflict = false;
@@ -496,6 +496,13 @@ describe("official TypeScript MCP SDK contract", () => {
           throw apiError(409, {
             type: "https://glosa.local/errors/claim-held",
             title: "session sess-A holds an exclusive claim on this until 2026-09-22T12:15:00.000Z",
+            claim_id: "claim-A",
+            holder_session: "sess-A",
+            holder_principal: "token:12345678",
+            mode: "exclusive",
+            since: "2026-09-22T12:00:00.000Z",
+            expires_at: "2026-09-22T12:15:00.000Z",
+            fence: 2,
           });
         }
         return {
@@ -515,7 +522,7 @@ describe("official TypeScript MCP SDK contract", () => {
         arguments: { resources: ["entry:e-1"], workspace: "/repo" },
       });
       expect(ok.isError).not.toBe(true);
-      expect(ok.structuredContent).toMatchObject({ claim_id: "claim-1", fence: 1 });
+      expect(ok.structuredContent).toMatchObject({ claim_id: "claim-1", fence: 1, session_id: "host-session" });
       expect(seen[0]?.slice(0, 3)).toEqual(["/repo", ["entry:e-1"], "host-session"]);
 
       conflict = true;
@@ -524,9 +531,21 @@ describe("official TypeScript MCP SDK contract", () => {
         arguments: { resources: ["entry:e-1"], workspace: "/repo" },
       });
       expect(refused.isError).toBe(true);
-      expect(refused.content).toEqual([
+      expect(refused.structuredContent).toMatchObject({
+        error: {
+          code: "claim-held",
+          claim_id: "claim-A",
+          holder_session: "sess-A",
+          holder_principal: "token:12345678",
+          mode: "exclusive",
+          since: "2026-09-22T12:00:00.000Z",
+          expires_at: "2026-09-22T12:15:00.000Z",
+          fence: 2,
+        },
+      });
+      expect(refused.content).toContainEqual(
         expect.objectContaining({ type: "text", text: expect.stringContaining("sess-A") }),
-      ]);
+      );
     } finally {
       await connected.close();
     }
@@ -702,6 +721,7 @@ describe("official TypeScript MCP SDK contract", () => {
         expect.objectContaining({ type: "text", text: expect.stringContaining("Act on this.") }),
       );
       expect(result.content[1]).toEqual({ type: "text", text: JSON.stringify(result.structuredContent) });
+      expect(structured(result).session_id).toBe(hook.registered?.session_id);
       expect(hook.registered).toMatchObject({ provider: "mcp", cwd: "/workspace", source: "mcp" });
       expect(events).toEqual(["write", "presented"]);
       expect(hook.deliveryAcks[0]?.slice(1, 3)).toEqual(["delivery-1", "presented"]);
@@ -751,6 +771,7 @@ describe("official TypeScript MCP SDK contract", () => {
       });
       expect(result.content[0]).toEqual({ type: "text", text: "page opaque" });
       expect(result.content[1]).toEqual({ type: "text", text: JSON.stringify(result.structuredContent) });
+      expect(structured(result).session_id).toBe(hook.registered?.session_id);
       expect(calls).toEqual([["/workspace", "inb-2", "opaque"]]);
       expect(hook.registered?.source).toBe("mcp");
       expect(hook.drainOptions).toBeUndefined();

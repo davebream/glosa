@@ -578,3 +578,25 @@ describe("lifecycle — terminalBy and the promoted apply interval (issue #155)"
     expect(state.entries.e1?.terminalBy).toBe("session:A");
   });
 });
+
+test("replay of a status-only rejection never credits an orphan apply_end from the same session", () => {
+  const history = [
+    created("orphan"),
+    mkEvent("apply_end", "orphan", {
+      by: "session:A",
+      detail: {
+        claim_id: "old",
+        lease_id: "old",
+        pre_sha: "before",
+        post_sha: "after",
+        paths: ["notes.md"],
+        interval_attribution: "session",
+      },
+    }),
+    transition("orphan", "rejected", { by: "session:A", detail: { to: "rejected", resolution_mode: "status_only" } }),
+  ];
+  const entry = fold(history).entries.orphan;
+  expect(entry).toMatchObject({ status: "rejected", terminalBy: "session:A" });
+  expect(entry?.appliedInterval).toBeUndefined();
+  expect(entry?.rollbackPreSha).toBeUndefined();
+});

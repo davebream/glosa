@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { emDashesInVisibleText } from "../scripts/visible-text.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
-const TREES = ["packages/spa/src", "packages/shell/src", "packages/cli/src"];
+const TREES = ["packages/spa/src", "packages/shell/src", "packages/cli/src", "packages/daemon/src/delivery"];
 
 function trackedSources(): string[] {
   const out = Bun.spawnSync(["git", "ls-files", "-z", ...TREES], { cwd: ROOT }).stdout.toString();
@@ -38,7 +38,7 @@ describe("copy rules: no em dash reaches a person", () => {
   test("a comment does not hide a literal on the same line", () => {
     expect(emDashesInVisibleText("a.js", 'const s = "a — b"; // c — d')).toHaveLength(1);
   });
-  test("every tracked source under the SPA, the shell and the CLI is clean", () => {
+  test("every tracked source under the SPA, shell, CLI and daemon delivery is clean", () => {
     const files = trackedSources();
     expect(files.length).toBeGreaterThan(50);
     const findings = files.flatMap((f) => emDashesInVisibleText(f, readFileSync(resolve(ROOT, f), "utf8")));

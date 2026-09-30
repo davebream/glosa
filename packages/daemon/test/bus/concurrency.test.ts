@@ -105,6 +105,155 @@ describe("claims — two sessions, one workspace (issue #155 AC-1)", () => {
     return { root, clock, bus };
   }
 
+  test("claim paths project a name-reusing rename sequence only once", async () => {
+    const { root, bus } = await setup();
+    try {
+      writeFile(root, "other.md", "other\n");
+      // Folded rename records: notes -> temporary, other -> notes, temporary -> other.
+      bus.state.renames = [
+        { from: "notes.md", to: "temporary.md", scope: "file", checkpoint_after: "one", entry: "rename-1" },
+        { from: "other.md", to: "notes.md", scope: "file", checkpoint_after: "two", entry: "rename-2" },
+        { from: "temporary.md", to: "other.md", scope: "file", checkpoint_after: "three", entry: "rename-3" },
+      ];
+      const held = await bus.claim(["entry:e1"], "exclusive", "A", "unknown");
+      expect(held.paths).toEqual(["other.md"]);
+    } finally {
+      await bus.close();
+      cleanupWorkspace(root);
+    }
+  });
+
+  test("claim-free rejection records only the decision, leaves disk drift unknown, and replays without writes", async () => {
+    const { root, bus } = await setup();
+    try {
+      writeFile(root, "notes.md", "unclaimed edit\n");
+      const head = (await runGit(root, ["rev-parse", "HEAD"])).stdout;
+      const before = events(root).length;
+      const result = await bus.resolveEntry("e1", "rejected", "A", { note: "Not needed" });
+      expect(result).toEqual({ fence: null, replayed: false });
+      expect(events(root).slice(before)).toMatchObject([
+        { event: "transition_committed", by: "session:A", detail: { to: "rejected", resolution_mode: "status_only" } },
+      ]);
+      expect((await runGit(root, ["rev-parse", "HEAD"])).stdout).toBe(head);
+      expect(bus.state.entries.e1).toMatchObject({ status: "rejected", terminalBy: "session:A" });
+      expect(bus.state.entries.e1?.appliedInterval).toBeUndefined();
+      expect(bus.state.entries.e1?.rollbackPreSha).toBeUndefined();
+      expect(await bus.resolveEntry("e1", "rejected", "A")).toEqual({ fence: null, replayed: true });
+      expect(events(root)).toHaveLength(before + 1);
+      await expect(bus.resolveEntry("e1", "rejected", "B")).rejects.toMatchObject({ code: "ENTRY_RESOLVED" });
+      await bus.captureExternalEdit();
+      expect((await runGit(root, ["log", "-1", "--format=%B"])).stdout).toContain("Glosa-Attribution: unknown");
+    } finally {
+      await bus.close();
+      cleanupWorkspace(root);
+    }
+  });
+
+  test("claim-free rejection preserves holder, fence and revocation guards; claimed rejection still closes its interval", async () => {
+    const { root, bus } = await setup();
+    try {
+      const before = events(root).length;
+      await expect(bus.resolveEntry("e1", "rejected", "A", { fence: 99 })).rejects.toMatchObject({ code: "NO_CLAIM" });
+      expect(events(root)).toHaveLength(before);
+      const claim = await bus.applyBegin("e1", "A");
+      const heldAt = events(root).length;
+      await expect(bus.resolveEntry("e1", "rejected", "B")).rejects.toMatchObject({ code: "CLAIM_HELD" });
+      expect(events(root)).toHaveLength(heldAt);
+      await bus.deferEntry("e1", "A");
+      expect(bus.state.claims["entry:e1"]?.exclusive?.claim_id).toBe(claim.leaseId);
+      expect(bus.state.entries.e1?.status).toBe("pending");
+      await bus.release(claim.leaseId, "human");
+      await expect(bus.resolveEntry("e1", "rejected", "A")).rejects.toMatchObject({ code: "CLAIM_REVOKED" });
+      await bus.applyBegin("e1", "A");
+      writeFile(root, "notes.md", "attempted edit\n");
+      const rejected = await bus.resolveEntry("e1", "rejected", "A");
+      expect(rejected.postSha).toBeTruthy();
+      expect(bus.state.entries.e1?.appliedInterval?.by).toBe("session:A");
+    } finally {
+      await bus.close();
+      cleanupWorkspace(root);
+    }
+  });
+
+  test("a rejected note cannot bypass revocation or expiry of an artifact or sibling-entry claim", async () => {
+    const { root, bus, clock } = await setup();
+    try {
+      // An unrelated direct tombstone must not hide this caller's revoked covering claim.
+      const previous = await bus.applyBegin("e1", "B");
+      await bus.release(previous.leaseId, "human");
+      await bus.createEntry("sibling", { kind: "annotation", artifact_path: "notes.md" });
+      for (const resource of ["artifact:notes.md", "entry:sibling"]) {
+        const claim = await bus.claim([resource], "exclusive", "A", "unknown");
+        await bus.release(claim.claimId, "human");
+        await expect(bus.resolveEntry("e1", "rejected", "A")).rejects.toMatchObject({ code: "CLAIM_REVOKED" });
+        await bus.claim([resource], "exclusive", "A", "unknown");
+        clock.advance(EXCLUSIVE_CLAIM_TTL_MS + 1);
+        await bus.sweepExpiredClaims(clock.now(), () => null);
+        await expect(bus.resolveEntry("e1", "rejected", "A")).rejects.toMatchObject({ code: "CLAIM_EXPIRED" });
+      }
+      await bus.applyBegin("e1", "A");
+      expect((await bus.resolveEntry("e1", "rejected", "A")).postSha).toBeTruthy();
+    } finally {
+      await bus.close();
+      cleanupWorkspace(root);
+    }
+  }, 15_000);
+
+  test("ended presence claims never block a claim-free rejection", async () => {
+    const { root, bus, clock } = await setup();
+    try {
+      for (const ending of ["release", "expiry"]) {
+        await bus.createEntry(ending, { kind: "annotation", artifact_path: "notes.md" });
+        const claim = await bus.claim([`entry:${ending}`], "presence", "A", "unknown");
+        if (ending === "release") await bus.release(claim.claimId, "session", "A");
+        else {
+          clock.advance(EXCLUSIVE_CLAIM_TTL_MS + 1);
+          await bus.sweepExpiredClaims(clock.now(), () => null);
+        }
+        expect(await bus.resolveEntry(ending, "rejected", "A")).toEqual({ fence: null, replayed: false });
+      }
+    } finally {
+      await bus.close();
+      cleanupWorkspace(root);
+    }
+  });
+
+  test("claim-free rejection refuses entry kinds without a rejected state, without appending", async () => {
+    const { root, bus } = await setup();
+    try {
+      for (const kind of ["attention_request", "conversation_message"]) {
+        await bus.createEntry(kind, { kind }, { detail: { kind } });
+        const before = events(root).length;
+        const status = bus.state.entries[kind]?.status;
+        await expect(bus.resolveEntry(kind, "rejected", "A")).rejects.toMatchObject({ code: "NO_CLAIM" });
+        expect(events(root)).toHaveLength(before);
+        expect(bus.state.entries[kind]?.status).toBe(status);
+      }
+    } finally {
+      await bus.close();
+      cleanupWorkspace(root);
+    }
+  });
+
+  test("competing claim-free rejections have exactly one terminal winner", async () => {
+    const { root, bus } = await setup();
+    try {
+      const before = events(root).length;
+      const results = await Promise.allSettled([
+        bus.resolveEntry("e1", "rejected", "A"),
+        bus.resolveEntry("e1", "rejected", "B"),
+      ]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toMatchObject([
+        { reason: { code: "ENTRY_RESOLVED" } },
+      ]);
+      expect(events(root)).toHaveLength(before + 1);
+    } finally {
+      await bus.close();
+      cleanupWorkspace(root);
+    }
+  });
+
   test("A claims; B is told who holds it; A renews; A resolves; A's retry replays; B learns the entry is closed and by whom", async () => {
     const { root, clock, bus } = await setup();
 

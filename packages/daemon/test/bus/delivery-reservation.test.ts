@@ -132,7 +132,7 @@ describe("two-phase delivery reservations", () => {
     const root = freshWorkspace();
     roots.push(root);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
-    for (let i = 0; i < 5; i++) await bus.createEntry(`e${i}`, { ...payload(), body: `${i}:${"ż".repeat(5_000)}` });
+    for (let i = 0; i < 5; i++) await bus.createEntry(`e${i}`, { ...payload(), body: `${i}:${"ż".repeat(4_000)}` });
     const prepared = await bus.prepareDelivery(8, { via: "mcp_pull", session: "s1" }, (id, value, status) =>
       buildDeliveryPresentation(id, value, { status }),
     );
