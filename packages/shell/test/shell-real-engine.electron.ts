@@ -247,9 +247,15 @@ describe.skipIf(!electronInstalled)(
     let closedReleases: ReturnType<typeof releasesStub> | null = null;
 
     /** Starts the shell with `args` after the app directory, the way `open -a` or a link would. */
-    const launchShell = (args: string[], extra: Record<string, string> = {}) => {
+    const launchShell = (args: string[], extra: Record<string, string> = {}, ownProfile = false) => {
       electron = Bun.spawn({
-        cmd: [ELECTRON, SHELL_DIR, ...args, `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userData}`],
+        cmd: [
+          ELECTRON,
+          SHELL_DIR,
+          ...args,
+          `--remote-debugging-port=${cdpPort}`,
+          ...(ownProfile ? [] : [`--user-data-dir=${userData}`]),
+        ],
         env: {
           ...env,
           GLOSA_SHELL_CLI: cli,
@@ -257,6 +263,7 @@ describe.skipIf(!electronInstalled)(
           ANTHROPIC_API_KEY: "sk-must-never-reach-a-child",
           ...extra,
           GLOSA_SHELL_HIDDEN: "yes",
+          ...(ownProfile ? { GLOSA_SHELL_TEST_PROFILE: userData } : {}),
         },
         stdin: "ignore",
         stdout: "pipe",
@@ -388,6 +395,28 @@ describe.skipIf(!electronInstalled)(
       }
     }, 120_000);
 
+    test("development shell uses its checkout CLI and a private Electron profile", async () => {
+      // The recorded decoy would fail if the shell looked up the install of truth instead of its checkout.
+      const recorded = join(home, "bin", "glosa");
+      rmSync(recorded);
+      writeFileSync(recorded, "#!/bin/sh\nexit 33\n", { mode: 0o755 });
+      launchShell([workspace, "readme.md"], { GLOSA_SHELL_CLI: "" }, true);
+      const spaOrigin = `http://glosa.localhost:${port}`;
+      const page = await listTargets(
+        cdpPort,
+        60_000,
+        (target) => target.type === "page" && target.url.startsWith(spaOrigin),
+      );
+      expect(page, `dev shell page; stderr:\n${stderrText}`).not.toBeNull();
+      const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
+      try {
+        expect(await workspaceMounted(cdp), `checkout CLI opened the workspace; stderr:\n${stderrText}`).toBe(true);
+        expect(existsSync(join(userData, "session"))).toBe(true);
+      } finally {
+        cdp.close();
+      }
+    }, 70_000);
+
     test("pairs over the bridge with no token in any URL, keeps class-F sandboxed, denies leaving the SPA origin, and leaves the daemon running on quit", async () => {
       launchShell([workspace, "classf/probe.html"]);
       const spaOrigin = `http://glosa.localhost:${port}`;
@@ -446,6 +475,7 @@ describe.skipIf(!electronInstalled)(
           targetId: frame!.id,
           flatten: true,
         });
+
         let probe = "";
         for (let i = 0; i < 50 && !probe.includes("img="); i++) {
           probe = await cdp.evaluate<string>("document.getElementById('out')?.textContent ?? ''", attached.sessionId);

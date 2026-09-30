@@ -604,6 +604,9 @@ registration epochs prevent filename collisions and restoration into a replaceme
   with no host prerequisite. The shell is not a root workspace member so Electron is
   never a dependency of the CLI, daemon or SPA. Scrub `ANTHROPIC_API_KEY` from every spawned
   child env (the $1,800 footgun). Idle daemon < 100 MB RSS.
+  An unpackaged shell uses its own checkout CLI and an Electron profile keyed by that checkout,
+  allowing it to run beside the installed app. A person may explicitly select the bundled CLI as
+  the recorded executable; ordinary CLI entries leave that selection in place until reset.
 
 ## 5. Task decomposition (epic order; each has a testable gate)
 - **T0 — bootstrap**: create the repository; monorepo + lefthook/CI (`bun test` + typecheck); copy

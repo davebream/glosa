@@ -3,6 +3,7 @@
 // function here so it can be tested without a window, and so the main process stays a thin
 // wiring layer. Contracts: docs/design/2026-09-25-daemon-ownership-and-pairing-under-a-shell.md
 // (R-O1…R-O6, R-P1…R-P5) and docs/research/2026-09-25-desktop-shell-readiness.md §3.
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -304,20 +305,23 @@ export interface CliLookup {
   homeDir: string;
   /** Electron's `process.resourcesPath` when the app is packaged, else null. */
   resourcesPath: string | null;
+  /** The CLI in the source checkout, used by an unpackaged shell only. */
+  checkoutCli?: string;
 }
 
-/**
- * The CLIs the shell tries, in order (R-O1, #371). The recorded executable is the install of
- * truth, so it comes first: on a machine with a terminal install, the app runs that install. The
- * CLI a packaged app carries comes second, which is what makes a downloaded app complete on a
- * machine with nothing recorded; running it records it. The well-known bin directories cover a
- * Dock launch with a bare PATH, and the bare name is last. The caller keeps the first candidate
- * that exists; a dangling recorded link does not, so it falls through to the next one.
- */
+/** A different Chromium profile and singleton lock for each source checkout. */
+export function devProfilePath(appData: string, checkoutRoot: string): string {
+  const id = createHash("sha256").update(checkoutRoot).digest("hex").slice(0, 16);
+  return join(appData, "glosa-dev", id);
+}
+
+/** Packaged shells use the recorded install first (R-O1). An unpackaged shell uses only its
+ * checkout CLI so testing it cannot silently select a published daemon. */
 export function cliCandidates(lookup: CliLookup): string[] {
   if (lookup.override) return [lookup.override];
+  if (lookup.resourcesPath === null) return lookup.checkoutCli ? [lookup.checkoutCli] : [];
   const candidates = [join(lookup.glosaHome ?? join(lookup.homeDir, ".glosa"), "bin", "glosa")];
-  if (lookup.resourcesPath !== null) candidates.push(join(lookup.resourcesPath, "bin", "glosa"));
+  candidates.push(join(lookup.resourcesPath, "bin", "glosa"));
   // Linux has no Homebrew prefix to look in; the pacman package links /usr/bin/glosa (#432).
   const wellKnown =
     lookup.platform === "linux"
@@ -1007,7 +1011,7 @@ export function lockGuestPreferences(prefs: Record<string, unknown>): void {
  * from beaconing its version). */
 export function browserUserAgent(fallback: string): string {
   return fallback
-    .replace(/\s(?:glosa|Electron)\/\S+/gi, "")
+    .replace(/\s(?:glosadev|glosa|Electron)\/\S+/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
