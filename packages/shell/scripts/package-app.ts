@@ -324,9 +324,11 @@ const buildDir = join(shellRoot, "build");
 const stageDir = join(buildDir, "stage");
 const stageGlosa = join(stageDir, "glosa");
 const stageBin = join(stageDir, "bin");
-/** Measured on the first build (#371, 0.1.0-alpha.31): 34.8 MB of files staged; the ceiling is that
- *  plus 50%, so a dependency that balloons the bundle is a decision, not an accident. */
-export const STAGED_TREE_CEILING_BYTES = 52e6;
+/** Original budget: 34.8 MB plus 50% (52 MB). OpenAI 7.26.0 adds 20.6 MB of runtime,
+ *  declarations and source, shipped intact. Give that approved dependency 21 MB explicitly,
+ *  preserving the previous headroom rather than pruning vendor files or disabling the guard.
+ *  Measured on macOS and Linux CI: 60.5 MB staged with OpenAI. */
+export const STAGED_TREE_CEILING_BYTES = 73e6;
 const WORKSPACE_MANIFESTS = [
   "packages/cli",
   "packages/daemon",
