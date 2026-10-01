@@ -381,12 +381,25 @@ describe.skipIf(!electronInstalled)(
         );
       }
       async function click(index: number) {
-        const point = await cdp.evaluate<{ x: number; y: number }>(`(() => {
+        await cdp.evaluate(`(() => {
           const button=document.querySelectorAll('#dictation-fixture .glosa-dictation-toggle')[${index}];
           for(const host of document.querySelector('#dictation-fixture').children) host.style.visibility=host.contains(button)?'visible':'hidden';
-          button.scrollIntoView({block:'center'}); const r=button.getBoundingClientRect();
-          const x=r.x+r.width/2,y=r.y+r.height/2; if(!button.contains(document.elementFromPoint(x,y))) throw new Error('button not hittable: '+button.outerHTML+' '+JSON.stringify({x,y,hit:document.elementFromPoint(x,y)?.outerHTML})); return {x,y};
+          button.scrollIntoView({block:'center'});
         })()`);
+        // Revealing a production composer can move its animated layer. Wait for the actual
+        // hit target, retaining real mouse input and the foreground-activation permission gate.
+        const deadline = Date.now() + 8000;
+        let point: { x: number; y: number } | null = null;
+        while (Date.now() < deadline) {
+          point = await cdp.evaluate<{ x: number; y: number } | null>(`(() => {
+            const button=document.querySelectorAll('#dictation-fixture .glosa-dictation-toggle')[${index}];
+            const r=button.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
+            return button.contains(document.elementFromPoint(x,y)) ? {x,y} : null;
+          })()`);
+          if (point) break;
+          await Bun.sleep(50);
+        }
+        if (!point) throw new Error(`dictation button ${index} did not become hittable`);
         await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
         await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
       }
