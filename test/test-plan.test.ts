@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, renameSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -12,6 +12,7 @@ import {
   classifyChanges,
   discoverTests,
   gitEnvironment,
+  LINUX_EXCLUSIONS,
   expectedJobs,
   checkedFiles,
   validatePartitions,
@@ -42,6 +43,21 @@ test("coverage partitions are a complete disjoint union of the discovered invent
   );
   expect(plan.acceptance.every((file) => CI_PROFILES.some((profile) => plan[profile].includes(file)))).toBe(true);
   expect(files.length).toBeGreaterThan(150);
+});
+test("Linux acceptance names every platform exclusion and keeps its remaining coverage", () => {
+  const plan = buildPlan();
+  const excluded = new Set<string>(LINUX_EXCLUSIONS.map((entry) => entry.file));
+  expect(plan["linux-acceptance"]).toEqual(
+    [...new Set([...plan["linux-core"], ...plan.acceptance, ...plan.stability])].filter((file) => !excluded.has(file)),
+  );
+  for (const entry of LINUX_EXCLUSIONS) {
+    expect(plan.acceptance).toContain(entry.file);
+    expect(entry.reason.trim()).not.toBe("");
+    expect(entry.remainingCoverage.trim()).not.toBe("");
+    const source = readFileSync(entry.file, "utf8");
+    for (const name of entry.cases) expect(source).toContain(`test("${name}"`);
+    expect((source.match(/\btest\("/g) ?? []).length).toBe(entry.cases.length);
+  }
 });
 test("omission, duplication, stale acceptance membership and empty partitions fail closed", () => {
   expect(() => validatePartitions(["a", "b"], [["a"]])).toThrow("Omitted");
@@ -259,11 +275,12 @@ test("Linux core selection includes real process ownership, CLI and MCP boundari
   expect(() => validateResults("full", "false", results)).toThrow("linux");
 });
 
-test("Linux acceptance contains every acceptance owner and core test exactly once", () => {
+test("Linux acceptance contains every applicable acceptance owner and core test exactly once", () => {
   const plan = buildPlan();
   const files = checkedFiles("linux-acceptance");
   expect(new Set(files).size).toBe(files.length);
-  for (const file of [...plan.acceptance, ...plan["linux-core"], ...plan.stability]) expect(files).toContain(file);
+  for (const file of [...plan.acceptance, ...plan["linux-core"], ...plan.stability])
+    if (!LINUX_EXCLUSIONS.some((entry) => entry.file === file)) expect(files).toContain(file);
   expect(expectedJobs("full", true)["linux-shell"]).toBe("success");
 });
 

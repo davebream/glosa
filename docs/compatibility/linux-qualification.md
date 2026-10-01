@@ -14,6 +14,18 @@ not a passing compatibility certificate. Container and source-test results remai
 | Offering determination | G1 must be explicitly settled before the SDK qualification run. |
 | Generic T8 | #19 is closed, but the 2026-09-30 report records failure and no signature. Require a passing signed successor or explicit maintainer reconciliation. |
 
+The first branch CI attempt ([run 36838198869](https://github.com/davebream/glosa/actions/runs/36838198869))
+is a failed diagnostic, not Linux qualification. Pacman smoke, macOS shell, unpartitioned full and
+quality passed. Linux acceptance exposed a Darwin-only monitor lock, macOS-only Keychain CLI cases
+and Linux shortcut handling in two image-paste tests. The implementation now selects the Linux
+`flock` binding, carries the X display into shell subprocesses and uses the platform shortcut in
+the browser fixture; those changes still need Linux CI confirmation. The six Keychain CLI cases
+are named in `scripts/test-plan.ts` and remain covered by macOS CI, Linux daemon/SPA/provider
+fixtures and the held installed-app dictation ceremony, not by a claimed Linux Keychain pass.
+The run also failed the Linux shell because its test harness omitted `DISPLAY`; macOS browser
+partitions had two real-engine timing failures. The security scan found a medium-severity `hono`
+advisory in the existing lockfile. No candidate may be created from that run.
+
 Do not reopen issues, sign evidence, provision infrastructure or publish a release merely because
 this procedure exists. #435 stays open until its entire acceptance contract passes.
 

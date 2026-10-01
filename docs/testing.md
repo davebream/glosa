@@ -83,6 +83,11 @@ in the package manifest and both CI workflows; the application's older runtime f
 | Documentation-only PR CI | Defined docs consumers, package/format and security checks; not a T8 result |
 | Main, release or manual full validation | PR gates plus the unpartitioned `test:full` interaction check; T8 manual work remains separate |
 
+The Linux acceptance selection is the deduplicated union of Linux core, all applicable T8 suites
+and stability fixtures. `LINUX_EXCLUSIONS` in `scripts/test-plan.ts` names each excluded case, why it
+is platform-specific and what still covers it. An exclusion is not a Linux pass. The installed
+desktop and native dictation qualification must still exercise the corresponding behavior.
+
 `test:ci` runs all three partitions sequentially on a developer machine and in separate CI jobs on
 GitHub. `test:acceptance` is a standalone diagnostic/release selection of named requirements; do not
 run it again immediately after `test:ci` on unchanged contents and call that additional coverage.

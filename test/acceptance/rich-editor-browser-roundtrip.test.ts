@@ -697,6 +697,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         const result = await client.evaluate<{ pasted: boolean }>(`(async () => {
           const wait = async fn => { const end = Date.now() + 5000; while(Date.now() < end) { const value = fn(); if(value) return value; await new Promise(r => setTimeout(r, 20)); } throw Error("image insertion readiness: " + document.body.innerText); };
           const face = ${JSON.stringify(face)};
+          const modifier = ${JSON.stringify(process.platform === "darwin" ? "metaKey" : "ctrlKey")};
           if(face === "block") document.querySelector('.glosa-content p').click();
           else { document.querySelector('.glosa-tools-edit-source').click(); if(face === "source") document.querySelector('.glosa-face-source').click(); }
           const host = await wait(() => face === "source" ? document.querySelector('.glosa-edit-area:not([hidden])') : document.querySelector('.ProseMirror[contenteditable]'));
@@ -709,13 +710,13 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           await wait(() => face === "source" ? host.value.includes('images/pasted-') : host.querySelector('[data-image-src] img')?.naturalWidth);
           // The imported asset remains on disk while the document reference participates in undo.
           if(face === "source") document.execCommand('undo');
-          else host.dispatchEvent(new KeyboardEvent('keydown',{key:'z',code:'KeyZ',keyCode:90,metaKey:true,bubbles:true,cancelable:true}));
+          else host.dispatchEvent(new KeyboardEvent('keydown',{key:'z',code:'KeyZ',keyCode:90,[modifier]:true,bubbles:true,cancelable:true}));
           await wait(() => face === "source" ? !host.value.includes('images/pasted-') : !host.querySelector('[data-image-src]'));
           if(face === "source") document.execCommand('redo');
-          else host.dispatchEvent(new KeyboardEvent('keydown',{key:'z',code:'KeyZ',keyCode:90,metaKey:true,shiftKey:true,bubbles:true,cancelable:true}));
+          else host.dispatchEvent(new KeyboardEvent('keydown',{key:'z',code:'KeyZ',keyCode:90,[modifier]:true,shiftKey:true,bubbles:true,cancelable:true}));
           await wait(() => face === "source" ? host.value.includes('images/pasted-') : host.querySelector('[data-image-src]'));
           if(face === "block") {
-            document.dispatchEvent(new KeyboardEvent('keydown',{key:'k',metaKey:true,bubbles:true,cancelable:true}));
+            document.dispatchEvent(new KeyboardEvent('keydown',{key:'k',[modifier]:true,bubbles:true,cancelable:true}));
             const search=await wait(()=>document.querySelector('.glosa-palette:not([hidden]) input'));
             search.value='>insert image';search.dispatchEvent(new Event('input',{bubbles:true}));
             (await wait(()=>[...document.querySelectorAll('.glosa-palette-item')].find(item=>item.textContent.includes('Insert image')))).click();

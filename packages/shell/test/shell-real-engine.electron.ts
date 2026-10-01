@@ -302,6 +302,9 @@ describe.skipIf(!electronInstalled)(
         GLOSA_HOME: home,
         GLOSA_PORT: String(port),
         GLOSA_CLASSF_PORT: String(port + 1),
+        ...(process.platform === "linux"
+          ? { DISPLAY: process.env.DISPLAY ?? "", XAUTHORITY: process.env.XAUTHORITY ?? "" }
+          : {}),
       };
       daemon = Bun.spawn({
         cmd: [process.execPath, MAIN_PATH, "__daemon"],
