@@ -57,6 +57,8 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
             return json({ ok: true, instanceId: deps.instanceId });
           }
           if (tail === "status" && method === "GET") return json(service.status());
+          if (tail === "experimental" && method === "POST")
+            return json(await service.changeExperimental(await req.json()));
           if (tail === "profiles" && method === "POST") return json(service.createProfile(await req.json()));
           const installation = /^runtimes\/([a-z][a-z0-9-]{0,63})\/install$/.exec(tail);
           if (installation && method === "POST") {

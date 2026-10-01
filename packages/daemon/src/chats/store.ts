@@ -16,6 +16,22 @@ import { IntentJournal, privateDirectory, putBlob, readBlob } from "./journal.ts
  * text of web pages the agent reads in desk browser tabs, including pages the person is signed in
  * to. The SPA says which text it showed when it records a grant. */
 export const CONSENT_DISCLOSURE = 2;
+export const EXPERIMENTAL_DISCLOSURE = 1;
+
+const experimentalSchema = z
+  .object({
+    type: z.literal("experimental"),
+    provider: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+    runtimeId: z.string().min(1).max(256),
+    platform: z.enum(["darwin", "linux"]),
+    architecture: z.enum(["arm64", "x64"]),
+    libc: z.literal("glibc").optional(),
+    disclosure: z.number().int().positive(),
+    enabled: z.boolean(),
+    revision: z.number().int().positive(),
+  })
+  .strict();
+export type ExperimentalAcceptance = z.infer<typeof experimentalSchema>;
 
 const id = z.uuid();
 const text = z.string().max(32_768);
@@ -124,6 +140,7 @@ const capabilitiesSchema = z
   })
   .strict();
 const controlSchema = z.discriminatedUnion("type", [
+  experimentalSchema,
   z
     .object({
       type: z.literal("commands"),
@@ -605,6 +622,7 @@ export class AgentStore {
   readonly control: IntentJournal<z.infer<typeof controlSchema>>;
   private readonly catalogs = new Map<string, { revision: string; commands: z.infer<typeof commandSchema>[] }>();
   private readonly profiles = new Map<string, AgentProfile>();
+  private readonly experimentalGrants = new Map<string, ExperimentalAcceptance>();
   private readonly capabilities = new Map<
     string,
     { epoch: number; manifestId: string; capabilities: AgentCapabilities }
@@ -629,7 +647,8 @@ export class AgentStore {
     for (const record of this.control.records) this.applyControl(record.data);
   }
   private applyControl(event: z.infer<typeof controlSchema>): void {
-    if (event.type === "profiles")
+    if (event.type === "experimental") this.experimentalGrants.set(event.provider, event);
+    else if (event.type === "profiles")
       for (const p of event.profiles) {
         const prior = this.profiles.get(p.id);
         if (prior && JSON.stringify(prior.mcpServers ?? []) !== JSON.stringify(p.mcpServers ?? []))
@@ -656,6 +675,28 @@ export class AgentStore {
   }
   savedCommands(scope: string) {
     return structuredClone(this.catalogs.get(scope));
+  }
+  experimental(provider: string): ExperimentalAcceptance | undefined {
+    return structuredClone(this.experimentalGrants.get(provider));
+  }
+  /** Revocation cannot prevent explicit cleanup through bytes the person previously accepted. */
+  previouslyAccepted(
+    scope: Pick<ExperimentalAcceptance, "provider" | "runtimeId" | "platform" | "architecture" | "libc">,
+  ): boolean {
+    return this.control.records.some(
+      ({ data }) =>
+        data.type === "experimental" &&
+        data.enabled &&
+        data.provider === scope.provider &&
+        data.runtimeId === scope.runtimeId &&
+        data.platform === scope.platform &&
+        data.architecture === scope.architecture &&
+        data.libc === scope.libc,
+    );
+  }
+  setExperimental(event: ExperimentalAcceptance, request: { id: string; input: unknown; result: unknown }): void {
+    const record = this.control.append(experimentalSchema.parse(event), request);
+    this.applyControl(record.data);
   }
   saveCommands(scope: string, revision: string, commands: z.infer<typeof commandSchema>[]): void {
     const event = controlSchema.parse({ type: "commands", scope, revision, commands });

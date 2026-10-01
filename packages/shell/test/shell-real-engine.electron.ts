@@ -638,7 +638,8 @@ describe.skipIf(!electronInstalled)(
         const framed = await cdp.evaluate<boolean>(
           `Promise.race([
             new Promise((resolve) => requestAnimationFrame(() => resolve(true))),
-            new Promise((resolve) => setTimeout(() => resolve(false), 1000)),
+            // Xvfb can miss an early frame under CI load; liveness has no one-second SLA.
+            new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
           ])`,
         );
         expect(framed, "a hidden window still runs animation frames").toBe(true);

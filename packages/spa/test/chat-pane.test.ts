@@ -777,6 +777,63 @@ test("runtime setup disables accounts, reports installation, rejects repeated cl
   pane.destroy();
 });
 
+test("experimental account control requires confirmation and keeps an unqualified runtime visibly experimental", async () => {
+  const { mountAgentSettings } = await import("../src/agent-settings.js");
+  const host = document.createElement("div");
+  document.body.append(host);
+  let enabled = false;
+  const changes: unknown[] = [];
+  const pane = mountAgentSettings(host, {
+    appearance: undefined,
+    onChange: undefined,
+    dataAccess: {
+      getAgentStatus: async () => ({
+        available: enabled,
+        providers: [
+          {
+            id: "codex",
+            name: "Codex",
+            installed: true,
+            qualified: false,
+            available: enabled,
+            experimental: {
+              runtimeId: "codex-v1",
+              disclosure: 1,
+              revision: enabled ? 1 : 0,
+              enabled,
+              renewalRequired: false,
+            },
+          },
+        ],
+        profiles: [],
+      }),
+      setAgentExperimental: async (input: unknown) => {
+        changes.push(input);
+        enabled = true;
+      },
+    },
+  });
+  try {
+    await pane.ready;
+    const control = host.querySelector(".glosa-agent-experimental button") as HTMLButtonElement;
+    expect(control.textContent).toBe("Enable experimental managed chat");
+    expect(control.getAttribute("aria-pressed")).toBe("false");
+    expect(host.textContent).toContain("Native account isolation, process cleanup and release qualification");
+    control.click();
+    await flush();
+    expect(changes).toHaveLength(0);
+    (document.querySelector("dialog .glosa-save") as HTMLButtonElement).click();
+    await flush();
+    expect(changes).toMatchObject([
+      { provider: "codex", runtimeId: "codex-v1", disclosure: 1, revision: 0, enabled: true },
+    ]);
+    expect(host.querySelector(".glosa-agent-experimental button")?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.textContent).toContain("Experimental chat is available");
+  } finally {
+    pane.destroy();
+  }
+});
+
 test("reopened runtime settings recover progress after a disconnect and stop polling when destroyed", async () => {
   const { mountAgentSettings } = await import("../src/agent-settings.js");
   const host = document.createElement("div");

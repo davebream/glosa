@@ -402,6 +402,7 @@ export function mountAgentSettings(
         }),
       );
     for (const provider of state.providers) {
+      const available = provider.available ?? state.available;
       const tab = el(
         "button",
         {
@@ -429,9 +430,54 @@ export function mountAgentSettings(
         ]),
       ]);
       section.append(sectionHeader);
+      if (provider.experimental) {
+        const experimental = provider.experimental;
+        const enabled = experimental.enabled === true;
+        const explanation = enabled
+          ? "Experimental managed chat is on for this runtime. Native account isolation, process cleanup and release qualification are still unverified."
+          : experimental.renewalRequired
+            ? "The agent runtime changed. Review and enable experimental managed chat again."
+            : "Experimental managed chat is off. Native account isolation, process cleanup and release qualification are still unverified.";
+        const experimentalControl = button(
+          enabled ? "Disable experimental managed chat" : "Enable experimental managed chat",
+          async () => {
+            const next = !enabled;
+            if (
+              !(await confirmDialog({
+                title: next
+                  ? `Enable experimental ${agentName(provider.id)} chat?`
+                  : `Disable experimental ${agentName(provider.id)} chat?`,
+                body: next
+                  ? "Native account isolation, process cleanup and release qualification are still unverified. Agent turns may make changes to files after you send a message."
+                  : "Active chats and sign-in operations will stop. Chat history and account credentials stay available.",
+                confirmLabel: next ? "Enable experimental chat" : "Disable and stop chats",
+              }))
+            )
+              return;
+            await dataAccess.setAgentExperimental({
+              requestId: crypto.randomUUID(),
+              provider: provider.id,
+              runtimeId: experimental.runtimeId,
+              disclosure: experimental.disclosure,
+              revision: experimental.revision,
+              enabled: next,
+            });
+          },
+          !experimental.runtimeId || remoteInstallation,
+        );
+        experimentalControl.setAttribute("aria-pressed", String(enabled));
+        section.append(
+          el("div", { className: "glosa-agent-experimental" }, [
+            el("p", { role: "status", textContent: explanation }),
+            experimentalControl,
+          ]),
+        );
+      }
       const installedDetail = provider.qualified
         ? `Glosa uses a separate copy of ${agentName(provider.id)}. Verify or reinstall it if the agent stops working.`
-        : "Installed. Chat support is not available in this build yet.";
+        : available
+          ? "Installed. Experimental chat is available for this runtime."
+          : "Installed. Experimental chat is off.";
       const runtimeTitle = el("strong", {
         role: "status",
         textContent: `${agentName(provider.id)} runtime · ${provider.installed ? "Installed" : "Not installed"}`,
@@ -518,11 +564,11 @@ export function mountAgentSettings(
       section.prepend(runtimeDisclosure ?? runtime);
       const accountArea = el("fieldset", {
         className: "glosa-agent-account-area",
-        disabled: !provider.installed || !state.available || remoteInstallation,
+        disabled: !provider.installed || remoteInstallation,
       });
       const blockedReason = el("p", {
         className: "glosa-agent-recovery",
-        hidden: provider.installed && state.available,
+        hidden: provider.installed && available,
         textContent: !provider.installed
           ? "Accounts become available after installation."
           : "Account setup is unavailable in this build.",
@@ -678,7 +724,7 @@ export function mountAgentSettings(
             () => update(profile, { isDefault: !profile.isDefault }),
             !profile.enabled || profile.auth.state !== "authenticated",
           ),
-          button("Check account", () => dataAccess.probeAgent(profile.id), !profile.enabled || !state.available),
+          button("Check account", () => dataAccess.probeAgent(profile.id), !profile.enabled || !available),
           button(
             connected ? "Sign in again" : "Sign in",
             async () => {
@@ -698,7 +744,7 @@ export function mountAgentSettings(
               });
               loginHost.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
             },
-            !!profile.configuration || !profile.enabled || !state.available,
+            !!profile.configuration || !profile.enabled || !available,
           ),
           button(
             "Load models",
@@ -714,7 +760,7 @@ export function mountAgentSettings(
                 return;
               await dataAccess.discoverAgentModels(profile.id);
             },
-            !state.available || !profile.enabled || profile.auth.state !== "authenticated",
+            !available || !profile.enabled || profile.auth.state !== "authenticated",
           ),
           button(
             profile.cleanup ? "Retry account cleanup" : profile.configuration ? "Disconnect" : "Sign out",
@@ -883,7 +929,7 @@ export function mountAgentSettings(
       ]);
       form.addEventListener("submit", (event) => {
         event.preventDefault();
-        if (!provider.installed || !state.available || busy || remoteInstallation) return;
+        if (!provider.installed || !available || busy || remoteInstallation) return;
         if (label.value.trim())
           void act(async () => {
             const created = await dataAccess.createAgentProfile({

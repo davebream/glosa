@@ -33,6 +33,7 @@ export function mountAttentionTray(
   let loadError = "";
   let destroyed = false;
   let refreshPromise = null;
+  let refreshQueued = false;
   let dictationCleanups = [];
 
   const trigger = node("button", {
@@ -276,9 +277,20 @@ export function mountAttentionTray(
   }
 
   function refresh() {
-    if (refreshPromise) return refreshPromise;
-    refreshPromise = performRefresh().finally(() => {
+    if (refreshPromise) {
+      // A journal event can arrive while an older inbox read is in flight. That read may
+      // contain the pre-event snapshot, so it cannot stand in for this refresh.
+      refreshQueued = true;
+      return refreshPromise;
+    }
+    refreshPromise = (async () => {
+      do {
+        refreshQueued = false;
+        await performRefresh();
+      } while (refreshQueued && !destroyed);
+    })().finally(() => {
       refreshPromise = null;
+      if (refreshQueued && !destroyed) void refresh();
     });
     return refreshPromise;
   }

@@ -41,6 +41,10 @@ test("agent account routes reject an unpaired browser and class-F origin before 
   expect((await fetch(request("/api/agents/profiles", "POST", { Origin: "https://outside.example" }))).status).toBe(
     403,
   );
+  expect((await fetch(request("/api/agents/experimental", "POST", { Authorization: "" }))).status).toBe(401);
+  expect((await fetch(request("/api/agents/experimental", "POST", { Origin: "https://outside.example" }))).status).toBe(
+    403,
+  );
 });
 
 test("runtime install disables HTTP idle expiry before awaiting the bounded installer", async () => {

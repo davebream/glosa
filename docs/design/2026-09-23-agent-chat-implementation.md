@@ -31,6 +31,14 @@ The specification selects native adapters without requiring an ACP bake-off firs
 
 G1 is a product/distribution determination, not a question an adapter can answer. Anthropic's [hosting conditions](https://code.claude.com/docs/en/legal-and-compliance) and [SDK conditions](https://code.claude.com/docs/en/agent-sdk/overview) are the primary sources. Codex must likewise retain its supported native authentication and account policies. These gates do not leave the data model or UX undecided.
 
+**Experimental exception (2026-10-01).** A person may opt into the pinned Claude or Codex managed
+runtime in Account settings on macOS arm64/x64 or Linux x86_64/glibc. The control records versioned,
+per-provider and per-runtime acceptance and remains off by default. The maintainer chose to permit
+this explicitly experimental execution while G1 offering permission remains unresolved. It is not a
+finding that SDK use is permitted, a native compatibility certificate, or G4 release evidence. The
+runtime stays `qualified: false`; release qualification and the installed Manjaro gate still require
+every applicable observation above. Terminal companion sessions remain available independently.
+
 ### Initial scope
 
 | Included | Deliberately excluded |

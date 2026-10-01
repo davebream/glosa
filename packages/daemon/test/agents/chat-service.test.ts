@@ -25,7 +25,7 @@ import {
 import { createManagedTools } from "../../src/agents/managed-tools.ts";
 import type { DeliverableEntry } from "../../src/agent-provider/interface.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { AgentStore } from "../../src/chats/store.ts";
+import { AgentStore, EXPERIMENTAL_DISCLOSURE } from "../../src/chats/store.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
 import { runtimeTarget } from "../../src/agents/runtimes.ts";
 import { RuntimeSupervisor } from "../../src/agents/supervisor.ts";
@@ -57,7 +57,7 @@ test.each([
         qualified,
       }),
     });
-    // releaseEnabled=true is the existing daemon preview flag's only effect. It cannot qualify bytes.
+    // A release-owned activation bit cannot qualify bytes; request flags cannot open execution.
     await expect(h.service.login(h.profile.id)).rejects.toMatchObject({ code });
     await expect(h.service.discoverModels(h.profile.id)).rejects.toMatchObject({ code });
     const path = `/api/agents/profiles/${h.profile.id}/login`;
@@ -83,6 +83,156 @@ test.each([
     expect(h.spawns()).toBe(0);
   },
 );
+
+test("experimental admission is journaled per provider and pinned runtime, then revocation stops execution", async () => {
+  let runtimeId = "fixture-v1";
+  let manifestId = runtimeId;
+  const h = setup({
+    releaseEnabled: false,
+    runtimeIdentity: () => runtimeId,
+    manifest: () => ({
+      ...runtimeTarget(),
+      id: manifestId,
+      provider: "fixture",
+      version: "1",
+      executable: "/fixture",
+      executableSha256: "0".repeat(64),
+      qualified: false,
+    }),
+  });
+  const input = (enabled: boolean, revision: number, id = runtimeId) => ({
+    requestId: randomUUID(),
+    provider: "fixture",
+    runtimeId: id,
+    disclosure: EXPERIMENTAL_DISCLOSURE,
+    revision,
+    enabled,
+  });
+  expect(h.service.status().providers[0]?.qualified).toBe(false);
+  expect(h.service.status().available).toBe(false);
+  await expect(h.service.login(h.profile.id)).rejects.toMatchObject({ code: "managed-unavailable" });
+  await expect(h.service.changeExperimental(input(true, 0, "wrong-runtime"))).rejects.toMatchObject({
+    code: "stale-profile",
+  });
+  const grant = input(true, 0);
+  const path = "/api/agents/experimental";
+  const route = chatRoutes(
+    {
+      service: h.service,
+      workspaceIndex: {} as WorkspaceIndex,
+      getWorkspaceBus: () => {
+        throw new Error("unexpected workspace access");
+      },
+    },
+    "POST",
+    path,
+  )!;
+  const enabled = await route.handle(
+    new Request(`http://127.0.0.1:4646${path}`, {
+      method: "POST",
+      body: JSON.stringify(grant),
+    }),
+  );
+  expect(enabled.status).toBe(200);
+  expect((await enabled.json()).enabled).toBe(true);
+  const count = h.store.control.records.length;
+  await h.service.changeExperimental(grant);
+  expect(h.store.control.records.length).toBe(count);
+  expect(h.service.status().providers[0]).toMatchObject({ qualified: false, available: true });
+  expect(new AgentStore(h.root).experimental("fixture")?.enabled).toBe(true);
+  manifestId = "different-installed-bytes";
+  expect(h.service.status().providers[0]?.available).toBe(false);
+  const launchSpec = () => (h.service as unknown as { launchSpec: (id: string) => unknown }).launchSpec(h.profile.id);
+  expect(launchSpec).toThrow("Native agent compatibility and release qualification are pending.");
+  manifestId = runtimeId;
+  const chat = h.chat();
+  h.send(chat.id);
+  await waitUntil(() => h.service.status().activeTurns === 1);
+  const queued = h.chat();
+  h.send(queued.id);
+  await waitUntil(() => h.store.chat(queued.id).state.turns.at(-1)?.status === "queued");
+  await h.service.changeExperimental(input(false, 1));
+  expect(h.service.status().available).toBe(false);
+  expect(h.service.status().activeTurns).toBe(0);
+  expect(h.store.chat(chat.id).state.turns.at(-1)?.status).toBe("cancelled");
+  expect(h.store.chat(queued.id).state.turns.at(-1)?.status).toBe("held");
+  expect(h.store.previouslyAccepted({ provider: "fixture", runtimeId, ...runtimeTarget() })).toBe(true);
+  runtimeId = "fixture-v2";
+  manifestId = runtimeId;
+  expect(h.service.status().providers[0]?.experimental.renewalRequired).toBe(false);
+  await h.service.changeExperimental(input(true, 2));
+  expect(h.service.status().providers[0]?.qualified).toBe(false);
+  runtimeId = "fixture-v3";
+  expect(h.service.status().available).toBe(false);
+  expect(h.service.status().providers[0]?.experimental.renewalRequired).toBe(true);
+  await expect(h.service.login(h.profile.id)).rejects.toMatchObject({ code: "managed-unavailable" });
+  h.store.setExperimental(
+    {
+      type: "experimental",
+      provider: "codex",
+      runtimeId: "codex-v1",
+      ...runtimeTarget(),
+      disclosure: EXPERIMENTAL_DISCLOSURE,
+      enabled: true,
+      revision: 1,
+    },
+    { id: randomUUID(), input: { provider: "codex" }, result: { provider: "codex" } },
+  );
+  const replayed = new AgentStore(h.root);
+  expect(replayed.experimental("fixture")?.enabled).toBe(true);
+  expect(replayed.experimental("codex")?.enabled).toBe(true);
+});
+
+test("experimental acceptance refuses a missing integrity-verified runtime", async () => {
+  const h = setup({
+    releaseEnabled: false,
+    runtimeIdentity: () => "fixture-v1",
+    manifest: () => undefined,
+  });
+  const before = h.store.control.records.length;
+  await expect(
+    h.service.changeExperimental({
+      requestId: randomUUID(),
+      provider: "fixture",
+      runtimeId: "fixture-v1",
+      disclosure: EXPERIMENTAL_DISCLOSURE,
+      revision: 0,
+      enabled: true,
+    }),
+  ).rejects.toMatchObject({ code: "runtime-unqualified" });
+  expect(h.store.control.records).toHaveLength(before);
+});
+
+test("revoking experimental chat stops an active native login", async () => {
+  const h = setup({
+    releaseEnabled: false,
+    runtimeIdentity: () => "fixture-v1",
+    manifest: () => ({
+      ...runtimeTarget(),
+      id: "fixture-v1",
+      provider: "fixture",
+      version: "1",
+      executable: "/fixture",
+      executableSha256: "0".repeat(64),
+      qualified: false,
+    }),
+  });
+  const experimental = (enabled: boolean, revision: number) => ({
+    requestId: randomUUID(),
+    provider: "fixture",
+    runtimeId: "fixture-v1",
+    disclosure: EXPERIMENTAL_DISCLOSURE,
+    revision,
+    enabled,
+  });
+  await h.service.changeExperimental(experimental(true, 0));
+  const login = await h.service.login(h.profile.id);
+  expect(h.service.status().management?.state).toBe("running");
+  await h.service.changeExperimental(experimental(false, 1));
+  expect(h.service.status().management).toBeNull();
+  expect(() => h.service.loginOutput(login.id, login.secret, 0)).toThrow("not available");
+  expect(h.spawns()).toBe(1);
+});
 
 test.each(["claude-code", "codex"])(
   "%s login carries real PTY input, resize and loopback callback, and cancellation releases its owned tree",

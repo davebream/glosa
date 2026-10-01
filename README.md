@@ -133,6 +133,11 @@ command. Without `--wait`, the request waits in the inbox for later.
 | Linux x86_64 with glibc | Experimental CLI and daemon. Requires Bun 1.4.2+ and Git 2.30+. A pacman package of the desktop app for Arch and Manjaro is built and tested in containers; releasing it and native qualification of managed chats and dictation remain pending ([#430](https://github.com/davebream/glosa/issues/430)). |
 | Windows | Not supported and not planned for now. The local API socket, the file permission model and the Claude Code plugin launcher are POSIX only. |
 
+Managed Claude and Codex chats can be enabled separately in Agents & accounts on supported macOS
+and Linux hosts. This is an off-by-default experimental choice for the pinned runtime. It does not
+qualify that runtime or the Linux desktop package; native account, process and release checks remain
+pending. Terminal companion sessions are unaffected.
+
 `glosa open`, `glosa doctor`, `glosa update` and MCP startup refuse unsupported OS/architecture,
 libc or Bun versions with exit code 5 before daemon startup or network access. macOS keeps its
 Bun 1.2.7 minimum; Linux requires Bun 1.4.2. Windows, Linux ARM and musl are not supported.
