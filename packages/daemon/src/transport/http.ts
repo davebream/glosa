@@ -3364,6 +3364,7 @@ export function createApiFetch(
           method: req.method,
           headers: req.headers,
           body: bodyResult.body as BodyInit,
+          signal: req.signal,
         });
       }
 
