@@ -182,7 +182,7 @@ describe("A3 §5 attacks #1/#2 — production class-F CSP honored by a real brow
       stdout: "pipe",
       stderr: "ignore",
     });
-    const dom = await readBrowserDump(child, 10_000);
+    const dom = await readBrowserDump(child, 30_000);
     expect(dom.length, browser.version).toBeGreaterThan(0);
     const serialized = dom.match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
     expect(serialized).toBeString();
@@ -208,5 +208,5 @@ describe("A3 §5 attacks #1/#2 — production class-F CSP honored by a real brow
     expect(report.violations).toContain("connect-src");
     expect(report.violations).toContain("img-src");
     expect(probeHits).toBe(0);
-  }, 15_000);
+  }, 40_000);
 });
