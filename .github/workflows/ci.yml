@@ -127,9 +127,11 @@ jobs:
       - name: Install the Linux browser display
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb dbus libsecret-tools gnome-keyring
           google-chrome --version
       - run: xvfb-run -a bun run scripts/test-runner.ts linux-acceptance
+      - name: Verify real Linux secure storage and detached access
+        run: dbus-run-session -- bun run scripts/linux-secret-service-smoke.ts
       - name: Verify the installed Linux package
         run: bun run package:check
       - name: Preserve test evidence
