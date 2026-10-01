@@ -302,6 +302,9 @@ describe.skipIf(!electronInstalled)(
         GLOSA_HOME: home,
         GLOSA_PORT: String(port),
         GLOSA_CLASSF_PORT: String(port + 1),
+        ...(process.platform === "linux"
+          ? { DISPLAY: process.env.DISPLAY ?? "", XAUTHORITY: process.env.XAUTHORITY ?? "" }
+          : {}),
       };
       daemon = Bun.spawn({
         cmd: [process.execPath, MAIN_PATH, "__daemon"],
@@ -521,9 +524,12 @@ describe.skipIf(!electronInstalled)(
           true,
         );
 
-        const osDark = await main.evaluateInMain<boolean>(
-          "require('electron').systemPreferences.getUserDefault('AppleInterfaceStyle', 'string') === 'Dark'",
-        );
+        const osDark =
+          process.platform === "darwin"
+            ? await main.evaluateInMain<boolean>(
+                "require('electron').systemPreferences.getUserDefault('AppleInterfaceStyle', 'string') === 'Dark'",
+              )
+            : null;
         const windowState = () =>
           main.evaluateInMain<{ themeSource: string; dark: boolean; background: string | null }>(`(() => {
             const { BrowserWindow, nativeTheme } = require('electron');
@@ -563,9 +569,9 @@ describe.skipIf(!electronInstalled)(
           expect(painted.prefersDark).toBe(scheme === "dark");
         }
         const dockLines = stderrText.match(/dock icon follows macOS: (dark|light)/g) ?? [];
-        expect(dockLines, `the Dock icon was set once, from macOS's appearance; shell stderr:\n${stderrText}`).toEqual([
-          `dock icon follows macOS: ${osDark ? "dark" : "light"}`,
-        ]);
+        expect(dockLines, `only macOS sets the Dock icon; shell stderr:\n${stderrText}`).toEqual(
+          process.platform === "darwin" ? [`dock icon follows macOS: ${osDark ? "dark" : "light"}`] : [],
+        );
 
         // A window the shell did not open for the SPA: the shell's own preload, told the daemon's
         // IP origin, on a page at that origin. The preload exposes the bridge there, so the call
@@ -873,7 +879,9 @@ describe.skipIf(!electronInstalled)(
             draft: false,
             prerelease: true,
             html_url: "https://example.com/not-the-release-page",
-            assets: [{ name: `glosa-99.0.0-${arch}.dmg`, state: "uploaded" }],
+            assets: [
+              { name: `glosa-99.0.0-${arch}.${process.platform === "linux" ? "pacman" : "dmg"}`, state: "uploaded" },
+            ],
           },
         ]),
       );
@@ -903,20 +911,23 @@ describe.skipIf(!electronInstalled)(
           const menu = await main.evaluateInMain<Array<{ label: string; role: string | null; items: string[] }>>(`(() =>
             require('electron').Menu.getApplicationMenu().items.map((m) => ({ label: m.label, role: m.role || null,
               items: m.submenu ? m.submenu.items.map((i) => i.role || (i.type === 'separator' ? 'separator' : i.label)) : [] })))()`);
-          expect(menu[0]?.items, "the app menu: About, then Check for Updates…, then the standard items").toEqual([
-            "about",
-            "Check for Updates…",
-            "separator",
-            "services",
-            "separator",
-            "hide",
-            "hideothers",
-            "unhide",
-            "separator",
-            "quit",
-          ]);
-          expect(menu.at(-1)).toEqual({ label: "Help", role: "help", items: [] });
-          expect(menu.slice(1).flatMap((m) => m.items)).not.toContain("Check for Updates…");
+          expect(menu.flatMap((entry) => entry.items).filter((item) => item === "Check for Updates…")).toHaveLength(1);
+          if (process.platform === "darwin") {
+            expect(menu[0]?.items.slice(0, 2)).toEqual(["about", "Check for Updates…"]);
+            expect(menu[0]?.items, "the macOS app menu retains its standard items").toEqual([
+              "about",
+              "Check for Updates…",
+              "separator",
+              "services",
+              "separator",
+              "hide",
+              "hideothers",
+              "unhide",
+              "separator",
+              "quit",
+            ]);
+            expect(menu.at(-1)).toEqual({ label: "Help", role: "help", items: [] });
+          }
 
           arch = await main.evaluateInMain<string>("process.arch");
           // Two clicks back to back: the second finds the first in flight and starts nothing.

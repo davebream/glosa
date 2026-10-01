@@ -141,8 +141,8 @@ On Linux, install the source package with Bun and use `glosa open` as below. Bro
 `xdg-open`; install your distribution's `xdg-utils` package for desktop use. If launch fails or
 cannot be confirmed within five seconds, glosa keeps the workspace registered and prints its URL
 with a warning. `glosa open --url <path>` works without a graphical session or opener. Open the
-link within 60 seconds; run the command again for a fresh link. The Ubuntu Linux checks cover core
-CLI and process behavior; installed-app qualification on Manjaro remains pending. Pinned Linux
+link within 60 seconds; run the command again for a fresh link. The Ubuntu Linux checks select core,
+deterministic acceptance and real Electron security tests; installed-app qualification on Manjaro remains pending. Pinned Linux
 Claude/Codex runtimes are installable candidates, not qualified native sessions; managed execution
 remains gated until the native and release checks pass.
 
@@ -270,11 +270,16 @@ Install either the cask or the `glosa` formula, not both. Each links `glosa` int
 so the second one fails to link. The cask already carries the command line.
 
 On Arch Linux or Manjaro (x86_64), the desktop app is a pacman package. It carries its own Bun and
-the command line, and pacman installs Git and the libraries it needs. Release downloads arrive with
-[#435](https://github.com/davebream/glosa/issues/435); until then, build it from a checkout as
-described in `packages/shell/README.md`, then:
+the command line, and pacman installs Git and the libraries it needs. Linux publication requires an
+approved candidate tested on both Manjaro KDE Wayland and X11. No candidate is qualified yet:
+see the [qualification holds](docs/compatibility/linux-qualification.md). Candidate creation and
+promotion are described in [Releasing glosa](docs/release.md). Until publication, builds from a
+checkout are development packages, as described in `packages/shell/README.md`.
+
+For an approved release, download its pacman file and `SHA256SUMS` together, then:
 
 ```sh
+sha256sum --check --ignore-missing SHA256SUMS
 sudo pacman -U ./glosa-<version>-x64.pacman   # install, or upgrade to a newer package
 sudo pacman -R glosa                          # remove; ~/.glosa and your workspaces stay
 ```

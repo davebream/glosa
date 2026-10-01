@@ -17,20 +17,20 @@
 // window; it cannot close it. With `flock` there is nothing to judge stale, because the kernel
 // drops a dead holder's lock — SIGKILL included — so "is the holder alive" is never asked.
 //
-// Two macOS specifics this depends on:
+// Two platform details this depends on:
 //   - `flock` attaches to the OPEN FILE DESCRIPTION, so closing some unrelated fd on the same
 //     path does not release it. POSIX record locks (`fcntl` F_SETLK) have the opposite, famously
 //     surprising behaviour. That is why this must be `flock` specifically, not merely "a lock".
-//   - errno is read through `__error()`, because a failed `flock` and an unsupported filesystem
-//     are the same return value and must be told apart.
+//   - errno is read through Darwin's `__error()` or Linux's `__errno_location()`, because a failed
+//     `flock` and an unsupported filesystem are the same return value and must be told apart.
 import { dlopen, FFIType, read } from "bun:ffi";
 import { closeSync, ftruncateSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { monitorLockDir, monitorLockPath } from "../../../daemon/src/lifecycle/home.ts";
 
-/** `LOCK_EX | LOCK_SH`-free exclusive, non-blocking: 2 | 4 on Darwin. */
+/** `LOCK_EX | LOCK_SH`-free exclusive, non-blocking: 2 | 4 on Darwin and Linux. */
 export const LOCK_EX_NB = 6;
-/** Darwin's `EWOULDBLOCK`/`EAGAIN`. The ONLY errno that means "someone else holds it". */
-export const EWOULDBLOCK = 35;
+/** Platform `EWOULDBLOCK`/`EAGAIN`. The ONLY errno that means "someone else holds it". */
+export const EWOULDBLOCK = process.platform === "linux" ? 11 : 35;
 
 export type MonitorLockOutcome =
   /** This process owns the session. `release` is best-effort; process exit is the real release. */
@@ -47,22 +47,30 @@ export interface MonitorLockBody {
 }
 
 let libSystem: {
-  symbols: { flock: (fd: number, operation: number) => number; __error: () => number };
+  symbols: { flock: (fd: number, operation: number) => number; errnoLocation: () => number };
 } | null = null;
 
 function system(): typeof libSystem {
   if (libSystem === null) {
-    libSystem = dlopen("libSystem.B.dylib", {
+    const errnoSymbol = process.platform === "linux" ? "__errno_location" : "__error";
+    const library = process.platform === "linux" ? "libc.so.6" : "libSystem.B.dylib";
+    const native = dlopen(library, {
       flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
-      __error: { args: [], returns: FFIType.ptr },
-    }) as unknown as typeof libSystem;
+      [errnoSymbol]: { args: [], returns: FFIType.ptr },
+    });
+    libSystem = {
+      symbols: {
+        flock: native.symbols.flock,
+        errnoLocation: native.symbols[errnoSymbol] as () => number,
+      },
+    };
   }
   return libSystem;
 }
 
 function errno(): number {
   try {
-    return read.i32(system()!.symbols.__error(), 0);
+    return read.i32(system()!.symbols.errnoLocation(), 0);
   } catch {
     return 0;
   }

@@ -720,7 +720,7 @@ async function main(): Promise<void> {
   mkdirSync(dirname(options.report), { recursive: true });
   writeFileSync(
     options.report,
-    `${JSON.stringify({ version, archiveDate, image: IMAGE, emulated, results, unrun }, null, 2)}\n`,
+    `${JSON.stringify({ version, packageSha256: sha(readFileSync(options.pkg)), archiveDate, image: IMAGE, emulated, results, unrun }, null, 2)}\n`,
   );
   const failed = results.filter((r) => !r.ok);
   if (failed.length > 0 || unrun.length > 0) {

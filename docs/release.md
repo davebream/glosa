@@ -9,8 +9,8 @@ Pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/r
 
 1. The same test jobs as CI, with the full profile forced, plus the secret and dependency scans. That
    includes `pacman`, which builds the Linux pacman package and smokes it in Arch Linux containers
-   (#432); a red `pacman` blocks the release. The Linux package is validated, not yet published:
-   uploading it and its checksum is #435.
+   (#432); a red `pacman` blocks the release. Tags do not publish the Linux package:
+   the separate approved-candidate promotion below owns that action.
 2. `release`: publishes `@davebream/glosa` to npm with provenance and creates the GitHub release.
 3. `app`: builds the desktop app for Apple Silicon (`arm64`) and Intel (`x64`), smoke-tests it,
    and uploads to the GitHub release: `glosa-<version>-arm64.dmg`, `glosa-<version>-arm64.zip`,
@@ -25,6 +25,11 @@ The app carries the published npm file set, its production dependencies and a Bu
 desktop shell's one exception to the no-build-step rule.
 
 ## Secrets
+
+Linux promotion additionally requires a GitHub environment named `linux-release` with required
+maintainer reviewers. Configure it before using promotion. The publication script checks that the
+reviewer rule exists and fails if the environment was automatically created without protection.
+Native account credentials and Wispr credentials never belong in Actions secrets or artifacts.
 
 Set these under the repository's Settings, Secrets and variables, Actions.
 
@@ -137,6 +142,83 @@ Still manual, and pending #435 on a real Manjaro KDE desktop (x86_64): launching
 its icon, Wayland and X11, `glosa://` links through `kde-open` with the app closed and open,
 reveal in Dolphin, the Chromium sandbox on the Manjaro kernel, notifications, and dependency
 resolution from Manjaro's stable repositories rather than Arch's.
+
+## Linux candidate and promotion (#435)
+
+These are manual modes of the existing Release workflow, dispatched from `main`. macOS/npm tags
+keep their existing path while Linux qualification is pending. Dispatching a candidate publishes
+nothing. Dispatching promotion requires the protected `linux-release` environment approval and a
+published target release whose tag points to the candidate's exact source commit.
+
+### Create and keep the candidate
+
+Set the intended version before freezing the source. On that main commit, run:
+
+```sh
+gh workflow run release.yml --ref main -f mode=linux-candidate
+```
+
+All existing macOS gates, the unpartitioned interaction check, Linux acceptance, Linux Electron,
+pacman installation smoke and security must succeed. The final `linux-candidate` job validates the
+retained JUnit receipts and package-stage report, then uploads one artifact named
+`linux-candidate-<commit>-<attempt>`. It contains the actual pacman bytes, `candidate.json`,
+`SHA256SUMS` and the execution evidence. The metadata records version, source commit, workflow run
+and attempt, Bun/Electron/provider/SDK versions and lock hashes. The GitHub artifact ID is recorded
+separately after upload. Both candidate payload and final candidate have 90-day retention.
+
+Find the completed run and artifact in Actions. Download that artifact, verify its checksum and
+generate a qualification record with every row initially held:
+
+```sh
+gh run download <run-id> --name linux-candidate-<commit>-<attempt> --dir .context/linux-review
+cd .context/linux-review
+sha256sum --check SHA256SUMS
+cd ../..
+bun run scripts/linux-release.ts qualification-template .context/linux-review <artifact-id> .context/linux-qualification.json
+```
+
+The generator refuses to overwrite an existing record. Do not change runtime qualification flags
+or rebuild after qualifying a package. Any package change, including activation changes, requires
+a new candidate and installed-app qualification. An expired/deleted artifact is a hold, not a
+reason to rebuild silently. Failed or cancelled reruns are not accepted as the original success.
+
+### Record the attended results
+
+Follow [the Manjaro qualification procedure](compatibility/linux-qualification.md). Replace each
+`hold` only after observing its result, with a concise evidence reference in the sanitized report.
+Keep the copied `candidate` object and artifact ID intact. Record the environment, maintainer and
+approval timestamp. No fixture, screenshot alone, issue closure or successful login substitutes
+for the corresponding native requirement.
+
+After all checks pass, the maintainer reviews the report and record. Commit the sanitized record
+as `docs/compatibility/linux-<version>.json` and its report as the Markdown path named in `report`.
+Use a separate documentation commit on main; do not move the release tag away from the tested
+source commit. The record must contain every Wayland/X11 row and every native gate emitted by the
+template. `t8-signoff` references an explicit passing signed record; the closed state of #19 alone
+does not meet it. Preserve existing macOS qualification statements.
+
+### Promote those bytes
+
+The maintainer first initiates the normal tag release for the frozen source, then dispatches:
+
+```sh
+gh workflow run release.yml --ref main \
+  -f mode=linux-promote -f release_tag=v<version> \
+  -f candidate_run_id=<run-id> -f candidate_artifact_id=<artifact-id> \
+  -f qualification_commit=<full-main-commit-containing-the-record>
+```
+
+Approve the environment deployment only after checking those identities. Promotion verifies the
+successful main-branch Release run, artifact ownership/expiry, tag commit, package digest, locks,
+execution reports and signed qualification record. It downloads and uploads the retained package
+without rebuilding. A missing, skipped or failed selected Linux action makes `linux-result` fail.
+
+Both platforms use the same checksum publication helper. Release workflows serialize by tag;
+publication verifies existing assets, preserves the other platform's checksum entries and refuses
+conflicting bytes. An identical repeated promotion is safe. Downloads after upload verify the
+published package and combined checksum file. There is no application update polling or automatic
+installation. Install and explicitly upgrade with `sudo pacman -U ./glosa-<version>-x64.pacman`;
+remove with `sudo pacman -R glosa`, retaining user data.
 
 ## Checking a shipped release
 

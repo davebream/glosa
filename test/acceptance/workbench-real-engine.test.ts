@@ -41,6 +41,10 @@ const ALPHA_TEXT = "Alpha is the artifact the address bar names.";
 const BETA_TEXT = "Beta is the companion that must keep its own state.";
 
 const CHROMIUM_CANDIDATES = [
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Chromium.app/Contents/MacOS/Chromium",
   "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",

@@ -83,6 +83,11 @@ in the package manifest and both CI workflows; the application's older runtime f
 | Documentation-only PR CI | Defined docs consumers, package/format and security checks; not a T8 result |
 | Main, release or manual full validation | PR gates plus the unpartitioned `test:full` interaction check; T8 manual work remains separate |
 
+The Linux acceptance selection is the deduplicated union of Linux core, all applicable T8 suites
+and stability fixtures. `LINUX_EXCLUSIONS` in `scripts/test-plan.ts` names each excluded case, why it
+is platform-specific and what still covers it. An exclusion is not a Linux pass. The installed
+desktop and native dictation qualification must still exercise the corresponding behavior.
+
 `test:ci` runs all three partitions sequentially on a developer machine and in separate CI jobs on
 GitHub. `test:acceptance` is a standalone diagnostic/release selection of named requirements; do not
 run it again immediately after `test:ci` on unchanged contents and call that additional coverage.
@@ -167,3 +172,18 @@ fixtures use real supervised pipes, PTYs and loopback callback listeners with si
 behavior. They contact no vendor and do not prove native account compatibility. Frozen vendor
 installation, executable-format checks and offline SDK import are recorded separately from CI;
 attended G1–G4 qualification remains required.
+
+For #435, CI's `linux` job now runs `linux-acceptance`: the deduplicated union of Linux core,
+the authoritative acceptance membership and lifecycle stability files. There are no excluded
+acceptance files. The separate `linux-shell` job installs Electron and runs the existing shell
+suite under Xvfb with its sandbox enabled. Browser discovery includes Linux executables. These
+are actual Linux execution selections; a platform-specific failure must be repaired or documented
+as a named hold, never suppressed through an unexpected skip. The macOS partitions, stability
+repetitions and unpartitioned full run remain required at their existing frequencies.
+
+Candidate assembly revalidates raw JUnit against the selected files, commit and Bun version,
+requires x86_64 Linux evidence and both macOS stability attempts, and verifies every declared
+pacman stage against the package digest recorded by the smoke. The retained candidate contains
+these receipts for promotion. Unit tests of publication use a simulated GitHub transport with
+real local file bytes; they prove validation and merge behavior, not a GitHub upload or native
+Manjaro compatibility. Native checks remain in the [attended procedure](compatibility/linux-qualification.md).
