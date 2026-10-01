@@ -370,12 +370,6 @@ describe.skipIf(!electronInstalled)(
       expect(mainUrl, stderrText).not.toBeNull();
       const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
       const main = await Cdp.connect(mainUrl!);
-      await cdp.send("Emulation.setDeviceMetricsOverride", {
-        width: 800,
-        height: 600,
-        deviceScaleFactor: 1,
-        mobile: false,
-      });
       async function waitFor(expression: string) {
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
@@ -447,7 +441,9 @@ describe.skipIf(!electronInstalled)(
           const [{createDictationController},{createArtifactPane},{mountConversationPane},{mountAttentionTray}] = await Promise.all([
             load('dictation.js'), load('artifact-pane.js'), load('conversation.js'), load('attention-tray.js')]);
           const root = document.createElement('section'); root.id='dictation-fixture';
-          root.style.cssText='position:fixed;inset:0;overflow:auto;z-index:99999;background:white'; document.body.append(root);
+          // Exercise the narrow production layout without emulating device metrics: native
+          // Electron input must keep the renderer's actual CSS coordinate system on Linux too.
+          root.style.cssText='position:fixed;left:0;top:0;width:min(800px,100vw);height:min(600px,100vh);overflow:auto;z-index:99999;background:white'; document.body.append(root);
           const host = () => {const el=document.createElement('div'); root.append(el); return el;};
           globalThis.__dictationSubmissions=0; globalThis.__dictationCaptures=[];
           const capture=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
