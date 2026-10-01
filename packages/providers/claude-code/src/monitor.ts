@@ -11,6 +11,7 @@ import { apiSocketPath, glosaHome, lockPath } from "../../../daemon/src/lifecycl
 import { INSTALL_ID } from "../../../daemon/src/lifecycle/install.ts";
 import { readLock } from "../../../daemon/src/lifecycle/lock.ts";
 import { PROTOCOL_VERSION, protocolCompatible } from "../../../daemon/src/lifecycle/protocol.ts";
+import { CONTRACT_VERSION } from "../../../daemon/src/transport/contract.ts";
 import { authedRequest } from "../../../daemon/src/security/authed-request.ts";
 import { claudeConfigRoots, confineTranscriptPath } from "../../../daemon/src/transcript/root.ts";
 import { workspaceIndexPath, type WorkspaceIndexFile } from "../../../daemon/src/registry/workspace-index.ts";
@@ -263,7 +264,7 @@ async function registerAndStream(
       path: "/api/sessions/register",
       method: "POST",
       contentType: "application/json",
-      extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+      extraHeaders: { "X-Contract-Version": CONTRACT_VERSION },
       body: JSON.stringify({
         session_id: options.sessionId,
         provider: "claude-code",
@@ -283,7 +284,7 @@ async function registerAndStream(
     {
       path: `/api/sessions/${encodeURIComponent(options.sessionId)}/stream`,
       method: "GET",
-      extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+      extraHeaders: { "X-Contract-Version": CONTRACT_VERSION },
       signal,
     },
     home,
@@ -351,7 +352,7 @@ async function registerAndStream(
             {
               path: `/api/sessions/${encodeURIComponent(options.sessionId)}/signals/${encodeURIComponent(notice.id)}/ack`,
               method: "POST",
-              extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+              extraHeaders: { "X-Contract-Version": CONTRACT_VERSION },
               body: JSON.stringify({ ack_token: notice.ack_token }),
               signal,
             },
@@ -376,7 +377,7 @@ async function registerAndStream(
           {
             path: `/api/sessions/${encodeURIComponent(options.sessionId)}/stream/${encodeURIComponent(entry.id)}/transport-ack`,
             method: "POST",
-            extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+            extraHeaders: { "X-Contract-Version": CONTRACT_VERSION },
             body: "{}",
             signal,
           },
@@ -421,7 +422,7 @@ async function probeStreamConnected(
         {
           path: `/api/sessions/${encodeURIComponent(sessionId)}/stream/status`,
           method: "GET",
-          extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+          extraHeaders: { "X-Contract-Version": CONTRACT_VERSION },
           signal: combined,
         },
         deps.home(),
