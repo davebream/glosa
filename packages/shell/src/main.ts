@@ -47,6 +47,8 @@ import {
   contrastReply,
   devProfilePath,
   downloadName,
+  dictationPermissionAllowed,
+  dictationEgressAllowed,
   egressDecision,
   externalLinkDecision,
   firstFrameColor,
@@ -201,6 +203,26 @@ interface WindowState {
   installId: string | null;
 }
 const windows = new Map<number, WindowState>();
+
+type DictationAttempt = { id: string; approved: boolean; abort: AbortController; timer: ReturnType<typeof setTimeout> };
+const dictationAttempts = new Map<number, DictationAttempt>();
+function endDictation(id: number, notify = true): void {
+  const attempt = dictationAttempts.get(id);
+  if (!attempt) return;
+  dictationAttempts.delete(id);
+  clearTimeout(attempt.timer);
+  attempt.abort.abort();
+  const wc = webContents.fromId(id);
+  if (notify && wc && !wc.isDestroyed()) wc.send("glosa:dictation-ended", attempt.id);
+}
+
+function dictationAccess(wc: Electron.WebContents | null | undefined) {
+  return {
+    platform: process.platform,
+    active: Boolean(wc && dictationAttempts.get(wc.id)?.approved),
+    expectedOrigin: wc ? windows.get(wc.id)?.origin : undefined,
+  };
+}
 
 /** At most one reconnect per window at a time (R-L8): a second ask shares the first's answer. */
 const reconnecting = new Map<number, Promise<ReconnectResult>>();
@@ -779,6 +801,77 @@ function installIpc(): void {
     // not the preload's, is the boundary (readiness note §1b).
     return Boolean(origin) && event.senderFrame?.origin === origin;
   };
+  ipcMain.handle("glosa:dictation-begin", async (event, id: unknown) => {
+    const wc = event.sender;
+    if (
+      process.platform !== "linux" ||
+      !fromSpa(event) ||
+      event.senderFrame !== wc.mainFrame ||
+      typeof id !== "string" ||
+      !/^[0-9a-f-]{36}$/i.test(id) ||
+      dictationAttempts.has(wc.id)
+    )
+      return false;
+    const win = BrowserWindow.fromWebContents(wc);
+    if (!win) return false;
+    const attempt: DictationAttempt = {
+      id,
+      approved: false,
+      abort: new AbortController(),
+      timer: setTimeout(() => endDictation(wc.id), 360_000),
+    };
+    dictationAttempts.set(wc.id, attempt);
+    const navigated = (_event: unknown, _url: string, inPlace: boolean, isMainFrame: boolean) => {
+      // SPA focus updates replace the URL fragment. They keep this exact document and frame;
+      // replacing the document revokes its grant. Removing a composer cancels in the SPA too.
+      if (isMainFrame && !inPlace) endDictation(wc.id);
+    };
+    const destroyed = () => endDictation(wc.id);
+    wc.on("did-start-navigation", navigated);
+    wc.once("destroyed", destroyed);
+    attempt.abort.signal.addEventListener(
+      "abort",
+      () => {
+        wc.removeListener("did-start-navigation", navigated);
+        wc.removeListener("destroyed", destroyed);
+      },
+      { once: true },
+    );
+    try {
+      // Check Chromium's transient activation in the requesting document, never a renderer boolean.
+      const activated = await wc.executeJavaScript("navigator.userActivation.isActive");
+      if (dictationAttempts.get(wc.id) !== attempt) return false;
+      if (!activated || !fromSpa(event) || event.senderFrame !== wc.mainFrame) {
+        endDictation(wc.id, false);
+        return false;
+      }
+      const result = await dialog.showMessageBox(win, {
+        type: "question",
+        title: "Dictation microphone",
+        message: "Allow microphone access for this dictation?",
+        detail:
+          "Audio and the disclosed visible text go to your configured dictation provider. The result stays a draft.",
+        buttons: ["Cancel", "Allow once", "Deny"],
+        defaultId: 0,
+        cancelId: 0,
+        signal: attempt.abort.signal,
+      });
+      if (dictationAttempts.get(wc.id) !== attempt || wc.isDestroyed()) return false;
+      if (result.response !== 1 || !fromSpa(event) || event.senderFrame !== wc.mainFrame) {
+        endDictation(wc.id, false);
+        return false;
+      }
+      attempt.approved = true;
+      return true;
+    } catch {
+      if (dictationAttempts.get(wc.id) === attempt) endDictation(wc.id, false);
+      return false;
+    }
+  });
+  ipcMain.handle("glosa:dictation-end", (event, id: unknown) => {
+    if (!fromSpa(event) || event.senderFrame !== event.sender.mainFrame) return;
+    if (dictationAttempts.get(event.sender.id)?.id === id) endDictation(event.sender.id);
+  });
   ipcMain.handle("glosa:presentation-token", (event) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     const token = pendingTokens.get(event.sender.id) ?? null;
@@ -880,11 +973,43 @@ function installIpc(): void {
 
 function installEgressGate(): void {
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    const wc = details.webContents;
+    if (
+      dictationEgressAllowed({
+        ...dictationAccess(wc),
+        mainFrame: Boolean(wc && details.frame === wc.mainFrame),
+        origin: details.initiatorOrigin,
+        url: details.url,
+        resourceType: details.resourceType,
+      })
+    ) {
+      callback({ cancel: false });
+      return;
+    }
     const decision = egressDecision(details.url);
     if (decision === "cancel") log(`cancelled egress to ${details.url.slice(0, 120)}`);
     callback({ cancel: decision === "cancel" });
   });
-  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) =>
+    callback(
+      dictationPermissionAllowed({
+        ...dictationAccess(wc),
+        mainFrame: details.isMainFrame,
+        origin: "securityOrigin" in details ? details.securityOrigin : undefined,
+        permission,
+        mediaTypes: "mediaTypes" in details ? (details.mediaTypes ?? []) : [],
+      }),
+    ),
+  );
+  session.defaultSession.setPermissionCheckHandler((wc, permission, origin, details) =>
+    dictationPermissionAllowed({
+      ...dictationAccess(wc),
+      mainFrame: details.isMainFrame,
+      origin,
+      permission,
+      mediaTypes: details.mediaType ? [details.mediaType] : [],
+    }),
+  );
 }
 
 app.setAboutPanelOptions({ applicationName: app.isPackaged ? "glosa" : "glosa dev", applicationVersion: pkg.version });

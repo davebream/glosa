@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { glosaHome } from "../../daemon/src/lifecycle/home.ts";
 import { isSourceCheckout } from "../../daemon/src/lifecycle/install.ts";
 import {
-  MacKeychainCredentialStore,
+  createCredentialStore,
+  CredentialStoreError,
   readWisprFlowConfig,
   WISPR_FLOW_CONFIG_VERSION,
   WISPR_FLOW_CONSENT_VERSION,
@@ -90,7 +91,7 @@ export async function runDictation(
   deps: DictationCommandDeps = {},
 ): Promise<CommandEnvelope<DictationData>> {
   const home = deps.home ?? glosaHome();
-  const credentialStore = deps.credentialStore ?? new MacKeychainCredentialStore();
+  const credentialStore = deps.credentialStore ?? createCredentialStore(deps.platform);
 
   if (action === "status") {
     const result = readWisprFlowConfig(home);
@@ -107,8 +108,18 @@ export async function runDictation(
         warnings: [],
       };
     }
-    if (!developmentCredentialAvailable(deps) && !(await credentialStore.has(result.config.keychain_account))) {
-      return failure("dictation-credential-unavailable", "the Wispr Flow organization key is unavailable in Keychain");
+    try {
+      if (!developmentCredentialAvailable(deps) && !(await credentialStore.has(result.config.keychain_account))) {
+        return failure(
+          "dictation-credential-unavailable",
+          "the Wispr Flow organization key is unavailable; run glosa dictation configure --provider wispr-flow",
+        );
+      }
+    } catch (error) {
+      return failure(
+        "dictation-credential-unavailable",
+        error instanceof CredentialStoreError ? error.message : "the credential store is unavailable",
+      );
     }
     return {
       ok: true,
@@ -146,7 +157,9 @@ export async function runDictation(
     }
     let removed = true;
     try {
-      removed = await credentialStore.remove(result.config.keychain_account);
+      removed = await credentialStore.remove(result.config.keychain_account, {
+        interactive: !options.json && (deps.isTTY ?? (() => Boolean(process.stdin.isTTY)))(),
+      });
     } catch {
       removed = false;
     }
@@ -160,7 +173,8 @@ export async function runDictation(
         : [
             {
               code: "dictation-keychain-remove-failed",
-              message: "dictation is disabled, but its Keychain item could not be removed",
+              message:
+                "dictation is disabled, but its secure credential could not be removed; unlock your wallet and retry glosa dictation disable",
             },
           ],
     };
@@ -169,8 +183,12 @@ export async function runDictation(
   if (options.provider !== "wispr-flow") {
     return failure("dictation-provider-unsupported", "configure requires --provider wispr-flow", EXIT_CODES.USAGE);
   }
-  if ((deps.platform ?? process.platform) !== "darwin") {
-    return failure("platform-unsupported", "Wispr Flow configuration requires macOS", EXIT_CODES.PLATFORM_UNSUPPORTED);
+  if (!["darwin", "linux"].includes(deps.platform ?? process.platform)) {
+    return failure(
+      "platform-unsupported",
+      "Wispr Flow configuration requires macOS or Linux",
+      EXIT_CODES.PLATFORM_UNSUPPORTED,
+    );
   }
   if (options.json || !(deps.isTTY ?? (() => Boolean(process.stdin.isTTY)))()) {
     return failure(
@@ -201,7 +219,9 @@ export async function runDictation(
     }
     return failure(
       "dictation-configure-failed",
-      error instanceof Error ? error.message : "could not configure Wispr Flow dictation",
+      error instanceof CredentialStoreError
+        ? error.message
+        : "could not configure Wispr Flow dictation; the credential prompt was cancelled or failed",
     );
   }
   if (previous.state === "configured" && previous.config.keychain_account !== account) {

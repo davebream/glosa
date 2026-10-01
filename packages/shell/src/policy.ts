@@ -33,6 +33,44 @@ export function egressDecision(url: string): "allow" | "cancel" {
   return isLoopbackHost(parsed.hostname) ? "allow" : "cancel";
 }
 
+/** One foreground Linux dictation lease, never a session-wide media or network exception. */
+export function dictationPermissionAllowed(input: {
+  platform: string;
+  active: boolean;
+  mainFrame: boolean;
+  origin?: string;
+  expectedOrigin?: string;
+  permission: string;
+  mediaTypes: readonly string[];
+}): boolean {
+  return (
+    input.platform === "linux" &&
+    input.active &&
+    input.mainFrame &&
+    Boolean(input.expectedOrigin) &&
+    (input.origin === input.expectedOrigin || input.origin === `${input.expectedOrigin}/`) &&
+    input.permission === "media" &&
+    input.mediaTypes.length === 1 &&
+    input.mediaTypes[0] === "audio"
+  );
+}
+
+export function dictationEgressAllowed(input: {
+  platform: string;
+  active: boolean;
+  mainFrame: boolean;
+  origin?: string;
+  expectedOrigin?: string;
+  url: string;
+  resourceType: string;
+}): boolean {
+  return (
+    dictationPermissionAllowed({ ...input, permission: "media", mediaTypes: ["audio"] }) &&
+    input.resourceType === "webSocket" &&
+    input.url === "wss://platform-api.wisprflow.ai/api/v1/dash/client_ws"
+  );
+}
+
 /**
  * The top frame may only ever be the SPA origin. The class-F origin is deliberately not allowed
  * here: a class-F document loaded top level is unsandboxed by the iframe attribute it lost, and

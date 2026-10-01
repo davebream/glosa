@@ -740,9 +740,10 @@ export function createDataAccess(deps = {}) {
     getDictationStatus() {
       return requestJson("/api/dictation/status");
     },
-    /** Foreground-only session grant. The returned JWT stays in renderer memory. */
-    createDictationSession() {
-      return requestJson("/api/dictation/session", { method: "POST" });
+    /** Foreground-only session grant. The returned JWT stays in renderer memory.
+     * @param {AbortSignal} [signal] */
+    createDictationSession(signal) {
+      return requestJson("/api/dictation/session", { method: "POST", signal });
     },
     /** `GET /api/workspaces` — not one of R6's five named functions, but needed by the sidebar
      * to have ANY slug to call the other five with; without it something else would have to call
