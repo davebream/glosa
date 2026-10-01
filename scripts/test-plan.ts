@@ -52,6 +52,7 @@ export type Profile =
   | "stability"
   | "shell"
   | "linux-core"
+  | "linux-acceptance"
   | "full";
 type Estimate = { seconds: number; reason: string };
 export function validateTimings(
@@ -155,6 +156,7 @@ export function buildPlan(
     stability: [...STABILITY_FILES],
     shell: [...SHELL_FILES],
     "linux-core": [...LINUX_CORE_FILES],
+    "linux-acceptance": [...new Set([...LINUX_CORE_FILES, ...acceptance, ...STABILITY_FILES])],
     full: inventory,
   };
 }
@@ -220,6 +222,7 @@ export function expectedJobs(profile: ChangeProfile, whole: boolean): Record<str
     stability: profile === "full" ? "success" : "skipped",
     shell: profile === "full" ? "success" : "skipped",
     linux: profile === "full" ? "success" : "skipped",
+    "linux-shell": profile === "full" ? "success" : "skipped",
     pacman: profile === "full" ? "success" : "skipped",
     full: whole ? "success" : "skipped",
   };

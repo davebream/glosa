@@ -167,3 +167,18 @@ fixtures use real supervised pipes, PTYs and loopback callback listeners with si
 behavior. They contact no vendor and do not prove native account compatibility. Frozen vendor
 installation, executable-format checks and offline SDK import are recorded separately from CI;
 attended G1–G4 qualification remains required.
+
+For #435, CI's `linux` job now runs `linux-acceptance`: the deduplicated union of Linux core,
+the authoritative acceptance membership and lifecycle stability files. There are no excluded
+acceptance files. The separate `linux-shell` job installs Electron and runs the existing shell
+suite under Xvfb with its sandbox enabled. Browser discovery includes Linux executables. These
+are actual Linux execution selections; a platform-specific failure must be repaired or documented
+as a named hold, never suppressed through an unexpected skip. The macOS partitions, stability
+repetitions and unpartitioned full run remain required at their existing frequencies.
+
+Candidate assembly revalidates raw JUnit against the selected files, commit and Bun version,
+requires x86_64 Linux evidence and both macOS stability attempts, and verifies every declared
+pacman stage against the package digest recorded by the smoke. The retained candidate contains
+these receipts for promotion. Unit tests of publication use a simulated GitHub transport with
+real local file bytes; they prove validation and merge behavior, not a GitHub upload or native
+Manjaro compatibility. Native checks remain in the [attended procedure](compatibility/linux-qualification.md).

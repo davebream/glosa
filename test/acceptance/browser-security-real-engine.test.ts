@@ -11,6 +11,10 @@ import { createClassFFetch } from "../../packages/daemon/src/transport/http.ts";
 import { randomPort } from "../../packages/daemon/test/helpers.ts";
 
 const CHROMIUM_CANDIDATES = [
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Chromium.app/Contents/MacOS/Chromium",
   "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",

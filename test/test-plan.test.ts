@@ -259,6 +259,14 @@ test("Linux core selection includes real process ownership, CLI and MCP boundari
   expect(() => validateResults("full", "false", results)).toThrow("linux");
 });
 
+test("Linux acceptance contains every acceptance owner and core test exactly once", () => {
+  const plan = buildPlan();
+  const files = checkedFiles("linux-acceptance");
+  expect(new Set(files).size).toBe(files.length);
+  for (const file of [...plan.acceptance, ...plan["linux-core"], ...plan.stability]) expect(files).toContain(file);
+  expect(expectedJobs("full", true)["linux-shell"]).toBe("success");
+});
+
 test("the pacman job is required, and Linux core covers the package's install kind and lifetime (#432)", () => {
   const files = checkedFiles("linux-core");
   for (const file of [

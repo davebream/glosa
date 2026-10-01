@@ -11,7 +11,7 @@ const workflows = ["ci.yml", "release.yml"].map((name) => readFileSync(join(root
 function job(yaml: string, name: string): string {
   const start = yaml.indexOf(`\n  ${name}:\n`);
   expect(start, name).toBeGreaterThan(-1);
-  const next = yaml.slice(start + 1).search(/\n  [a-z]+:\n/);
+  const next = yaml.slice(start + 1).search(/\n {2}[a-z-]+:\n/);
   return next < 0 ? yaml.slice(start) : yaml.slice(start, start + 1 + next);
 }
 
@@ -62,7 +62,7 @@ describe("repository quality gates", () => {
     for (const yaml of workflows) {
       const linux = job(yaml, "linux");
       expect(linux).toContain("runs-on: ubuntu-24.04");
-      expect(linux).toContain("bun run scripts/test-runner.ts linux-core");
+      expect(linux).toContain("bun run scripts/test-runner.ts linux-acceptance");
       expect(linux).toContain("if: needs.prepare.outputs.profile == 'full'");
       const tests = job(yaml, "tests");
       expect(tests).toContain("profile: [ci-1, ci-2, ci-3]");
@@ -100,7 +100,9 @@ describe("repository quality gates", () => {
     for (const yaml of workflows) {
       const aggregate = job(yaml, "ci");
       expect(aggregate).toContain("if: always()");
-      expect(aggregate).toContain("needs: [prepare, quality, docs, tests, stability, shell, linux, pacman, full]");
+      expect(aggregate).toContain(
+        "needs: [prepare, quality, docs, tests, stability, shell, linux, linux-shell, pacman, full]",
+      );
       expect(aggregate).toContain("TEST_PROFILE: ${{ needs.prepare.outputs.profile }}");
       expect(aggregate).toContain("TEST_WHOLE: ${{ needs.prepare.outputs.whole }}");
       expect(aggregate).toContain("TEST_RESULTS: ${{ toJSON(needs) }}");
@@ -139,6 +141,50 @@ describe("repository quality gates", () => {
     }
     expect(job(workflows[1]!, "release")).toContain("needs: [ci, security]");
     expect(job(workflows[1]!, "release")).toContain("npm publish");
+  });
+
+  test("Linux workflow declarations retain approval, exact artifact inputs and a non-skippable result gate", () => {
+    const release = Bun.YAML.parse(workflows[1]!) as {
+      on: { workflow_dispatch: { inputs: Record<string, unknown> } };
+      concurrency: { group: string; "cancel-in-progress": boolean };
+      jobs: Record<
+        string,
+        {
+          if: string;
+          needs?: string[];
+          environment?: string;
+          permissions?: Record<string, string>;
+          steps: Array<{ run?: string; with?: Record<string, unknown> }>;
+        }
+      >;
+    };
+    for (const name of ["mode", "release_tag", "candidate_run_id", "candidate_artifact_id", "qualification_commit"])
+      expect(release.on.workflow_dispatch.inputs).toHaveProperty(name);
+    expect(release.concurrency.group).toContain("inputs.release_tag || github.ref_name");
+    expect(release.concurrency["cancel-in-progress"]).toBe(false);
+    const promotion = release.jobs["linux-promote"]!;
+    expect(promotion.environment).toBe("linux-release");
+    expect(promotion.if).toContain("github.ref == 'refs/heads/main'");
+    expect(promotion.needs).toEqual(["security"]);
+    expect(promotion.steps.some((step) => step.run === "bun run scripts/linux-release.ts promote")).toBe(true);
+    const candidate = release.jobs["linux-candidate"]!;
+    expect(candidate.needs).toEqual(["ci", "security", "pacman"]);
+    expect(candidate.permissions).toEqual({ contents: "read", actions: "read" });
+    expect(
+      candidate.steps.some(
+        (step) => step.with?.["retention-days"] === 90 && step.with?.["if-no-files-found"] === "error",
+      ),
+    ).toBe(true);
+    expect(release.jobs["linux-result"]!.if).toContain("always()");
+    expect(release.jobs["linux-result"]!.needs).toEqual(["linux-candidate", "linux-promote"]);
+    expect(release.jobs.release!.if).toContain("github.event_name == 'push'");
+    for (const workflow of workflows) {
+      const linuxShell = job(workflow, "linux-shell");
+      expect(linuxShell).toContain("xvfb-run -a bun run scripts/test-runner.ts shell");
+      expect(linuxShell).toContain("chmod 4755");
+      expect(linuxShell).toContain("if-no-files-found: error");
+      expect(linuxShell).not.toContain("--no-sandbox");
+    }
   });
 
   test("CI and release pin every cache action to the reviewed version", () => {
@@ -211,12 +257,11 @@ describe("repository quality gates", () => {
       "- name: Build and smoke an ad-hoc signed app\n        if: steps.signing.outputs.enabled != 'true'",
     );
     // Publishing does not: without a Developer ID the ad-hoc build is what people install (#371).
-    for (const step of ["Write SHA256SUMS", "Upload the app to the release", "Update the Homebrew tap"]) {
+    for (const step of ["Publish app assets and merged SHA256SUMS", "Update the Homebrew tap"]) {
       expect(app, step).toContain(`- name: ${step}\n`);
       expect(app, step).not.toContain(`- name: ${step}\n        if:`);
     }
-    expect(app).toContain('gh release upload "$GITHUB_REF_NAME"');
-    expect(app).toContain("packages/shell/dist/SHA256SUMS --clobber");
+    expect(app).toContain('bun run scripts/release-assets.ts "$GITHUB_REF_NAME" packages/shell/dist/SHA256SUMS');
     expect(app).toContain("bun run scripts/cask-bump.ts");
     // The tap is written with a deploy key scoped to it, never a broad token.
     expect(app).toContain("HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}");
