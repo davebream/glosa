@@ -72,27 +72,43 @@
 
 ## F34 — opt-in dictation configuration
 
-- `glosa dictation configure --provider wispr-flow` is macOS- and TTY-gated. Before changing state it
+- `glosa dictation configure --provider wispr-flow` requires macOS or Linux and an interactive TTY. Before changing state it
   discloses that microphone audio and up to 256 KiB of visible Glosa plaintext may be sent to Wispr,
   API approval/billing is separate, recording begins only after clicking Dictate, and the result is a
   draft that is never submitted automatically. Declining or using a noninteractive terminal/`--json`
   fails before a credential prompt or write.
 - The organization key is entered through the inherited macOS Keychain prompt, never as a command
   argument. Service is `ai.glosa.dictation.wispr-flow`; account and provider client ID are independent
-  random UUIDs. Packaged Glosa uses Keychain exclusively. A source checkout may use
+  random UUIDs. Packaged Glosa uses secure OS storage exclusively. A source checkout may use
   `WISPR_FLOW_API_KEY` only when `GLOSA_WISPR_FLOW_ALLOW_ENV_KEY=1` explicitly enables the development
   override; tests inject a credential reader.
 - Durable state is one atomic mode-0600 file in `GLOSA_HOME` containing only schema version, enabled
   state, provider ID, consent version/time, `visible-prose` context policy and 262,144-byte cap,
   client UUID, Keychain account UUID, configuration time, and optional disabled time. A new consent
   version invalidates old configuration rather than silently widening it.
-- `glosa dictation status [--json]` reads configuration and Keychain item presence only. It never
+- On Linux, the provider uses libsecret (`secret-tool`) and systemd (`busctl`) with the user
+  Secret Service on D-Bus. Manjaro/KDE requires KWallet Secret Service (`ksecretd`), an initialized
+  default wallet and a working desktop session bus. Install packages from Manjaro repositories with
+  `sudo pacman -S libsecret systemd kwallet`. Glosa does not install or activate a replacement wallet.
+  Launch from the desktop session carrying `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`;
+  existing daemon inheritance preserves them. Helpers receive only HOME/USER, these session variables
+  and DISPLAY/WAYLAND_DISPLAY/XAUTHORITY, with fixed PATH and locale. They inherit no API keys.
+- Linux status uses metadata-only `SearchItems`. Reading uses `secret-tool search` without
+  `--unlock`, never `lookup`. Status and Dictate never unlock a wallet. Unlock it in the desktop
+  wallet manager and retry; reload the page if dictation was unavailable at page load. Missing
+  utilities, session services or permission leave review/editing usable and never select plaintext
+  storage. Setup and interactive disable may prompt; JSON/non-TTY disable and rollback never do.
+  Operations have bounded output and deadlines (5 seconds unattended, 2 minutes interactive).
+- `glosa dictation status [--json]` reads configuration and secure item presence only. It never
   contacts Wispr. `glosa dictation disable [--json]` commits inactive state before attempting to
-  remove the Keychain item; removal failure is a warning because egress is already disabled.
-- The Electron shell (`packages/shell`) reuses the daemon-served SPA and browser-direct adapter. It must
-  provide macOS microphone usage metadata and surface permission failures when it is packaged, but owns
-  no alternate dictation transport. Its permission handler currently denies every permission request,
-  so dictation inside the shell waits on that metadata.
+  remove the secure item; removal failure is a warning because egress is already disabled.
+- The Linux Electron shell reuses the daemon-served SPA and browser-direct adapter. Each click
+  on Dictate asks for microphone access with Allow once, Deny and Cancel. Only that foreground
+  attempt may capture audio from the SPA main frame or connect to the exact Wispr WebSocket.
+  Cancellation, completion, failure, navigation, window destruction or the six-minute shell
+  deadline revokes the attempt. The existing recording limit remains 5m45s. Camera, screen capture,
+  subframes and desk browser tabs receive no permission. macOS shell permission behavior is unchanged.
+  Real Manjaro/KDE and installed-package/live-provider qualification remain held for #434/#435.
 
 - **`GLOSA_MANAGED_PREVIEW=1`** (2026-09-25) opens managed chats for the one daemon whose environment
   carries it, read once at boot and logged as `managed chats open: preview for this daemon only`. It

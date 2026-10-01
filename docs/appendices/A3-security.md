@@ -234,12 +234,13 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   never loaded top level: a class-F document outside its iframe loses the iframe sandbox and may
   navigate itself off loopback.
 - **Egress is a browser-process gate, not a CSP.** `session.webRequest.onBeforeRequest` cancels every
-  request whose host is not loopback; the daemon's CSP stays as defence in depth.
+  request whose host is not loopback, except the foreground Linux dictation grant below; the
+  daemon's CSP stays as defence in depth.
 - **The preload is a per-origin capability.** It exposes `window.glosaShell` only when the page origin
   equals the SPA origin exactly, and every `ipcMain` handler re-checks `event.senderFrame.origin`
   before acting; that handler check is the boundary (a class-F document reports a `null` origin under
   its CSP sandbox and is refused even by a deliberately unscoped preload). The class-F frame receives
-  no preload. The bridge carries nine calls, two pushes and one constant: a one-shot presentation
+  no preload. The base bridge carries nine calls, two pushes and one constant: a one-shot presentation
   token, "open folder", an OS notification, "reveal in Finder", "bring back this window's daemon"
   (R-L8, #432), the page's resolved appearance, a synchronous read of whether macOS asks for more
   contrast, "open in your browser" and "read one of this window's browser tabs" for a chat agent
@@ -254,7 +255,7 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   path: the main process sets the Dock badge from a whole number from zero up (the latest value, since
   every window reports the same daemon-wide count), clamps title and body, shows a notification at
   most once per id, and focuses the reporting window on click. The page's own web Notification and
-  permission requests stay denied (#391). The appearance call takes one message,
+  permission requests stay denied except the Linux dictation grant below (#391, #434). The appearance call takes one message,
   `{ source, scheme, background }`, and no path: `source` is `system`, `light` or `dark` (whether
   the page follows macOS or fixed a scheme), `scheme` is `light` or `dark` and must equal a fixed
   `source`, and `background` is the page's paper as exactly `#rrggbb`. A message with any other
@@ -272,6 +273,21 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   whose top frame has committed that origin, so a blocking screen the shell loaded into one after a
   failed compatibility check gets nothing; the push carries one boolean, and the preload ignores
   anything else and exposes no way to set it.
+- **Linux dictation (#434).** The Linux-only preload adds begin/end methods carrying an attempt
+  UUID and an ended notification. Main-process handlers verify the exact SPA main frame and
+  Chromium transient user activation before a native Allow once/Deny/Cancel dialog. Approval is
+  per attempt, never persisted. Both permission handlers require that grant and audio-only media.
+  The browser-process network gate permits only `wss://platform-api.wisprflow.ai/api/v1/dash/client_ws`,
+  from that SPA main frame, for the same attempt. Consent-gated CSP remains required. All other
+  hosts, paths, schemes, frames and permissions retain their previous refusal. Cancellation,
+  completion, navigation, destruction and a six-minute deadline revoke the grant and stop capture.
+  macOS behavior and renderer sandbox settings do not change.
+- **Linux dictation credentials.** Secure storage belongs to the Wispr provider. Metadata-only
+  status never reads a secret or invokes an unlock prompt. Foreground reads remain non-unlocking;
+  only interactive CLI setup/removal may prompt. No plaintext fallback, credential argv/environment,
+  raw helper diagnostics or secret application files are permitted. Helpers use a small session
+  environment allowlist and bounded private output. Consent schema and the 256 KiB visible-plaintext
+  cap are unchanged. Cancellation propagates through session creation and credential helpers.
 - **Desk browser tabs (#440; decision 2026-09-29).** A desk window hosts web pages as `<webview>`
   guests in its dock. `webviewTag` is on for every window, because a window's kind is known only
   after `glosa open` answers; `will-attach-webview` is the gate. It refuses a guest unless the window
