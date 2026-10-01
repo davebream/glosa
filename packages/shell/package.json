@@ -82,7 +82,7 @@
       ],
       "notarize": true,
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "glosa uses the microphone only when you click Dictate, and only if you configured a dictation provider."
+        "NSMicrophoneUsageDescription": "glosa uses the microphone only when you click the microphone icon, and only if you configured a dictation provider."
       }
     },
     "dmg": {

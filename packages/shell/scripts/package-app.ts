@@ -333,7 +333,7 @@ const WORKSPACE_MANIFESTS = [
   "packages/spa",
   "packages/providers/claude-code",
   "packages/providers/codex",
-  "packages/providers/wispr-flow",
+  "packages/providers/openai-transcription",
 ];
 
 function fail(message: string): never {

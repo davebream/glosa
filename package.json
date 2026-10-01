@@ -3,7 +3,7 @@
   "version": "0.1.0-alpha.37",
   "description": "Local-first writing and review workspace for people working with AI coding agents.",
   "license": "Apache-2.0",
-  "author": "Dawid Leszczy\u0144ski",
+  "author": "Dawid Leszczyński",
   "private": false,
   "type": "module",
   "bin": {
@@ -14,7 +14,7 @@
     "packages/daemon/src",
     "packages/providers/claude-code/src",
     "packages/providers/codex/src",
-    "packages/providers/wispr-flow/src",
+    "packages/providers/openai-transcription/src",
     "packages/spa/src",
     ".claude-plugin/marketplace.json",
     "glosa-plugin",
@@ -104,6 +104,7 @@
     "ignore": "7.0.10",
     "image-size": "2.0.4",
     "markdown-it": "^14.3.1",
+    "openai": "7.26.0",
     "picomatch": "^4.0.7",
     "zod": "^4.6.5"
   },

@@ -1,10 +1,10 @@
 {
-  "name": "@glosa/providers-wispr-flow",
+  "name": "@glosa/providers-openai-transcription",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Opt-in Wispr Flow dictation provider for glosa.",
+  "description": "Opt-in OpenAI dictation provider for glosa.",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts"
