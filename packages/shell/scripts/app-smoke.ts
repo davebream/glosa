@@ -39,6 +39,7 @@ import {
 import { createServer } from "node:net";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import shellManifest from "../package.json";
 
 /** The doctor row name for installs; a test pins it to the CLI's INSTALL_CHECK. */
 export const SMOKE_INSTALL_ROW = "install";
@@ -218,8 +219,8 @@ async function main(): Promise<void> {
       expectOk("S4", exec("/usr/bin/plutil", ["-extract", key, "raw", plist], env), `plutil ${key}`).trim();
     if (plistValue("CFBundleShortVersionString") !== version)
       fail("S4", "CFBundleShortVersionString is not the release version");
-    if (!plistValue("NSMicrophoneUsageDescription").includes("Dictate"))
-      fail("S4", "NSMicrophoneUsageDescription is missing");
+    if (plistValue("NSMicrophoneUsageDescription") !== shellManifest.build.mac.extendInfo.NSMicrophoneUsageDescription)
+      fail("S4", "NSMicrophoneUsageDescription does not match the declared microphone permission text");
     if (plistValue("LSMinimumSystemVersion") !== "13.0") fail("S4", "LSMinimumSystemVersion is not 13.0");
     // The bundle declares glosa:// so macOS routes links to the app (#392).
     if (plistValue("CFBundleURLTypes.0.CFBundleURLSchemes.0") !== "glosa")
