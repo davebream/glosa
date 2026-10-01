@@ -1867,3 +1867,14 @@ same trade-off a declined link already makes.
 **Rejected.** Letting the document surface grow tabs (the brief keeps it one document); a separate
 in-app Back button (browser history already carries the path, and the navigator covers
 discovery); sharing the desk's navigator preference.
+
+## 2026-10-01: Explicit experimental managed chat before native qualification (#435)
+
+The maintainer elected an off-by-default Account settings opt-in for the pinned Claude and Codex
+runtimes on supported macOS and Linux hosts. Record each acceptance in the agent control journal,
+bound to the provider, host tuple, runtime identity and disclosure version. Revocation stops active
+native work. This replaces the daemon environment preview switch.
+
+The decision permits experimentation while the offering determination and G2–G4 evidence remain
+open. It does not mark any runtime qualified or authorize a Linux release claim. Installation still
+requires a foreground action, and workspace/MCP consent remains separate.

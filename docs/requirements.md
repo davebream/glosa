@@ -288,8 +288,13 @@ hooks and MCP servers after foreground approval; startup hooks can run before a 
 Unlinking never invokes native logout or deletes native configuration. Configuration authority changes
 invalidate workspace consent. Existing profiles remain private and isolated. Opening history never
 starts a runtime. No account fallback, API fallback, credential import or external-session takeover.
-Public managed execution stays unavailable until the joint Claude/Codex qualification and offering
-gates in the [implementation contract](design/2026-09-23-agent-chat-implementation.md) pass.
+Release-qualified managed execution stays unavailable until the joint Claude/Codex qualification
+and offering gates in the [implementation contract](design/2026-09-23-agent-chat-implementation.md)
+pass. As a maintainer-approved experimental exception, a person may explicitly enable managed chat
+per provider in Account settings on supported macOS and Linux hosts. Acceptance is off by default,
+versioned and bound to the pinned native runtime tuple; a changed tuple requires fresh acceptance.
+It never marks that tuple qualified or satisfies G1–G4. Turning it off fences active work and native
+login, while preserving account cleanup through previously accepted, integrity-verified bytes.
 Pluginless managed registration grants only its exact session/workspace; the existing inbox journal,
 claim interval and human-save precedence remain authoritative. This amendment supersedes the old
 unqualified “never launches” rule only for managed chats; it does not authorize process enumeration.

@@ -110,12 +110,11 @@
   subframes and desk browser tabs receive no permission. macOS shell permission behavior is unchanged.
   Real Manjaro/KDE and installed-package/live-provider qualification remain held for #434/#435.
 
-- **`GLOSA_MANAGED_PREVIEW=1`** (2026-09-25) opens managed chats for the one daemon whose environment
-  carries it, read once at boot and logged as `managed chats open: preview for this daemon only`. It
-  exists so a maintainer can produce the attended evidence the ship gates in
-  `docs/design/2026-09-23-agent-chat-implementation.md` require (G2 native compatibility, G3 lifecycle
-  containment); it changes no public default, is never read from a request or the SPA, and an already
-  running daemon does not pick it up. Public managed execution stays closed until those gates pass.
+- **Experimental managed chat** (2026-10-01) is enabled per provider through an explicit Account
+  settings acceptance, off by default and recorded in the agent control journal. It is bound to the
+  current platform, architecture, libc, pinned runtime identity and disclosure version. Revocation
+  stops active turns and login and holds queued work. The old `GLOSA_MANAGED_PREVIEW` environment
+  switch no longer opens execution. Experimental acceptance does not qualify a runtime or pass G1–G4.
 
 ## F33 — `glosa update` self-update
 
