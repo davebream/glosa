@@ -377,7 +377,7 @@ describe.skipIf(!electronInstalled)(
           await Bun.sleep(50);
         }
         throw new Error(
-          `dictation condition not reached: ${expression}; ${await cdp.evaluate<any>('JSON.stringify({statuses:[...document.querySelectorAll("#dictation-fixture .glosa-dictation-status")].map(e=>e.textContent),activation:navigator.userActivation.isActive})')}; dialogs:${await main.evaluateInMain<number>("globalThis.__dictationDialogs")}; stderr:${stderrText}`,
+          `dictation condition not reached: ${expression}; ${await cdp.evaluate<string>('JSON.stringify({statuses:[...document.querySelectorAll("#dictation-fixture .glosa-dictation-status")].map(e=>e.textContent),activation:navigator.userActivation.isActive,mouseEvents:globalThis.__dictationMouseEvents})')}; dialogs:${await main.evaluateInMain<number>("globalThis.__dictationDialogs")}; stderr:${stderrText}`,
         );
       }
       async function click(index: number) {
@@ -386,15 +386,19 @@ describe.skipIf(!electronInstalled)(
           for(const host of document.querySelector('#dictation-fixture').children) host.style.visibility=host.contains(button)?'visible':'hidden';
           button.scrollIntoView({block:'center'});
         })()`);
-        // Revealing a production composer can move its animated layer. Wait for the actual
-        // hit target, retaining real mouse input and the foreground-activation permission gate.
+        // DOM hit testing can lead the compositor after scrolling/revealing a layer. Observe
+        // the same hittable position across painted frames before dispatching native input.
         const deadline = Date.now() + 8000;
         let point: { x: number; y: number } | null = null;
         while (Date.now() < deadline) {
-          point = await cdp.evaluate<{ x: number; y: number } | null>(`(() => {
+          point = await cdp.evaluate<{ x: number; y: number } | null>(`(async () => {
             const button=document.querySelectorAll('#dictation-fixture .glosa-dictation-toggle')[${index}];
-            const r=button.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-            return button.contains(document.elementFromPoint(x,y)) ? {x,y} : null;
+            const position=()=>{const r=button.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;
+              return button.contains(document.elementFromPoint(x,y)) ? {x,y} : null;};
+            const before=position();
+            await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+            const after=position();
+            return before && after && before.x===after.x && before.y===after.y ? after : null;
           })()`);
           if (point) break;
           await Bun.sleep(50);
@@ -444,6 +448,11 @@ describe.skipIf(!electronInstalled)(
           // Exercise the narrow production layout without emulating device metrics: native
           // Electron input must keep the renderer's actual CSS coordinate system on Linux too.
           root.style.cssText='position:fixed;left:0;top:0;width:min(800px,100vw);height:min(600px,100vh);overflow:auto;z-index:99999;background:white'; document.body.append(root);
+          globalThis.__dictationMouseEvents=[];
+          for(const type of ['mousedown','mouseup','click']) document.addEventListener(type,event=>{
+            globalThis.__dictationMouseEvents.push({type,trusted:event.isTrusted,x:event.clientX,y:event.clientY,
+              target:event.target.className,button:[...root.querySelectorAll('.glosa-dictation-toggle')].findIndex(button=>button.contains(event.target))});
+          },true);
           const host = () => {const el=document.createElement('div'); root.append(el); return el;};
           globalThis.__dictationSubmissions=0; globalThis.__dictationCaptures=[];
           const capture=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
