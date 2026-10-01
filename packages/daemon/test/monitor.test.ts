@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Real plugin-monitor process against a real daemon. The owned stdout line and journal event are
 // the synchronization points; no fixed sleep stands in for delivery.
+import { CONTRACT_VERSION } from "../src/transport/contract.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -94,7 +95,7 @@ describe("Claude monitor integration", () => {
           Host: `127.0.0.1:${port}`,
           Origin: base,
           Authorization: `Bearer ${token}`,
-          "X-Contract-Version": "1.0",
+          "X-Contract-Version": CONTRACT_VERSION,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -152,7 +153,7 @@ describe("Claude monitor integration", () => {
           Host: `127.0.0.1:${port}`,
           Origin: base,
           Authorization: `Bearer ${token}`,
-          "X-Contract-Version": "1.0",
+          "X-Contract-Version": CONTRACT_VERSION,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -270,7 +271,7 @@ describe("Claude monitor integration", () => {
             Host: `127.0.0.1:${port}`,
             Origin: base,
             Authorization: `Bearer ${token}`,
-            "X-Contract-Version": "1.0",
+            "X-Contract-Version": CONTRACT_VERSION,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({

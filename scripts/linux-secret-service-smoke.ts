@@ -5,14 +5,17 @@ import { strict as assert } from "node:assert";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { LinuxSecretServiceCredentialStore, writeWisprFlowConfig } from "../packages/providers/wispr-flow/src/index.ts";
-import { credentialHelperEnv } from "../packages/providers/wispr-flow/src/secret-service.ts";
+import {
+  LinuxSecretServiceCredentialStore,
+  writeOpenAIDictationConfig,
+} from "../packages/providers/openai-transcription/src/index.ts";
+import { credentialHelperEnv } from "../packages/providers/openai-transcription/src/secret-service.ts";
 
 const mode = process.argv[2];
 const account = process.argv[3] ?? crypto.randomUUID();
 const cli = resolve(import.meta.dir, "../packages/cli/src/main.ts");
 if (mode === "--store") {
-  await new LinuxSecretServiceCredentialStore().addInteractive(account);
+  await new LinuxSecretServiceCredentialStore().write(account, await Bun.stdin.text());
 } else if (mode === "--read") {
   const expected = await Bun.stdin.text();
   assert.equal(await new LinuxSecretServiceCredentialStore().read(account), expected, "real Secret Service read");
@@ -32,13 +35,13 @@ if (mode === "--store") {
   // HTTP transport is substituted, and every unrecognized outbound request fails closed.
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) !== "https://platform-api.wisprflow.ai/api/v1/dash/generate_access_token") {
+      if (String(input) !== "https://api.openai.com/v1/audio/transcriptions") {
         throw new Error("offline fixture refuses outbound request");
       }
       if (new Headers(init?.headers).get("Authorization") !== `Bearer ${expected}`) {
         return new Response(null, { status: 401 });
       }
-      return Response.json({ access_token: "offline-detached-grant", expires_in: 60 });
+      return Response.json({ text: "offline dictated draft" });
     },
     { preconnect() {} },
   ) as typeof fetch;
@@ -106,17 +109,15 @@ if (mode === "--store") {
     stages.push("store-metadata-read");
     const token = crypto.randomUUID();
     writeFileSync(join(home, "token"), token, { mode: 0o600 });
-    writeWisprFlowConfig(home, {
+    const revision = crypto.randomUUID();
+    writeOpenAIDictationConfig(home, {
       version: 1,
-      provider: "wispr-flow",
       enabled: true,
+      context: true,
+      cleanup: false,
       consent_version: 1,
-      consented_at: new Date().toISOString(),
-      context_policy: "visible-prose",
-      context_limit_bytes: 262144,
-      client_id: crypto.randomUUID(),
+      revision,
       keychain_account: account,
-      configured_at: new Date().toISOString(),
     });
     daemonPid = Number(await child("--parent", secret));
     assert.ok(Number.isInteger(daemonPid) && daemonPid > 1, "parent reports owned child PID and exits");
@@ -132,15 +133,19 @@ if (mode === "--store") {
     assert.equal(JSON.parse(readFileSync(join(home, "daemon.lock"), "utf8")).pid, daemonPid);
     stages.push("detached-daemon-status-after-parent-exit");
     const origin = `http://127.0.0.1:${env.GLOSA_PORT}`;
-    const grant = await fetch(`${origin}/api/dictation/session`, {
+    const form = new FormData();
+    form.set("revision", revision);
+    form.set("audio", new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0])], { type: "audio/webm" }), "audio.webm");
+    const grant = await fetch(`${origin}/api/dictation/transcribe`, {
       unix: join(home, "run/api.sock"),
       method: "POST",
+      body: form,
       headers: { Authorization: `Bearer ${token}`, Origin: origin },
       signal: AbortSignal.timeout(10000),
     });
     assert.equal(grant.status, 200, "detached daemon reads the real credential without its launching parent");
-    assert.equal(((await grant.json()) as { access_token?: string }).access_token, "offline-detached-grant");
-    stages.push("detached-daemon-read-with-offline-token-transport");
+    assert.equal(((await grant.json()) as { text?: string }).text, "offline dictated draft");
+    stages.push("detached-daemon-read-with-offline-transcription-transport");
     function checkFiles(dir: string) {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name);

@@ -150,8 +150,6 @@
     "packages/providers/codex/test/app-server.test.ts": 0.032184,
     "packages/providers/codex/test/attachment-loop.test.ts": 0.006528,
     "packages/providers/codex/test/provider.test.ts": 0.005188,
-    "packages/providers/wispr-flow/test/browser.test.ts": 0.037178,
-    "packages/providers/wispr-flow/test/provider.test.ts": 0.011681,
     "packages/spa/test/address.test.ts": 0.022805,
     "packages/spa/test/agent-feedback.test.ts": 0.023635,
     "packages/spa/test/agent-request.test.ts": 0.002203,
@@ -345,6 +343,10 @@
     "packages/daemon/test/read-only-files.test.ts": {
       "seconds": 0.4,
       "reason": "Initial local estimate for real temporary filesystem, preference persistence and one bounded worker/watcher test; replace with CI medians."
+    },
+    "packages/providers/openai-transcription/test/provider.test.ts": {
+      "seconds": 0.2,
+      "reason": "Replacement dictation provider tests: offline SDK multipart/cleanup, atomic config and credential helpers; about 0.1 s locally. Replace with measured CI medians."
     }
   }
 }

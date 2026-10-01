@@ -24,7 +24,6 @@ import {
   devProfilePath,
   downloadName,
   dictationPermissionAllowed,
-  dictationEgressAllowed,
   egressDecision,
   externalLinkDecision,
   firstFrameColor,
@@ -182,22 +181,22 @@ describe("compatibility is checked, not repaired (R-O5)", () => {
     expect(compatibility(null, "0.1.0-alpha.31")).toEqual({ state: "down", command: "glosa open <folder>" });
   });
   test("contract major mismatch → incompatible, too-old daemon → too-old, both name glosa update", () => {
-    expect(compatibility({ contract_version: "2.0", daemon_version: "9.9.9" }, "0.1.0")).toEqual({
+    expect(compatibility({ contract_version: "1.29", daemon_version: "9.9.9" }, "0.1.0")).toEqual({
       state: "incompatible",
       command: "glosa update",
     });
-    expect(compatibility({ contract_version: "1.18", daemon_version: "0.1.0-alpha.30" }, "0.1.0-alpha.31")).toEqual({
+    expect(compatibility({ contract_version: "2.0", daemon_version: "0.1.0-alpha.30" }, "0.1.0-alpha.31")).toEqual({
       state: "too-old",
       command: "glosa update",
     });
-    expect(compatibility({ contract_version: "1.18", daemon_version: "0.1.0-alpha.31" }, "0.1.0-alpha.31")).toEqual({
+    expect(compatibility({ contract_version: "2.0", daemon_version: "0.1.0-alpha.31" }, "0.1.0-alpha.31")).toEqual({
       state: "ok",
     });
   });
   test("a missing or malformed daemon version still reads as too old", () => {
     for (const daemon_version of [undefined, 42, "", "garbage", "v0.1.0-alpha.40", "0.1", "01.2.3"]) {
       expect(
-        compatibility({ contract_version: "1.21", daemon_version }, "0.1.0-alpha.36"),
+        compatibility({ contract_version: "2.0", daemon_version }, "0.1.0-alpha.36"),
         String(daemon_version),
       ).toEqual({ state: "too-old", command: "glosa update" });
     }
@@ -1370,7 +1369,7 @@ describe("a chat agent's read of a browser tab (#440)", () => {
   });
 });
 
-describe("Linux foreground dictation permission", () => {
+describe("Foreground dictation permission", () => {
   const allowed = {
     platform: "linux",
     active: true,
@@ -1385,7 +1384,7 @@ describe("Linux foreground dictation permission", () => {
     // Electron's media securityOrigin includes a trailing slash; IPC frame origins do not.
     expect(dictationPermissionAllowed({ ...allowed, origin: `${allowed.origin}/` })).toBe(true);
     for (const change of [
-      { platform: "darwin" },
+      { platform: "win32" },
       { active: false },
       { mainFrame: false },
       { origin: "null" },
@@ -1399,24 +1398,8 @@ describe("Linux foreground dictation permission", () => {
       expect(dictationPermissionAllowed({ ...allowed, ...change })).toBe(false);
     }
   });
-  test("the same attempt permits only the exact provider WebSocket and never general egress", () => {
-    const request = {
-      ...allowed,
-      resourceType: "webSocket",
-      url: "wss://platform-api.wisprflow.ai/api/v1/dash/client_ws",
-    };
-    expect(dictationEgressAllowed(request)).toBe(true);
-    for (const change of [
-      { active: false },
-      { mainFrame: false },
-      { platform: "darwin" },
-      { origin: "null" },
-      { resourceType: "xhr" },
-      { url: `${request.url}?secret=bad` },
-      { url: "wss://platform-api.wisprflow.ai/other" },
-      { url: "https://platform-api.wisprflow.ai/api/v1/dash/client_ws" },
-    ]) {
-      expect(dictationEgressAllowed({ ...request, ...change })).toBe(false);
-    }
+  test("macOS uses the same foreground microphone gate", () => {
+    expect(dictationPermissionAllowed({ ...allowed, platform: "darwin" })).toBe(true);
+    expect(dictationPermissionAllowed({ ...allowed, platform: "darwin", active: false })).toBe(false);
   });
 });

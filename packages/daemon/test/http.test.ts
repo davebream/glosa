@@ -235,18 +235,18 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(res.status).toBe(401);
   });
 
-  it("X-Contract-Version major mismatch (2.0) on a non-handshake route → 409", async () => {
+  it("X-Contract-Version major mismatch (3.0) on a non-handshake route → 409", async () => {
     const res = await fetch(apiUrl("/api/workspaces"), {
-      headers: { Authorization: `Bearer ${TOKEN}`, "X-Contract-Version": "2.0" },
+      headers: { Authorization: `Bearer ${TOKEN}`, "X-Contract-Version": "3.0" },
     });
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.type).toContain("contract-mismatch");
   });
 
-  it("X-Contract-Version minor mismatch (1.8) → 200 + X-Contract-Warning: stale-minor", async () => {
+  it("X-Contract-Version minor mismatch (2.1) → 200 + X-Contract-Warning: stale-minor", async () => {
     const res = await fetch(apiUrl("/api/workspaces"), {
-      headers: { Authorization: `Bearer ${TOKEN}`, "X-Contract-Version": "1.8" },
+      headers: { Authorization: `Bearer ${TOKEN}`, "X-Contract-Version": "2.1" },
     });
     expect(res.status).toBe(200);
     expect(res.headers.get("X-Contract-Warning")).toBe("stale-minor");

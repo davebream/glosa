@@ -1,249 +1,73 @@
 // SPDX-License-Identifier: Apache-2.0
-
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  CredentialStoreError,
-  readWisprFlowConfig,
-  type WisprFlowCredentialStore,
-} from "../../providers/wispr-flow/src/index.ts";
 import { runDictation } from "../src/dictation.ts";
-
-function store() {
-  const values = new Set<string>();
-  const api: WisprFlowCredentialStore & { values: Set<string> } = {
-    values,
-    has: async (account) => values.has(account),
-    read: async (account) => (values.has(account) ? "secret" : null),
-    addInteractive: async (account) => {
-      values.add(account);
+import {
+  type OpenAIDictationCredentialStore,
+  openAIDictationConfigPath,
+} from "../../providers/openai-transcription/src/index.ts";
+const homes: string[] = [];
+afterEach(() => {
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+});
+function fixture() {
+  const home = mkdtempSync(join(tmpdir(), "glosa-dictation-cli-"));
+  homes.push(home);
+  const keys = new Map<string, string>();
+  const credentialStore: OpenAIDictationCredentialStore = {
+    has: async (account) => keys.has(account),
+    read: async (account) => keys.get(account) ?? null,
+    write: async (account, key) => {
+      keys.set(account, key);
     },
-    remove: async (account) => values.delete(account),
+    remove: async (account) => {
+      keys.delete(account);
+      return true;
+    },
   };
-  return api;
+  return {
+    home,
+    credentialStore,
+    isTTY: () => true,
+    confirm: async () => true,
+    readKey: async () => "private-key",
+    keys,
+  };
 }
-
-function testUuid(value: number): string {
-  return `${String(value).padStart(8, "0")}-0000-4000-8000-000000000000`;
-}
-
-describe("glosa dictation", () => {
-  const homes: string[] = [];
-  afterEach(() => {
-    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
-  });
-
-  function home() {
-    const value = mkdtempSync(join(tmpdir(), "glosa-cli-dictation-"));
-    homes.push(value);
-    return value;
-  }
-
-  test.each(["linux", "darwin"] as const)(
-    "%s configure keeps consent ahead of secure storage, reports failures without secrets, and disables without prompting in JSON",
-    async (platform) => {
-      const target = home();
-      const credentials = store();
-      const deps = {
-        home: target,
-        credentialStore: credentials,
-        platform,
-        isTTY: () => true,
-        confirm: async () => false,
-      };
-      expect((await runDictation("configure", { provider: "wispr-flow" }, deps)).error?.code).toBe(
-        "dictation-consent-declined",
-      );
-      expect(readWisprFlowConfig(target).state).toBe("missing");
-      expect(credentials.values.size).toBe(0);
-      deps.confirm = async () => true;
-      expect((await runDictation("configure", { provider: "wispr-flow" }, deps)).ok).toBe(true);
-      credentials.has = async () => {
-        throw new CredentialStoreError("locked");
-      };
-      expect((await runDictation("status", {}, deps)).error?.message).toContain("Unlock");
-      credentials.remove = async (_account, options) => {
-        expect(options?.interactive).toBe(false);
-        const config = readWisprFlowConfig(target);
-        expect(config.state === "configured" && config.config.enabled).toBe(false);
-        throw new Error("private-service-secret");
-      };
-      const disabled = await runDictation("disable", { json: true }, deps);
-      expect(disabled).toMatchObject({ ok: true, data: { state: "disabled" } });
-      expect(disabled.warnings).toHaveLength(1);
-      expect(JSON.stringify(disabled)).not.toContain("private-service-secret");
-      credentials.addInteractive = async () => {
-        throw new Error("private-service-secret");
-      };
-      expect(JSON.stringify(await runDictation("configure", { provider: "wispr-flow" }, deps))).not.toContain(
-        "private-service-secret",
-      );
-    },
+test("configure requires the OpenAI provider, consent and an interactive terminal", async () => {
+  const f = fixture();
+  expect((await runDictation("configure", {}, f)).ok).toBe(false);
+  expect((await runDictation("configure", { provider: "openai", json: true }, f)).ok).toBe(false);
+  expect((await runDictation("configure", { provider: "openai" }, { ...f, confirm: async () => false })).ok).toBe(
+    false,
   );
-
-  test("configure is TTY-gated, records current consent, and never accepts a key argument", async () => {
-    const credentials = store();
-    const target = home();
-    let ids = 0;
-    const result = await runDictation(
-      "configure",
-      { provider: "wispr-flow" },
-      {
-        home: target,
-        credentialStore: credentials,
-        isTTY: () => true,
-        confirm: async () => true,
-        now: () => new Date("2026-09-21T10:00:00.000Z"),
-        uuid: () => testUuid(++ids),
-      },
-    );
-    expect(result).toMatchObject({ ok: true, data: { state: "ready", consent_version: 1 } });
-    const config = readWisprFlowConfig(target);
-    expect(config.state).toBe("configured");
-    if (config.state === "configured") {
-      expect(credentials.values.has(config.config.keychain_account)).toBe(true);
-      expect(config.config).not.toHaveProperty("api_key");
-    }
-  });
-
-  test("configure refuses noninteractive and JSON invocations before touching Keychain", async () => {
-    const credentials = store();
-    const target = home();
-    const noninteractive = await runDictation(
-      "configure",
-      { provider: "wispr-flow" },
-      {
-        home: target,
-        credentialStore: credentials,
-        isTTY: () => false,
-      },
-    );
-    expect(noninteractive.exitCode).toBe(2);
-    expect(credentials.values.size).toBe(0);
-
-    const json = await runDictation(
-      "configure",
-      { provider: "wispr-flow", json: true },
-      {
-        home: target,
-        credentialStore: credentials,
-        isTTY: () => true,
-      },
-    );
-    expect(json.exitCode).toBe(2);
-    expect(credentials.values.size).toBe(0);
-  });
-
-  test("a first-time configuration write failure removes the staged Keychain item", async () => {
-    const credentials = store();
-    const parent = home();
-    const invalidHome = join(parent, "not-a-directory");
-    writeFileSync(invalidHome, "occupied");
-    let ids = 0;
-    const result = await runDictation(
-      "configure",
-      { provider: "wispr-flow" },
-      {
-        home: invalidHome,
-        credentialStore: credentials,
-        isTTY: () => true,
-        confirm: async () => true,
-        uuid: () => testUuid(++ids),
-      },
-    );
-    expect(result).toMatchObject({ ok: false, error: { code: "dictation-configure-failed" } });
-    expect(credentials.values.size).toBe(0);
-  });
-
-  test("an explicit source-checkout environment override avoids storing the development key", async () => {
-    const credentials = store();
-    const target = home();
-    let ids = 0;
-    const result = await runDictation(
-      "configure",
-      { provider: "wispr-flow" },
-      {
-        home: target,
-        credentialStore: credentials,
-        isTTY: () => true,
-        confirm: async () => true,
-        developmentCredentialAvailable: () => true,
-        uuid: () => testUuid(++ids),
-      },
-    );
-    expect(result).toMatchObject({ ok: true, data: { state: "ready" } });
-    expect(credentials.values.size).toBe(0);
-    expect(
-      await runDictation(
-        "status",
-        {},
-        {
-          home: target,
-          credentialStore: credentials,
-          developmentCredentialAvailable: () => true,
-        },
-      ),
-    ).toMatchObject({ ok: true, data: { state: "ready" } });
-  });
-
-  test("reconfiguration preserves the per-install Keychain account and provider client ID", async () => {
-    const credentials = store();
-    const target = home();
-    let ids = 0;
-    const deps = {
-      home: target,
-      credentialStore: credentials,
-      isTTY: () => true,
-      confirm: async () => true,
-      uuid: () => testUuid(++ids),
-    };
-    await runDictation("configure", { provider: "wispr-flow" }, deps);
-    const first = readWisprFlowConfig(target);
-    await runDictation("configure", { provider: "wispr-flow" }, deps);
-    const second = readWisprFlowConfig(target);
-    expect(first.state).toBe("configured");
-    expect(second.state).toBe("configured");
-    if (first.state === "configured" && second.state === "configured") {
-      expect(second.config.keychain_account).toBe(first.config.keychain_account);
-      expect(second.config.client_id).toBe(first.config.client_id);
-    }
-    expect(ids).toBe(2);
-  });
-
-  test("status and disable are local-only; disable commits inactive before credential removal", async () => {
-    const credentials = store();
-    const target = home();
-    let ids = 0;
-    await runDictation(
-      "configure",
-      { provider: "wispr-flow" },
-      {
-        home: target,
-        credentialStore: credentials,
-        isTTY: () => true,
-        confirm: async () => true,
-        uuid: () => testUuid(++ids),
-      },
-    );
-    expect(await runDictation("status", {}, { home: target, credentialStore: credentials })).toMatchObject({
-      ok: true,
-      data: { state: "ready" },
-    });
-
-    let disabledBeforeRemoval = false;
-    const remove = credentials.remove;
-    credentials.remove = async (account) => {
-      const current = readWisprFlowConfig(target);
-      disabledBeforeRemoval = current.state === "configured" && !current.config.enabled;
-      return remove(account);
-    };
-    const disabled = await runDictation("disable", {}, { home: target, credentialStore: credentials });
-    expect(disabled).toMatchObject({ ok: true, data: { state: "disabled" } });
-    expect(disabledBeforeRemoval).toBe(true);
-    const config = readWisprFlowConfig(target);
-    expect(config.state === "configured" && config.config.enabled).toBe(false);
-    expect(credentials.values.size).toBe(0);
-  });
+  expect(f.keys.size).toBe(0);
+});
+test("configure, status and disable use secure storage and never emit the key", async () => {
+  const f = fixture();
+  const result = await runDictation("configure", { provider: "openai" }, f);
+  expect(result.ok).toBe(true);
+  expect(result.data.state).toBe("ready");
+  expect(JSON.stringify(result)).not.toContain("private-key");
+  expect(readFileSync(openAIDictationConfigPath(f.home), "utf8")).not.toContain("private-key");
+  f.credentialStore.read = async () => {
+    throw new Error("status must not read");
+  };
+  expect((await runDictation("status", { json: true }, f)).data.state).toBe("ready");
+  expect((await runDictation("disable", {}, f)).ok).toBe(true);
+  expect(f.keys.size).toBe(0);
+});
+test("key-write failure preserves the previous configuration", async () => {
+  const f = fixture();
+  await runDictation("configure", { provider: "openai" }, f);
+  const before = readFileSync(openAIDictationConfigPath(f.home), "utf8");
+  f.credentialStore.write = async () => {
+    throw new Error("private-key");
+  };
+  const result = await runDictation("configure", { provider: "openai" }, f);
+  expect(result.ok).toBe(false);
+  expect(JSON.stringify(result)).not.toContain("private-key");
+  expect(readFileSync(openAIDictationConfigPath(f.home), "utf8")).toBe(before);
 });

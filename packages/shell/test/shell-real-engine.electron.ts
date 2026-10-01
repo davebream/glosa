@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tokenPath } from "../../daemon/src/security/token.ts";
-import { writeWisprFlowConfig } from "../../providers/wispr-flow/src/config.ts";
 import { randomPort, superviseDaemonHome } from "../../daemon/test/helpers.ts";
 import { PAPER } from "../src/policy.ts";
 
@@ -351,27 +350,14 @@ describe.skipIf(!electronInstalled)(
       expect(survivors, `Electron processes outlived the test (${marker})`).toEqual([]);
     }, 20_000);
 
-    test("Linux dictation allows one foreground microphone attempt, preserves all four drafts and refuses other frames", async () => {
+    test("Desktop dictation allows one foreground microphone attempt, preserves all four drafts and refuses other frames", async () => {
       const inspectPort = randomPort();
-      writeWisprFlowConfig(home, {
-        version: 1,
-        provider: "wispr-flow",
-        enabled: true,
-        consent_version: 1,
-        consented_at: new Date().toISOString(),
-        context_policy: "visible-prose",
-        context_limit_bytes: 262144,
-        client_id: crypto.randomUUID(),
-        keychain_account: crypto.randomUUID(),
-        configured_at: new Date().toISOString(),
-      });
-      // Every provider hostname resolves inside this isolated fixture. No provider request can leave it.
       launchShell([
         workspace,
         "readme.md",
         `--inspect=${inspectPort}`,
         "--use-fake-device-for-media-stream",
-        "--host-resolver-rules=MAP platform-api.wisprflow.ai 127.0.0.1",
+        "--host-resolver-rules=MAP api.openai.com 127.0.0.1",
       ]);
       const origin = `http://glosa.localhost:${port}`;
       const page = await listTargets(
@@ -399,17 +385,13 @@ describe.skipIf(!electronInstalled)(
           const button=document.querySelectorAll('#dictation-fixture .glosa-dictation-toggle')[${index}];
           for(const host of document.querySelector('#dictation-fixture').children) host.style.visibility=host.contains(button)?'visible':'hidden';
           button.scrollIntoView({block:'center'}); const r=button.getBoundingClientRect();
-          const x=r.x+r.width/2,y=r.y+r.height/2; if(document.elementFromPoint(x,y)!==button) throw new Error('button not hittable: '+button.outerHTML+' '+JSON.stringify({x,y,hit:document.elementFromPoint(x,y)?.outerHTML})); return {x,y};
+          const x=r.x+r.width/2,y=r.y+r.height/2; if(!button.contains(document.elementFromPoint(x,y))) throw new Error('button not hittable: '+button.outerHTML+' '+JSON.stringify({x,y,hit:document.elementFromPoint(x,y)?.outerHTML})); return {x,y};
         })()`);
         await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
         await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
       }
       try {
         expect(await workspaceMounted(cdp), stderrText).toBe(true);
-        if (process.platform !== "linux") {
-          expect(await cdp.evaluate<any>("typeof glosaShell.beginDictation")).toBe("undefined");
-          return;
-        }
         // Only the human's native dialog response is simulated. Chromium capture, both permission
         // handlers, the preload bridge and the four production composers execute for real.
         await main.evaluateInMain<any>(`(() => {
@@ -417,11 +399,11 @@ describe.skipIf(!electronInstalled)(
           globalThis.__dictationDialogs = 0;
           globalThis.__dictationNetwork = [];
           globalThis.__dictationHeaders = 0;
-          require('electron').session.defaultSession.webRequest.onBeforeSendHeaders({urls:['wss://platform-api.wisprflow.ai/*']}, (_details, callback) => {
+          require('electron').session.defaultSession.webRequest.onBeforeSendHeaders({urls:['wss://api.openai.com/*']}, (_details, callback) => {
             globalThis.__dictationHeaders++; callback({cancel:true});
           });
           require('electron').session.defaultSession.webRequest.onErrorOccurred(details => {
-            if(details.url.startsWith('wss://platform-api.wisprflow.ai/')) globalThis.__dictationNetwork.push(details.error);
+            if(details.url.startsWith('wss://api.openai.com/')) globalThis.__dictationNetwork.push(details.error);
           });
           require('electron').dialog.showMessageBox = async (_window, options) => {
             globalThis.__dictationDialogs++;
@@ -440,14 +422,18 @@ describe.skipIf(!electronInstalled)(
           const root = document.createElement('section'); root.id='dictation-fixture';
           root.style.cssText='position:fixed;inset:0;overflow:auto;z-index:99999;background:white'; document.body.append(root);
           const host = () => {const el=document.createElement('div'); root.append(el); return el;};
-          globalThis.__dictationSubmissions=0; globalThis.__dictationStreams=[];
-          globalThis.__dictationCaptures=[];
+          globalThis.__dictationSubmissions=0; globalThis.__dictationCaptures=[];
           const capture=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
           navigator.mediaDevices.getUserMedia=async options=>{const stream=await capture(options);globalThis.__dictationCaptures.push(stream);return stream;};
+          globalThis.__dictationChunks=0;
+          const NativeRecorder=MediaRecorder;
+          globalThis.MediaRecorder=class extends NativeRecorder {
+            constructor(...args){super(...args);this.addEventListener('dataavailable',event=>{if(event.data.size)globalThis.__dictationChunks++;});}
+          };
           const noSubmit=async()=>{globalThis.__dictationSubmissions++; return {};};
           const dataAccess={
-            getDictationStatus:async()=>({state:'ready',provider:'wispr-flow',client_module:'/app/providers/wispr-flow/browser.js'}),
-            createDictationSession:async()=>({access_token:'offline-fixture'}),
+            getDictationStatus:async()=>({state:'ready',context:true,revision:'r1'}),
+            transcribeDictation:async audio=>{if(!audio.size)throw new Error('empty native recording');return {text:'offline dictated draft',cleanup:'off'};},
             getArtifact:async()=>({source_path:'notes.md',content:'A paragraph to annotate.\\n',rendered_html:'<p id="dictation-para" data-line="0">A paragraph to annotate.</p>',source_sha256:'sha',rendered_sha256:'r',class:'R'}),
             getAnnotations:async()=>({annotations:[]}),getCheckpoints:async()=>[],
             getInbox:async()=>({pending_count:1,attention:[{id:'attention',status:'open',action:'review',message:'Review these words'}]}),
@@ -456,14 +442,7 @@ describe.skipIf(!electronInstalled)(
             sendComposerMessage:noSubmit,createAnnotation:noSubmit
           };
           globalThis.__dictationDataAccess=dataAccess;
-          globalThis.__dictationController=createDictationController({dataAccess,loadModule:async()=>({
-            createWisprFlowSession:async({stream,signal})=>{
-              globalThis.__dictationStreams.push(stream);
-              const stop=()=>stream.getTracks().forEach(t=>t.stop());
-              signal.addEventListener('abort',stop,{once:true});
-              return {stop:async()=>{stop();return 'offline dictated draft';},cancel:async()=>stop()};
-            }
-          })});
+          globalThis.__dictationController=createDictationController({dataAccess});
           const dc=globalThis.__dictationController; await dc.readiness;
           const artifactHost=host();
           const pane=createArtifactPane(artifactHost,{dataAccess,slug:'fixture',path:'notes.md',initialMode:'review',dictationController:dc,
@@ -482,6 +461,7 @@ describe.skipIf(!electronInstalled)(
         })()`);
         expect(count, "the four production composers mount a dictate control").toBe(4);
         for (let index = 0; index < 4; index++) {
+          const previousChunks = await cdp.evaluate<number>("globalThis.__dictationChunks");
           await click(index);
           await waitFor(
             `document.querySelectorAll('#dictation-fixture .glosa-dictation-toggle')[${index}].getAttribute('aria-pressed') === 'true'`,
@@ -489,13 +469,13 @@ describe.skipIf(!electronInstalled)(
           // While approved, camera and even a same-origin child frame still receive no permission.
           if (index === 0) {
             await cdp.evaluate(
-              `new Promise(resolve=>{const ws=new WebSocket('wss://platform-api.wisprflow.ai/api/v1/dash/client_ws');ws.onerror=()=>resolve(true);})`,
+              `new Promise(resolve=>{const ws=new WebSocket('wss://api.openai.com/api/v1/dash/client_ws');ws.onerror=()=>resolve(true);})`,
             );
-            expect(await main.evaluateInMain<number>("globalThis.__dictationHeaders"), stderrText).toBe(1);
+            expect(await main.evaluateInMain<number>("globalThis.__dictationHeaders"), stderrText).toBe(0);
             await cdp.evaluate(
-              `new Promise(resolve=>{const ws=new WebSocket('wss://platform-api.wisprflow.ai/other');ws.onerror=()=>resolve(true);})`,
+              `new Promise(resolve=>{const ws=new WebSocket('wss://api.openai.com/other');ws.onerror=()=>resolve(true);})`,
             );
-            expect(await main.evaluateInMain<number>("globalThis.__dictationHeaders")).toBe(1);
+            expect(await main.evaluateInMain<number>("globalThis.__dictationHeaders")).toBe(0);
             expect(
               await cdp.evaluate<any>(
                 `navigator.mediaDevices.getUserMedia({video:true}).then(s=>{s.getTracks().forEach(t=>t.stop());return 'unsafe';},e=>e.name)`,
@@ -507,9 +487,10 @@ describe.skipIf(!electronInstalled)(
               ),
             );
           }
+          await waitFor(`globalThis.__dictationChunks > ${previousChunks}`);
           await click(index);
           await waitFor(
-            `document.querySelectorAll('#dictation-fixture .glosa-dictation-toggle')[${index}].textContent === 'Start dictation'`,
+            `document.querySelectorAll('#dictation-fixture .glosa-dictation-toggle')[${index}].getAttribute('aria-label') === 'Start dictation'`,
           );
         }
         expect(
@@ -519,12 +500,12 @@ describe.skipIf(!electronInstalled)(
         ).toEqual(Array(4).fill("offline dictated draft"));
         expect(await cdp.evaluate<any>("globalThis.__dictationSubmissions")).toBe(0);
         await cdp.evaluate(
-          `new Promise(resolve=>{const ws=new WebSocket('wss://platform-api.wisprflow.ai/api/v1/dash/client_ws');ws.onerror=()=>resolve(true);})`,
+          `new Promise(resolve=>{const ws=new WebSocket('wss://api.openai.com/api/v1/dash/client_ws');ws.onerror=()=>resolve(true);})`,
         );
-        expect(await main.evaluateInMain<number>("globalThis.__dictationHeaders")).toBe(1);
+        expect(await main.evaluateInMain<number>("globalThis.__dictationHeaders")).toBe(0);
         expect(
           await cdp.evaluate<any>(
-            'globalThis.__dictationStreams.every(s=>s.getTracks().every(t=>t.readyState === "ended"))',
+            'globalThis.__dictationCaptures.every(s=>s.getTracks().every(t=>t.readyState === "ended"))',
           ),
         ).toBe(true);
         for (const answer of [2, 0]) {
@@ -533,12 +514,12 @@ describe.skipIf(!electronInstalled)(
           await waitFor(
             `document.querySelector('#dictation-fixture .glosa-dictation-status').textContent.includes('not granted')`,
           );
-          expect(await cdp.evaluate<any>("globalThis.__dictationStreams.length")).toBe(4);
+          expect(await cdp.evaluate<any>("globalThis.__dictationCaptures.length")).toBe(4);
         }
         await main.evaluateInMain<any>("globalThis.__dictationAnswer=-1");
         await click(0);
         await cdp.evaluate<any>("globalThis.__dictationController.cancel()");
-        expect(await cdp.evaluate<any>("globalThis.__dictationStreams.length")).toBe(4);
+        expect(await cdp.evaluate<any>("globalThis.__dictationCaptures.length")).toBe(4);
         expect(
           await cdp.evaluate<any>(
             `navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{s.getTracks().forEach(t=>t.stop());return 'unsafe';},e=>e.name)`,
@@ -546,28 +527,45 @@ describe.skipIf(!electronInstalled)(
         ).toBe("NotAllowedError");
         await main.evaluateInMain<any>("globalThis.__dictationAnswer=1");
         await cdp.evaluate(
-          `globalThis.__dictationDataAccess.createDictationSession=async()=>{throw new Error('Secure storage is unavailable');}`,
+          `globalThis.__dictationDataAccess.transcribeDictation=async()=>{throw new Error('Secure storage is unavailable');}`,
         );
+        const previousFailureChunks = await cdp.evaluate<number>("globalThis.__dictationChunks");
         await click(0);
         await waitFor(
-          `document.querySelector('#dictation-fixture .glosa-dictation-toggle').textContent === 'Start dictation'`,
+          `document.querySelector("#dictation-fixture .glosa-dictation-toggle").getAttribute("aria-pressed") === "true"`,
         );
+        await waitFor(`globalThis.__dictationChunks > ${previousFailureChunks}`);
+        await click(0);
+        await waitFor(
+          `document.querySelector('#dictation-fixture .glosa-dictation-toggle').getAttribute('aria-label') === 'Start dictation'`,
+        );
+        expect(
+          await cdp.evaluate<string>(
+            "document.querySelector('#dictation-fixture .glosa-dictation-status').textContent",
+          ),
+        ).toContain("Secure storage is unavailable");
         expect(
           await cdp.evaluate<boolean>(
             `globalThis.__dictationCaptures.every(s=>s.getTracks().every(t=>t.readyState==='ended'))`,
           ),
         ).toBe(true);
         await cdp.evaluate(
-          `globalThis.__dictationDataAccess.createDictationSession=signal=>new Promise(resolve=>{globalThis.__dictationPendingSignal=signal;globalThis.__dictationLateGrant=resolve;})`,
+          `globalThis.__dictationDataAccess.transcribeDictation=(_audio,_context,_revision,signal)=>new Promise(resolve=>{globalThis.__dictationPendingSignal=signal;globalThis.__dictationLateGrant=resolve;})`,
         );
+        const previousCancelChunks = await cdp.evaluate<number>("globalThis.__dictationChunks");
+        await click(0);
+        await waitFor(
+          `document.querySelector("#dictation-fixture .glosa-dictation-toggle").getAttribute("aria-pressed") === "true"`,
+        );
+        await waitFor(`globalThis.__dictationChunks > ${previousCancelChunks}`);
         await click(0);
         await waitFor(`typeof globalThis.__dictationLateGrant === 'function'`);
         await cdp.evaluate(`globalThis.__dictationController.cancel()`);
         expect(await cdp.evaluate<boolean>(`globalThis.__dictationPendingSignal.aborted`)).toBe(true);
         await cdp.evaluate(
-          `globalThis.__dictationLateGrant({access_token:'late-offline-fixture'});new Promise(resolve=>setTimeout(resolve,0))`,
+          `globalThis.__dictationLateGrant({text:'late-offline-fixture',cleanup:'off'});new Promise(resolve=>setTimeout(resolve,0))`,
         );
-        expect(await cdp.evaluate<number>(`globalThis.__dictationStreams.length`)).toBe(4);
+        expect(await cdp.evaluate<number>(`globalThis.__dictationCaptures.length`)).toBe(6);
         expect(
           await cdp.evaluate<boolean>(
             `globalThis.__dictationCaptures.every(s=>s.getTracks().every(t=>t.readyState==='ended'))`,
@@ -580,13 +578,15 @@ describe.skipIf(!electronInstalled)(
         ).toBe("offline dictated draft");
         expect(await cdp.evaluate<number>(`globalThis.__dictationSubmissions`)).toBe(0);
         // A full document navigation revokes an approved grant; same-document focus was exercised above.
-        await cdp.evaluate(
-          `globalThis.__dictationDataAccess.createDictationSession=async()=>({access_token:'offline-fixture'})`,
-        );
         await click(0);
         await waitFor(
           `document.querySelector('#dictation-fixture .glosa-dictation-toggle').getAttribute('aria-pressed') === 'true'`,
         );
+        expect(
+          await cdp.evaluate<boolean>(
+            "globalThis.__dictationCaptures.some(stream=>stream.getTracks().some(track=>track.readyState==='live'))",
+          ),
+        ).toBe(true);
         await cdp.send("Page.reload");
         expect(await workspaceMounted(cdp), stderrText).toBe(true);
         expect(

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { CONTRACT_VERSION } from "../src/transport/contract.ts";
 import { describe, expect, test } from "bun:test";
 import { ensureToken, revokeToken, rotateToken } from "../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
@@ -7,7 +8,7 @@ function authedRead(port: number, token: string): Promise<Response> {
   return fetch(`http://127.0.0.1:${port}/api/workspaces`, {
     headers: {
       Authorization: `Bearer ${token}`,
-      "X-Contract-Version": "1.0",
+      "X-Contract-Version": CONTRACT_VERSION,
     },
   });
 }

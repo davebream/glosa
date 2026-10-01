@@ -644,7 +644,7 @@ describe("selectScreen", () => {
     expect(storage.getItem("glosa_install")).toBe("new-install");
     expect(storage.getItem("glosa_token")).toBe("new-token");
     expect(location.hash).toBe("#w=notes&a=draft.md");
-    expect(selectScreen({ ...handshake, contract_version: "2.0" }, token, null)).toBe("mismatch");
+    expect(selectScreen({ ...handshake, contract_version: "3.0" }, token, null)).toBe("mismatch");
   });
 
   test.each(["#p=expired", ""])("unsuccessful pairing or ordinary reload preserves the stored install: %s", (hash) => {
@@ -665,31 +665,31 @@ describe("selectScreen", () => {
   });
 
   test("the bundled SPA advertises contract 1.26", () => {
-    expect(CONTRACT_VERSION).toBe("1.26");
+    expect(CONTRACT_VERSION).toBe("2.0");
   });
 
   test("handshake null (fetch failed/threw) → down", () => {
     expect(selectScreen(null, "some-token")).toBe("down");
   });
 
-  test("contract major mismatch (daemon 2.0 vs SPA CONTRACT_VERSION 1.0) → mismatch", () => {
-    expect(CONTRACT_VERSION.split(".")[0]).toBe("1");
-    const handshake = { contract_version: "2.0", daemon_version: "0.1.0", paired: true };
+  test("contract major mismatch (daemon 1.29 vs SPA CONTRACT_VERSION 2.0) → mismatch", () => {
+    expect(CONTRACT_VERSION.split(".")[0]).toBe("2");
+    const handshake = { contract_version: "1.29", daemon_version: "0.1.0", paired: true };
     expect(selectScreen(handshake, "some-token")).toBe("mismatch");
   });
 
   test("no token → unpaired, even if daemon reports paired:true", () => {
-    const handshake = { contract_version: "1.0", daemon_version: "0.1.0", paired: true };
+    const handshake = { contract_version: CONTRACT_VERSION, daemon_version: "0.1.0", paired: true };
     expect(selectScreen(handshake, null)).toBe("unpaired");
   });
 
   test("paired:false → unpaired, even with a stored token", () => {
-    const handshake = { contract_version: "1.0", daemon_version: "0.1.0", paired: false };
+    const handshake = { contract_version: CONTRACT_VERSION, daemon_version: "0.1.0", paired: false };
     expect(selectScreen(handshake, "some-token")).toBe("unpaired");
   });
 
   test("token present + paired:true + matching major → ready", () => {
-    const handshake = { contract_version: "1.15", daemon_version: "0.1.0", paired: true };
+    const handshake = { contract_version: CONTRACT_VERSION, daemon_version: "0.1.0", paired: true };
     expect(selectScreen(handshake, "some-token")).toBe("ready");
   });
 
@@ -698,24 +698,24 @@ describe("selectScreen", () => {
   // there produced a 401 on the first call, which used to be read as "revoked" and threw the
   // credential away for good.
   test("a paired daemon from another install → foreign-daemon, not ready", () => {
-    const handshake = { contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" };
+    const handshake = { contract_version: CONTRACT_VERSION, paired: true, install_id: "ffffffffffffffff" };
     expect(selectScreen(handshake, "some-token", "aaaaaaaaaaaaaaaa")).toBe("foreign-daemon");
   });
 
   test("the same install → ready", () => {
-    const handshake = { contract_version: "1.6", paired: true, install_id: "aaaaaaaaaaaaaaaa" };
+    const handshake = { contract_version: CONTRACT_VERSION, paired: true, install_id: "aaaaaaaaaaaaaaaa" };
     expect(selectScreen(handshake, "some-token", "aaaaaaaaaaaaaaaa")).toBe("ready");
   });
 
   test("unknown identity on either side is never 'foreign' — old tabs behave exactly as before", () => {
-    const known = { contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" };
+    const known = { contract_version: CONTRACT_VERSION, paired: true, install_id: "ffffffffffffffff" };
     expect(selectScreen(known, "some-token", null)).toBe("ready");
-    const legacyDaemon = { contract_version: "1.6", paired: true };
+    const legacyDaemon = { contract_version: CONTRACT_VERSION, paired: true };
     expect(selectScreen(legacyDaemon, "some-token", "aaaaaaaaaaaaaaaa")).toBe("ready");
   });
 
   test("an unpaired or down daemon still wins over the identity check", () => {
-    const unpaired = { contract_version: "1.6", paired: false, install_id: "ffffffffffffffff" };
+    const unpaired = { contract_version: CONTRACT_VERSION, paired: false, install_id: "ffffffffffffffff" };
     expect(selectScreen(unpaired, "some-token", "aaaaaaaaaaaaaaaa")).toBe("unpaired");
     expect(selectScreen(null, "some-token", "aaaaaaaaaaaaaaaa")).toBe("down");
   });
@@ -724,18 +724,18 @@ describe("selectScreen", () => {
 describe("rememberDaemonIdentity", () => {
   test("records the issuing daemon alongside the credential", () => {
     const storage = fakeStorage();
-    const handshake = { contract_version: "1.6", paired: true, install_id: "aaaaaaaaaaaaaaaa" };
+    const handshake = { contract_version: CONTRACT_VERSION, paired: true, install_id: "aaaaaaaaaaaaaaaa" };
     expect(rememberDaemonIdentity(storage, handshake, "tok")).toBe("aaaaaaaaaaaaaaaa");
     expect(storage.getItem("glosa_install")).toBe("aaaaaaaaaaaaaaaa");
   });
 
   test("records nothing without a credential or without an identity to record", () => {
     const noToken = fakeStorage();
-    rememberDaemonIdentity(noToken, { contract_version: "1.6", paired: true, install_id: "a" }, null);
+    rememberDaemonIdentity(noToken, { contract_version: CONTRACT_VERSION, paired: true, install_id: "a" }, null);
     expect(noToken.getItem("glosa_install")).toBeNull();
 
     const legacyDaemon = fakeStorage();
-    rememberDaemonIdentity(legacyDaemon, { contract_version: "1.6", paired: true }, "tok");
+    rememberDaemonIdentity(legacyDaemon, { contract_version: CONTRACT_VERSION, paired: true }, "tok");
     expect(legacyDaemon.getItem("glosa_install")).toBeNull();
   });
 });
@@ -749,8 +749,8 @@ describe("waitForOwnDaemon", () => {
       {
         daemonIdentity: async () => {
           calls += 1;
-          if (calls < 3) return { contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" };
-          return { contract_version: "1.6", paired: true, install_id: paired };
+          if (calls < 3) return { contract_version: CONTRACT_VERSION, paired: true, install_id: "ffffffffffffffff" };
+          return { contract_version: CONTRACT_VERSION, paired: true, install_id: paired };
         },
       },
       paired,
@@ -766,7 +766,7 @@ describe("waitForOwnDaemon", () => {
       {
         daemonIdentity: async () => {
           calls += 1;
-          return calls < 3 ? null : { contract_version: "1.6", paired: true, install_id: paired };
+          return calls < 3 ? null : { contract_version: CONTRACT_VERSION, paired: true, install_id: paired };
         },
       },
       paired,
@@ -778,7 +778,13 @@ describe("waitForOwnDaemon", () => {
   test("gives up after its window so a tab cannot hold a credential it can no longer place", async () => {
     let clock = 0;
     const outcome = await waitForOwnDaemon(
-      { daemonIdentity: async () => ({ contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" }) },
+      {
+        daemonIdentity: async () => ({
+          contract_version: CONTRACT_VERSION,
+          paired: true,
+          install_id: "ffffffffffffffff",
+        }),
+      },
       paired,
       {
         now: () => clock,
@@ -795,7 +801,7 @@ describe("waitForOwnDaemon", () => {
   test("checks once before consulting the clock, so a daemon already back never waits", async () => {
     let slept = 0;
     const outcome = await waitForOwnDaemon(
-      { daemonIdentity: async () => ({ contract_version: "1.6", paired: true, install_id: paired }) },
+      { daemonIdentity: async () => ({ contract_version: CONTRACT_VERSION, paired: true, install_id: paired }) },
       paired,
       {
         now: () => 0,
