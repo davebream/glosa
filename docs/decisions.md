@@ -50,22 +50,54 @@ foreground action. Class-F content remains network-locked regardless of configur
 
 ## Dictation is a consented input provider, not desktop automation
 
-Decided 2026-09-21. Wispr Flow's installed desktop application has no documented SDK or supported
-control API. Its cloud Voice Interface API does, but access and billing are separate from installing
-the desktop app. Glosa therefore does not detect a running app, synthesize its hotkey, use a private
-URL scheme, or automate accessibility. “Available” means current versioned consent, a configured
-organization credential, and browser microphone/streaming APIs.
+Revised 2026-10-02. Retire the unused Wispr Flow integration completely. Its desktop subscription
+was not API access, and its browser streaming protocol added complexity without a working input
+experience. There is no migration, desktop automation, legacy endpoint or old-secret cleanup.
 
-The generic daemon has a `DictationProvider` registry separate from `AgentProvider`; the core works
-with an empty registry and imports no Wispr package. The CLI entrypoint composes Wispr, Keychain owns
-the organization key, and a foreground session request exchanges it for a ten-minute client JWT.
-Audio and capped visible plaintext then travel directly from the browser to the provider over its
-allowlisted WSS origin. There is no daemon audio proxy, REST fallback, warm-up, or retry.
+Use the maintained official OpenAI TypeScript SDK (`openai`, Apache-2.0) behind the generic
+`DictationProvider` interface. The daemon owns authenticated multipart transcription; the browser
+keeps `connect-src 'self'`. The CLI composes the provider, never the generic core. OpenAI API usage
+is billed separately from ChatGPT. Settings saves a key into macOS Keychain or Linux Secret Service;
+its atomic 0600 config contains only toggles, consent version, revision and an opaque credential
+reference. No secret is returned to the renderer. Save and status never contact OpenAI.
 
-Dictation changes an editable draft only. It locks one eligible prose field, preserves the original
-selection and value, and inserts only a final transcript. It never submits, writes a journal event,
-or claims human/session provenance on its own; later submission follows the existing action and
-provenance contracts. Document editors, search, command syntax, and read-only prompts are excluded.
+Native `MediaRecorder` fits this vanilla, no-build SPA: use supported WebM/Opus, then MP4/AAC, and
+upload after stopping capture. Avoid custom PCM resampling and encoding. Reviewed alternatives:
+WaveSurfer RecordPlugin adds a waveform abstraction we do not need; extendable-media-recorder adds
+worker/encoder packaging; provider-specific recorder SDKs still require lifecycle integration;
+Vercel AI SDK adds another wrapper over the official client without removing capture or consent
+work. The owned controller handles pending-permission cancellation, device loss, finalization,
+size/duration limits and the exact target selection. No automatic retries or background warm-ups.
+
+Use `gpt-transcribe` without a forced language. English, Polish, German, Spanish and mixed-language
+speech must preserve names, numbers and negation. Visible context defaults on under explicit consent,
+limited to 8 KiB serialized UTF-8 from the current field and visible prose/conversation. It can be
+disabled. Optional conservative cleanup defaults off; `gpt-5.6-luna`, reasoning `none`, Responses
+`store:false` receives the transcript and enabled context. Failed, empty or incomplete cleanup falls
+back to the raw transcript with a warning. Cancellation discards the result. It never executes
+spoken commands or submits the draft. No-speech results insert nothing.
+
+Only the four existing prose composers opt in. Editors, search and command inputs stay excluded.
+An accessible microphone icon becomes Stop while recording and Cancel while awaiting permission
+or transcription. A changed or detached target never receives a late result, and newer edits are
+never rolled back. One capture per SPA and one processing request per daemon are allowed. Settings
+changes, auth invalidation and shutdown cancel pending work. Contract 2.0 removes the session-grant
+route and introduces settings and transcription routes; old desktop clients fail compatibility.
+
+Future local transcription should implement the same audio-to-text boundary after explicit model
+download consent. Evaluate maintained Transformers.js multilingual Whisper models and WebGPU/WASM
+support; Remotion's whisper-webgpu wrapper is another candidate, subject to its packaging/dependency
+constraints. English-only `.en` models are unsuitable. Model download, cache lifecycle, worker memory,
+CPU fallback, latency on supported macOS/Linux hosts, and the four-language corpus need qualification.
+There is no local runtime, model download, provider selector or silent cloud fallback in this change.
+
+Sources: [OpenAI TypeScript SDK](https://github.com/openai/openai-node),
+[speech-to-text guide](https://platform.openai.com/docs/guides/speech-to-text),
+[MediaRecorder](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder),
+[WaveSurfer](https://github.com/katspaugh/wavesurfer.js),
+[extendable-media-recorder](https://github.com/chrisguttandin/extendable-media-recorder),
+[Transformers.js](https://github.com/huggingface/transformers.js),
+[Remotion Whisper](https://www.remotion.dev/docs/whisper-webgpu/).
 
 ## Token lifecycle is a local filesystem authority
 

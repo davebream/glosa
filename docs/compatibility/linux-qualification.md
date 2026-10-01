@@ -10,7 +10,7 @@ not a passing compatibility certificate. Container and source-test results remai
 | Temporary x86_64 desktop | No spending authorized. Provisioning remains held. |
 | Linux dictation | #434 adds source support and offline checks. Real KWallet and microphone acceptance remain pending; verify the current candidate before scheduling. |
 | Provider accounts | Maintainer will supply two distinct Claude and two distinct Codex subscriptions when scheduled. |
-| Wispr live smoke | Needs one usable API credential, explicit paid-use consent and maintainer attendance. |
+| OpenAI dictation live smoke | Needs one usable API credential, explicit paid-use consent and maintainer attendance. |
 | Offering determination | G1 must be explicitly settled before the SDK qualification run. |
 | Generic T8 | #19 is closed, but the 2026-09-30 report records failure and no signature. Require a passing signed successor or explicit maintainer reconciliation. |
 
@@ -110,7 +110,7 @@ a private GNOME Secret Service. Its named stages prove store/metadata/read/delet
 secret-free Glosa files and access from a real detached daemon after its launcher exits. The
 Linux Electron test uses real Chromium capture with a fake audio device, simulated native dialog
 answers and offline transcript responses in all four production composers. Neither result proves
-KWallet compatibility, physical microphone forwarding or paid Wispr support.
+KWallet compatibility, physical microphone forwarding or paid OpenAI dictation support.
 
 Before the attended run, verify `libsecret`, `systemd` and `kwallet` from the Manjaro repository,
 `secret-tool`, `busctl`, an initialized default wallet and the user service `org.freedesktop.secrets`.
@@ -125,9 +125,9 @@ and session type, but never record credentials, secret read output or a shell co
 2. Confirm the actual microphone/remote-desktop audio path. Allow once, Deny and Cancel, then cancel
    again while permission or transport is pending. Verify recording indicators and that tracks and
    transport stop; no denied/cancelled result may change the draft.
-3. Only after explicit paid-use consent, use an approved Wispr API organization credential with API
-   access and billing enabled. A consumer Wispr subscription alone is not evidence of API access.
-   Configure interactively with `glosa dictation configure --provider wispr-flow`, accept the current
+3. Only after explicit paid-use consent, use an OpenAI API key with API
+   access and billing enabled. A ChatGPT subscription alone is not evidence of API access.
+   Configure in Settings → Dictation or interactively with `glosa dictation configure --provider openai`, accept the current
    disclosure, and enter the key at the hidden prompt. Never put it in argv or an environment file.
 4. Reload the SPA after configuration. Dictate neutral text into annotation, agent answer, attention
    response and conversation. Each result must remain an editable draft without submission. Check

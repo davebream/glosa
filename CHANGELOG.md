@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- OpenAI dictation with a secure API key in Settings, native browser recording, automatic English,
+  Polish, German and Spanish transcription, visible-context control and optional cleanup.
+  Microphone icon controls serve the four prose composers. Failed or cancelled requests preserve
+  drafts. The unused Wispr integration is removed; API contract 2.0 replaces its session route.
 - An off-by-default, per-provider Account settings choice for experimental managed Claude and Codex
   chats on supported macOS and Linux hosts. Acceptance is tied to the pinned runtime and recorded
   locally; turning it off stops active work. Native and release qualification remain pending (#435).

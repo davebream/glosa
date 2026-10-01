@@ -105,10 +105,8 @@ the programmatic API now lives on a Unix socket instead.
   the baseline is `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src
   'self' data:; font-src 'self'; connect-src 'self'; frame-src
   http://127.0.0.1:<CLASSF_PORT>; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src
-  'none';` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff`. When current versioned
-  Wispr consent is enabled at page load, and only then, append the exact origin
-  `wss://platform-api.wisprflow.ai` to `connect-src`. No wildcard, HTTPS origin, or other provider host
-  is allowed. Configuration changes require a reload. (SPA refuses to ever be framed.)
+  'none';` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff`. Dictation never adds an external origin. Audio upload and credential settings reach only the
+  authenticated same-origin daemon. Class-F remains network-blocked. (SPA refuses to ever be framed.)
 - Log redaction: one `redact()` at logger boundary — strip `Authorization` values; regex-redact token/capability-shaped path segments `[A-Za-z0-9_-]{32,}`. Grep-enforceable single call site.
 - **confinePath(workspaceRoot, relPath)**: reject absolute or `..`-containing; `path.resolve`; realpath the nearest EXISTING ancestor (so not-yet-created files still confined); reject if realAncestor not under realRoot. ONE shared utility at every path entry point (HTTP routes, class-F mint/serve, adapter manifest, git pathspec); grep-enforced in CI. Rejects lexical traversal AND symlink escape. Argv safety: git paths as discrete argv elements + `--` before first path → filename `--force` can't be a flag.
 
@@ -273,21 +271,19 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   whose top frame has committed that origin, so a blocking screen the shell loaded into one after a
   failed compatibility check gets nothing; the push carries one boolean, and the preload ignores
   anything else and exposes no way to set it.
-- **Linux dictation (#434).** The Linux-only preload adds begin/end methods carrying an attempt
-  UUID and an ended notification. Main-process handlers verify the exact SPA main frame and
-  Chromium transient user activation before a native Allow once/Deny/Cancel dialog. Approval is
-  per attempt, never persisted. Both permission handlers require that grant and audio-only media.
-  The browser-process network gate permits only `wss://platform-api.wisprflow.ai/api/v1/dash/client_ws`,
-  from that SPA main frame, for the same attempt. Consent-gated CSP remains required. All other
-  hosts, paths, schemes, frames and permissions retain their previous refusal. Cancellation,
-  completion, navigation, destruction and a six-minute deadline revoke the grant and stop capture.
-  macOS behavior and renderer sandbox settings do not change.
-- **Linux dictation credentials.** Secure storage belongs to the Wispr provider. Metadata-only
-  status never reads a secret or invokes an unlock prompt. Foreground reads remain non-unlocking;
-  only interactive CLI setup/removal may prompt. No plaintext fallback, credential argv/environment,
-  raw helper diagnostics or secret application files are permitted. Helpers use a small session
-  environment allowlist and bounded private output. Consent schema and the 256 KiB visible-plaintext
-  cap are unchanged. Cancellation propagates through session creation and credential helpers.
+- **Foreground dictation.** macOS and Linux preload expose begin/end methods carrying an attempt
+  UUID and an ended notification. Main verifies the exact SPA main frame and transient activation
+  before Allow once/Deny/Cancel. Both permission handlers require that grant and audio-only media.
+  Browser external egress stays denied. Camera, subframes and desk tabs never inherit the grant.
+  Completion, cancellation, navigation, destruction and a six-minute deadline revoke permission.
+- **Dictation credentials.** Provider-owned OS storage has no plaintext fallback. Metadata status
+  never reads the secret or requests unlocking. Key writes use private stdin, reads private bounded
+  output, and helpers inherit only approved desktop-session variables. No key in argv, environment,
+  logs or application config. Config has versioned consent, context/cleanup toggles, revision and
+  a random credential reference. New keys are written before atomic config replacement; rollback
+  removes the candidate. Removal disables dictation first and retains the reference on failure.
+  Foreground upload sends only audio plus enabled context (8 KiB serialized), never paths or metadata.
+  Optional cleanup sends transcript and enabled context with `store:false`. No retries or warm-ups.
 - **Desk browser tabs (#440; decision 2026-09-29).** A desk window hosts web pages as `<webview>`
   guests in its dock. `webviewTag` is on for every window, because a window's kind is known only
   after `glosa open` answers; `will-attach-webview` is the gate. It refuses a guest unless the window

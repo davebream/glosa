@@ -75,7 +75,7 @@ inside image tabs, decisions.md 2026-09-28); **markdown-it** (+ `data-line` stam
 **idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), Bun's native
 recursive **`fs.watch`** (artifact watch; **chokidar v5** only for transcript tailing), system **git** (shadow repo), a vendored **transcript-event normalizer** (do NOT
 parse raw transcript JSONL directly — A2). Monorepo: `packages/{daemon, spa, providers/claude-code,
-providers/codex, providers/wispr-flow, cli}`. Three invariant boundaries (review-blockers if violated):
+providers/codex, providers/openai-transcription, cli}`. Three invariant boundaries (review-blockers if violated):
 (1) daemon API is versioned + client-agnostic; (2) agent providers and content adapters only enter
 via their interfaces — no special-casing; (3) the SPA talks to the daemon only through the public
 authenticated API. **Adapters/providers carry ALL domain- and agent-specific knowledge; the core is
@@ -366,7 +366,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.29: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v2.0: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -477,18 +477,21 @@ registration epochs prevent filename collisions and restoration into a replaceme
   replacement in the plugin monitor's or MCP server's environment. The composer keeps
   one tab-scoped in-flight submission, clears only after `presented`, preserves newer edits, and shows
   an inline native session picker when multiple live explicit bindings are eligible.
-- **Opt-in dictation** is an input method, not a submission or provenance event. One shared controller
-  may record for one eligible field at a time: annotation request, agent answer, attention response,
-  or conversation composer. Document source/rich editing, search, command syntax, and read-only
-  prompts never expose it. A configured browser captures mono 16-bit PCM WAV at 16 kHz, sends exact
-  one-second packets directly to the provider, and inserts only a final transcript by replacing the
-  original selection and dispatching one bubbling `input` event. The field and submit controls are
-  locked while active. Escape, permission denial, disconnect, timeout, empty speech, field removal,
-  or concurrent value drift restores value, selection, focus, and controls unchanged. Context is
-  plaintext-only and capped at 262,144 UTF-8 bytes: selection first, nearest field text second, then
-  only visible artifact/question, loaded conversation, or visible attention prose. Screenshots,
-  HTML, hidden frontmatter/comments, raw events, tool payloads, paths, session IDs, and participant
-  identities are excluded. Recording auto-stops at 5m45s and never submits the resulting draft.
+- **Opt-in dictation** is an input method, never a submission or provenance event. One controller
+  records for one of four eligible prose composers: annotation request, agent answer, attention
+  response or conversation. Editors, search, command syntax and read-only prompts remain excluded.
+  A microphone icon records through native MediaRecorder using supported WebM/Opus or MP4/AAC.
+  Stop ends capture before uploading to the authenticated daemon. Recording stops at 5m45s or
+  12 MiB. The daemon transcribes with the configured provider; no renderer cloud calls are allowed.
+  English, Polish, German and Spanish, including mixed-language passages, retain their spoken language.
+  Only final text replaces the original selection, with one bubbling `input`. The field and submit
+  controls are locked while active. Escape, permission denial, device loss, timeout, empty speech,
+  removal or concurrent value drift restore focus and controls without overwriting newer edits.
+  Enabled context is plaintext-only and capped at 8 KiB serialized UTF-8: selection and nearest
+  field text first, then visible artifact/question, loaded conversation or visible attention prose.
+  Screenshots, HTML, hidden frontmatter/comments, raw events, tool payloads, paths, session IDs and
+  participant identities are excluded. Context can be disabled. Optional cleanup defaults off and
+  conservatively removes fillers and fixes punctuation, with raw text fallback on failure.
 - **Anchoring resolution contract** (A5 §F10/§F11): total `resolve(annotation, artifact, ctx) →
   source_range | pipeline_feedback | orphaned`. Fixed normalization (NFC, whitespace-fold, UTF-16
   offsets, uniqueness required). Class R = quote-in-stamped-line-range, else `block_range` guidance,
@@ -515,10 +518,14 @@ registration epochs prevent filename collisions and restoration into a replaceme
   tools; transcript mirror) and a **Codex provider** (`push` = an app-server attachment is live for
   this exact thread). Both always have `mcpPull`; neither has `gate` or `boundaryDrain` any more (#152).
   Adding a CLI = a new provider, never a core change.
-- **Dictation-provider interface** is separate from `AgentProvider`. The generic daemon knows only
-  local availability, fixed browser assets, exact connect origins, and short-lived session grants.
-  Provider packages own credentials, token exchange, and browser wire format. The core runs with an
-  empty dictation registry and imports no provider package; the CLI entrypoint composes Wispr Flow.
+- **Dictation-provider interface** is separate from `AgentProvider`. The generic daemon knows
+  availability, consent settings and bounded audio-to-text requests. The provider owns secure
+  credentials and cloud transport. The core works with an empty registry; the CLI composes OpenAI.
+  Settings enables dictation explicitly, with visible context on and optional cleanup off by default.
+  Four prose composers use an accessible microphone icon. Native MediaRecorder captures WebM/Opus
+  or MP4/AAC, stops by 5m45s or 12 MiB, and uploads after Stop. Context is bounded to 8 KiB serialized
+  UTF-8. English, Polish, German, Spanish and mixed-language speech remain in their spoken language.
+  The result replaces only the original selection in an unchanged draft and never submits it.
 - **Content-adapter interface**: supplies artifact-class metadata, sidebar ordering, and generic
   **`derived-from(A→B, via process)`** edges. From an edge the core provides Edit-on-A→source-B,
   staleness, and class-F source resolution without knowing the workflow that produced either file.
@@ -542,7 +549,7 @@ registration epochs prevent filename collisions and restoration into a replaceme
 - Commands (all with `--json` + stable exit codes, A6): `open [--url]`,
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `dictation configure --provider wispr-flow|status|disable`, `doctor`
+  `token rotate|revoke`, `dictation configure --provider openai|status|disable`, `doctor`
   (19 enumerated checks incl. live artifact-update state + Claude-monitor suppression + transcript-root confinement + orphaned
   journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152 + MCP install diagnosis, #461), `status`,
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
@@ -661,11 +668,10 @@ registration epochs prevent filename collisions and restoration into a replaceme
   switch and a tab move; a concurrent writer's change on disk is never silently overwritten by
   a stale save — a merge is written only on the writer's explicit Keep mine, never automatically, and
   what it cannot carry (a conflicting block, or a conflicting source region between or around blocks)
-  is named in the preview rather than dropped silently. Optional dictation is hidden until locally
-  configured, preserves drafts on every failure path, and is accepted only after offline transport,
-  context-boundary, DOM opt-in, security, and ablation tests plus one attended paid Wispr smoke test.
-  The paid smoke gates only the claim that this optional provider is supported; it is not a general
-  v1 or T8 release gate, and CI/T8 never contact Wispr.
+  is named in the preview rather than dropped silently. Optional dictation offers setup until configured, preserves drafts on every failure path,
+  and requires offline transport, context-boundary, native recording, security and ablation tests.
+  Live qualification includes all four supported languages and mixed-language speech. Paid probes
+  gate only the optional provider support claim; CI/T8 remain offline.
 - **T4 — class F viewer**: separate-origin serving + capability + CSP + MessageChannel bridge (A3);
   source-preserving render; derived-from Edit→source; anchoring resolution (A5 §F11). Gate: E2E annotate
   the real rendered-preview fixture (renders within tolerance, its JS runs, network blocked); the full A3 §5
