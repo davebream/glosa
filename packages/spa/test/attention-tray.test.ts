@@ -183,6 +183,34 @@ describe("attention tray", () => {
     expect(dom.document.activeElement).toBe(trigger);
   });
 
+  test("a journal refresh during an older inbox read fetches the newer snapshot", async () => {
+    let finishOldRead!: (value: { attention: { id: string; status: string; message: string }[] }) => void;
+    let reads = 0;
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const tray = mountAttentionTray(host, {
+      dataAccess: {
+        getInbox: async () => {
+          reads += 1;
+          if (reads === 1)
+            return new Promise<{ attention: { id: string; status: string; message: string }[] }>((resolve) => {
+              finishOldRead = resolve;
+            });
+          return { attention: [] };
+        },
+        markAttentionSeen: async () => ({}),
+        respondToAttention: async () => ({}),
+      },
+    });
+    tray.setWorkspace("ws-one");
+    await flush();
+    const afterResponse = tray.refresh();
+    finishOldRead({ attention: [{ id: "a1", status: "seen", message: "Review" }] });
+    await afterResponse;
+    expect(reads).toBe(2);
+    expect(host.querySelector(".glosa-attention-badge")?.hasAttribute("hidden")).toBe(true);
+  });
+
   test("failed response preserves input and returns focus for correction", async () => {
     const host = dom.document.createElement("div");
     dom.document.body.append(host);
