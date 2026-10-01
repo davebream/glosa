@@ -23,11 +23,12 @@ import {
 import type { ManagedTools } from "../agents/managed-tools.ts";
 import { managedToolsUnavailable, managedWorkflowInstructions } from "../agents/managed-bootstrap.ts";
 import { nativeProbe } from "../agents/probe.ts";
-import { RUNTIME_INSTALL_TIMEOUT_MS } from "../agents/runtimes.ts";
+import { RUNTIME_INSTALL_TIMEOUT_MS, runtimeTarget } from "../agents/runtimes.ts";
 import { digest, privateDirectory, readBlob } from "./journal.ts";
 import {
   AgentStore,
   CONSENT_DISCLOSURE,
+  EXPERIMENTAL_DISCLOSURE,
   type Attachment,
   type ChatLog,
   type ChatState,
@@ -56,7 +57,7 @@ export interface ChatServiceOptions {
   installRuntime?(provider: string, launcher: ProcessLauncher): Promise<RuntimeManifest>;
   /** Re-resolve registration/lifecycle at every admission and handoff. */
   workspace(id: string, epoch: string): ChatWorkspace;
-  /** Public activation requires BOTH providers' native compatibility/release gates. */
+  /** Release-owned activation; experimental acceptance never changes qualification. */
   releaseEnabled?: boolean;
   ownershipUnknown?(): boolean;
   tools?: ManagedTools;
@@ -476,20 +477,22 @@ export class ManagedChatService {
   }
 
   status() {
+    const providers = this.options.registry.list().map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      configurationPath: provider.defaultConfiguration?.(),
+      ...(this.options.runtimeStatus?.(provider.id) ?? {
+        installed: !!this.options.manifest(provider.id),
+        qualified: this.options.manifest(provider.id)?.qualified === true,
+      }),
+      available: this.providerAvailable(provider.id),
+      experimental: this.experimentalStatus(provider.id),
+    }));
+    const available = this.options.releaseEnabled === true || providers.some((provider) => provider.available);
     return {
-      available: this.options.releaseEnabled === true,
-      reason: this.options.releaseEnabled
-        ? undefined
-        : "Native agent compatibility and release qualification are pending.",
-      providers: this.options.registry.list().map((provider) => ({
-        id: provider.id,
-        name: provider.name,
-        configurationPath: provider.defaultConfiguration?.(),
-        ...(this.options.runtimeStatus?.(provider.id) ?? {
-          installed: !!this.options.manifest(provider.id),
-          qualified: this.options.manifest(provider.id)?.qualified === true,
-        }),
-      })),
+      available,
+      reason: available ? undefined : "Native agent compatibility and release qualification are pending.",
+      providers,
       recovery: this.options.ownershipUnknown?.()
         ? "An earlier process has no verified exit receipt. Managed execution is blocked. Close the run’s native processes if identifiable; rebooting proves that all prior processes ended. Never signal a saved PID blindly."
         : undefined,
@@ -519,10 +522,121 @@ export class ManagedChatService {
         : null,
     };
   }
-  private available(): void {
+  private readonly disablingExperimental = new Set<string>();
+  private experimentalStatus(provider: string) {
+    const target = runtimeTarget();
+    const runtimeId = this.options.runtimeIdentity?.(provider) ?? this.options.manifest(provider)?.id;
+    const grant = this.store.experimental(provider);
+    const current =
+      grant?.runtimeId === runtimeId &&
+      grant?.platform === target.platform &&
+      grant?.architecture === target.architecture &&
+      grant?.libc === target.libc &&
+      grant?.disclosure === EXPERIMENTAL_DISCLOSURE;
+    return {
+      ...target,
+      runtimeId,
+      disclosure: EXPERIMENTAL_DISCLOSURE,
+      revision: grant?.revision ?? 0,
+      enabled: !!grant?.enabled && current,
+      renewalRequired: !!grant?.enabled && !current,
+    };
+  }
+  private providerAvailable(provider: string): boolean {
+    const manifest = this.options.manifest(provider);
+    return (
+      !this.disablingExperimental.has(provider) &&
+      (this.options.releaseEnabled === true ||
+        (!!manifest && this.experimentalStatus(provider).enabled && this.runtimeAdmitted(provider, manifest)))
+    );
+  }
+  async changeExperimental(raw: unknown) {
+    const input = z
+      .object({
+        requestId: z.uuid(),
+        provider: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+        runtimeId: z.string().min(1).max(256),
+        disclosure: z.literal(EXPERIMENTAL_DISCLOSURE),
+        revision: z.number().int().nonnegative(),
+        enabled: z.boolean(),
+      })
+      .strict()
+      .parse(raw);
+    this.options.registry.get(input.provider);
+    if (this.closed || this.quiescing || this.disablingExperimental.has(input.provider))
+      throw new ManagedAgentError("managed-stopping", "Managed agents are stopping.", 409);
+    const request = { op: "experimental", ...input };
+    const receipt = this.store.control.receipt(input.requestId, request);
+    const current = this.experimentalStatus(input.provider);
+    if (!receipt.found) {
+      if (input.revision !== current.revision || (input.enabled && input.runtimeId !== current.runtimeId))
+        throw new ManagedAgentError(
+          "stale-profile",
+          "The runtime or experimental setting changed. Refresh settings.",
+          409,
+        );
+      if (input.enabled) {
+        const manifest = this.options.manifest(input.provider);
+        if (
+          !manifest ||
+          manifest.id !== input.runtimeId ||
+          manifest.platform !== current.platform ||
+          manifest.architecture !== current.architecture ||
+          manifest.libc !== current.libc
+        )
+          throw new ManagedAgentError(
+            "runtime-unqualified",
+            "An integrity-verified experimental runtime must be installed first.",
+            409,
+          );
+      }
+      this.store.setExperimental(
+        {
+          type: "experimental",
+          provider: input.provider,
+          runtimeId: input.runtimeId,
+          ...runtimeTarget(),
+          disclosure: input.disclosure,
+          enabled: input.enabled,
+          revision: current.revision + 1,
+        },
+        { id: input.requestId, input: request, result: { provider: input.provider } },
+      );
+    }
+    // Retry an interrupted disable without replaying an older enable over a newer revocation.
+    if (!input.enabled && !this.store.experimental(input.provider)?.enabled) {
+      this.disablingExperimental.add(input.provider);
+      try {
+        // Each call fences its writers synchronously, before waiting for native process exit.
+        await Promise.all(
+          this.store
+            .listProfiles()
+            .filter((profile) => profile.provider === input.provider)
+            .map((profile) => this.stopProfile(profile.id)),
+        );
+      } finally {
+        this.disablingExperimental.delete(input.provider);
+      }
+    }
+    return this.experimentalStatus(input.provider);
+  }
+  private runtimeAdmitted(provider: string, manifest: RuntimeManifest, cleanup = false): boolean {
+    if (manifest.qualified) return true;
+    const scope = { provider, runtimeId: manifest.id, ...runtimeTarget() };
+    if (
+      manifest.platform !== scope.platform ||
+      manifest.architecture !== scope.architecture ||
+      manifest.libc !== scope.libc
+    )
+      return false;
+    if (cleanup) return this.store.previouslyAccepted(scope);
+    const acceptance = this.experimentalStatus(provider);
+    return acceptance.enabled && acceptance.runtimeId === manifest.id;
+  }
+  private available(provider: string): void {
     if (this.closed || this.quiescing)
       throw new ManagedAgentError("managed-stopping", "Managed agents are stopping.", 503);
-    if (!this.options.releaseEnabled)
+    if (!this.providerAvailable(provider))
       throw new ManagedAgentError(
         "managed-unavailable",
         "Native agent compatibility and release qualification are pending.",
@@ -820,7 +934,7 @@ export class ManagedChatService {
       native = join(base, "native");
     if (!profile.configuration && existsSync(native)) {
       const manifest = this.options.manifest(profile.provider);
-      if (!manifest?.qualified)
+      if (!manifest || !this.runtimeAdmitted(profile.provider, manifest, true))
         throw new ManagedAgentError(
           "runtime-unqualified",
           "Account cleanup needs its tested native runtime. The account remains disabled.",
@@ -871,12 +985,12 @@ export class ManagedChatService {
     return done;
   }
   private launchSpec(profileId: string): ProfileLaunchSpec {
-    this.available();
     const profile = this.store.profile(profileId);
+    this.available(profile.provider);
     if (!profile.enabled) throw new ManagedAgentError("account-disabled", "Enable this account before using it.");
     const adapter = this.options.registry.get(profile.provider);
     const manifest = this.options.manifest(profile.provider);
-    if (!manifest?.qualified)
+    if (!manifest || !this.runtimeAdmitted(profile.provider, manifest))
       throw new ManagedAgentError(
         "runtime-unqualified",
         manifest?.reason ?? "A tested agent runtime must be installed first.",
@@ -898,6 +1012,7 @@ export class ManagedChatService {
         throw new ManagedAgentError("login-cancelled", "The account operation was cancelled.");
       if (!operation.profileId.startsWith("runtime:")) {
         const profile = this.store.profile(operation.profileId);
+        if (!cleanup) this.available(profile.provider);
         if ((!profile.enabled && !cleanup) || profile.epoch !== operation.epoch)
           throw new ManagedAgentError("account-changed", "Account access changed.");
       }
@@ -1404,7 +1519,7 @@ export class ManagedChatService {
       throw new ManagedAgentError("attachments-too-large", "Attachments exceed 20 MiB in total.", 413);
   }
   private eligible(state: ChatState, turn?: ChatTurn, management?: LoginOperation): AgentProfile {
-    this.available();
+    this.available(state.provider);
     this.validateWorkspace({ id: state.workspaceId, epoch: state.workspaceEpoch, path: state.workspacePath });
     if (this.options.workspace(state.workspaceId, state.workspaceEpoch).managedExecution === false)
       throw new ManagedAgentError("chat-read-only", "Managed agents require a directory workspace.");
@@ -2204,7 +2319,7 @@ export class ManagedChatService {
           log.append({ type: "turn_status", turnId: turn.id, status: "held", error: "Account access was changed." });
       if (run) {
         const turn = log.state.turns.find((item) => item.id === run.turnId);
-        if (turn && !terminalStates.has(turn.status) && turn.status !== "stopping")
+        if (turn && !terminalStates.has(turn.status) && turn.status !== "stopping" && turn.status !== "held")
           log.append({
             type: "turn_status",
             turnId: turn.id,

@@ -81,6 +81,8 @@ export function createChatPane(
     uploading = false,
     stopping = false;
   const lifetime = new AbortController();
+  const executionAvailable = () =>
+    catalog?.providers?.find((provider) => provider.id === state?.provider)?.available ?? catalog?.available;
   // A reply's table keeps its words whole unless one is too long for any column; then its cells
   // break words so it fits the reply's column, as a document's tables do (`fitTables` in
   // artifact-pane.js, DESIGN.md's Cell Break Rule). A reply is marked again whenever it renders or
@@ -797,7 +799,7 @@ export function createChatPane(
       !!selectedModel &&
       (!state.settings.effort || selectedModel.efforts.includes(state.settings.effort));
     effort.disabled = changingAccount || changingSettings || !selectedModel?.efforts.length;
-    readiness.hidden = readyToSend || !catalog?.available || state.archived;
+    readiness.hidden = readyToSend || !executionAvailable() || state.archived;
     readinessText.textContent = !accountReady
       ? "This account needs attention before it can send."
       : !models.length
@@ -1166,9 +1168,9 @@ export function createChatPane(
     const queued = state.turns.some((turn) => ["accepted", "queued", "held"].includes(turn.status));
     queueNotice.hidden = !queued;
     queueNotice.textContent = "A message is waiting. Model and effort changes apply after it.";
-    feedback.disabled = pending || editing || !catalog?.available || state.archived || queued;
+    feedback.disabled = pending || editing || !executionAvailable() || state.archived || queued;
     send.disabled =
-      pending || editing || (!sendIntent && (!catalog?.available || state.archived || !readyToSend || queued));
+      pending || editing || (!sendIntent && (!executionAvailable() || state.archived || !readyToSend || queued));
     send.textContent = pending
       ? "Sending…"
       : uploading
@@ -1352,7 +1354,7 @@ export function createChatPane(
       uploading ||
       !state ||
       (!sendIntent &&
-        (!catalog?.available ||
+        (!executionAvailable() ||
           state.archived ||
           !readyToSend ||
           state.turns.some((turn) => ["accepted", "queued", "held"].includes(turn.status)))) ||

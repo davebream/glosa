@@ -549,6 +549,8 @@ export function createDataAccess(deps = {}) {
 
   return {
     getAgentStatus: () => requestJson("/api/agents/status"),
+    /** @param {unknown} input */
+    setAgentExperimental: (input) => postJson("/api/agents/experimental", input),
     /** @param {string} slug @param {string} profileId */
     getMcpPolicy: (slug, profileId) =>
       requestJson(`${profilePath(profileId, "mcp")}?workspace=${encodeURIComponent(slug)}`),
