@@ -26,6 +26,13 @@ The run also failed the Linux shell because its test harness omitted `DISPLAY`; 
 partitions had two real-engine timing failures. The security scan found a medium-severity `hono`
 advisory in the existing lockfile. No candidate may be created from that run.
 
+The follow-up [run 36840004632](https://github.com/davebream/glosa/actions/runs/36840004632)
+passed Linux acceptance, pacman smoke, macOS shell and all three macOS partitions. Linux renderer
+security executed 11 real-Electron cases; nine passed, while a macOS-only Dock assertion and a
+`.dmg` update fixture failed. Their Linux equivalents are now under test. The same `hono` advisory
+still failed the security job in that run; the pinned dependency has been moved to the reported
+fixed version for the next run. These CI attempts are not installed Manjaro session evidence.
+
 Do not reopen issues, sign evidence, provision infrastructure or publish a release merely because
 this procedure exists. #435 stays open until its entire acceptance contract passes.
 
