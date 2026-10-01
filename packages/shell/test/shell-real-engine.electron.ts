@@ -370,6 +370,12 @@ describe.skipIf(!electronInstalled)(
       expect(mainUrl, stderrText).not.toBeNull();
       const cdp = await Cdp.connect(page!.webSocketDebuggerUrl);
       const main = await Cdp.connect(mainUrl!);
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: 800,
+        height: 600,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
       async function waitFor(expression: string) {
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
@@ -399,7 +405,15 @@ describe.skipIf(!electronInstalled)(
           if (point) break;
           await Bun.sleep(50);
         }
-        if (!point) throw new Error(`dictation button ${index} did not become hittable`);
+        if (!point) {
+          const diagnostic = await cdp.evaluate(`(() => {
+            const b=document.querySelectorAll('#dictation-fixture .glosa-dictation-toggle')[${index}], r=b.getBoundingClientRect();
+            const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2), ancestors=[];
+            for(let e=b;e&&ancestors.length<12;e=e.parentElement){const s=getComputedStyle(e);ancestors.push({tag:e.tagName,classes:e.className,hidden:e.hidden,rect:e.getBoundingClientRect().toJSON(),visibility:s.visibility,display:s.display,pointerEvents:s.pointerEvents,overflow:s.overflow});}
+            return {viewport:[innerWidth,innerHeight],hit:hit?.className,ancestors};
+          })()`);
+          throw new Error(`dictation button ${index} did not become hittable: ${JSON.stringify(diagnostic)}`);
+        }
         await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
         await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
       }
@@ -458,13 +472,20 @@ describe.skipIf(!electronInstalled)(
           globalThis.__dictationController=createDictationController({dataAccess});
           const dc=globalThis.__dictationController; await dc.readiness;
           const artifactHost=host();
-          const pane=createArtifactPane(artifactHost,{dataAccess,slug:'fixture',path:'notes.md',initialMode:'review',dictationController:dc,
-            getAttentionEntries:()=>[{id:'question',status:'open',action:'ask',message:'What do you mean?',target:'notes.md'}]});
+          // Keep each production composer in its own pane while the fixture changes which
+          // surface is visible. The controller and the four connected drafts remain shared.
+          const pane=createArtifactPane(artifactHost,{dataAccess,slug:'fixture',path:'notes.md',initialMode:'review',dictationController:dc});
           await pane.ready;
           const text=artifactHost.querySelector('#dictation-para').firstChild;
           const range=document.createRange();range.setStart(text,2);range.setEnd(text,11);
           const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
           artifactHost.querySelector('.glosa-content').dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+          const replyPane=createArtifactPane(host(),{dataAccess,slug:'fixture',path:'notes.md',initialMode:'review',dictationController:dc,
+            getAttentionEntries:()=>[{id:'question',status:'open',action:'ask',message:'What do you mean?',target:'notes.md'}]});
+          await replyPane.ready;
+          // At a narrow pane the review reply lives in the collapsed notes tray. Reveal it
+          // through the production control, rather than clicking its clipped descendants.
+          root.lastElementChild.querySelector('.glosa-tray-chevron').click();
           mountConversationPane(host(),{dataAccess,slug:'fixture',dictationController:dc});
           const attentionHost=host(); const tray=mountAttentionTray(attentionHost,{dataAccess,dictationController:dc});
           tray.setWorkspace('fixture'); await new Promise(resolve=>setTimeout(resolve,0));
