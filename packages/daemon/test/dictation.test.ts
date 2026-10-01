@@ -116,4 +116,41 @@ describe("dictation HTTP contract", () => {
     expect(disabled.headers.get("Content-Security-Policy")).toContain("connect-src 'self';");
     expect(disabled.headers.get("Content-Security-Policy")).not.toContain("dictation.example");
   });
+
+  test("credential failures give recovery instructions without exposing provider error text", async () => {
+    const registry = new DictationProviderRegistry();
+    registry.register(
+      provider({
+        createSession: async () => {
+          throw new DictationProviderError("credential-unavailable", "private-credential-material");
+        },
+      }),
+    );
+    const response = await harness(registry)(request("/api/dictation/session", "POST"));
+    expect(response.status).toBe(503);
+    const body = await response.text();
+    expect(body).toContain("unlock it if needed");
+    expect(body).not.toContain("private-credential-material");
+  });
+
+  test("cancelling the foreground HTTP request aborts pending provider work", async () => {
+    const registry = new DictationProviderRegistry();
+    const started = Promise.withResolvers<AbortSignal>();
+    registry.register(
+      provider({
+        createSession: async (signal) => {
+          started.resolve(signal!);
+          await new Promise<void>((resolve) => signal!.addEventListener("abort", () => resolve(), { once: true }));
+          throw new DictationProviderError("provider-unavailable", "cancelled");
+        },
+      }),
+    );
+    const abort = new AbortController();
+    const pending = harness(registry)(new Request(request("/api/dictation/session", "POST"), { signal: abort.signal }));
+    const signal = await started.promise;
+    expect(signal.aborted).toBe(false);
+    abort.abort();
+    await pending;
+    expect(signal.aborted).toBe(true);
+  });
 });

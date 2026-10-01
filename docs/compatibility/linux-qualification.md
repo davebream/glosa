@@ -8,7 +8,7 @@ not a passing compatibility certificate. Container and source-test results remai
 | Prerequisite | State |
 | --- | --- |
 | Temporary x86_64 desktop | No spending authorized. Provisioning remains held. |
-| Linux dictation implementation | #434 remains a prerequisite; verify its current evidence before scheduling. |
+| Linux dictation | #434 adds source support and offline checks. Real KWallet and microphone acceptance remain pending; verify the current candidate before scheduling. |
 | Provider accounts | Maintainer will supply two distinct Claude and two distinct Codex subscriptions when scheduled. |
 | Wispr live smoke | Needs one usable API credential, explicit paid-use consent and maintainer attendance. |
 | Offering determination | G1 must be explicitly settled before the SDK qualification run. |
@@ -102,3 +102,37 @@ Publish only sanitized reproducible observations. After maintainer approval and 
 verify downloaded GitHub assets against the retained checksum. Reconcile #430's children and every
 #435 acceptance criterion before closing #435. A partial implementation PR uses a reference without
 a closing keyword. This procedure does not close or replace generic T8 acceptance.
+
+## Dictation handoff from #434
+
+Offline CI runs `dbus-run-session -- bun run scripts/linux-secret-service-smoke.ts` against
+a private GNOME Secret Service. Its named stages prove store/metadata/read/delete, locked refusal,
+secret-free Glosa files and access from a real detached daemon after its launcher exits. The
+Linux Electron test uses real Chromium capture with a fake audio device, simulated native dialog
+answers and offline transcript responses in all four production composers. Neither result proves
+KWallet compatibility, physical microphone forwarding or paid Wispr support.
+
+Before the attended run, verify `libsecret`, `systemd` and `kwallet` from the Manjaro repository,
+`secret-tool`, `busctl`, an initialized default wallet and the user service `org.freedesktop.secrets`.
+Do not change the person's default wallet service automatically. Record desktop/package versions
+and session type, but never record credentials, secret read output or a shell command containing a key.
+
+1. Use a disposable credential account. Exercise store/read/delete through the provider; compare the
+   secret only in memory. Repeat with the wallet locked, unavailable, access denied and a dismissed
+   prompt. Status must not unlock or read a secret. Dictate must give recovery instructions while
+   ordinary annotation, editing and review remain usable. Verify the detached daemon after closing
+   the launching terminal and reopening the shell in the same desktop session.
+2. Confirm the actual microphone/remote-desktop audio path. Allow once, Deny and Cancel, then cancel
+   again while permission or transport is pending. Verify recording indicators and that tracks and
+   transport stop; no denied/cancelled result may change the draft.
+3. Only after explicit paid-use consent, use an approved Wispr API organization credential with API
+   access and billing enabled. A consumer Wispr subscription alone is not evidence of API access.
+   Configure interactively with `glosa dictation configure --provider wispr-flow`, accept the current
+   disclosure, and enter the key at the hidden prompt. Never put it in argv or an environment file.
+4. Reload the SPA after configuration. Dictate neutral text into annotation, agent answer, attention
+   response and conversation. Each result must remain an editable draft without submission. Check
+   the disclosed visible-plaintext boundary and 256 KiB cap with synthetic content, not private prose.
+5. Disable dictation, verify that egress is disabled before removal, and confirm credential cleanup.
+   A locked or refused removal leaves a warning and a disabled configuration; unlock and repeat
+   removal interactively. Record each unobserved outcome as held. Installed-package checks and the
+   paid smoke remain #435's gates; source checks do not close #434's pending desktop acceptance.

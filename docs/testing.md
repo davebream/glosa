@@ -166,6 +166,15 @@ daemon outliving the window.
 Local Linux containers must provide init, system Git/ps and executable temporary storage for the
 launcher fixtures so process-lifetime tests observe their intended topology. Container evidence does not qualify an installed Manjaro desktop app.
 
+For #434, `dbus-run-session -- bun run scripts/linux-secret-service-smoke.ts` uses disposable
+credentials and isolated GNOME Secret Service state to verify store/read/delete, locked storage,
+and status from a detached daemon after its launcher exits. It requires `dbus`, `libsecret-tools`,
+`systemd` utilities and `gnome-keyring`. Linux now executes the CLI dictation cases previously
+excluded for Keychain. The real Electron suite exercises the four production composers with fake
+audio and offline provider responses, including permission and network refusal. These checks make
+no paid provider requests and do not qualify KWallet, physical microphones or a native Wayland/X11
+desktop; those remain in the attended procedure.
+
 Since #433, `linux-core` also executes runtime-tree verification/repair, managed-chat admission and
 login, both providers' managed protocol tests, and the SPA chat/login wiring tests. The added process
 fixtures use real supervised pipes, PTYs and loopback callback listeners with simulated provider

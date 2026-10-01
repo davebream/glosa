@@ -4,7 +4,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readWisprFlowConfig, type WisprFlowCredentialStore } from "../../providers/wispr-flow/src/index.ts";
+import {
+  CredentialStoreError,
+  readWisprFlowConfig,
+  type WisprFlowCredentialStore,
+} from "../../providers/wispr-flow/src/index.ts";
 import { runDictation } from "../src/dictation.ts";
 
 function store() {
@@ -36,6 +40,48 @@ describe("glosa dictation", () => {
     homes.push(value);
     return value;
   }
+
+  test.each(["linux", "darwin"] as const)(
+    "%s configure keeps consent ahead of secure storage, reports failures without secrets, and disables without prompting in JSON",
+    async (platform) => {
+      const target = home();
+      const credentials = store();
+      const deps = {
+        home: target,
+        credentialStore: credentials,
+        platform,
+        isTTY: () => true,
+        confirm: async () => false,
+      };
+      expect((await runDictation("configure", { provider: "wispr-flow" }, deps)).error?.code).toBe(
+        "dictation-consent-declined",
+      );
+      expect(readWisprFlowConfig(target).state).toBe("missing");
+      expect(credentials.values.size).toBe(0);
+      deps.confirm = async () => true;
+      expect((await runDictation("configure", { provider: "wispr-flow" }, deps)).ok).toBe(true);
+      credentials.has = async () => {
+        throw new CredentialStoreError("locked");
+      };
+      expect((await runDictation("status", {}, deps)).error?.message).toContain("Unlock");
+      credentials.remove = async (_account, options) => {
+        expect(options?.interactive).toBe(false);
+        const config = readWisprFlowConfig(target);
+        expect(config.state === "configured" && config.config.enabled).toBe(false);
+        throw new Error("private-service-secret");
+      };
+      const disabled = await runDictation("disable", { json: true }, deps);
+      expect(disabled).toMatchObject({ ok: true, data: { state: "disabled" } });
+      expect(disabled.warnings).toHaveLength(1);
+      expect(JSON.stringify(disabled)).not.toContain("private-service-secret");
+      credentials.addInteractive = async () => {
+        throw new Error("private-service-secret");
+      };
+      expect(JSON.stringify(await runDictation("configure", { provider: "wispr-flow" }, deps))).not.toContain(
+        "private-service-secret",
+      );
+    },
+  );
 
   test("configure is TTY-gated, records current consent, and never accepts a key argument", async () => {
     const credentials = store();

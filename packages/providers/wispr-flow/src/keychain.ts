@@ -3,10 +3,10 @@
 export const WISPR_FLOW_KEYCHAIN_SERVICE = "ai.glosa.dictation.wispr-flow";
 
 export interface WisprFlowCredentialStore {
-  has(account: string): Promise<boolean>;
-  read(account: string): Promise<string | null>;
+  has(account: string, signal?: AbortSignal): Promise<boolean>;
+  read(account: string, signal?: AbortSignal): Promise<string | null>;
   addInteractive(account: string): Promise<void>;
-  remove(account: string): Promise<boolean>;
+  remove(account: string, options?: { interactive?: boolean; signal?: AbortSignal }): Promise<boolean>;
 }
 
 export function keychainFindCommand(account: string, reveal = false): string[] {

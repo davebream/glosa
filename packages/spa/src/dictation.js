@@ -143,6 +143,16 @@ export function createDictationController({
   let availability = null;
   let active = null;
   let destroyed = false;
+  const shell = scope.glosaShell;
+  const unsubscribeShell = shell?.onDictationEnded?.((id) => {
+    if (active?.shellId === id) void cancel();
+  });
+  function releaseShell(session) {
+    if (!session.shellId) return;
+    const id = session.shellId;
+    session.shellId = null;
+    void shell.endDictation(id).catch(() => {});
+  }
 
   const readiness =
     browserSupported(scope) && typeof dataAccess?.getDictationStatus === "function"
@@ -229,6 +239,7 @@ export function createDictationController({
     active = null;
     clearTimeout(session.maximumTimer);
     session.abort.abort(reason);
+    releaseShell(session);
     await session.providerSession?.cancel?.().catch(() => {});
     if (!session.providerSession) {
       for (const track of session.stream?.getTracks?.() ?? []) track.stop();
@@ -253,12 +264,16 @@ export function createDictationController({
       session.binding.field.setRangeText(transcript, session.snapshot.start, session.snapshot.end, "end");
       session.binding.field.dispatchEvent(new scope.Event("input", { bubbles: true }));
       active = null;
+      releaseShell(session);
       restore(session, { inserted: true });
       session.binding.status.textContent = "Dictation inserted. Review the draft before sending.";
       refreshBindings();
     } catch (error) {
       if (active !== session) return;
       active = null;
+      session.abort.abort("dictation failed");
+      releaseShell(session);
+      await session.providerSession?.cancel?.().catch(() => {});
       restore(session);
       session.binding.status.textContent = statusText(error);
       refreshBindings();
@@ -270,6 +285,7 @@ export function createDictationController({
     active = null;
     clearTimeout(session.maximumTimer);
     session.abort.abort("provider error");
+    releaseShell(session);
     await session.providerSession?.cancel?.().catch(() => {});
     restore(session);
     session.binding.status.textContent = statusText(error);
@@ -296,11 +312,17 @@ export function createDictationController({
       providerSession: null,
       stream: null,
       maximumTimer: null,
+      shellId: shell?.beginDictation ? globalThis.crypto.randomUUID() : null,
     };
     active = session;
     lock(session);
     refreshBindings();
     try {
+      if (session.shellId) {
+        const allowed = await shell.beginDictation(session.shellId);
+        if (active !== session) return;
+        if (!allowed) throw new DOMException("Microphone permission was not granted.", "NotAllowedError");
+      }
       const stream = await scope.navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 }, video: false });
       session.stream = stream;
       if (active !== session) {
@@ -308,7 +330,7 @@ export function createDictationController({
         return;
       }
       const [grant, module] = await Promise.all([
-        dataAccess.createDictationSession(),
+        dataAccess.createDictationSession(session.abort.signal),
         loadModule(scopedModule(availability.client_module)),
       ]);
       if (active !== session) {
@@ -333,6 +355,8 @@ export function createDictationController({
       refreshBindings();
     } catch (error) {
       if (active !== session) return;
+      session.abort.abort("dictation failed");
+      releaseShell(session);
       if (!session.providerSession) {
         for (const track of session.stream?.getTracks?.() ?? []) track.stop();
       }
@@ -406,6 +430,7 @@ export function createDictationController({
     destroy() {
       destroyed = true;
       void cancel();
+      unsubscribeShell?.();
       document.removeEventListener("keydown", onKeydown, true);
       removalObserver.disconnect();
       for (const binding of bindings) binding.host.remove();

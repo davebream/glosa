@@ -22,7 +22,7 @@ function mapError(error: unknown, pathname: string): Response {
         503,
         "dictation-credential-unavailable",
         "the configured dictation credential is unavailable",
-        undefined,
+        "Check the configured provider's credential storage, unlock it if needed, then retry.",
         pathname,
       );
     case "authentication-failed":
@@ -88,7 +88,8 @@ export function dictationRoutes(deps: DictationRouteDependencies, method: string
   if (method === "POST" && pathname === "/api/dictation/session") {
     return {
       routeClass: "state-changing",
-      handle: (_req, _server, authSignal) => createSession(deps, pathname, authSignal),
+      handle: (req, _server, authSignal) =>
+        createSession(deps, pathname, authSignal ? AbortSignal.any([req.signal, authSignal]) : req.signal),
     };
   }
   return null;

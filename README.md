@@ -130,7 +130,7 @@ command. Without `--wait`, the request waits in the inbox for later.
 | Platform | Status |
 |---|---|
 | macOS 13 or newer, Apple Silicon and Intel | Supported. Every release is tested here. |
-| Linux x86_64 with glibc | Experimental CLI and daemon. Requires Bun 1.4.2+ and Git 2.30+. A pacman package of the desktop app for Arch and Manjaro is built and tested in containers; releasing it, managed chats and dictation remain pending ([#430](https://github.com/davebream/glosa/issues/430)). |
+| Linux x86_64 with glibc | Experimental CLI and daemon. Requires Bun 1.4.2+ and Git 2.30+. A pacman package of the desktop app for Arch and Manjaro is built and tested in containers; releasing it and native qualification of managed chats and dictation remain pending ([#430](https://github.com/davebream/glosa/issues/430)). |
 | Windows | Not supported and not planned for now. The local API socket, the file permission model and the Claude Code plugin launcher are POSIX only. |
 
 `glosa open`, `glosa doctor`, `glosa update` and MCP startup refuse unsupported OS/architecture,
@@ -224,9 +224,13 @@ A few commands worth knowing:
 - `glosa open --document <file>` opens one document with no file navigator. Its link also works in an
   open workspace tab: unsaved edits need a discard confirmation first, and cancelling keeps the draft.
 - `glosa dictation configure --provider wispr-flow` explicitly enables Wispr Flow for the four prose
-  composers after showing its data disclosure and storing the organization key in macOS Keychain.
+  composers after showing its data disclosure and storing the organization key in macOS Keychain
+  or Linux Secret Service. Linux needs `libsecret`, `systemd` utilities and an initialized desktop
+  wallet such as KWallet. Status and Dictate never unlock a locked wallet; unlock it in the desktop
+  wallet manager, then retry. The Linux app asks for microphone access per dictation attempt.
   `glosa dictation status` is local-only; `glosa dictation disable` turns egress off before removing
-  the credential.
+  the credential. Manjaro/KDE and paid Wispr qualification remain pending; see the
+  [attended Linux procedure](docs/compatibility/linux-qualification.md).
 
 ### Desktop app
 

@@ -8,7 +8,9 @@ import {
   type DictationSessionGrant,
 } from "../../../daemon/src/index.ts";
 import { readWisprFlowConfig } from "./config.ts";
-import { MacKeychainCredentialStore, type WisprFlowCredentialStore } from "./keychain.ts";
+import type { WisprFlowCredentialStore } from "./keychain.ts";
+import { createCredentialStore } from "./credentials.ts";
+import { CredentialStoreError } from "./secret-service.ts";
 
 export const WISPR_FLOW_TOKEN_URL = "https://platform-api.wisprflow.ai/api/v1/dash/generate_access_token";
 export const WISPR_FLOW_WEBSOCKET_URL = "wss://platform-api.wisprflow.ai/api/v1/dash/client_ws";
@@ -54,7 +56,7 @@ export class WisprFlowProvider implements DictationProvider {
   private readonly now: () => number;
 
   constructor(private readonly deps: WisprFlowProviderDeps) {
-    this.credentialStore = deps.credentialStore ?? new MacKeychainCredentialStore();
+    this.credentialStore = deps.credentialStore ?? createCredentialStore();
     this.fetchImpl = deps.fetch ?? fetch;
     this.env = deps.env ?? Bun.env;
     this.now = deps.now ?? Date.now;
@@ -95,12 +97,12 @@ export class WisprFlowProvider implements DictationProvider {
     return result.config;
   }
 
-  private async credential(account: string): Promise<string | null> {
+  private async credential(account: string, signal?: AbortSignal): Promise<string | null> {
     if (this.deps.allowDevelopmentEnv && this.env.GLOSA_WISPR_FLOW_ALLOW_ENV_KEY === "1") {
       const development = normalizedCredential(this.env.WISPR_FLOW_API_KEY ?? null);
       if (development) return development;
     }
-    return normalizedCredential(await this.credentialStore.read(account));
+    return normalizedCredential(await this.credentialStore.read(account, signal));
   }
 
   async status(): Promise<DictationAvailability> {
@@ -121,13 +123,22 @@ export class WisprFlowProvider implements DictationProvider {
       this.deps.allowDevelopmentEnv &&
       this.env.GLOSA_WISPR_FLOW_ALLOW_ENV_KEY === "1" &&
       normalizedCredential(this.env.WISPR_FLOW_API_KEY ?? null);
-    if (!developmentCredential && !(await this.credentialStore.has(result.config.keychain_account))) {
+    let unavailable: string | undefined;
+    try {
+      if (!developmentCredential && !(await this.credentialStore.has(result.config.keychain_account))) {
+        unavailable =
+          "the Wispr Flow organization key is unavailable; run glosa dictation configure --provider wispr-flow";
+      }
+    } catch (error) {
+      unavailable = error instanceof CredentialStoreError ? error.message : "the credential store is unavailable";
+    }
+    if (unavailable) {
       return {
         state: "error",
         provider: this.id,
         display_name: this.displayName,
         code: "credential-unavailable",
-        message: "the Wispr Flow organization key is unavailable",
+        message: unavailable,
       };
     }
     return {
@@ -139,8 +150,19 @@ export class WisprFlowProvider implements DictationProvider {
   }
 
   async createSession(signal?: AbortSignal): Promise<DictationSessionGrant> {
+    signal?.throwIfAborted();
     const config = this.configured();
-    const credential = await this.credential(config.keychain_account);
+    let credential: string | null;
+    try {
+      credential = await this.credential(config.keychain_account, signal);
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw new DictationProviderError(
+        "credential-unavailable",
+        error instanceof CredentialStoreError ? error.message : "the credential store is unavailable",
+      );
+    }
+    signal?.throwIfAborted();
     if (!credential) throw new DictationProviderError("credential-unavailable", "organization key unavailable");
 
     const timeout = AbortSignal.timeout(this.deps.tokenTimeoutMs ?? WISPR_FLOW_TOKEN_TIMEOUT_MS);

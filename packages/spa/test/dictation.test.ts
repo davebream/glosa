@@ -74,7 +74,12 @@ describe("DictationController", () => {
   });
   afterEach(() => dom.teardown());
 
-  function setup({ transcript = "dictated words", maximumDurationMs = DICTATION_MAX_DURATION_MS } = {}) {
+  function setup({
+    transcript = "dictated words",
+    maximumDurationMs = DICTATION_MAX_DURATION_MS,
+    shell = undefined as any,
+    moduleFailure = false,
+  } = {}) {
     const track = {
       stopped: false,
       stop() {
@@ -107,6 +112,7 @@ describe("DictationController", () => {
       }),
     };
     const scope = {
+      glosaShell: shell,
       navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [track] }) } },
       AudioContext: class {},
       AudioWorkletNode: class {},
@@ -119,26 +125,116 @@ describe("DictationController", () => {
       scope: scope as any,
       document: dom.document as any,
       maximumDurationMs,
-      loadModule: async () => ({
-        createWisprFlowSession: async ({ context }: { context: unknown }) => {
-          provider.context = context;
-          return {
-            stop: async () => {
-              provider.stops += 1;
-              track.stop();
-              return transcript;
-            },
-            cancel: async () => {
-              provider.cancels += 1;
-              track.stop();
-            },
-            error: providerError,
-          };
-        },
-      }),
+      loadModule: async () => {
+        if (moduleFailure) throw new Error("module unavailable");
+        return {
+          createWisprFlowSession: async ({ context }: { context: unknown }) => {
+            provider.context = context;
+            return {
+              stop: async () => {
+                provider.stops += 1;
+                track.stop();
+                return transcript;
+              },
+              cancel: async () => {
+                provider.cancels += 1;
+                track.stop();
+              },
+              error: providerError,
+            };
+          },
+        };
+      },
     });
-    return { controller, provider, track };
+    return { controller, provider, track, dataAccess, scope };
   }
+
+  test("cancellation while the shell prompt is pending revokes the attempt and ignores late approval", async () => {
+    let approve: (value: boolean) => void = () => {};
+    const ended: string[] = [];
+    const { controller, scope } = setup({
+      shell: {
+        beginDictation: () =>
+          new Promise<boolean>((resolve) => {
+            approve = resolve;
+          }),
+        endDictation: async (id: string) => {
+          ended.push(id);
+        },
+      },
+    });
+    let captures = 0;
+    scope.navigator.mediaDevices.getUserMedia = async () => {
+      captures++;
+      throw new Error("must not capture");
+    };
+    const field = dom.document.createElement("textarea");
+    field.value = "preserved";
+    dom.document.body.append(field);
+    controller.attachField(field as any);
+    await controller.readiness;
+    (dom.document.querySelector(".glosa-dictation-toggle") as any).click();
+    await flush();
+    await controller.cancel();
+    approve(true);
+    await flush();
+    expect(ended).toHaveLength(1);
+    expect(captures).toBe(0);
+    expect(field.value).toBe("preserved");
+    expect(field.readOnly).toBe(false);
+    controller.destroy();
+  });
+
+  test("cancellation aborts a pending session grant and stops capture before a late token arrives", async () => {
+    const { controller, dataAccess, track, provider } = setup();
+    let requestSignal: AbortSignal | undefined;
+    let finish: (value: any) => void = () => {};
+    dataAccess.createDictationSession = (signal?: AbortSignal) => {
+      requestSignal = signal;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    };
+    const field = dom.document.createElement("textarea");
+    field.value = "preserved";
+    dom.document.body.append(field);
+    controller.attachField(field as any);
+    await controller.readiness;
+    (dom.document.querySelector(".glosa-dictation-toggle") as any).click();
+    await flush();
+    expect(requestSignal?.aborted).toBe(false);
+    await controller.cancel();
+    expect(requestSignal?.aborted).toBe(true);
+    expect(track.stopped).toBe(true);
+    finish({ access_token: "late" });
+    await flush();
+    expect(provider.context).toBeNull();
+    expect(field.value).toBe("preserved");
+    controller.destroy();
+  });
+
+  test("a module load failure aborts the parallel token request and stops capture", async () => {
+    const { controller, dataAccess, track } = setup({ moduleFailure: true });
+    let requestSignal: AbortSignal | undefined;
+    dataAccess.createDictationSession = (signal?: AbortSignal) => {
+      requestSignal = signal;
+      return new Promise((_resolve, reject) =>
+        signal!.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }),
+      );
+    };
+    const field = dom.document.createElement("textarea");
+    field.value = "preserved";
+    dom.document.body.append(field);
+    controller.attachField(field as any);
+    await controller.readiness;
+    (dom.document.querySelector(".glosa-dictation-toggle") as any).click();
+    await flush();
+    expect(requestSignal?.aborted).toBe(true);
+    expect(track.stopped).toBe(true);
+    expect(field.readOnly).toBe(false);
+    expect(field.value).toBe("preserved");
+    controller.destroy();
+  });
 
   test("keeps controls hidden when required browser recording APIs are unavailable", async () => {
     let statusCalls = 0;

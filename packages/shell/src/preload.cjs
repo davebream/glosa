@@ -82,6 +82,19 @@ if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin
     },
     /** One-shot: the presentation token for this window load, or null once taken (R-P1, R-P2). */
     presentationToken: () => ipcRenderer.invoke("glosa:presentation-token"),
+    ...(process.platform === "linux"
+      ? {
+          beginDictation: (id) => ipcRenderer.invoke("glosa:dictation-begin", id),
+          endDictation: (id) => ipcRenderer.invoke("glosa:dictation-end", id),
+          onDictationEnded: (listener) => {
+            const receive = (_event, id) => {
+              if (typeof id === "string") listener(id);
+            };
+            ipcRenderer.on("glosa:dictation-ended", receive);
+            return () => ipcRenderer.removeListener("glosa:dictation-ended", receive);
+          },
+        }
+      : {}),
     /** Opens the native folder picker; the main process runs `glosa open` on the choice. */
     openFolder: () => ipcRenderer.invoke("glosa:open-folder"),
     /** The Dock badge and OS notifications (#391): `{ id, title, body, badge }`, all optional.

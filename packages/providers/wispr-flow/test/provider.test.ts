@@ -5,6 +5,16 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DictationProviderError } from "@glosa/daemon";
+import { createCredentialStore } from "../src/credentials.ts";
+import { MacKeychainCredentialStore } from "../src/keychain.ts";
+import {
+  CredentialStoreError,
+  credentialHelperEnv,
+  LinuxSecretServiceCredentialStore,
+  runCredentialHelper,
+  type CredentialHelperRequest,
+  type CredentialHelperResult,
+} from "../src/secret-service.ts";
 import {
   keychainAddCommand,
   keychainFindCommand,
@@ -22,6 +32,147 @@ import {
 
 const ACCOUNT = "11111111-1111-4111-8111-111111111111";
 const CLIENT = "22222222-2222-4222-8222-222222222222";
+
+describe("Linux Secret Service", () => {
+  function fixture(results: CredentialHelperResult[]) {
+    const calls: CredentialHelperRequest[] = [];
+    const store = new LinuxSecretServiceCredentialStore({
+      platform: "linux",
+      executable: () => true,
+      env: {
+        HOME: "/fixture",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus",
+        ANTHROPIC_API_KEY: "never-inherit",
+        WISPR_FLOW_API_KEY: "never-inherit",
+      },
+      run: async (request) => {
+        calls.push(request);
+        return results.shift() ?? { code: 1, stdout: "", stderr: "unexpected call" };
+      },
+    });
+    return { store, calls };
+  }
+  const present = {
+    code: 0,
+    stdout: JSON.stringify({ type: "aoao", data: [["/org/freedesktop/secrets/collection/test/item1"], []] }),
+    stderr: "",
+  };
+  const absent = { code: 0, stdout: JSON.stringify({ type: "aoao", data: [[], []] }), stderr: "" };
+
+  test("platform selection preserves macOS and selects secure Linux storage", () => {
+    expect(createCredentialStore("darwin")).toBeInstanceOf(MacKeychainCredentialStore);
+    expect(createCredentialStore("linux")).toBeInstanceOf(LinuxSecretServiceCredentialStore);
+  });
+  test("missing secure-store utilities fail before metadata access", async () => {
+    let called = false;
+    const store = new LinuxSecretServiceCredentialStore({
+      platform: "linux",
+      executable: (path) => !path.endsWith("secret-tool"),
+      run: async () => {
+        called = true;
+        return present;
+      },
+    });
+    await expect(store.has(ACCOUNT)).rejects.toMatchObject({ code: "unavailable" });
+    expect(called).toBe(false);
+  });
+  test("status reads metadata only and distinguishes missing from locked storage", async () => {
+    const { store, calls } = fixture([
+      present,
+      absent,
+      {
+        ...present,
+        stdout: JSON.stringify({ type: "aoao", data: [[], ["/org/freedesktop/secrets/collection/test/item1"]] }),
+      },
+    ]);
+    expect(await store.has(ACCOUNT)).toBe(true);
+    expect(await store.has(ACCOUNT)).toBe(false);
+    await expect(store.has(ACCOUNT)).rejects.toMatchObject({ code: "locked" });
+    expect(
+      calls.every(
+        (call) => call.argv[0] === "/usr/bin/busctl" && call.argv.includes("SearchItems") && !call.interactive,
+      ),
+    ).toBe(true);
+    expect(calls[0]!.env).toEqual({
+      PATH: "/usr/bin:/bin",
+      LC_ALL: "C",
+      HOME: "/fixture",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus",
+    });
+  });
+  test("foreground reads use a private non-unlocking search, never lookup", async () => {
+    const { store, calls } = fixture([
+      present,
+      {
+        code: 0,
+        stdout: "[item1]\nlabel = Glosa Wispr Flow\nsecret = disposable-secret\ncreated = today\n",
+        stderr: "",
+      },
+    ]);
+    expect(await store.read(ACCOUNT)).toBe("disposable-secret");
+    expect(calls[1]!.argv.slice(0, 2)).toEqual(["/usr/bin/secret-tool", "search"]);
+    expect(calls[1]!.argv).not.toContain("--unlock");
+    expect(JSON.stringify(calls)).not.toContain("disposable-secret");
+    expect(calls[1]!.interactive).toBe(false);
+  });
+  test("a wallet locking between metadata and read fails without unlocking", async () => {
+    const { store, calls } = fixture([
+      present,
+      { code: 0, stdout: "[item1]\nlabel = Glosa Wispr Flow\n", stderr: "IsLocked" },
+    ]);
+    await expect(store.read(ACCOUNT)).rejects.toMatchObject({ code: "locked" });
+    expect(calls).toHaveLength(2);
+  });
+  test.each([
+    ["AccessDenied secret-value", "denied"],
+    ["Prompt dismissed secret-value", "cancelled"],
+    ["ServiceUnknown secret-value", "unavailable"],
+  ])("sanitizes helper failure %s as %s", async (stderr, code) => {
+    const { store } = fixture([{ code: 1, stdout: "secret-value", stderr }]);
+    try {
+      await store.has(ACCOUNT);
+      throw new Error("expected failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CredentialStoreError);
+      expect(error).toMatchObject({ code });
+      expect(String(error)).not.toContain("secret-value");
+    }
+  });
+  test("interactive configuration inherits input while noninteractive removal never invokes a prompt", async () => {
+    const { store, calls } = fixture([
+      { code: 0, stdout: "", stderr: "" },
+      present,
+      { code: 0, stdout: JSON.stringify({ type: "o", data: ["/org/freedesktop/secrets/prompt/p1"] }), stderr: "" },
+    ]);
+    await store.addInteractive(ACCOUNT);
+    expect(calls[0]!.interactive).toBe(true);
+    expect(calls[0]!.argv).toContain("store");
+    expect(await store.remove(ACCOUNT)).toBe(false);
+    expect(calls.slice(1).every((call) => !call.interactive && !call.argv.includes("Prompt"))).toBe(true);
+  });
+  test("rejects malformed metadata and nonlocal bus addresses", async () => {
+    const { store } = fixture([{ code: 0, stdout: "secret-value", stderr: "" }]);
+    await expect(store.has(ACCOUNT)).rejects.toMatchObject({ code: "invalid" });
+    expect(() => credentialHelperEnv({ DBUS_SESSION_BUS_ADDRESS: "tcp:host=example.com" })).toThrow(
+      CredentialStoreError,
+    );
+  });
+  test("real helper execution bounds output, times out and handles already cancelled calls", async () => {
+    const base = { env: credentialHelperEnv(process.env), interactive: false, timeoutMs: 1000 };
+    await expect(
+      runCredentialHelper({
+        ...base,
+        argv: [process.execPath, "-e", 'process.stdout.write("x".repeat(100000)); setInterval(()=>{},1000)'],
+      }),
+    ).rejects.toMatchObject({ code: "invalid" });
+    await expect(
+      runCredentialHelper({ ...base, timeoutMs: 20, argv: [process.execPath, "-e", "setInterval(()=>{},1000)"] }),
+    ).rejects.toMatchObject({ code: "timeout" });
+    await expect(
+      runCredentialHelper({ ...base, argv: ["/must/not/run"], signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
 
 function config(enabled = true): WisprFlowConfig {
   return {
@@ -113,6 +264,31 @@ describe("WisprFlowProvider", () => {
     });
     expect(await provider.status()).toMatchObject({ state: "ready", provider: "wispr-flow" });
     expect(calls).toBe(0);
+  });
+
+  test("locked storage is actionable and cancellation during credential read prevents token exchange", async () => {
+    const abort = new AbortController();
+    let fetches = 0;
+    const store = credentials();
+    store.has = async () => {
+      throw new CredentialStoreError("locked");
+    };
+    store.read = async (_account, signal) => {
+      expect(signal).toBe(abort.signal);
+      abort.abort();
+      return "secret";
+    };
+    const provider = new WisprFlowProvider({
+      home: home(),
+      credentialStore: store,
+      fetch: async () => {
+        fetches++;
+        return Response.json({});
+      },
+    });
+    expect(await provider.status()).toMatchObject({ state: "error", message: expect.stringContaining("Unlock") });
+    await expect(provider.createSession(abort.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetches).toBe(0);
   });
 
   test("the development environment key requires both source-checkout and explicit opt-in", async () => {

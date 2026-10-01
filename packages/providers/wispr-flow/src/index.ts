@@ -10,6 +10,8 @@ export {
   writeWisprFlowConfig,
 } from "./config.ts";
 export type { WisprFlowCredentialStore } from "./keychain.ts";
+export { createCredentialStore } from "./credentials.ts";
+export { CredentialStoreError, LinuxSecretServiceCredentialStore } from "./secret-service.ts";
 export {
   keychainAddCommand,
   keychainFindCommand,
