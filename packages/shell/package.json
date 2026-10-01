@@ -122,7 +122,9 @@
         "at-spi2-core",
         "xdg-utils",
         "libnotify",
-        "hicolor-icon-theme"
+        "hicolor-icon-theme",
+        "libsecret",
+        "systemd"
       ],
       "afterInstall": "assets/linux/after-install.sh",
       "afterRemove": "assets/linux/after-remove.sh"
