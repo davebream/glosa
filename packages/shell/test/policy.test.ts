@@ -23,6 +23,8 @@ import {
   contrastReply,
   devProfilePath,
   downloadName,
+  dictationPermissionAllowed,
+  dictationEgressAllowed,
   egressDecision,
   externalLinkDecision,
   firstFrameColor,
@@ -1365,5 +1367,56 @@ describe("a chat agent's read of a browser tab (#440)", () => {
     expect(BROWSER_READ_SCRIPT).toContain("document.title");
     expect(BROWSER_READ_SCRIPT).toContain("document.body.innerText");
     expect(BROWSER_READ_SCRIPT).not.toMatch(/window\.|fetch|eval|postMessage/);
+  });
+});
+
+describe("Linux foreground dictation permission", () => {
+  const allowed = {
+    platform: "linux",
+    active: true,
+    mainFrame: true,
+    origin: "http://glosa.localhost:4646",
+    expectedOrigin: "http://glosa.localhost:4646",
+    permission: "media",
+    mediaTypes: ["audio"],
+  };
+  test("only one approved SPA main-frame audio attempt can use the microphone", () => {
+    expect(dictationPermissionAllowed(allowed)).toBe(true);
+    // Electron's media securityOrigin includes a trailing slash; IPC frame origins do not.
+    expect(dictationPermissionAllowed({ ...allowed, origin: `${allowed.origin}/` })).toBe(true);
+    for (const change of [
+      { platform: "darwin" },
+      { active: false },
+      { mainFrame: false },
+      { origin: "null" },
+      { origin: "https://example.com" },
+      { expectedOrigin: undefined },
+      { permission: "display-capture" },
+      { mediaTypes: [] },
+      { mediaTypes: ["video"] },
+      { mediaTypes: ["audio", "video"] },
+    ]) {
+      expect(dictationPermissionAllowed({ ...allowed, ...change })).toBe(false);
+    }
+  });
+  test("the same attempt permits only the exact provider WebSocket and never general egress", () => {
+    const request = {
+      ...allowed,
+      resourceType: "webSocket",
+      url: "wss://platform-api.wisprflow.ai/api/v1/dash/client_ws",
+    };
+    expect(dictationEgressAllowed(request)).toBe(true);
+    for (const change of [
+      { active: false },
+      { mainFrame: false },
+      { platform: "darwin" },
+      { origin: "null" },
+      { resourceType: "xhr" },
+      { url: `${request.url}?secret=bad` },
+      { url: "wss://platform-api.wisprflow.ai/other" },
+      { url: "https://platform-api.wisprflow.ai/api/v1/dash/client_ws" },
+    ]) {
+      expect(dictationEgressAllowed({ ...request, ...change })).toBe(false);
+    }
   });
 });

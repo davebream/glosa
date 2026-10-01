@@ -44,22 +44,12 @@ export const LINUX_CORE_FILES = [
   "packages/daemon/test/install-guard.test.ts",
   "packages/daemon/test/install-lifetime.test.ts",
 ];
-export const LINUX_EXCLUSIONS = [
-  {
-    file: "packages/cli/test/dictation.test.ts",
-    cases: [
-      "configure is TTY-gated, records current consent, and never accepts a key argument",
-      "configure refuses noninteractive and JSON invocations before touching Keychain",
-      "a first-time configuration write failure removes the staged Keychain item",
-      "an explicit source-checkout environment override avoids storing the development key",
-      "reconfiguration preserves the per-install Keychain account and provider client ID",
-      "status and disable are local-only; disable commits inactive before credential removal",
-    ],
-    reason: "#434 has not shipped Linux secure-store dictation; these six cases target the macOS Keychain CLI",
-    remainingCoverage:
-      "macOS CI retains all six cases; Linux runs daemon, SPA and Wispr Flow provider security fixtures; attended installed-app dictation remains held",
-  },
-] as const;
+export const LINUX_EXCLUSIONS: ReadonlyArray<{
+  file: string;
+  cases: readonly string[];
+  reason: string;
+  remainingCoverage: string;
+}> = [];
 export const CI_PROFILES = ["ci-1", "ci-2", "ci-3"] as const;
 export type Profile =
   | "acceptance"
