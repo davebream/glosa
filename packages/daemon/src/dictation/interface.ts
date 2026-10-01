@@ -1,121 +1,113 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/daemon — provider-neutral dictation boundary. Dictation is an input capability, not an
-// agent-delivery provider: the daemon knows availability/session grants, while provider packages
-// own credentials, external endpoints, and browser wire protocols.
-
-export type DictationAvailability =
-  | { state: "unconfigured" }
-  | {
-      state: "ready";
-      provider: string;
-      display_name: string;
-      client_module: string;
-    }
-  | {
-      state: "error";
-      provider: string;
-      display_name: string;
-      code: string;
-      message: string;
-    };
-
-export interface DictationSessionGrant {
-  provider: string;
-  websocket_url: string;
-  access_token: string;
-  expires_at: string;
+export const DICTATION_CONTEXT_LIMIT = 8192;
+export const DICTATION_AUDIO_LIMIT = 12 * 1024 * 1024;
+export const DICTATION_CONSENT_VERSION = 1;
+export interface DictationSettings {
+  enabled: boolean;
+  context: boolean;
+  cleanup: boolean;
+  credential_present: boolean;
+  /** Metadata lookup failed; configured toggles/revision remain available for disabling. */
+  credential_error?: string;
+  revision: string;
+  consent_version: number;
 }
-
-export interface DictationBrowserAsset {
-  route: string;
-  filePath: string;
-  contentType: string;
+export interface DictationSettingsUpdate {
+  enabled: boolean;
+  context: boolean;
+  cleanup: boolean;
+  revision: string;
+  consent_version: number;
+  api_key?: string;
 }
-
+export type DictationAvailability = DictationSettings & {
+  state: "ready" | "unconfigured" | "error";
+  message?: string;
+};
+export interface DictationInput {
+  audio: Uint8Array;
+  mediaType: "audio/webm" | "audio/mp4";
+  context?: string;
+  revision: string;
+  signal: AbortSignal;
+}
+export interface DictationResult {
+  text: string;
+  cleanup: "off" | "applied" | "failed";
+}
 export type DictationProviderErrorCode =
   | "unconfigured"
   | "credential-unavailable"
   | "authentication-failed"
   | "rate-limited"
+  | "quota-exceeded"
+  | "model-unavailable"
   | "timeout"
   | "provider-unavailable"
-  | "invalid-response";
-
+  | "invalid-response"
+  | "invalid-input"
+  | "stale-settings"
+  | "busy"
+  | "cancelled";
 export class DictationProviderError extends Error {
   constructor(
     readonly code: DictationProviderErrorCode,
-    message: string,
+    message: string = code,
   ) {
     super(message);
     this.name = "DictationProviderError";
   }
 }
-
 export interface DictationProvider {
   id: string;
-  displayName: string;
-  clientModule: string;
-  /** Pure local configuration check used to construct CSP. It must never contact the provider. */
-  isEnabled(): boolean;
-  /** Exact external origins the browser adapter may connect to after foreground activation. */
-  connectOrigins(): readonly string[];
-  /** Local-only availability check. Credential presence is allowed; provider liveness is not. */
   status(): Promise<DictationAvailability>;
-  /** The only daemon-side external call: mint a short-lived client credential. */
-  createSession(signal?: AbortSignal): Promise<DictationSessionGrant>;
-  browserAssets(): readonly DictationBrowserAsset[];
+  settings(): Promise<DictationSettings>;
+  update(settings: DictationSettingsUpdate, signal?: AbortSignal): Promise<DictationSettings>;
+  remove(revision: string, signal?: AbortSignal): Promise<DictationSettings>;
+  transcribe(input: DictationInput): Promise<DictationResult>;
+  dispose(): void;
 }
-
-/** Generic provider lookup. An empty registry is the supported zero-dictation core. */
+export const EMPTY_DICTATION_SETTINGS: DictationSettings = {
+  enabled: false,
+  context: true,
+  cleanup: false,
+  credential_present: false,
+  revision: "unconfigured",
+  consent_version: DICTATION_CONSENT_VERSION,
+};
 export class DictationProviderRegistry {
   private readonly providers = new Map<string, DictationProvider>();
-
   register(provider: DictationProvider): void {
     if (this.providers.has(provider.id)) throw new Error(`dictation provider already registered: ${provider.id}`);
     this.providers.set(provider.id, provider);
   }
-
-  get(id: string): DictationProvider | undefined {
+  get(id: string) {
     return this.providers.get(id);
   }
-
-  list(): readonly DictationProvider[] {
+  list() {
     return [...this.providers.values()];
   }
-
-  private enabled(): DictationProvider | undefined {
-    return this.list().find((provider) => provider.isEnabled());
+  private configured(): DictationProvider {
+    const provider = this.list()[0];
+    if (!provider) throw new DictationProviderError("unconfigured");
+    return provider;
   }
-
   async status(): Promise<DictationAvailability> {
-    for (const provider of this.providers.values()) {
-      const status = await provider.status();
-      if (status.state !== "unconfigured") return status;
-    }
-    return { state: "unconfigured" };
+    return this.list()[0]?.status() ?? { ...EMPTY_DICTATION_SETTINGS, state: "unconfigured" };
   }
-
-  async createSession(signal?: AbortSignal): Promise<DictationSessionGrant> {
-    const provider = this.enabled();
-    if (!provider) throw new DictationProviderError("unconfigured", "dictation is not configured");
-    return provider.createSession(signal);
+  async settings(): Promise<DictationSettings> {
+    return this.list()[0]?.settings() ?? { ...EMPTY_DICTATION_SETTINGS };
   }
-
-  enabledConnectOrigins(): readonly string[] {
-    return [
-      ...new Set(
-        this.list()
-          .filter((provider) => provider.isEnabled())
-          .flatMap((provider) => provider.connectOrigins()),
-      ),
-    ];
+  update(settings: DictationSettingsUpdate, signal?: AbortSignal) {
+    return this.configured().update(settings, signal);
   }
-
-  browserAsset(route: string): DictationBrowserAsset | undefined {
-    for (const provider of this.providers.values()) {
-      const asset = provider.browserAssets().find((candidate) => candidate.route === route);
-      if (asset) return asset;
-    }
-    return undefined;
+  remove(revision: string, signal?: AbortSignal) {
+    return this.configured().remove(revision, signal);
+  }
+  transcribe(input: DictationInput) {
+    return this.configured().transcribe(input);
+  }
+  dispose() {
+    for (const provider of this.providers.values()) provider.dispose();
   }
 }

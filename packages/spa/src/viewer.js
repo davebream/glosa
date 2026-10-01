@@ -232,7 +232,9 @@ export function mountApp(
       void Promise.resolve(desktopShell.openExternal(url)).catch(() => {});
     } else window.open(url, "_blank", "noopener,noreferrer");
   }
-  const dictationController = injectedDictationController ?? createDictationController({ dataAccess });
+  const dictationController =
+    injectedDictationController ??
+    createDictationController({ dataAccess, onSettings: () => openAgentSettings("dictation") });
   const ownsDictationController = !injectedDictationController;
 
   const shell = createViewerShell(root, {
@@ -717,12 +719,13 @@ export function mountApp(
     );
     return tools;
   }
-  function openAgentSettings() {
+  function openAgentSettings(section) {
     if (!dock) return;
     const id = settingsPanelId(),
       panel = dock.api.getPanel(id);
     if (panel) {
       panel.api.setActive();
+      if (section === "dictation") panes.get(id)?.showDictation?.();
       return;
     }
     dock.api.addPanel({
@@ -730,7 +733,7 @@ export function mountApp(
       component: "pane",
       tabComponent: "pane",
       title: "Settings",
-      params: { kind: "agent-settings" },
+      params: { kind: "agent-settings", section: section === "dictation" ? section : undefined },
     });
   }
   async function newChat(profile, settings, sourceChatId, group) {
@@ -1457,6 +1460,7 @@ export function mountApp(
         openOutside,
         onChange: () => void refreshChats().catch(() => {}),
       });
+      if (params.section === "dictation") pane.showDictation();
       panes.set(id, pane);
       return pane;
     }

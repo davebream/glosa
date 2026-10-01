@@ -639,7 +639,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     watchEmissions: backend.watchEmissions,
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,
-    spaAssets: spaAssetsFor(bootSnapshot !== null, backend.dictationRegistry),
+    spaAssets: spaAssetsFor(bootSnapshot !== null),
     installChanged: () => installGuard?.fenced === true,
     home,
     recordRejection: createRejectionRecorder((line) => log(home, `${instanceId} ${line}`)),
@@ -665,12 +665,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     if (new URL(request.url).pathname === "/api/handshake") await startupReady;
     return apiFetch(request, server);
   };
-  const server = await bindMainOrExit(
-    home,
-    port,
-    readyApiFetch,
-    spaCspHeaders(classFPort, backend.dictationRegistry.enabledConnectOrigins()),
-  );
+  const server = await bindMainOrExit(home, port, readyApiFetch, spaCspHeaders(classFPort));
 
   // Lock acquisition happens IMMEDIATELY after the main-port bind — before the class-F bind —
   // deliberately mirroring P1.2's original "bind, then lock" ordering (A5 §F13: "Bind-before-
@@ -785,6 +780,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
       [server, classFServer, socketServer],
       () => {
         // The reason rides the SSE `bye` so a page can tell an update from an ordinary restart.
+        backend.dictationRegistry.dispose();
         shutdownController.abort(reason);
         tokenAuthority.close();
       },
@@ -873,13 +869,13 @@ function captureBootSnapshot(): InstallSnapshot {
 
 /** R-L1/R-L6 (#432): an installed daemon serves only the bytes it read at boot; a checkout reads per
  *  request so an edit shows on reload. Both stamp the page with this build's hash. */
-function spaAssetsFor(installed: boolean, dictation: DictationProviderRegistry | undefined) {
+function spaAssetsFor(installed: boolean) {
   const buildHash = parseBuildId(BUILD_ID)?.sourceHash ?? null;
   if (installed && buildHash !== null) {
-    const providerAssets = dictation?.list().flatMap((provider) => [...provider.browserAssets()]) ?? [];
+    const providerAssets: [] = [];
     return pinnedSpaAssets({ buildHash, providerAssets });
   }
-  return liveSpaAssets({ buildHash, providerAsset: (route) => dictation?.browserAsset(route) });
+  return liveSpaAssets({ buildHash });
 }
 
 async function bindMainOrExit(

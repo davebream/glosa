@@ -388,7 +388,6 @@ function handleHandshake(ctx: ApiContext): () => Response {
 function spaSource(ctx: ApiContext): SpaAssetSource {
   return (ctx.spaAssets ??= liveSpaAssets({
     buildHash: null,
-    providerAsset: (route) => ctx.dictationRegistry?.browserAsset(route),
   }));
 }
 
@@ -3090,7 +3089,11 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "GET" && pathname === "/api/status") {
     return { routeClass: "authed-read", handle: () => handleStatusAggregate(ctx) };
   }
-  const dictationRoute = dictationRoutes({ registry: ctx.dictationRegistry }, method, pathname);
+  const dictationRoute = dictationRoutes(
+    { registry: ctx.dictationRegistry, shutdownSignal: ctx.shutdownSignal },
+    method,
+    pathname,
+  );
   if (dictationRoute) return dictationRoute;
 
   let m: RegExpMatchArray | null;
@@ -3277,10 +3280,9 @@ export function createApiFetch(
   const overSocket = transport === "socket";
 
   return async (req, server) => {
-    // Read the local consent flag for every response. `glosa dictation configure|disable` can run
-    // beside a live daemon; the next page reload must receive the corresponding CSP without a
-    // daemon restart. This check is filesystem-only and never probes the provider.
-    const csp = spaCspHeaders(ctx.classFPort, ctx.dictationRegistry?.enabledConnectOrigins() ?? []);
+    // Dictation reaches only the authenticated daemon. The renderer keeps the same-origin CSP
+    // independently of provider configuration.
+    const csp = spaCspHeaders(ctx.classFPort);
     try {
       const url = new URL(req.url);
 

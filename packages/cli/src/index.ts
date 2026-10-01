@@ -664,7 +664,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       args: {
         ...GLOBAL_ARGS,
         action: { type: "positional", required: true, description: "Dictation action: configure, status, or disable" },
-        provider: { type: "string", description: "Dictation provider (configure requires wispr-flow)" },
+        provider: { type: "string", description: "Dictation provider (configure requires openai)" },
       },
     },
     async (context) => {
@@ -966,7 +966,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     const { ClaudeManagedAdapter } = await import("../../providers/claude-code/src/managed.ts");
     const { claudeRuntimeCandidate } = await import("../../providers/claude-code/src/runtime.ts");
     const { CodexProvider } = await import("../../providers/codex/src/index.ts");
-    const { WisprFlowProvider } = await import("../../providers/wispr-flow/src/index.ts");
+    const { OpenAITranscriptionProvider } = await import("../../providers/openai-transcription/src/index.ts");
     await bootDaemon({
       managedAgentFactories: [() => new ClaudeManagedAdapter(), () => new CodexManagedAdapter()],
       // Experimental execution requires the person's versioned, per-runtime acceptance in
@@ -989,9 +989,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
             sendPush: (session, entry) => pushRegistry.send(session.session_id, entry),
           }),
       ],
-      dictationProviderFactories: [
-        ({ home }) => new WisprFlowProvider({ home, allowDevelopmentEnv: isSourceCheckout() }),
-      ],
+      dictationProviderFactories: [({ home }) => new OpenAITranscriptionProvider({ home })],
     });
   });
 

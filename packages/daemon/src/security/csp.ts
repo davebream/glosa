@@ -5,31 +5,12 @@
 
 import { CLASSF_HOSTNAME, SPA_HOSTNAMES } from "./hosts.ts";
 
-function externalConnectSources(origins: readonly string[]): string {
-  const allowed = new Set<string>();
-  for (const value of origins) {
-    try {
-      const url = new URL(value);
-      if (url.protocol !== "wss:" || url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
-        continue;
-      }
-      allowed.add(url.origin);
-    } catch {
-      // Provider registrations are trusted code, but malformed policy input still fails closed.
-    }
-  }
-  return [...allowed].sort().join(" ");
-}
-
-/** Attached to every response from the SPA/API listener (GLOSA_PORT). Refuses to ever be
- * framed; only the class-F origin may be embedded as a frame-src. A configured, consented
- * dictation provider may add exact WSS origins; malformed or non-WSS values are ignored. */
-export function spaCspHeaders(classFPort: number, connectOrigins: readonly string[] = []): Record<string, string> {
-  const external = externalConnectSources(connectOrigins);
+/** The SPA communicates only with its own loopback daemon. */
+export function spaCspHeaders(classFPort: number): Record<string, string> {
   return {
     "Content-Security-Policy":
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-      `img-src 'self' data:; font-src 'self'; connect-src 'self'${external ? ` ${external}` : ""}; ` +
+      `img-src 'self' data:; font-src 'self'; connect-src 'self'; ` +
       `frame-src http://${CLASSF_HOSTNAME}:${classFPort}; frame-ancestors 'none'; base-uri 'none'; ` +
       "form-action 'self'; object-src 'none';",
     "Referrer-Policy": "no-referrer",

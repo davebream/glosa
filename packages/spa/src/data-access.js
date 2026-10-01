@@ -742,10 +742,32 @@ export function createDataAccess(deps = {}) {
     getDictationStatus() {
       return requestJson("/api/dictation/status");
     },
-    /** Foreground-only session grant. The returned JWT stays in renderer memory.
-     * @param {AbortSignal} [signal] */
-    createDictationSession(signal) {
-      return requestJson("/api/dictation/session", { method: "POST", signal });
+    getDictationSettings() {
+      return requestJson("/api/dictation/settings");
+    },
+    /** @param {Record<string, unknown>} settings */
+    saveDictationSettings(settings) {
+      return requestJson("/api/dictation/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+    },
+    /** @param {string} revision */
+    removeDictationKey(revision) {
+      return requestJson("/api/dictation/settings", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ revision }),
+      });
+    },
+    /** @param {Blob} audio @param {string} context @param {string} revision @param {AbortSignal} signal */
+    transcribeDictation(audio, context, revision, signal) {
+      const body = new FormData();
+      body.append("audio", audio, audio.type.includes("mp4") ? "dictation.mp4" : "dictation.webm");
+      if (context) body.append("context", context);
+      body.append("revision", revision);
+      return requestJson("/api/dictation/transcribe", { method: "POST", body, signal });
     },
     /** `GET /api/workspaces` — not one of R6's five named functions, but needed by the sidebar
      * to have ANY slug to call the other five with; without it something else would have to call

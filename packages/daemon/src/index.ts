@@ -28,10 +28,12 @@ export { AgentProviderRegistry, recordDelivery } from "./agent-provider/interfac
 export { SessionPushRegistry } from "./agent-provider/push-registry.ts";
 export type {
   DictationAvailability,
-  DictationBrowserAsset,
   DictationProvider,
   DictationProviderErrorCode,
-  DictationSessionGrant,
+  DictationSettings,
+  DictationSettingsUpdate,
+  DictationInput,
+  DictationResult,
 } from "./dictation/interface.ts";
 export { DictationProviderError, DictationProviderRegistry } from "./dictation/interface.ts";
 export * from "./bus/index.ts";

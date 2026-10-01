@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The SPA contract major this shell was built against (A1: major mismatch → reload, never a fix). */
-export const SHELL_CONTRACT_MAJOR = "1";
+export const SHELL_CONTRACT_MAJOR = "2";
 
 /** Loopback is the only place the shell's renderer may talk to (invariant 5; readiness note §3). */
 export function isLoopbackHost(hostname: string): boolean {
@@ -33,7 +33,7 @@ export function egressDecision(url: string): "allow" | "cancel" {
   return isLoopbackHost(parsed.hostname) ? "allow" : "cancel";
 }
 
-/** One foreground Linux dictation lease, never a session-wide media or network exception. */
+/** One foreground dictation lease, never a session-wide media or network exception. */
 export function dictationPermissionAllowed(input: {
   platform: string;
   active: boolean;
@@ -44,7 +44,7 @@ export function dictationPermissionAllowed(input: {
   mediaTypes: readonly string[];
 }): boolean {
   return (
-    input.platform === "linux" &&
+    ["linux", "darwin"].includes(input.platform) &&
     input.active &&
     input.mainFrame &&
     Boolean(input.expectedOrigin) &&
@@ -52,22 +52,6 @@ export function dictationPermissionAllowed(input: {
     input.permission === "media" &&
     input.mediaTypes.length === 1 &&
     input.mediaTypes[0] === "audio"
-  );
-}
-
-export function dictationEgressAllowed(input: {
-  platform: string;
-  active: boolean;
-  mainFrame: boolean;
-  origin?: string;
-  expectedOrigin?: string;
-  url: string;
-  resourceType: string;
-}): boolean {
-  return (
-    dictationPermissionAllowed({ ...input, permission: "media", mediaTypes: ["audio"] }) &&
-    input.resourceType === "webSocket" &&
-    input.url === "wss://platform-api.wisprflow.ai/api/v1/dash/client_ws"
   );
 }
 

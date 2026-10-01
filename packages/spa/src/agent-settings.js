@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { mountDictationSettings } from "./dictation-settings.js";
 import { mountMcpSettings } from "./agent-mcp-settings.js";
 import { appearanceList, CHECK_SVG, paletteList } from "./appearance.js";
 import { actionMenu, agentIcon, agentName } from "./agent-ui.js";
@@ -75,8 +76,11 @@ export function mountAgentSettings(
     el("h2", { className: "glosa-settings-title", textContent: "Appearance" }),
     el("p", { className: "glosa-agent-intro", textContent: "Choose how glosa looks on this device." }),
   ]);
+  const dictationPage = el("section", { className: "glosa-settings-content", hidden: true });
+  const dictationSettings = mountDictationSettings(dictationPage, dataAccess);
   for (const [label, panel] of [
     ["Agents & accounts", agents],
+    ["Dictation", dictationPage],
     ...(appearance || textSize ? [["Appearance", appearancePage]] : []),
   ]) {
     const item = el("button", {
@@ -85,6 +89,7 @@ export function mountAgentSettings(
       "aria-current": panel === agents ? "page" : "false",
       onClick: () => {
         agents.hidden = panel !== agents;
+        dictationPage.hidden = panel !== dictationPage;
         appearancePage.hidden = panel !== appearancePage;
         for (const button of navigation.children)
           button.setAttribute("aria-current", String(button === item ? "page" : "false"));
@@ -220,7 +225,7 @@ export function mountAgentSettings(
   });
   root.append(
     el("h1", { textContent: "Settings" }),
-    el("div", { className: "glosa-settings-layout" }, [navigation, agents, appearancePage]),
+    el("div", { className: "glosa-settings-layout" }, [navigation, agents, appearancePage, dictationPage]),
   );
   host.append(root);
   function paintInstallation(row, progress, connectionLost = false) {
@@ -973,9 +978,13 @@ export function mountAgentSettings(
     element: root,
     kind: "agent-settings",
     title: "Settings",
+    showDictation() {
+      [...navigation.children].find((item) => item.textContent === "Dictation")?.click();
+    },
     ready,
     destroy() {
       disposed = true;
+      dictationSettings.destroy();
       stopInstallationPolling();
       stopAppearance?.();
       textSizeControl?.destroy();

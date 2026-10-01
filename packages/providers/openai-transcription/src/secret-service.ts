@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { accessSync, constants } from "node:fs";
-import { WISPR_FLOW_KEYCHAIN_SERVICE, type WisprFlowCredentialStore } from "./keychain.ts";
+import { OPENAI_DICTATION_KEYCHAIN_SERVICE, type OpenAIDictationCredentialStore } from "./keychain.ts";
 
 export type CredentialFailure = "locked" | "unavailable" | "denied" | "cancelled" | "timeout" | "invalid";
 const MESSAGES: Record<CredentialFailure, string> = {
@@ -10,7 +10,7 @@ const MESSAGES: Record<CredentialFailure, string> = {
   denied: "Desktop wallet access was denied. Allow Glosa access in your wallet settings, then retry.",
   cancelled: "The desktop wallet operation was cancelled. Retry configuration when ready.",
   timeout: "The desktop wallet did not respond. Check your desktop session and wallet, then retry.",
-  invalid: "The desktop wallet returned an invalid credential result. Configure Wispr Flow again.",
+  invalid: "The desktop wallet returned an invalid credential result. Configure OpenAI again.",
 };
 
 export class CredentialStoreError extends Error {
@@ -47,6 +47,7 @@ export interface CredentialHelperRequest {
   interactive: boolean;
   signal?: AbortSignal;
   timeoutMs: number;
+  input?: string;
 }
 export interface CredentialHelperResult {
   code: number;
@@ -57,16 +58,20 @@ export interface CredentialHelperResult {
 /** Output is private and bounded even when a helper fails. Never include it in an Error. */
 export async function runCredentialHelper(request: CredentialHelperRequest): Promise<CredentialHelperResult> {
   request.signal?.throwIfAborted();
-  let child: Bun.Subprocess<"inherit" | "ignore", "pipe", "pipe">;
+  let child: Bun.Subprocess<"inherit" | "ignore" | "pipe", "pipe", "pipe">;
   try {
     child = Bun.spawn(request.argv, {
       env: request.env,
-      stdin: request.interactive ? "inherit" : "ignore",
+      stdin: request.input !== undefined ? "pipe" : request.interactive ? "inherit" : "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
   } catch {
     throw new CredentialStoreError("unavailable");
+  }
+  if (request.input !== undefined && child.stdin && typeof child.stdin !== "number") {
+    child.stdin.write(request.input);
+    child.stdin.end();
   }
   let failure: CredentialFailure | undefined;
   const stop = (code: CredentialFailure) => {
@@ -112,7 +117,7 @@ function checked(result: CredentialHelperResult): string {
   throw new CredentialStoreError("unavailable");
 }
 
-export class LinuxSecretServiceCredentialStore implements WisprFlowCredentialStore {
+export class LinuxSecretServiceCredentialStore implements OpenAIDictationCredentialStore {
   constructor(
     private readonly deps: {
       platform?: NodeJS.Platform;
@@ -122,7 +127,7 @@ export class LinuxSecretServiceCredentialStore implements WisprFlowCredentialSto
     } = {},
   ) {}
 
-  private async command(argv: string[], signal?: AbortSignal, interactive = false): Promise<string> {
+  private async command(argv: string[], signal?: AbortSignal, interactive = false, input?: string): Promise<string> {
     if ((this.deps.platform ?? process.platform) !== "linux") throw new CredentialStoreError("unavailable");
     const executable =
       this.deps.executable ??
@@ -141,14 +146,16 @@ export class LinuxSecretServiceCredentialStore implements WisprFlowCredentialSto
         env: credentialHelperEnv(this.deps.env ?? process.env),
         signal,
         interactive,
+        input,
         timeoutMs: interactive ? 120_000 : 5_000,
       }),
     );
   }
 
   private attributes(account: string): string[] {
-    if (!/^[0-9a-f-]{36}$/i.test(account)) throw new CredentialStoreError("invalid");
-    return ["service", WISPR_FLOW_KEYCHAIN_SERVICE, "account", account];
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(account))
+      throw new CredentialStoreError("invalid");
+    return ["service", OPENAI_DICTATION_KEYCHAIN_SERVICE, "account", account];
   }
 
   private async items(account: string, signal?: AbortSignal): Promise<string[]> {
@@ -209,12 +216,12 @@ export class LinuxSecretServiceCredentialStore implements WisprFlowCredentialSto
     return secret;
   }
 
-  async addInteractive(account: string): Promise<void> {
-    // secret-tool uses getpass on inherited TTY input. No key passes through argv or a file.
+  async write(account: string, secret: string, signal?: AbortSignal): Promise<void> {
     await this.command(
-      ["/usr/bin/secret-tool", "store", "--label=Glosa Wispr Flow", ...this.attributes(account)],
-      undefined,
-      true,
+      ["/usr/bin/secret-tool", "store", "--label=Glosa OpenAI dictation", ...this.attributes(account)],
+      signal,
+      false,
+      secret,
     );
   }
 
