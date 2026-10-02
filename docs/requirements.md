@@ -772,7 +772,8 @@ Versioned assets and file operations for transport, safety, provenance and recov
 Directory desks show a separate read-only tier alongside tracked documents and images. This tier
 never participates in document matching, claims, journal capture or shadow Git. Companion and
 loose-file surfaces retain their current inventories. All files is the default view; Documents only
-retains tracked documents, images and their existing directory rows. Folder preferences persist in
+retains tracked documents, images and only their ancestor folders, hiding branches with no matching
+files at any depth. All files retains eligible empty folders. Folder preferences persist in
 glosa home, keyed by canonical folder path, and synchronize across open desks.
 
 Read-only files obey workspace exclusions, dot-directory and symlink refusal, and root/nested
