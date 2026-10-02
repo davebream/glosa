@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { renderMarkdown } from "../../daemon/src/artifact-render.ts";
+import { type DomEnv, installDom } from "./dom-env.ts";
 import {
   agentIdentity,
   agentRequestSummary,
@@ -80,6 +82,136 @@ describe("locateQuote — source→rendered, prove it or give up", () => {
     expect(locateQuote(RENDERED, { exact: "" })).toBeNull();
     expect(locateQuote(RENDERED, null as never)).toBeNull();
   });
+});
+
+describe("source block quotes against the production renderer", () => {
+  let dom: DomEnv;
+  beforeEach(() => {
+    dom = installDom();
+  });
+  afterEach(() => dom.teardown());
+
+  function rendered(source: string) {
+    const root = dom.document.createElement("div");
+    root.innerHTML = renderMarkdown(source);
+    return root.textContent;
+  }
+
+  test.each([
+    "# ",
+    "## ",
+    "### ",
+    "#### ",
+    "##### ",
+    "###### ",
+    "- ",
+    "+ ",
+    "* ",
+    "1. ",
+    "2) ",
+    "> ",
+    ">",
+    "> > ",
+    "> - ### ",
+    "1. > ",
+    "   ### ",
+    "###\t",
+  ])("%s source markers resolve to the exact visible words", (marker) => {
+    const quote = `${marker}The **kind** list (for Dawid's yes)`;
+    const text = rendered(`Opening.\n\n${quote}\n\nEnding.`);
+    const words = "The kind list (for Dawid's yes)";
+    expect(locateQuote(text, { exact: quote })).toEqual({
+      start: text.indexOf(words),
+      end: text.indexOf(words) + words.length,
+    });
+  });
+
+  test("closing heading hashes disappear while literal trailing hashes survive", () => {
+    for (const [source, words] of [
+      ["### Topic ###", "Topic"],
+      ["### Topic#", "Topic#"],
+    ] as const) {
+      const text = rendered(source);
+      expect(locateQuote(text, { exact: source })).toEqual({ start: 0, end: words.length });
+    }
+  });
+
+  test("marker-only prefix lets the visible suffix distinguish the reported heading", () => {
+    const text = rendered("### The kind list (for Dawid's yes)\n\nThe kind list appears again.");
+    expect(locateQuote(text, { exact: "The kind list", prefix: "### ", suffix: " (for Dawid" })).toEqual({
+      start: 0,
+      end: "The kind list".length,
+    });
+  });
+
+  test.each(["### **Chosen** ", "- **Chosen** ", "1. **Chosen** ", "> **Chosen** "])(
+    "visible prefix in %s distinguishes a repeated quote",
+    (prefix) => {
+      const text = rendered(`${prefix}passage\n\nOther passage`);
+      const start = text.indexOf("passage");
+      expect(locateQuote(text, { exact: "passage", prefix })).toEqual({ start, end: start + 7 });
+    },
+  );
+
+  test("a suffix beginning with a block marker distinguishes a repeated quote", () => {
+    const text = rendered("passage\n\n## **Chosen** ending\n\npassage\n\nOther ending");
+    expect(locateQuote(text, { exact: "passage", suffix: "\n\n## **Chosen** ending" })).toEqual({ start: 0, end: 7 });
+  });
+
+  test("both visible contexts must match after normalization", () => {
+    const text = rendered("### Chosen passage first\n\n### Other passage second");
+    expect(locateQuote(text, { exact: "passage", prefix: "### Chosen ", suffix: " second" })).toBeNull();
+  });
+
+  test("multiline block quotes retain rendered offsets after whitespace folding", () => {
+    const exact = "> First **line**\r\n> second line";
+    const text = rendered(`Opening.\n\n${exact}\n\nEnding.`);
+    const words = "First line\nsecond line";
+    expect(locateQuote(text, { exact })).toEqual({
+      start: text.indexOf(words),
+      end: text.indexOf(words) + words.length,
+    });
+  });
+
+  test("folded contexts distinguish repeated multiline quotes", () => {
+    const text = rendered("> Chosen\n> lead passage\n\nOther lead passage");
+    const start = text.indexOf("passage");
+    expect(locateQuote(text, { exact: "passage", prefix: "> Chosen\r\n> lead " })).toEqual({ start, end: start + 7 });
+  });
+
+  test("duplicates remain unanchored when normalization removes all context", () => {
+    const text = rendered("### Repeated\n\n- Repeated");
+    expect(locateQuote(text, { exact: "### Repeated" })).toBeNull();
+    expect(locateQuote(text, { exact: "Repeated", prefix: "> ### ", suffix: "\n- " })).toBeNull();
+  });
+
+  test.each(["### ", "- ", "1. ", "> ", "> - ### "])("marker-only quote %s cannot produce an empty anchor", (exact) => {
+    expect(locateQuote(rendered("Some text"), { exact })).toBeNull();
+  });
+
+  test.each(["####### Topic", "###Topic", "-Topic", "1234567890. Topic", "\\### Topic"])(
+    "invalid or escaped marker %s is not stripped to locate unrelated prose",
+    (exact) => {
+      expect(locateQuote(rendered("Topic"), { exact })).toBeNull();
+    },
+  );
+
+  test("literal markers and their context take precedence over normalized matches", () => {
+    const text = rendered("`### Topic`\n\n### Topic\n\n`### Chosen passage`\n\n### Chosen passage");
+    expect(locateQuote(text, { exact: "### Topic" })).toEqual({ start: 0, end: 9 });
+    const start = text.indexOf("passage");
+    expect(locateQuote(text, { exact: "passage", prefix: "### Chosen " })).toEqual({ start, end: start + 7 });
+  });
+
+  test.each(["-     ", "1.     ", ">     ", "    "])(
+    "indented code after %s preserves its visible heading marker",
+    (prefix) => {
+      const exact = `${prefix}### Literal`;
+      const text = rendered(exact);
+      const start = text.indexOf("### Literal");
+      expect(locateQuote(text, { exact })).toEqual({ start, end: start + "### Literal".length });
+    },
+  );
 });
 
 describe("requestsForArtifact", () => {
