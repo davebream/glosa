@@ -319,6 +319,93 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 40; i++) await Promise.resolve();
   };
 
+  test("documents-only view keeps document and image ancestors, prunes empty branches on refresh, and preserves open tabs", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let view = { mode: "all", show_ignored: false };
+    let artifacts = [{ path: "docs/deep/notes.md", class: "R" }];
+    let images = [{ path: "images/photo.png", kind: "image" }];
+    const da = fakeDataAccess({
+      getWorkspaces: async () => [{ slug: "ws-1", path: "/tmp/ws-1", kind: "directory" }],
+      getArtifacts: async () => artifacts,
+      getImages: async () => ({ images, directories: ["empty", "docs/empty/nested", "docs/deep", "images", "src"] }),
+      getFileView: async () => view,
+      setFileView: async (_slug: string, next: typeof view) => {
+        view = next;
+        return view;
+      },
+      getReadOnlyFiles: async () => ({
+        files: [{ path: "src/data.bin", kind: "read-only", size_bytes: 8, version: "1" }],
+        omitted_count: 0,
+        complete: true,
+      }),
+      // A binary placeholder exercises tab retention without loading the text-viewer bundle.
+      getReadOnlyFile: async () => ({ kind: "placeholder", reason: "binary", size_bytes: 8, file_type: ".bin" }),
+    });
+    const nodes = () =>
+      [...root.querySelectorAll(".glosa-artifact-list [data-node-id]")].map((row) => row.getAttribute("data-node-id"));
+    const clickRow = (id: string) => {
+      const item = [...root.querySelectorAll("[data-node-id]")].find((row) => row.getAttribute("data-node-id") === id);
+      expect(item).toBeDefined();
+      (item!.querySelector(".glosa-tree-row") as any).click();
+    };
+    const changeView = async (mode: string) => {
+      const select = root.querySelector('select[aria-label="Files shown"]') as any;
+      select.value = mode;
+      select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+      await settle();
+    };
+    const unmount = mountApp(root, { dataAccess: da, surfaceKind: "desk" });
+    try {
+      await settle();
+      expect(nodes()).toEqual(["d:docs", "d:empty", "d:images", "d:src"]);
+      clickRow("d:src");
+      clickRow("f:src/data.bin");
+      await settle();
+      const openPane = root.querySelector(".glosa-read-only-pane");
+      expect(openPane).not.toBeNull();
+      expect(openPane!.textContent).toContain("Binary file.");
+
+      await changeView("documents");
+      expect(nodes()).toEqual(["d:docs", "d:images"]);
+      clickRow("d:docs");
+      expect(nodes()).toEqual(["d:docs", "d:docs/deep", "d:images"]);
+      clickRow("d:docs/deep");
+      clickRow("d:images");
+      expect(nodes()).toEqual(["d:docs", "d:docs/deep", "f:docs/deep/notes.md", "d:images", "f:images/photo.png"]);
+      expect(root.querySelector(".glosa-read-only-pane")).toBe(openPane);
+      expect(root.querySelectorAll(".glosa-tab")).toHaveLength(1);
+
+      await changeView("all");
+      expect(nodes()).toContain("d:empty");
+      expect(nodes()).toContain("d:docs/empty");
+      clickRow("d:docs/empty");
+      expect(nodes()).toContain("d:docs/empty/nested");
+      clickRow("d:src");
+      expect(nodes()).toContain("f:src/data.bin");
+      expect(root.querySelector(".glosa-read-only-pane")).toBe(openPane);
+
+      await changeView("documents");
+      artifacts = [];
+      da.stream.handlers?.onEvent?.({ event: "artifact_index", data: {} });
+      await settle();
+      expect(nodes()).toEqual(["d:images", "f:images/photo.png"]);
+
+      images = [];
+      da.stream.handlers?.onEvent?.({ event: "artifact_index", data: {} });
+      await settle();
+      expect(nodes()).toEqual([]);
+      const empty = [...root.querySelectorAll("p")].find(
+        (p) => p.textContent === "No documents or images in this folder.",
+      );
+      expect(empty).toBeDefined();
+      expect(empty!.hidden).toBe(false);
+      expect(root.querySelector(".glosa-read-only-pane")).toBe(openPane);
+    } finally {
+      unmount();
+    }
+  });
+
   /** A fake with the star routes (A1 §5.21) over an in-memory store, and live workspaces that a
    * reopened star joins. */
   function starringDataAccess({

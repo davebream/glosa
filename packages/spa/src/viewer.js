@@ -1972,7 +1972,7 @@ export function mountApp(
       ...(fileView.mode === "all" ? knownReadOnly.values() : []),
     ];
     artifactListEmpty.hidden = files.length > 0;
-    artifactNavigator.setArtifacts(files, knownDirectories);
+    artifactNavigator.setArtifacts(files, fileView.mode === "documents" ? [] : knownDirectories);
     markNavigatorOpenSet();
     refreshTabs();
   }

@@ -1600,7 +1600,9 @@ with retry guidance. The listing retains the first 10,000 entries of sorted dept
 and counts additional eligible files; incomplete scans cannot promise a total.
 
 The SPA requests this subscription only on desks and exposes controls only for directories.
-Documents only hides read-only rows without closing their tabs. Changing Show ignored files
+Documents only retains tracked documents, images and their ancestor folders. It hides read-only
+rows and folders with no documents or images anywhere inside, without closing open tabs. All files
+retains eligible empty folders. Changing Show ignored files
 revalidates open tabs. Old daemons returning 404 hide the unsupported controls. The read-only
 viewer has its own persisted panel kind and never falls back to a document editor.
 
