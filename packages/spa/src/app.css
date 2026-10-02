@@ -8004,14 +8004,8 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-message[data-kind="human"] .glosa-chat-text {
   text-wrap: pretty;
 }
-/* A message not yet sent on (queued or held) is in pencil: an outline, not the bubble's fill. */
-.glosa-chat-message[data-kind="human"][data-pending] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--border);
-  color: var(--pencil);
-}
-/* Where a waiting or cancelled message stands, on the bubble's own edge, with its way out as
-   recessive verbs. */
+/* Where a cancelled message stands, on the bubble's own edge, with its way out as a recessive
+   verb. */
 .glosa-chat-turn-state {
   display: flex;
   flex-wrap: wrap;
@@ -8223,6 +8217,49 @@ nav.glosa-chat-actions[hidden] {
 }
 .glosa-chat-composer:focus-within {
   border-color: var(--ink);
+}
+/* What waits to be sent is the top of the composer, not a card of its own: one line a message in
+   pencil, a word in Muted sans for where it stands, its way out as recessive verbs, and one Quiet
+   Border hairline between it and the draft. The word, not a colour, says the state. */
+.glosa-chat-tray {
+  list-style: none;
+  margin: 0 0 2px;
+  padding: 4px 13px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.glosa-chat-tray[hidden] {
+  display: none;
+}
+.glosa-chat-tray li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-height: 28px;
+}
+.glosa-chat-tray-state {
+  flex: none;
+  min-width: 4.4em;
+  font: var(--text-xs) / 1.5 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.glosa-chat-tray li[data-kind="failed"] .glosa-chat-tray-state {
+  color: var(--ink);
+}
+.glosa-chat-tray-words {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: calc(var(--chat-size) * 0.94) / 1.5 var(--font-serif);
+  color: var(--pencil);
+}
+.glosa-chat-tray-verbs {
+  flex: none;
+  display: flex;
+  gap: var(--space-3);
+  font: var(--text-xs) / 1.5 var(--font-sans);
 }
 .glosa-chat-pane .glosa-chat-draft,
 .glosa-chat-pane .glosa-chat-reference-mirror {

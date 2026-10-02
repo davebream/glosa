@@ -208,7 +208,7 @@ valid UUIDs, case-insensitively. Missing, malformed and same-boot evidence stays
 PIDs never authorize a signal after restart.
 
 Limits include starting/stopping/unknown reservations: six native processes globally, four managed
-turns, two turns per account and one active plus one queued user turn per chat. One management task
+turns, two turns per account and one active plus up to five waiting user turns per chat. One management task
 (login, probe, discovery or installation) runs globally. Native handshake/probe is bounded to thirty
 seconds; control replies to fifteen seconds. Explicit runtime installation allows ten minutes.
 Native inference has no arbitrary wall-time cutoff. Cancellation first fences local authority, then

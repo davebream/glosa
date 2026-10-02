@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
-import { elapsedLabel, stepLabel, turnActivity } from "../src/chat-activity.js";
+import { chatQueue, elapsedLabel, stepLabel, turnActivity } from "../src/chat-activity.js";
 
 const tool = (id: string, name: string, status: string, text = "") => ({ id, kind: "tool", name, status, text });
 
@@ -57,4 +57,30 @@ test("a turn at work says what it is doing now; a finished one keeps only its st
 
 test("elapsed time reads as a person counts it", () => {
   expect([0, 8.9, 59, 60, 65, 600].map(elapsedLabel)).toEqual(["0s", "8s", "59s", "1m 00s", "1m 05s", "10m 00s"]);
+});
+
+test("chatQueue: the message at work or starting is in the thread, the rest wait in the tray in order", () => {
+  const turn = (id: string, status: string, more = {}) => ({ id, status, text: id, ...more });
+  // A reply at work: everything behind it waits, counted from "Next".
+  const busy = chatQueue([turn("a", "running"), turn("b", "queued"), turn("c", "held"), turn("d", "queued")]);
+  expect(busy.active!.id).toBe("a");
+  expect(busy.head).toBeNull();
+  expect(busy.tray.map((row) => `${row.id}:${row.label}`)).toEqual(["b:Next", "c:Held", "d:Queued · 2"]);
+  expect([...busy.hidden]).toEqual(["b", "c", "d"]);
+  // Nothing at work: the first message free to go is starting, so it is in the thread, not the tray.
+  const idle = chatQueue([turn("a", "completed"), turn("b", "held"), turn("c", "queued"), turn("d", "queued")]);
+  expect(idle.head!.id).toBe("c");
+  expect(idle.tray.map((row) => `${row.id}:${row.label}`)).toEqual(["b:Held", "d:Next"]);
+  // Sent here and not yet taken: in the thread when nothing is ahead, otherwise at the tray's end.
+  const sending = { id: "x", state: "sending" as const, text: "x" };
+  expect(chatQueue([turn("a", "completed")], [sending]).localHead!.id).toBe("x");
+  const behind = chatQueue([turn("a", "running")], [sending, { id: "y", state: "failed", text: "y" }]);
+  expect(behind.localHead).toBeNull();
+  expect(behind.tray.map((row) => `${row.id}:${row.label}`)).toEqual(["x:Sending", "y:Not sent"]);
+  // An entry the daemon has after all is the daemon's turn, not a second row.
+  expect(chatQueue([turn("a", "running"), turn("x", "queued")], [sending]).tray.map((row) => row.id)).toEqual(["x"]);
+  // Cancelled before it reached the agent, a message is not in the thread unless it was kept.
+  const cancelled = [turn("a", "cancelled"), turn("b", "cancelled", { started: true })];
+  expect([...chatQueue(cancelled).hidden]).toEqual(["a"]);
+  expect([...chatQueue(cancelled, [], new Set(["a"])).hidden]).toEqual([]);
 });

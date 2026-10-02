@@ -74,6 +74,8 @@ interface LiveRun {
   fenced: boolean;
   dispatched: boolean;
   cancelling?: boolean;
+  /** Stopped so a waiting message the person chose can go next: the rest of the queue is not held. */
+  sendNow?: boolean;
   finishing: boolean;
   finishingPromise?: Promise<void>;
   starting: Set<Promise<unknown>>;
@@ -98,6 +100,9 @@ interface LoginOperation {
   timer?: ReturnType<typeof setTimeout>;
 }
 const terminalStates = new Set(["completed", "cancelled", "failed", "outcome_unknown"]);
+const waitingStates = new Set(["accepted", "queued", "held"]);
+/** How many of a chat's messages may wait behind the one at work (A5). */
+const MAX_WAITING_TURNS = 5;
 // Only the asynchronous call chain of native interrupt may write after the run fence.
 // Other queued writes retain their original context and remain rejected.
 const cancellationContext = new AsyncLocalStorage<LiveRun>();
@@ -356,6 +361,9 @@ export class ManagedChatService {
   readonly store: AgentStore;
   private readonly runs = new Map<string, LiveRun>();
   private readonly ready = new Set<string>();
+  /** The waiting turn a person asked to send next, per chat. In memory only: waiting turns are held
+   * after a restart, so the choice has nothing left to order. */
+  private readonly sendNext = new Map<string, string>();
   private readonly fencedWorkspaces = new Set<string>();
   private management?: LoginOperation;
   private closed = false;
@@ -1617,8 +1625,8 @@ export class ManagedChatService {
     if (!state.settings.model) throw new ManagedAgentError("unsupported-model", "Choose a model before sending.", 422);
     if (state.configRevision !== input.configRevision || state.draftRevision !== input.draftRevision)
       throw new ManagedAgentError("stale-chat", "Chat settings or the draft changed. Refresh before sending.");
-    if (state.turns.some((t) => ["accepted", "queued", "held"].includes(t.status)))
-      throw new ManagedAgentError("queue-full", "There is already a waiting turn in this chat.");
+    if (state.turns.filter((t) => waitingStates.has(t.status)).length >= MAX_WAITING_TURNS)
+      throw new ManagedAgentError("queue-full", "Five messages are already waiting in this chat.");
     validateReferences(input.text, input.references);
     this.attachments(log, input.attachments);
     if (
@@ -1696,6 +1704,32 @@ export class ManagedChatService {
     this.ready.add(chatId);
     this.pump();
   }
+  /** Sends one waiting message next. A reply still at work is stopped first; the other waiting
+   * messages keep their order behind the chosen one. */
+  async sendNow(workspace: ChatWorkspace, chatId: string, turnId: string): Promise<void> {
+    const log = this.chat(workspace, chatId),
+      turn = log.state.turns.find((item) => item.id === turnId);
+    if (!turn || !waitingStates.has(turn.status))
+      throw new ManagedAgentError("turn-not-waiting", "Only a waiting message can be sent now.");
+    this.sendNext.set(chatId, turnId);
+    try {
+      if (turn.status === "held") this.resume(workspace, chatId, turnId);
+    } catch (error) {
+      this.sendNext.delete(chatId);
+      throw error;
+    }
+    const run = this.runs.get(chatId);
+    if (run && run.turnId !== turnId) {
+      const atWork = log.state.turns.find((item) => item.id === run.turnId);
+      // Only a reply the person ends here lets the queue move on. One that already failed on its
+      // own is still being cleared up, and what waits behind it is held for review as always.
+      run.sendNow = !run.finishing && !!atWork && !terminalStates.has(atWork.status);
+      await this.stop(workspace, chatId, run.turnId);
+      return;
+    }
+    this.ready.add(chatId);
+    this.pump();
+  }
   deleteChat(workspace: ChatWorkspace, chatId: string): void {
     this.validateWorkspace(workspace);
     if (this.runs.has(chatId) || this.options.ownershipUnknown?.())
@@ -1715,7 +1749,10 @@ export class ManagedChatService {
           if (this.runs.has(chatId)) continue;
           const log = this.store.chat(chatId),
             state = log.state;
-          const turn = state.turns.find((item) => item.status === "queued");
+          const next = this.sendNext.get(chatId);
+          const turn =
+            state.turns.find((item) => item.id === next && item.status === "queued") ??
+            state.turns.find((item) => item.status === "queued");
           if (!turn) {
             this.ready.delete(chatId);
             continue;
@@ -1733,6 +1770,10 @@ export class ManagedChatService {
             });
             continue;
           }
+          // The choice is spent only once its turn really goes: a chat passed over at the account's
+          // limit keeps it for the next pass.
+          if (turn.id === next || !state.turns.some((item) => item.id === next && waitingStates.has(item.status)))
+            this.sendNext.delete(chatId);
           const run: LiveRun = {
             chatId,
             turnId: turn.id,
@@ -2213,7 +2254,9 @@ export class ManagedChatService {
         status: stopped ? "cancelled" : "outcome_unknown",
         ...(stopped ? {} : { error: "The run could not be confirmed stopped. New execution remains blocked." }),
       });
-    if (finished?.status !== "completed")
+    // A reply stopped by Send now was ended by the person to let their own queue move on, so the
+    // queue is not held. A stop that could not be confirmed still blocks everything behind it.
+    if (finished?.status !== "completed" && !(run.sendNow && stopped))
       for (const queued of log.state.turns) {
         if (["accepted", "queued"].includes(queued.status))
           log.append({
