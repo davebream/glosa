@@ -117,6 +117,7 @@ export const SPA_ASSETS: Readonly<Record<string, string>> = {
   "agent-ui.js": "text/javascript; charset=utf-8",
   "agent-settings.js": "text/javascript; charset=utf-8",
   "agent-login.js": "text/javascript; charset=utf-8",
+  "chat-activity.js": "text/javascript; charset=utf-8",
   "chat-markdown.js": "text/javascript; charset=utf-8",
   "vendor/markdown-it.js": "text/javascript; charset=utf-8",
   "composer-picker.js": "text/javascript; charset=utf-8",

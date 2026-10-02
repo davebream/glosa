@@ -2067,7 +2067,7 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
     const rect=(el)=>{const r=el.getBoundingClientRect();return {left:r2(r.left),right:r2(r.right),width:r2(r.width)};};
     const human=document.querySelector('.glosa-chat-message[data-kind="human"]');
     const reasoning=document.querySelector('.glosa-chat-message[data-kind="reasoning"] .glosa-chat-text');
-    const tool=document.querySelector('.glosa-chat-message[data-kind="detail"] .glosa-chat-text');
+    const tool=document.querySelector('.glosa-chat-steps .glosa-chat-step-detail');
     const treatment=(el)=>{const s=getComputedStyle(el);return {
       padding:[s.paddingTop,s.paddingRight,s.paddingBottom,s.paddingLeft].join(' '),
       background:s.backgroundColor===surface?'surface':s.backgroundColor,radius:s.borderRadius};};
@@ -2188,15 +2188,15 @@ describe("#406 — the reading surfaces at the sizes a reader asks for, in a rea
       await page.evaluate(SETTLE);
       expect(
         await page.evaluate<Array<{ kind: string; tag: string; open: boolean }>>(
-          `([...document.querySelectorAll('.glosa-chat-message:is([data-kind="reasoning"],[data-kind="detail"])')]
+          `([...document.querySelectorAll('.glosa-chat-message:is([data-kind="reasoning"],[data-kind="steps"])')]
           .map(row=>({kind:row.dataset.kind,tag:row.tagName.toLowerCase(),open:row.open})))`,
         ),
-        "reasoning and tool output begin as closed disclosures with distinct row kinds",
+        "reasoning and the turn's tool steps begin as closed disclosures with distinct row kinds",
       ).toEqual([
         { kind: "reasoning", tag: "details", open: false },
-        { kind: "detail", tag: "details", open: false },
+        { kind: "steps", tag: "details", open: false },
       ]);
-      await page.evaluate(`document.querySelectorAll('.glosa-chat-message:is([data-kind="reasoning"],[data-kind="detail"])')
+      await page.evaluate(`document.querySelectorAll('.glosa-chat-message:is([data-kind="reasoning"],[data-kind="steps"]), .glosa-chat-steps li details')
         .forEach(row=>row.open=true)`);
       const DECISIONS = "document.querySelector('.glosa-chat-decisions')";
       const decisions: Record<number, DecisionReading> = {
