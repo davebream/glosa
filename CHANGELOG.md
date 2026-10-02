@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The chat composer's effort control is a button instead of a menu. Each press steps to the next
+  level and the highest wraps to the lowest. Arrow Up and Arrow Down step in either direction.
+
 ## [0.1.0-alpha.40] · 2026-10-02
 
 ### Fixed

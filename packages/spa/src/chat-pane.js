@@ -3,7 +3,15 @@
 import { createComposerPicker } from "./composer-picker.js";
 import { mountAgentLogin } from "./agent-login.js";
 import { mountMcpSettings } from "./agent-mcp-settings.js";
-import { actionMenu, agentIcon, agentName, effortIcon, effortPresentation, modelPicker } from "./agent-ui.js";
+import {
+  actionMenu,
+  agentIcon,
+  agentName,
+  effortIcon,
+  effortLadder,
+  effortPresentation,
+  modelPicker,
+} from "./agent-ui.js";
 import { loadChatMarkdown } from "./chat-markdown.js";
 import { confirmDialog } from "./dialog.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -78,6 +86,8 @@ export function createChatPane(
     accountGeneration = 0,
     changingAccount = false,
     changingSettings = false,
+    effortSaving = false,
+    effortTarget = null,
     uploading = false,
     stopping = false;
   const lifetime = new AbortController();
@@ -129,26 +139,43 @@ export function createChatPane(
   });
   const manageAccount = el("button", { type: "button", textContent: "Manage account", onClick: onSettings });
   readiness.append(readinessText, loadModels, manageAccount);
-  const field = (label, input) =>
-    el("label", { className: "glosa-chat-field" }, [
-      el("span", { className: "glosa-visually-hidden", textContent: label }),
-      input,
-    ]);
   const picker = modelPicker({
     onModel: (id) => changeSettings(id),
     onProfile: (id) => changeAccount(id),
     onSettings,
   });
-  const effort = el("select", { "aria-label": "Effort" });
-  const effortField = field("Effort", effort);
-  effortField.classList.add("glosa-chat-effort-field");
+  // Effort is a short ladder, so the control steps rather than opens: each press climbs one level
+  // and the top wraps to the bottom. The label holds the width of the longest level, which keeps
+  // the button still under the pointer through a run of presses.
+  const effortMark = effortIcon("");
+  const effortLabel = el("span", { className: "glosa-chat-effort-label" });
   const effortTip = el("span", {
     className: "glosa-control-tooltip",
     role: "tooltip",
     id: `effort-tip-${crypto.randomUUID()}`,
   });
-  effort.setAttribute("aria-describedby", effortTip.id);
-  effortField.append(effortTip);
+  const effort = el(
+    "button",
+    {
+      type: "button",
+      className: "glosa-chat-effort",
+      "aria-describedby": effortTip.id,
+      onClick: () => void stepEffort(1),
+    },
+    [el("span", { className: "glosa-visually-hidden", textContent: "Effort" }), effortMark, effortLabel],
+  );
+  effort.addEventListener("keydown", (event) => {
+    const step = { ArrowUp: 1, ArrowDown: -1 }[event.key];
+    if (!step || event.altKey || event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    void stepEffort(step);
+  });
+  const effortAnnounce = el("span", { className: "glosa-visually-hidden", role: "status" });
+  const effortField = el("span", { className: "glosa-chat-field glosa-chat-effort-field" }, [
+    effort,
+    effortTip,
+    effortAnnounce,
+  ]);
   const tooltipFields = [effortField];
   for (const field of tooltipFields) {
     field.addEventListener("mouseenter", () => delete field.dataset.tooltipDismissed);
@@ -765,31 +792,9 @@ export function createChatPane(
       return false;
     }
   }
-  function pick(select, values, selected, fallbackLabel = selected || "Choose…") {
-    const entries = values.some((v) => v.id === selected) ? values : [{ id: selected, name: fallbackLabel }, ...values];
-    const options = [...select.options];
-    if (
-      options.length !== entries.length ||
-      entries.some((entry, index) => options[index]?.value !== entry.id || options[index]?.textContent !== entry.name)
-    )
-      select.replaceChildren(...entries.map((v) => el("option", { value: v.id, textContent: v.name })));
-    if (select.value !== selected) select.value = selected;
-    // Size to the selected label, not the longest option in the account catalog.
-    const selectedLabel = select.selectedOptions[0]?.textContent ?? "Choose…";
-    select.parentElement.dataset.selection = selectedLabel;
-  }
   function renderControls() {
     if (!state) return;
     const models = catalog?.capabilities?.[state.profileId]?.models ?? [];
-    pick(
-      effort,
-      (models.find((m) => m.id === state.settings.model)?.efforts ?? []).map((id) => ({
-        id,
-        name: effortPresentation(id).label,
-      })),
-      state.settings.effort,
-      effortPresentation(state.settings.effort).label,
-    );
     const profile = catalog?.profiles?.find((p) => p.id === state.profileId);
     const accountReady =
       !!profile?.enabled && !profile.removed && (!profile.auth || profile.auth.state === "authenticated");
@@ -798,7 +803,8 @@ export function createChatPane(
       accountReady &&
       !!selectedModel &&
       (!state.settings.effort || selectedModel.efforts.includes(state.settings.effort));
-    effort.disabled = changingAccount || changingSettings || !selectedModel?.efforts.length;
+    // The control stays live while its own save is in flight, so a run of presses is not dropped.
+    effort.disabled = changingAccount || (changingSettings && !effortSaving) || !selectedModel?.efforts.length;
     readiness.hidden = readyToSend || !executionAvailable() || state.archived;
     readinessText.textContent = !accountReady
       ? "This account needs attention before it can send."
@@ -818,11 +824,19 @@ export function createChatPane(
         state.turns.some((turn) => !["completed", "failed", "cancelled", "outcome_unknown"].includes(turn.status)) ||
         (!!state.runtime && state.runtime.state !== "stopped"),
     });
-    const selectedEffort = effortPresentation(state.settings.effort);
-    effortTip.textContent = `${selectedEffort.label} effort · ${selectedEffort.description} Applies to your next message.`;
-    for (const option of effort.options) option.title = effortPresentation(option.value).description;
-    effortField.querySelector(".glosa-effort-mark")?.remove();
-    effortField.append(effortIcon(state.settings.effort));
+    const levels = effortLevels();
+    const shown = effortTarget ?? state.settings.effort;
+    const selectedEffort = effortPresentation(shown);
+    const next = levels[(levels.indexOf(shown) + 1) % levels.length];
+    effort.dataset.effort = shown;
+    effortLabel.textContent = selectedEffort.label;
+    effortLabel.dataset.widest = [shown, ...levels]
+      .map((id) => effortPresentation(id).label)
+      .reduce((widest, label) => (label.length > widest.length ? label : widest));
+    effortIcon(shown, effortMark);
+    effortTip.textContent =
+      `${selectedEffort.label} effort · ${selectedEffort.description} Applies to your next message.` +
+      (levels.length > 1 && next !== shown ? ` Press for ${effortPresentation(next).label}.` : "");
     menu.popup.querySelector('[data-chat-action="pin"]').textContent = state.pinned ? "Unpin chat" : "Pin chat";
     menu.popup.querySelector('[data-chat-action="archive"]').textContent = state.archived
       ? "Restore chat"
@@ -1476,7 +1490,32 @@ export function createChatPane(
         }),
       ),
   );
-  effort.addEventListener("change", () => void changeSettings(state.settings.model, effort.value));
+  function effortLevels() {
+    const models = catalog?.capabilities?.[state.profileId]?.models ?? [];
+    return effortLadder(models.find((m) => m.id === state.settings.model)?.efforts ?? []);
+  }
+  // A press moves the shown level at once and the save follows it: presses made while a save is in
+  // flight retarget it, and one that fails puts the control back on the level the chat really has.
+  async function stepEffort(step) {
+    const levels = effortLevels();
+    if (effort.disabled || levels.length < 2) return;
+    const at = levels.indexOf(effortTarget ?? state.settings.effort);
+    effortTarget = levels[at < 0 ? 0 : (at + step + levels.length) % levels.length];
+    renderControls();
+    effortAnnounce.textContent = `Effort: ${effortPresentation(effortTarget).label}`;
+    if (effortSaving) return;
+    effortSaving = true;
+    try {
+      while (effortTarget !== null && effortTarget !== state.settings.effort)
+        if (!(await changeSettings(state.settings.model, effortTarget))) break;
+    } finally {
+      effortSaving = false;
+      if (effortTarget !== state.settings.effort)
+        effortAnnounce.textContent = `Effort: ${effortPresentation(state.settings.effort).label}`;
+      effortTarget = null;
+      renderControls();
+    }
+  }
   async function changeSettings(modelId, desiredEffort) {
     if (changingAccount || changingSettings || pending || sendIntent) return false;
     changingSettings = true;

@@ -1722,23 +1722,27 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-history strong')?.textContent")).toBe(
         "clear opening",
       );
-      // Native selects keep keyboard behavior, while their shared custom tooltip stays dismissible.
+      // Effort is a button that steps, not a select: no menu chevron, the mark sits clear of the
+      // label, and its custom tooltip stays dismissible.
       expect(
-        await tab.evaluate<{ visible: boolean; clearance: number; text: string }>(`(()=>{
-        const select=document.querySelector('[aria-label=Effort]');select.focus();
-        const tip=document.getElementById(select.getAttribute('aria-describedby'));
-        const icon=select.parentElement.querySelector('svg').getBoundingClientRect();
-        return {visible:getComputedStyle(tip).visibility==='visible',text:tip.textContent,
-          clearance:select.getBoundingClientRect().left+parseFloat(getComputedStyle(select).paddingLeft)-icon.right};
+        await tab.evaluate<{ tag: string; visible: boolean; clearance: number; chevron: string; text: string }>(`(()=>{
+        const effort=document.querySelector('.glosa-chat-effort');effort.focus();
+        const tip=document.getElementById(effort.getAttribute('aria-describedby'));
+        const icon=effort.querySelector('svg').getBoundingClientRect();
+        return {tag:effort.tagName,visible:getComputedStyle(tip).visibility==='visible',text:tip.textContent,
+          chevron:getComputedStyle(effort.parentElement,'::before').content,
+          clearance:effort.querySelector('.glosa-chat-effort-label').getBoundingClientRect().left-icon.right};
       })()`),
       ).toEqual({
+        tag: "BUTTON",
         visible: true,
         clearance: expect.any(Number),
+        chevron: "none",
         text: expect.stringContaining("High effort · More reasoning"),
       });
       expect(
         await tab.evaluate<number>(
-          `(()=>{const select=document.querySelector('[aria-label=Effort]');return parseFloat(getComputedStyle(select).paddingLeft)-26})()`,
+          `(()=>{const effort=document.querySelector('.glosa-chat-effort');return effort.querySelector('.glosa-chat-effort-label').getBoundingClientRect().left-effort.querySelector('svg').getBoundingClientRect().right})()`,
         ),
       ).toBeGreaterThan(0);
       await tab.send("Input.dispatchKeyEvent", {
@@ -1749,11 +1753,11 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       });
       expect(
         await tab.evaluate<{ focused: boolean; hidden: boolean }>(
-          `(()=>{const select=document.querySelector('[aria-label=Effort]');return {focused:document.activeElement===select,hidden:getComputedStyle(document.getElementById(select.getAttribute('aria-describedby'))).visibility==='hidden'}})()`,
+          `(()=>{const select=document.querySelector('.glosa-chat-effort');return {focused:document.activeElement===select,hidden:getComputedStyle(document.getElementById(select.getAttribute('aria-describedby'))).visibility==='hidden'}})()`,
         ),
       ).toEqual({ focused: true, hidden: true });
       const effortBox = await tab.evaluate<{ x: number; y: number }>(
-        `(()=>{const select=document.querySelector('[aria-label=Effort]');select.blur();const box=select.getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2}})()`,
+        `(()=>{const select=document.querySelector('.glosa-chat-effort');select.blur();const box=select.getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2}})()`,
       );
       await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...effortBox });
       const tipBox = await tab.evaluate<{ x: number; y: number; visible: boolean }>(
