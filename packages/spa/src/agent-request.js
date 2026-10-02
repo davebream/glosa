@@ -14,11 +14,30 @@
 // It follows the daemon resolver's law rather than its algorithm: prove a unique location, or give
 // up loudly. Nothing here silently picks "probably that one".
 
-/** Inline markdown that disappears in rendering. Deliberately not a markdown parser: this is a
- * fallback for the common inline marks, and anything it cannot flatten falls through to
+/** Markdown that disappears in rendering. Deliberately not a markdown parser: this is a
+ * fallback for common block prefixes and inline marks, and anything it cannot flatten falls through to
  * `orphaned`, which is a correct answer. */
-function flattenInlineMarkdown(text) {
+function flattenMarkdown(text) {
   return text
+    .split(/\r\n|\n|\r/)
+    .map((line) => {
+      // Containers can nest, e.g. `> - ### Heading`. Consume only line-leading syntax,
+      // with Markdown's bounded indentation and ordered-marker width. Do this before
+      // inline marks: the `*` in a bullet is not an emphasis delimiter.
+      for (;;) {
+        // Five spaces after a list marker start indented code: remove just its one
+        // separator, preserving the four spaces that keep `###` literal inside it.
+        const container = /^ {0,3}(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])(?: {1,4}(?![ \t])|[ \t]|$))/.exec(line);
+        if (!container) break;
+        line = line.slice(container[0].length);
+      }
+      const heading = /^ {0,3}#{1,6}(?:[ \t]+|$)/.exec(line);
+      if (heading) {
+        line = line.slice(heading[0].length).replace(/(?:^|[ \t]+)#+[ \t]*$/, "");
+      }
+      return line;
+    })
+    .join("\n")
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1") // images → alt text
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // links → label
     .replace(/(\*\*\*|___)(.+?)\1/g, "$2")
@@ -77,8 +96,9 @@ export function locateQuote(text, quote) {
   if (!quote || typeof quote.exact !== "string" || quote.exact.length === 0) return null;
 
   // Rung 1 — the quote is already rendered text (plain prose, the common case).
-  // Rung 2 — the quote carries inline markdown the renderer removed.
-  for (const candidate of [quote.exact, flattenInlineMarkdown(quote.exact)]) {
+  // Rung 2 — the quote carries markdown the renderer removed.
+  const candidates = [quote.exact, flattenMarkdown(quote.exact)];
+  for (const candidate of candidates) {
     const hits = allIndexesOf(text, candidate);
     const picked = disambiguate(text, hits, candidate.length, quote);
     if (picked) return picked;
@@ -87,7 +107,7 @@ export function locateQuote(text, quote) {
   // Rung 3 — whitespace differs: a source hard-wrap renders as one space, and a rendered block
   // may carry indentation the source never had. Match in folded space, report real offsets.
   const doc = normalizeWithMap(text);
-  for (const candidate of [quote.exact, flattenInlineMarkdown(quote.exact)]) {
+  for (const candidate of candidates) {
     const needle = normalizeWithMap(candidate).normalized;
     const hits = allIndexesOf(doc.normalized, needle);
     if (hits.length === 0) continue;
@@ -113,15 +133,27 @@ function disambiguate(text, hits, length, quote) {
 /** Picks the one candidate whose surrounding text matches the session's prefix/suffix. Returns
  * null unless exactly one survives — two survivors is still ambiguity. */
 function narrowByContext(text, ranges, quote) {
-  const prefix = typeof quote.prefix === "string" ? quote.prefix.trim() : "";
-  const suffix = typeof quote.suffix === "string" ? quote.suffix.trim() : "";
-  if (!prefix && !suffix) return null;
-  const survivors = ranges.filter((range) => {
-    const before = text.slice(Math.max(0, range.start - prefix.length - 8), range.start);
-    const after = text.slice(range.end, range.end + suffix.length + 8);
-    return (!prefix || before.includes(prefix.slice(-24))) && (!suffix || after.includes(suffix.slice(0, 24)));
-  });
-  return survivors.length === 1 ? survivors[0] : null;
+  const rawPrefix = typeof quote.prefix === "string" ? quote.prefix : "";
+  const rawSuffix = typeof quote.suffix === "string" ? quote.suffix : "";
+  // Keep literal context first, especially when it describes visible code. Normalize BEFORE
+  // trimming: `### ` is a heading marker, while trimming it first loses its separator.
+  for (const flatten of [false, true]) {
+    const prefix = (flatten ? flattenMarkdown(rawPrefix) : rawPrefix).trim();
+    const suffix = (flatten ? flattenMarkdown(rawSuffix) : rawSuffix).trim();
+    if (!prefix && !suffix) continue; // Removed syntax is not evidence of a unique passage.
+    for (const fold of [false, true]) {
+      const context = (value) => (fold ? normalizeWithMap(value).normalized : value);
+      const beforeNeedle = context(prefix).slice(-24);
+      const afterNeedle = context(suffix).slice(0, 24);
+      const survivors = ranges.filter((range) => {
+        const before = text.slice(Math.max(0, range.start - prefix.length - 8), range.start);
+        const after = text.slice(range.end, range.end + suffix.length + 8);
+        return (!prefix || context(before).includes(beforeNeedle)) && (!suffix || context(after).includes(afterNeedle));
+      });
+      if (survivors.length === 1) return survivors[0];
+    }
+  }
+  return null;
 }
 
 /** The requests that belong beside THIS artifact: anchored ones plus whole-artifact asks, oldest
