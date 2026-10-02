@@ -24,6 +24,9 @@ import {
 import { nativeProbe } from "../../../daemon/src/agents/probe.ts";
 import { managedToolsUnavailable, waitForManagedTools } from "../../../daemon/src/agents/managed-bootstrap.ts";
 
+// Keep the managed grant bridge separate from the native companion integration.
+const MANAGED_MCP_NAME = "glosa-managed";
+
 // Structural boundary checked against the published 0.3.280 declarations. The optional commercial
 // SDK is loaded only from an explicitly installed/qualified runtime, never imported by core.
 type ClaudeCommand = { name: string; description: string; argumentHint?: string; builtin?: boolean };
@@ -317,8 +320,8 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
       const mcp = config.mcpServers as Record<string, unknown> | undefined;
       const projects = config.projects as Record<string, { mcpServers?: Record<string, unknown> }> | undefined;
       if (
-        mcp?.glosa ||
-        projects?.[cwd]?.mcpServers?.glosa ||
+        mcp?.[MANAGED_MCP_NAME] ||
+        projects?.[cwd]?.mcpServers?.[MANAGED_MCP_NAME] ||
         config.apiKeyHelper ||
         Object.keys(env).some((key) =>
           /^(ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY))$/u.test(key),
@@ -326,7 +329,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
       )
         throw new ManagedAgentError(
           "provider-unavailable",
-          "Native billing configuration or the reserved glosa MCP name conflicts with this account.",
+          "Native billing configuration or the reserved glosa-managed MCP name conflicts with this account.",
         );
       if (path === join(configRoot, ".claude.json"))
         return { mcpServers: mcp, projectMcpServers: projects?.[cwd]?.mcpServers };
@@ -432,7 +435,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
           ),
           ...(spec.mcp
             ? {
-                glosa: {
+                [MANAGED_MCP_NAME]: {
                   type: "http" as const,
                   url: spec.mcp.url,
                   headers: { Authorization: "Bearer ${GLOSA_MANAGED_MCP_GRANT}" },
@@ -543,7 +546,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         if (spec.mcp)
           await waitForManagedTools(
             async () => {
-              const server = (await query.mcpServerStatus?.())?.find((item) => item.name === "glosa");
+              const server = (await query.mcpServerStatus?.())?.find((item) => item.name === MANAGED_MCP_NAME);
               return {
                 state:
                   !server || server.status === "pending"

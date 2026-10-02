@@ -21,6 +21,9 @@ import {
 
 import { waitForManagedTools } from "../../../daemon/src/agents/managed-bootstrap.ts";
 
+// Keep the managed grant bridge separate from the native companion integration.
+const MANAGED_MCP_NAME = "glosa-managed";
+
 const accountSchema = z.object({
   account: z
     .object({ type: z.literal("chatgpt"), email: z.string().email(), planType: z.string() })
@@ -313,11 +316,11 @@ export class ManagedCodexRpc {
         (config.chatgpt_base_url && config.chatgpt_base_url !== "https://chatgpt.com/backend-api/") ||
         config.model_provider !== "openai" ||
         (config.model_providers as Record<string, unknown> | undefined)?.openai ||
-        (config.mcp_servers as Record<string, unknown> | undefined)?.glosa
+        (config.mcp_servers as Record<string, unknown> | undefined)?.[MANAGED_MCP_NAME]
       )
         throw new ManagedAgentError(
           "provider-unavailable",
-          "Native routing or the reserved glosa MCP name conflicts with this account.",
+          "Native routing or the reserved glosa-managed MCP name conflicts with this account.",
         );
     } else auditConfiguration(result);
   }
@@ -694,7 +697,12 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
           ]),
         ),
         ...(spec.mcp
-          ? { "mcp_servers.glosa": { url: spec.mcp.url, bearer_token_env_var: "GLOSA_MANAGED_MCP_GRANT" } }
+          ? {
+              [`mcp_servers.${MANAGED_MCP_NAME}`]: {
+                url: spec.mcp.url,
+                bearer_token_env_var: "GLOSA_MANAGED_MCP_GRANT",
+              },
+            }
           : {}),
       };
       const readMcpServers = async () => {
@@ -831,7 +839,7 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
         if (spec.mcp)
           await waitForManagedTools(
             async () => {
-              const server = (await readMcpServers()).find((item) => item.name === "glosa");
+              const server = (await readMcpServers()).find((item) => item.name === MANAGED_MCP_NAME);
               return {
                 state: server?.toolsError
                   ? "failed"
@@ -869,7 +877,7 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
             name: server.name,
             status: server.runtimeStatus ?? "unknown",
             auth: server.authStatus,
-            login: server.name !== "glosa",
+            login: server.name !== MANAGED_MCP_NAME,
           }));
         },
         async startTurn(input) {
