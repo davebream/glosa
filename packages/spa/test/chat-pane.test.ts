@@ -421,7 +421,9 @@ test("a turn names its model only when it ran on something else, and shows its r
   ]);
   expect(f.host.querySelector(".glosa-chat-history")!.textContent).not.toContain("Model and effort");
   const reasoning = f.host.querySelector('.glosa-chat-message[data-kind="reasoning"] .glosa-chat-text')!;
-  expect(reasoning.textContent).toBe("Weighing the outline\n\nChecking the ending");
+  // Both fragments, in order, in the one row (rendered or plain, by whether a renderer is loaded).
+  expect(f.host.querySelectorAll('.glosa-chat-message[data-kind="reasoning"]')).toHaveLength(1);
+  expect(reasoning.textContent).toMatch(/Weighing the outline\s+Checking the ending/);
   const mismatch = [...f.host.querySelectorAll("details")].find((row) =>
     row.textContent!.includes("Ran on a different model"),
   )!;
