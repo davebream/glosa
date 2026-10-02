@@ -12,7 +12,7 @@ import {
   effortPresentation,
   modelPicker,
 } from "./agent-ui.js";
-import { elapsedLabel, turnActivity } from "./chat-activity.js";
+import { chatQueue, elapsedLabel, turnActivity } from "./chat-activity.js";
 import { loadChatMarkdown } from "./chat-markdown.js";
 import { confirmDialog, noticeDialog } from "./dialog.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -51,6 +51,8 @@ export function applyChatEvent(state, record) {
 }
 
 /** A step's state, drawn: done, failed, stopped before it finished. A running step pulses (app.css). */
+/** How many messages may wait in a chat; the daemon holds the same line (A5). */
+const MAX_WAITING = 5;
 const STEP_MARKS = {
   completed: '<svg viewBox="0 0 12 12"><path d="M2.5 6.4l2.3 2.3 4.7-5.2"/></svg>',
   failed: '<svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg>',
@@ -77,7 +79,6 @@ export function createChatPane(
     dirty = false,
     timer,
     saving = Promise.resolve(),
-    sendIntent,
     pending = false,
     readyToSend = false;
   let attachments = [],
@@ -98,7 +99,13 @@ export function createChatPane(
     effortSaving = false,
     effortTarget = null,
     uploading = false,
-    stopping = false;
+    stopping = false,
+    stopTarget = null;
+  // Messages the person has sent that the daemon has not yet taken, oldest first. The composer is
+  // theirs again the moment they press Enter; each entry is posted in turn behind the scenes.
+  const outbox = [];
+  // Messages stopped before they reached the agent that should stay in the thread to be reused.
+  const keptCancelled = new Set();
   const lifetime = new AbortController();
   const executionAvailable = () =>
     catalog?.providers?.find((provider) => provider.id === state?.provider)?.available ?? catalog?.available;
@@ -116,6 +123,7 @@ export function createChatPane(
   const stepSubjects = new Map(),
     turnStatuses = new Map();
   const rows = new Map(),
+    trayRows = new Map(),
     decisionRows = new Map(),
     decisionIntents = new Map(),
     dialogs = new Set();
@@ -266,7 +274,10 @@ export function createChatPane(
       if (stopping) return;
       stopping = true;
       render();
-      void act(() => dataAccess.stopChat(slug, chatId)).finally(() => {
+      const target = stopTarget;
+      // Stopped before it reached the agent, the message stays in the thread to be used again.
+      if (target && !target.started) keptCancelled.add(target.id);
+      void act(() => dataAccess.stopChat(slug, chatId, target?.id)).finally(() => {
         stopping = false;
         render();
       });
@@ -331,7 +342,7 @@ export function createChatPane(
         type: "button",
         textContent: "Move previous draft here",
         onClick: () => {
-          if (uploading || changingAccount || changingSettings || pending || sendIntent) return;
+          if (uploading || changingAccount || changingSettings || outbox.length) return;
           uploading = true;
           render();
           void act(async () => {
@@ -369,7 +380,7 @@ export function createChatPane(
         type: "button",
         textContent: "Attach previous conversation",
         onClick: () => {
-          if (uploading || changingAccount || changingSettings || pending || sendIntent) return;
+          if (uploading || changingAccount || changingSettings || outbox.length) return;
           uploading = true;
           render();
           void act(async () => {
@@ -773,7 +784,13 @@ export function createChatPane(
     title: "Attach documents or images",
     onClick: () => files.click(),
   });
+  // What waits to be sent, at the top of the composer: one line each, oldest first, with its way
+  // out beside it. A change in how many wait is announced once, politely.
+  const trayList = el("ol", { className: "glosa-chat-tray", "aria-label": "Waiting messages", hidden: true });
+  const trayAnnounce = el("span", { className: "glosa-visually-hidden", role: "status" });
   const composer = el("div", { className: "glosa-chat-composer" }, [
+    trayList,
+    trayAnnounce,
     draft,
     attachmentList,
     el("div", { className: "glosa-chat-compose-actions" }, [
@@ -787,7 +804,7 @@ export function createChatPane(
   ]);
   const completion = createComposerPicker(draft, {
     getFiles,
-    enabled: () => !sendIntent && !pending && !changingAccount && !changingSettings,
+    enabled: () => !changingAccount && !changingSettings,
     getCatalog: () => dataAccess.getChatCommands?.(slug, chatId) ?? Promise.resolve({ commands: [], loaded: false }),
     loadCatalog: async () => {
       try {
@@ -855,11 +872,15 @@ export function createChatPane(
     async confirmClose() {
       await save();
       return (
-        (!dirty && !uploading && !changingSettings) ||
+        (!dirty && !uploading && !changingSettings && !outbox.length) ||
         (await confirmDialog({
-          title: uploading || changingSettings ? "Close with unfinished changes?" : "Close with an unsaved draft?",
-          body:
-            uploading || changingSettings
+          title:
+            uploading || changingSettings || outbox.length
+              ? "Close with unfinished changes?"
+              : "Close with an unsaved draft?",
+          body: outbox.length
+            ? "A message has not been sent yet. Closing now discards it."
+            : uploading || changingSettings
               ? "An attachment or setting is still being saved. Keep this tab open to finish. Closing now may leave the change unfinished."
               : "Copy the draft first if you want to keep it. The agent keeps running when its tab closes.",
           confirmLabel: "Close tab",
@@ -913,7 +934,7 @@ export function createChatPane(
     picker.render({
       state,
       catalog,
-      disabled: changingSettings || uploading || pending || !!sendIntent || !!state.archived,
+      disabled: changingSettings || uploading || outbox.length > 0 || !!state.archived,
       busy: changingAccount || changingSettings,
       subscriptionBlocked:
         state.turns.some((turn) => !["completed", "failed", "cancelled", "outcome_unknown"].includes(turn.status)) ||
@@ -1187,6 +1208,158 @@ export function createChatPane(
     clearInterval(liveTimer);
     liveTimer = 0;
   }
+  /** Asks before a message taken back into the composer overwrites what is being written there. */
+  async function confirmReplace(body) {
+    return (
+      (!draft.value.trim() && !attachments.length) ||
+      (await confirmDialog({ title: "Replace this draft?", body, confirmLabel: "Replace draft", danger: true }))
+    );
+  }
+  async function fillDraft(message) {
+    if (disposed) return;
+    draft.value = message.text;
+    completion.setReferences(message.references ?? []);
+    attachments = [...(message.attachments ?? [])];
+    dirty = true;
+    renderAttachments();
+    await save();
+    draft.focus();
+  }
+  /** A send whose answer was lost may have landed. Asks the daemon before the row is taken back. */
+  async function stillUnsent(entry) {
+    if (entry.intent) await refresh().catch(() => {});
+    if (outbox.includes(entry)) return true;
+    status.textContent = "That message was sent after all.";
+    return false;
+  }
+  function trayVerbs(row) {
+    const verb = (textContent, label, onClick, more = {}) =>
+      el("button", {
+        type: "button",
+        className: "glosa-chat-verb",
+        textContent,
+        "aria-label": label,
+        onClick,
+        ...more,
+      });
+    const waitingBody = "The waiting message will replace the current unsent draft and its attachments.";
+    const remove = verb(
+      "Remove",
+      "Remove waiting message",
+      () => {
+        const { turn, entry } = row.item;
+        if (turn) return void act(() => dataAccess.stopChat(slug, chatId, turn.id));
+        void (async () => {
+          if (!(await stillUnsent(entry))) return;
+          outbox.splice(outbox.indexOf(entry), 1);
+          render();
+          void drainOutbox();
+        })();
+      },
+      { "data-verb": "remove" },
+    );
+    const edit = verb("Edit", "Edit waiting message", () => {
+      const { turn, entry } = row.item;
+      if (uploading || changingAccount || changingSettings) return;
+      if (turn)
+        return void act(async () => {
+          if (!(await confirmReplace(waitingBody))) return;
+          await dataAccess.stopChat(slug, chatId, turn.id);
+          await fillDraft(turn);
+        });
+      void (async () => {
+        if (!(await confirmReplace(waitingBody)) || !(await stillUnsent(entry))) return;
+        outbox.splice(outbox.indexOf(entry), 1);
+        await fillDraft(entry);
+        render();
+        void drainOutbox();
+      })();
+    });
+    if (row.kind === "failed")
+      return [
+        verb("Retry", "Retry sending message", () => {
+          for (const entry of outbox) entry.state = "sending";
+          status.textContent = "";
+          render();
+          void drainOutbox();
+        }),
+        edit,
+        remove,
+      ];
+    if (row.kind === "held")
+      return [
+        verb(
+          "Continue",
+          "Continue held message",
+          () => void act(() => dataAccess.resumeChatTurn(slug, chatId, row.item.id)),
+          { "data-continue-turn": "true" },
+        ),
+        edit,
+        remove,
+      ];
+    // Selected notes sent as feedback are not the person's own words to rewrite.
+    if (row.kind === "feedback") return [remove];
+    if (row.kind !== "queued") return [];
+    return [
+      edit,
+      remove,
+      verb(
+        "Send now",
+        "Send this message now",
+        () => {
+          // Send now stops what is at work. Stopped before it reached the agent, that message
+          // stays in the thread to be used again.
+          if (stopTarget && !stopTarget.started) keptCancelled.add(stopTarget.id);
+          void act(() => dataAccess.sendChatTurnNow(slug, chatId, row.item.id));
+        },
+        { title: "Stops the current reply" },
+      ),
+    ];
+  }
+  function renderTray(queue) {
+    let previous = null;
+    for (const item of queue.tray) {
+      let row = trayRows.get(item.id);
+      if (!row) {
+        const place = el("span", { className: "glosa-chat-tray-state" });
+        const words = el("span", { className: "glosa-chat-tray-words" });
+        const verbs = el("span", { className: "glosa-chat-tray-verbs" });
+        row = { node: el("li", {}, [place, words, verbs]), place, words, verbs, kind: "", item };
+        trayRows.set(item.id, row);
+      }
+      row.item = item;
+      const text = typeof item.text === "string" ? item.text.replace(/\s+/gu, " ").trim() : "Waiting message";
+      if (row.place.textContent !== item.label) row.place.textContent = item.label;
+      if (row.words.textContent !== text) row.words.textContent = text;
+      // Why a message is held or was not sent is said in words, on the row.
+      const reason = item.turn?.error ?? item.entry?.error ?? "";
+      row.words.title = reason ? `${text}\n${reason}` : text;
+      const kind = item.kind === "queued" && item.turn?.origin === "feedback" ? "feedback" : item.kind;
+      row.node.dataset.kind = item.kind;
+      if (row.kind !== kind) {
+        row.kind = kind;
+        row.verbs.replaceChildren(...trayVerbs(row));
+      }
+      if (previous ? previous.nextSibling !== row.node : trayList.firstChild !== row.node) {
+        if (previous) previous.after(row.node);
+        else trayList.prepend(row.node);
+      }
+      previous = row.node;
+    }
+    const wanted = new Set(queue.tray.map((item) => item.id));
+    for (const [id, row] of trayRows) {
+      if (wanted.has(id)) continue;
+      // The row under the keyboard is going: the composer is where its message went.
+      if (row.node.contains(document.activeElement)) draft.focus();
+      row.node.remove();
+      trayRows.delete(id);
+    }
+    trayList.hidden = !queue.tray.length;
+    const said = queue.tray.length
+      ? `${queue.tray.length} ${queue.tray.length === 1 ? "message" : "messages"} waiting`
+      : "";
+    if (trayAnnounce.textContent !== said) trayAnnounce.textContent = said;
+  }
   function renderMessages() {
     render();
   }
@@ -1201,11 +1374,22 @@ export function createChatPane(
       transfer.hidden = true;
     }
     wantedRows = new Set();
-    empty.hidden = !!state.turns.length;
+    // A send whose answer was lost may have landed after all: the daemon's turn then stands for it.
+    for (let i = outbox.length - 1; i >= 0; i--)
+      if (outbox[i].state === "failed" && state.turns.some((turn) => turn.id === outbox[i].id)) outbox.splice(i, 1);
+    const queue = chatQueue(state.turns, outbox, keptCancelled);
+    const sent = queue.localHead?.entry;
+    // A message sent with nothing ahead of it is in the thread at once, before the daemon has it.
+    const drawn = sent
+      ? [...state.turns, { id: sent.id, text: sent.text, references: sent.references, status: "sending", local: true }]
+      : state.turns;
+    empty.hidden = queue.tray.length > 0 || drawn.some((turn) => !queue.hidden.has(turn.id));
     pageControls.hidden = !state.page?.hasEarlier && !state.page?.hasLater;
     older.disabled = !state.page?.hasEarlier || paging;
     recent.hidden = !state.page?.hasLater;
-    for (const turn of state.turns) {
+    for (const turn of drawn) {
+      // A waiting message is a row in the tray; one removed from there was never in the thread.
+      if (queue.hidden.has(turn.id)) continue;
       if (typeof turn.text === "string") {
         textRow(`user:${turn.id}`, `You · ${turn.status.replaceAll("_", " ")}`, turn.text);
         const row = rows.get(`user:${turn.id}`);
@@ -1235,6 +1419,10 @@ export function createChatPane(
         item.text + (item.truncated ? "\n\nDisplay shortened. Export the chat for the complete message." : "");
       const items = state.content.filter((c) => c.turnId === turn.id);
       const work = turnActivity(turn, items, stepSubjects);
+      // The message on its way has no reply yet, and the wait for the agent to start is the long
+      // one: the thread says so from the moment it is sent.
+      if (turn.local) work.live = "Sending";
+      else if (turn === queue.head) work.live = "Starting";
       // The last row this turn has drawn: its live line sits right under it.
       let tail = rows.get(ranOn ? `settings:${turn.id}` : `user:${turn.id}`)?.node;
       // A session reports its reasoning in fragments and its tools one by one; a turn shows one
@@ -1269,46 +1457,7 @@ export function createChatPane(
       liveRow(turn, work, tail);
       if (turn.error && (typeof turn.text === "string" || state.content.some((item) => item.turnId === turn.id)))
         textRow(`error:${turn.id}`, "Needs attention", turn.error);
-      // A message that has not started yet is the person's own, not yet sent on: its bubble is in
-      // pencil, and the line under it says where it stands and offers the way out.
       const bubble = rows.get(`user:${turn.id}`)?.node;
-      const waiting = ["accepted", "queued", "held"].includes(turn.status);
-      if (bubble) bubble.toggleAttribute("data-pending", waiting);
-      const waitingKey = `pending:${turn.id}`;
-      if (waiting) wantedRows.add(waitingKey);
-      if (waiting && !rows.has(waitingKey)) {
-        const node = el("div", { className: "glosa-chat-turn-state" }, [
-          el("span"),
-          el("button", {
-            textContent: "Continue",
-            className: "glosa-chat-verb",
-            "aria-label": "Continue held message",
-            "data-continue-turn": "true",
-            type: "button",
-            onClick: () => void act(() => dataAccess.resumeChatTurn(slug, chatId, turn.id)),
-          }),
-          el("button", {
-            textContent: "Cancel",
-            className: "glosa-chat-verb",
-            "aria-label": "Cancel queued message",
-            "data-verb": "remove",
-            type: "button",
-            onClick: () => void act(() => dataAccess.stopChat(slug, chatId, turn.id)),
-          }),
-        ]);
-        if (bubble) bubble.after(node);
-        else history.append(node);
-        rows.set(waitingKey, { node });
-      }
-      if (waiting) {
-        const node = rows.get(waitingKey).node;
-        node.querySelector("[data-continue-turn]").hidden = turn.status !== "held";
-        node.firstChild.textContent =
-          turn.status === "held" ? "Held until you continue" : "Queued. Sends after the current reply";
-      } else {
-        rows.get(waitingKey)?.node.remove();
-        rows.delete(waitingKey);
-      }
       const reuseKey = `reuse:${turn.id}`;
       if (turn.status === "cancelled" && typeof turn.text === "string" && turn.origin !== "feedback") {
         wantedRows.add(reuseKey);
@@ -1322,25 +1471,14 @@ export function createChatPane(
               "aria-label": "Use message as draft",
               onClick: () =>
                 void act(async () => {
-                  if (pending || sendIntent || uploading || changingAccount || changingSettings) return;
+                  if (uploading || changingAccount || changingSettings) return;
                   if (
-                    (draft.value.trim() || attachments.length) &&
-                    !(await confirmDialog({
-                      title: "Replace this draft?",
-                      body: "The cancelled message will replace the current unsent draft and its attachments.",
-                      confirmLabel: "Replace draft",
-                      danger: true,
-                    }))
+                    !(await confirmReplace(
+                      "The cancelled message will replace the current unsent draft and its attachments.",
+                    ))
                   )
                     return;
-                  if (disposed) return;
-                  draft.value = turn.text;
-                  completion.setReferences(turn.references);
-                  attachments = [...(turn.attachments ?? [])];
-                  dirty = true;
-                  renderAttachments();
-                  await save();
-                  draft.focus();
+                  await fillDraft(turn);
                 }),
             }),
           ]);
@@ -1457,48 +1595,41 @@ export function createChatPane(
       card.hidden = decision.status !== "pending";
       card.expiryLabel.textContent = `Expires in ${Math.max(0, Math.ceil((Date.parse(decision.expiresAt) - Date.now()) / 60000))} min`;
     }
+    renderTray(queue);
     const unconfirmedStop = ["unknown", "stopping"].includes(state.runtime?.state);
-    const hasWork = state.turns.some((t) =>
-      ["accepted", "queued", "held", "dispatching", "running", "waiting", "stopping"].includes(t.status),
-    );
-    stop.disabled = stopping || (!hasWork && !unconfirmedStop);
-    stop.hidden = !hasWork && !unconfirmedStop && !stopping;
-    stop.textContent = stopping ? "Stopping…" : unconfirmedStop ? "Retry stop" : "Stop";
+    // Stop ends the reply at work, or the message that is starting. What waits behind it stays.
+    stopTarget = queue.active ?? queue.head;
+    stop.disabled = stopping || (!stopTarget && !unconfirmedStop);
+    stop.hidden = !stopTarget && !unconfirmedStop && !stopping;
+    stop.textContent = stopping ? "Stopping…" : unconfirmedStop && !stopTarget ? "Retry stop" : "Stop";
     const active = state.turns.findLast((t) => ["dispatching", "running", "waiting"].includes(t.status));
+    const working = active ?? queue.head ?? (sent ? { status: "sending" } : null);
     activity.textContent = state.archived
       ? "Archived"
-      : unconfirmedStop
+      : unconfirmedStop && !stopTarget
         ? "Stop not confirmed"
-        : active
-          ? active.status === "waiting"
+        : working
+          ? working.status === "waiting"
             ? "Needs your reply"
             : "Working…"
           : "";
-    activity.dataset.working = String(!!active);
-    history.setAttribute("aria-busy", String(!!active && active.status !== "waiting"));
+    activity.dataset.working = String(!!working);
+    history.setAttribute("aria-busy", String(!!working && working.status !== "waiting"));
     handle.attentionCount = state.decisions.filter((decision) => decision.status === "pending").length;
     handle.activityLabel = activity.textContent;
     const editing = changingAccount || changingSettings || uploading;
-    const queued = state.turns.some((turn) => ["accepted", "queued", "held"].includes(turn.status));
-    feedback.disabled = pending || editing || !executionAvailable() || state.archived || queued;
-    send.disabled =
-      pending || editing || (!sendIntent && (!executionAvailable() || state.archived || !readyToSend || queued));
-    send.textContent = pending
-      ? "Sending…"
-      : uploading
-        ? "Attaching…"
-        : changingSettings
-          ? "Saving…"
-          : sendIntent
-            ? "Retry ↑"
-            : "↑";
-    send.setAttribute("aria-label", active ? "Queue message" : "Send message");
-    send.title = active ? "Queue next message" : "Send message";
+    const queued = queue.tray.length > 0 || !!queue.head || !!sent;
+    feedback.disabled = editing || !executionAvailable() || state.archived || queued;
+    // Sending never locks the composer: a message sent while another is at work waits in the tray.
+    send.disabled = editing || !executionAvailable() || !!state.archived || !readyToSend;
+    send.textContent = uploading ? "Attaching…" : changingSettings ? "Saving…" : "↑";
+    const behind = !!working;
+    send.setAttribute("aria-label", behind ? "Queue message" : "Send message");
+    send.title = behind ? "Queue next message" : "Send message";
     draft.disabled = !!state.archived;
     draft.placeholder = state.archived ? "Restore this chat to send a message." : "What would you like to work on?";
-    files.disabled = pending || !!sendIntent || editing || !!state.archived;
+    files.disabled = editing || !!state.archived;
     attach.disabled = files.disabled;
-    for (const button of attachmentList.querySelectorAll("button")) button.disabled = pending || !!sendIntent;
     usageAction.hidden = !state.usage;
     const selection = window.getSelection?.();
     for (const [key, row] of rows)
@@ -1529,7 +1660,7 @@ export function createChatPane(
     const next = await dataAccess.getChat(slug, chatId, pageBefore);
     if (disposed || (state && next.revision < state.revision)) return;
     state = next;
-    if (!dirty && !sendIntent) {
+    if (!dirty && !outbox.length) {
       draft.value = next.draft;
       completion.setReferences(next.draftReferences);
       lastDraft = next.draft;
@@ -1565,7 +1696,7 @@ export function createChatPane(
   async function save() {
     clearTimeout(timer);
     saving = saving.then(async () => {
-      if (!dirty || !state || sendIntent) return;
+      if (!dirty || !state || pending) return;
       const text = draft.value,
         sentAttachments = [...attachments],
         references = completion.references,
@@ -1586,94 +1717,150 @@ export function createChatPane(
           draft.value !== text ||
           JSON.stringify(attachments) !== JSON.stringify(sentAttachments) ||
           JSON.stringify(completion.references) !== JSON.stringify(references);
-        status.textContent = dirty ? "Draft changed while saving" : "Draft saved";
+        // Why a message was not sent stays said until it is retried or taken back.
+        if (!outbox.some((entry) => entry.state === "failed"))
+          status.textContent = dirty ? "Draft changed while saving" : "Draft saved";
       } catch (error) {
         failure(error);
       }
     });
     await saving;
   }
-  async function submit() {
-    if (
-      pending ||
-      changingAccount ||
-      changingSettings ||
-      uploading ||
-      !state ||
-      (!sendIntent &&
-        (!executionAvailable() ||
-          state.archived ||
-          !readyToSend ||
-          state.turns.some((turn) => ["accepted", "queued", "held"].includes(turn.status)))) ||
-      !draft.value.trim()
-    )
+  /** Enter takes the message out of the composer at once. It goes into the thread when nothing is
+   * ahead of it, and into the tray when something is; the daemon is told behind the scenes. */
+  function submit() {
+    if (!state || changingAccount || changingSettings || uploading) return;
+    if (!executionAvailable() || state.archived || !readyToSend || !draft.value.trim()) return;
+    const waiting = state.turns.filter((turn) => ["accepted", "queued", "held"].includes(turn.status)).length;
+    if (waiting + outbox.length >= MAX_WAITING) {
+      status.textContent = "Five messages are already waiting. Remove one, or wait for a reply.";
       return;
-    pending = true;
+    }
+    completion.resolveTyped();
+    outbox.push({
+      id: crypto.randomUUID(),
+      text: draft.value,
+      references: completion.references,
+      attachments: [...attachments],
+      state: "sending",
+      intent: null,
+      // Words the daemon has not saved yet are saved as the draft first, so a send that fails
+      // cannot lose them, and a draft changed in another window is never sent over.
+      unsaved:
+        dirty ||
+        draft.value !== lastDraft ||
+        JSON.stringify(completion.references) !== JSON.stringify(state.draftReferences ?? []),
+    });
+    clearTimeout(timer);
+    draft.value = "";
+    completion.setReferences([]);
+    attachments = [];
+    dirty = false;
+    renderAttachments();
+    status.textContent = "";
     render();
+    void drainOutbox();
+  }
+  /** Posts what was sent, one message at a time and in order. A draft save never runs alongside:
+   * the daemon ties each send to the draft revision it consumes. */
+  async function drainOutbox() {
+    if (pending || disposed) return;
+    pending = true;
     try {
-      completion.resolveTyped();
-      if (JSON.stringify(completion.references) !== JSON.stringify(state.draftReferences ?? [])) dirty = true;
-      await save();
-      if (dirty) throw new Error("Save or reconcile the draft before sending. Your local text has been kept.");
-      sendIntent ??= {
-        requestId: crypto.randomUUID(),
-        turnId: crypto.randomUUID(),
-        configRevision: state.configRevision,
-        draftRevision: state.draftRevision,
-        text: draft.value,
-        references: completion.references,
-        attachments: [...attachments],
-      };
-      try {
-        await dataAccess.sendChatTurn(slug, chatId, sendIntent);
-      } catch (error) {
-        if (!error.problem?.type?.endsWith("/consent-required")) throw error;
-        if (!(await allowWorkspace("Allow and send"))) {
-          sendIntent = null;
-          return;
+      await saving;
+      while (!disposed && outbox[0]?.state === "sending") {
+        const entry = outbox[0];
+        try {
+          if (entry.unsaved) {
+            const saved = await dataAccess.saveChatDraft(slug, chatId, {
+              requestId: crypto.randomUUID(),
+              revision: baseDraftRevision,
+              text: entry.text,
+              attachments: entry.attachments,
+              references: entry.references,
+            });
+            baseDraftRevision = saved.draftRevision;
+            state.draftRevision = saved.draftRevision;
+            lastDraft = entry.text;
+            entry.unsaved = false;
+          }
+          // A retry of a send whose answer was lost repeats the same request, so it cannot duplicate.
+          entry.intent ??= {
+            requestId: crypto.randomUUID(),
+            turnId: entry.id,
+            configRevision: state.configRevision,
+            draftRevision: baseDraftRevision,
+            text: entry.text,
+            references: entry.references,
+            attachments: entry.attachments,
+          };
+          try {
+            await dataAccess.sendChatTurn(slug, chatId, entry.intent);
+          } catch (error) {
+            if (!error.problem?.type?.endsWith("/consent-required")) throw error;
+            if (!(await allowWorkspace("Allow and send")))
+              throw Object.assign(new Error("This account is not allowed to work in this workspace yet."), {
+                refused: true,
+              });
+            await dataAccess.sendChatTurn(slug, chatId, entry.intent);
+          }
+        } catch (error) {
+          if (disposed) return;
+          const refusal = error.problem?.type?.split("/").pop();
+          const refused =
+            !entry.intent ||
+            error.refused ||
+            [
+              "stale-chat",
+              "stale-draft",
+              "account-disabled",
+              "account-unavailable",
+              "unsupported-model",
+              "queue-full",
+              "chat-read-only",
+              "consent-required",
+              "runtime-unqualified",
+              "managed-unavailable",
+            ].includes(refusal);
+          // A refusal was not sent, so the next try is a new request. Anything else may have landed.
+          if (refused) entry.intent = null;
+          entry.error = error.message;
+          failure(error);
+          if (refused && outbox.length === 1 && !draft.value.trim() && !attachments.length) {
+            // Refused with nothing written since: the words go back where they were typed.
+            outbox.length = 0;
+            draft.value = entry.text;
+            completion.setReferences(entry.references);
+            attachments = [...entry.attachments];
+            renderAttachments();
+            status.textContent += " Your message has been kept.";
+            break;
+          }
+          // Nothing behind a message that did not go is sent ahead of it.
+          for (const waiting of outbox) waiting.state = "failed";
+          if (!refused) status.textContent += " Retry sends the same request; it will not create a duplicate.";
+          break;
         }
-        await dataAccess.sendChatTurn(slug, chatId, sendIntent);
+        outbox.shift();
+        // The daemon took the draft with the message: its next revision is the empty one.
+        baseDraftRevision = entry.intent.draftRevision + 1;
+        state.draftRevision = baseDraftRevision;
+        state.draftReferences = [];
+        lastDraft = "";
+        await refresh().catch(failure);
       }
-      sendIntent = null;
-      dirty = false;
-      draft.value = "";
-      completion.setReferences([]);
-      lastDraft = "";
-      attachments = [];
-      renderAttachments();
-      status.textContent = "Message accepted";
-      await refresh();
-    } catch (error) {
-      const refusal = error.problem?.type?.split("/").pop();
-      if (
-        [
-          "stale-chat",
-          "stale-draft",
-          "account-disabled",
-          "account-unavailable",
-          "unsupported-model",
-          "queue-full",
-          "chat-read-only",
-          "consent-required",
-          "runtime-unqualified",
-          "managed-unavailable",
-        ].includes(refusal)
-      )
-        sendIntent = null;
-      failure(error);
-      if (sendIntent) status.textContent += " Use Send to retry the same request; it will not create a duplicate.";
     } finally {
       pending = false;
-      render();
+      if (!disposed) {
+        dirty ||=
+          draft.value !== lastDraft ||
+          JSON.stringify(completion.references) !== JSON.stringify(state?.draftReferences ?? []);
+        if (dirty) scheduleSave();
+        render();
+      }
     }
   }
   draft.addEventListener("input", () => {
-    if (sendIntent) {
-      status.textContent = "The previous submission is unresolved. Retry it before editing this draft.";
-      draft.value = sendIntent.text;
-      completion.setReferences(sendIntent.references);
-      return;
-    }
     dirty =
       draft.value !== lastDraft ||
       JSON.stringify(completion.references) !== JSON.stringify(state?.draftReferences ?? []);
@@ -1692,7 +1879,7 @@ export function createChatPane(
     }
   });
   files.addEventListener("change", () => {
-    if (uploading || pending || sendIntent || changingAccount || changingSettings) return;
+    if (uploading || changingAccount || changingSettings) return;
     const selectedFiles = [...files.files];
     uploading = true;
     render();
@@ -1750,7 +1937,7 @@ export function createChatPane(
     }
   }
   async function changeSettings(modelId, desiredEffort) {
-    if (changingAccount || changingSettings || pending || sendIntent) return false;
+    if (changingAccount || changingSettings || outbox.length) return false;
     changingSettings = true;
     const supported =
       catalog?.capabilities?.[state.profileId]?.models.find((entry) => entry.id === modelId)?.efforts ?? [];
@@ -1776,7 +1963,7 @@ export function createChatPane(
     }
   }
   async function changeAccount(profileId) {
-    if (changingAccount || changingSettings || uploading || pending || sendIntent) return false;
+    if (changingAccount || changingSettings || uploading || outbox.length) return false;
     const generation = ++accountGeneration;
     changingAccount = true;
     render();
@@ -1870,7 +2057,7 @@ export function createChatPane(
           if (disposed) return;
           if (frame.event === "chat_snapshot") {
             if (state && frame.data.revision <= state.revision) return;
-            if (!dirty && !sendIntent) {
+            if (!dirty && !outbox.length) {
               state = frame.data;
               if (draft.value !== state.draft) draft.value = state.draft;
               completion.setReferences(state.draftReferences);

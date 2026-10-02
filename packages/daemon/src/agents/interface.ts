@@ -222,6 +222,7 @@ export type ManagedAgentCode =
   | "storage-unavailable"
   | "turn-active"
   | "turn-not-held"
+  | "turn-not-waiting"
   | "unexpected-executable"
   | "unsafe-state-path"
   | "unsupported-attachment"

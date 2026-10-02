@@ -662,6 +662,8 @@ export function createDataAccess(deps = {}) {
     stopChat: (slug, id, turnId) => postJson(chatPath(slug, id, "stop"), { ...(turnId ? { turnId } : {}) }),
     /** @param {string} slug @param {string} id @param {string} turnId */
     resumeChatTurn: (slug, id, turnId) => postJson(chatPath(slug, id, "resume"), { turnId }),
+    /** Sends one waiting message next, stopping the reply at work. @param {string} slug @param {string} id @param {string} turnId */
+    sendChatTurnNow: (slug, id, turnId) => postJson(chatPath(slug, id, "send-now"), { turnId }),
     /** @param {string} slug @param {string} id */
     exportChat: async (slug, id) => (await request(chatPath(slug, id, "export"))).text(),
     /** @param {string} slug @param {string} id */

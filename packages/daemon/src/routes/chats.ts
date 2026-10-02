@@ -250,6 +250,14 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
             service.resume(workspace, id, input.turnId);
             return nil();
           }
+          if (id && action === "send-now" && method === "POST") {
+            const input = z
+              .object({ turnId: z.uuid() })
+              .strict()
+              .parse(await req.json());
+            await service.sendNow(workspace, id, input.turnId);
+            return nil();
+          }
           if (id && action === "attachments" && method === "POST") {
             const bytes = new Uint8Array(await req.arrayBuffer());
             const name = decodeURIComponent(req.headers.get("X-Glosa-Filename") ?? "attachment");

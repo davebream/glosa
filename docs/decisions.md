@@ -1929,3 +1929,24 @@ raises one, named for its folder, because that is the only way to learn of it.
 
 **Rejected.** Keeping the badge daemon-wide and naming the other folder in the Attention tray: it
 explains the number but keeps a count on the Dock that the open window cannot act on.
+
+## 2026-10-02: Waiting chat messages line up in the composer, up to five
+
+A chat allowed one message to wait behind the reply at work, kept it in the thread as a pencil
+bubble, and locked the composer while a send was in flight. In use that read as a hang: the button
+sat on “Sending…”, Enter did nothing while one message waited, and the only way out for a waiting
+message was Cancel.
+
+The maintainer decided three things. Waiting messages sit in a tray at the top of the composer,
+each with Edit, Remove and Send now, and a message enters the thread only when it is the one going
+to the agent. Up to five may wait per chat (A5's limit was one). Send now stops the reply at work
+and sends the chosen message next, with the rest keeping their order behind it; that stop does not
+hold the queue, because the person ended the reply to let their own queue move on (A4). Stop ends
+only the reply at work, and what waits behind it is then held for Continue, as before.
+
+The order chosen by Send now is kept in memory only. Waiting turns are held after a restart, so
+there is nothing left for it to order, and the journal's event types are unchanged.
+
+**Rejected.** Keeping waiting messages in the thread with the new verbs: every waiting message
+pushed the reply being written out of view, and its verbs sat far from where the person types.
+No fixed cap: a runaway queue could spend an account's quota with nobody watching.

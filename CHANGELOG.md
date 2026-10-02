@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Sending a chat message never locks the composer. The message leaves the draft the moment you
+  press Enter, and you can write the next one straight away.
+- Messages sent while a reply is being written wait in a tray at the top of the composer, up to
+  five, oldest first. Each has Edit (back into the draft), Remove, and Send now, which stops the
+  current reply and sends that message next. Before, one message could wait, and it could only be
+  cancelled.
+- A message sent with nothing ahead of it shows “Starting” in the conversation while its agent
+  starts, instead of “Queued. Sends after the current reply”.
+- Stop ends only the reply being written. Messages waiting behind it are held until you continue
+  them, instead of being cancelled.
+
 ### Fixed
 
 - A chat no longer freezes after its first reply. The live line ("Writing 34s") kept counting after
