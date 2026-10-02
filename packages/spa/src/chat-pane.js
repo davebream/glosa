@@ -275,13 +275,15 @@ export function createChatPane(
   const jump = el("button", {
     className: "glosa-chat-jump",
     type: "button",
-    textContent: "New activity ↓",
+    textContent: "Jump to latest",
     hidden: true,
     onClick: () => {
       history.scrollTop = history.scrollHeight;
       jump.hidden = true;
     },
   });
+  // Zero-height, at the history's bottom edge: the button rides just above whatever sits below it.
+  const jumpAnchor = el("div", { className: "glosa-chat-jump-anchor" }, [jump]);
   history.addEventListener("scroll", () => {
     if (history.scrollHeight - history.scrollTop - history.clientHeight < 64) jump.hidden = true;
   });
@@ -779,8 +781,8 @@ export function createChatPane(
       files,
       controls,
       el("span", { className: "glosa-chat-action-spacer" }),
-      stop,
-      send,
+      // Stop and send wrap as one, and keep to the composer's right edge when they do.
+      el("span", { className: "glosa-chat-send-group" }, [stop, send]),
     ]),
   ]);
   const completion = createComposerPicker(draft, {
@@ -810,22 +812,14 @@ export function createChatPane(
     },
   });
 
+  // One quiet line under the composer. What the pane has to say (a save that failed, a message
+  // accepted) is said above the composer, beside the work, and only while there is something to say.
   const footer = el("div", { className: "glosa-chat-footer" }, [
-    status,
+    toolsLine,
+    feedback,
     el("span", { className: "glosa-chat-key-hint", textContent: "Enter to send · Shift Enter for a new line" }),
   ]);
-  root.append(
-    header,
-    transfer,
-    pageControls,
-    history,
-    jump,
-    decisions,
-    readiness,
-    composer,
-    el("div", { className: "glosa-chat-utilities" }, [toolsLine, feedback]),
-    footer,
-  );
+  root.append(header, transfer, pageControls, history, jumpAnchor, decisions, readiness, status, composer, footer);
   host.append(root);
   void loadChatMarkdown()
     .then((render) => {
@@ -1862,7 +1856,7 @@ export function createChatPane(
     await refreshFeedback();
     if (disposed) return;
     void refreshToolsLine();
-    status.textContent = catalog.reason ?? "Drafts save automatically.";
+    status.textContent = catalog.reason ?? "";
     connectStream();
   })().catch(failure);
   function connectStream() {
@@ -1897,8 +1891,7 @@ export function createChatPane(
         onStatus(value) {
           const reconnecting = "Reconnecting · no messages are sent automatically";
           if (value === "down") status.textContent = reconnecting;
-          else if (status.textContent === reconnecting)
-            status.textContent = catalog.reason ?? "Drafts save automatically.";
+          else if (status.textContent === reconnecting) status.textContent = catalog.reason ?? "";
         },
       },
       pageBefore,
