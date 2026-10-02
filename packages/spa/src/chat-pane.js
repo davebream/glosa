@@ -686,7 +686,6 @@ export function createChatPane(
         }),
     }),
   );
-  const queueNotice = el("p", { className: "glosa-chat-queue-notice", hidden: true });
   const attach = el("button", {
     type: "button",
     className: "glosa-chat-attach glosa-icon-button",
@@ -698,7 +697,6 @@ export function createChatPane(
   const composer = el("div", { className: "glosa-chat-composer" }, [
     draft,
     attachmentList,
-    queueNotice,
     el("div", { className: "glosa-chat-compose-actions" }, [
       attach,
       files,
@@ -1202,28 +1200,42 @@ export function createChatPane(
       liveRow(turn, work, tail);
       if (turn.error && (typeof turn.text === "string" || state.content.some((item) => item.turnId === turn.id)))
         textRow(`error:${turn.id}`, "Needs attention", turn.error);
+      // A message that has not started yet is the person's own, not yet sent on: its bubble is in
+      // pencil, and the line under it says where it stands and offers the way out.
+      const bubble = rows.get(`user:${turn.id}`)?.node;
       const waiting = ["accepted", "queued", "held"].includes(turn.status);
+      if (bubble) bubble.toggleAttribute("data-pending", waiting);
       const waitingKey = `pending:${turn.id}`;
       if (waiting) wantedRows.add(waitingKey);
       if (waiting && !rows.has(waitingKey)) {
-        const node = el("div", { className: "glosa-chat-actions" }, [
+        const node = el("div", { className: "glosa-chat-turn-state" }, [
+          el("span"),
           el("button", {
-            textContent: "Continue held message",
+            textContent: "Continue",
+            className: "glosa-chat-verb",
+            "aria-label": "Continue held message",
             "data-continue-turn": "true",
             type: "button",
             onClick: () => void act(() => dataAccess.resumeChatTurn(slug, chatId, turn.id)),
           }),
           el("button", {
-            textContent: "Cancel queued message",
+            textContent: "Cancel",
+            className: "glosa-chat-verb",
+            "aria-label": "Cancel queued message",
+            "data-verb": "remove",
             type: "button",
             onClick: () => void act(() => dataAccess.stopChat(slug, chatId, turn.id)),
           }),
         ]);
-        history.append(node);
+        if (bubble) bubble.after(node);
+        else history.append(node);
         rows.set(waitingKey, { node });
       }
       if (waiting) {
-        rows.get(waitingKey).node.querySelector("[data-continue-turn]").hidden = turn.status !== "held";
+        const node = rows.get(waitingKey).node;
+        node.querySelector("[data-continue-turn]").hidden = turn.status !== "held";
+        node.firstChild.textContent =
+          turn.status === "held" ? "Held until you continue" : "Queued. Sends after the current reply";
       } else {
         rows.get(waitingKey)?.node.remove();
         rows.delete(waitingKey);
@@ -1232,10 +1244,13 @@ export function createChatPane(
       if (turn.status === "cancelled" && typeof turn.text === "string" && turn.origin !== "feedback") {
         wantedRows.add(reuseKey);
         if (!rows.has(reuseKey)) {
-          const node = el("div", { className: "glosa-chat-actions" }, [
+          const node = el("div", { className: "glosa-chat-turn-state" }, [
+            el("span", { textContent: "Cancelled" }),
             el("button", {
               type: "button",
-              textContent: "Use message as draft",
+              className: "glosa-chat-verb",
+              textContent: "Use as draft",
+              "aria-label": "Use message as draft",
               onClick: () =>
                 void act(async () => {
                   if (pending || sendIntent || uploading || changingAccount || changingSettings) return;
@@ -1260,7 +1275,8 @@ export function createChatPane(
                 }),
             }),
           ]);
-          history.append(node);
+          if (bubble) bubble.after(node);
+          else history.append(node);
           rows.set(reuseKey, { node });
         }
       }
@@ -1395,8 +1411,6 @@ export function createChatPane(
     handle.activityLabel = activity.textContent;
     const editing = changingAccount || changingSettings || uploading;
     const queued = state.turns.some((turn) => ["accepted", "queued", "held"].includes(turn.status));
-    queueNotice.hidden = !queued;
-    queueNotice.textContent = "A message is waiting. Model and effort changes apply after it.";
     feedback.disabled = pending || editing || !executionAvailable() || state.archived || queued;
     send.disabled =
       pending || editing || (!sendIntent && (!executionAvailable() || state.archived || !readyToSend || queued));
