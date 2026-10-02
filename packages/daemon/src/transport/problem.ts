@@ -151,6 +151,12 @@ export type ProblemSlug =
   // A folder's default style (contract 1.21, #407). Only a directory registration has a folder of
   // its own; a single-file workspace's documents keep their own style, per device.
   | "folder-style-not-directory"
+  | "dictation-quota-exceeded"
+  | "dictation-model-unavailable"
+  | "dictation-invalid-input"
+  | "dictation-stale-settings"
+  | "dictation-busy"
+  | "dictation-cancelled"
   | "dictation-unconfigured"
   | "dictation-credential-unavailable"
   | "dictation-authentication-failed"

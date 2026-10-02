@@ -1557,7 +1557,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(949);
+    ).toBe(953);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -2099,7 +2099,9 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // and four paragraphs to docs/decisions.md: 944 blocks / 863 edits. Every loss numerator is unmoved.
   // #435's experimental-chat decision and user guidance add four blocks and four edits;
   // serializer loss and collateral-guard numerators stay unchanged.
-  const BLOCKS = 949;
+  // OpenAI dictation replaces the Wispr decision and guidance: 953 blocks / 872 edits.
+  // Keep the Added list tight; every loss, missed and false-alarm numerator stays unchanged.
+  const BLOCKS = 953;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -2135,7 +2137,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 55 of 949 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 55 of 953 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2197,7 +2199,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // to 4.9-5.1s run alone, and the unpartitioned CI suite runs it about three times slower than that:
   // 15.3s on main at d3a3626, which timed out against 15s. The measurements did not change; only the
   // runner's time limit did, and every edit is still swept.
-  test("metrics 2 and 3 — 1 dishonest write of 868; the guard fires on it and, ablated, on 50", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 872; the guard fires on it and, ablated, on 50", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2288,7 +2290,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // link definition, which the ablated path re-serializes and the shipped path restores, so
       // `shipped` held at 1/1 and metric 1's only per-cause move was the reference-link one.
     ).toEqual({
-      edits: 868,
+      edits: 872,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 50, fired: 50 },
     });

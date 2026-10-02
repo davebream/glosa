@@ -12,8 +12,8 @@ the exit criteria that close it.
 
 ## Now
 
-- **Opt-in Wispr Flow dictation.** A configured user can dictate into Glosa's four prose composers;
-  audio and bounded visible plaintext leave the machine only after the user clicks Dictate. Dictation
+- **Opt-in OpenAI dictation.** A configured user can dictate into Glosa's four prose composers;
+  recorded audio and enabled visible context leave the machine only after the user stops recording. Dictation
   inserts a reviewable draft and never submits it. A paid attended live-provider smoke test is the
   support gate; CI and the core workflow stay offline.
 - **Phase 3: several agents on one workspace.** Visible per-artifact and per-entry claims and a

@@ -156,8 +156,7 @@ dropping out of it.
 | `security` | `packages/daemon/test/presentation-token.test.ts` |
 | `security` | `packages/daemon/test/token-lifecycle.test.ts` |
 | `security` | `packages/cli/test/dictation.test.ts` |
-| `security` | `packages/providers/wispr-flow/test/provider.test.ts` |
-| `security` | `packages/providers/wispr-flow/test/browser.test.ts` |
+| `security` | `packages/providers/openai-transcription/test/provider.test.ts` |
 | `security` | `packages/spa/test/dictation.test.ts` |
 | `security` | `packages/spa/test/dictation-e2e.test.ts` |
 | `security` | `test/acceptance/browser-security-real-engine.test.ts` |

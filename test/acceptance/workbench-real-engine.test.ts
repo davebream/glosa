@@ -2313,6 +2313,9 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
     theme: string,
     media: "screen" | "print" = "screen",
   ): Promise<void> {
+    // Media-query change events are delivered during rendering. Keep this test's target
+    // foreground before changing them, rather than depending on headless tab activation.
+    await tab.send("Page.bringToFront");
     await tab.send("Emulation.setEmulatedMedia", {
       media,
       features: [
@@ -2321,9 +2324,13 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         { name: "prefers-contrast", value: contrast },
       ],
     });
-    await tab.evaluate(`(async()=>{const deadline=Date.now()+3000;
-      while(document.documentElement.dataset.theme!==${JSON.stringify(theme)}) {
-        if(Date.now()>deadline) throw new Error('the page never painted ${theme} (${scheme}, contrast ${contrast}); it shows '+document.documentElement.dataset.theme);
+    await tab.evaluate(`(async()=>{const deadline=Date.now()+10000;
+      const ready=()=>matchMedia('(prefers-color-scheme: ${scheme})').matches
+        && matchMedia('(prefers-contrast: more)').matches===${contrast === "more"}
+        && matchMedia('print').matches===${media === "print"}
+        && document.documentElement.dataset.theme===${JSON.stringify(theme)};
+      while(!ready()) {
+        if(Date.now()>deadline) throw new Error('the page never painted ${theme} (${scheme}, contrast ${contrast}); '+JSON.stringify({theme:document.documentElement.dataset.theme,visibility:document.visibilityState,scheme:matchMedia('(prefers-color-scheme: ${scheme})').matches,contrast:matchMedia('(prefers-contrast: more)').matches,print:matchMedia('print').matches}));
         await new Promise(resolve=>requestAnimationFrame(resolve));
       }
       for (let frame=0; frame<2; frame++) await new Promise(resolve=>requestAnimationFrame(resolve));

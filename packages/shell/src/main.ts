@@ -48,7 +48,6 @@ import {
   devProfilePath,
   downloadName,
   dictationPermissionAllowed,
-  dictationEgressAllowed,
   egressDecision,
   externalLinkDecision,
   firstFrameColor,
@@ -804,7 +803,7 @@ function installIpc(): void {
   ipcMain.handle("glosa:dictation-begin", async (event, id: unknown) => {
     const wc = event.sender;
     if (
-      process.platform !== "linux" ||
+      !["linux", "darwin"].includes(process.platform) ||
       !fromSpa(event) ||
       event.senderFrame !== wc.mainFrame ||
       typeof id !== "string" ||
@@ -973,19 +972,6 @@ function installIpc(): void {
 
 function installEgressGate(): void {
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-    const wc = details.webContents;
-    if (
-      dictationEgressAllowed({
-        ...dictationAccess(wc),
-        mainFrame: Boolean(wc && details.frame === wc.mainFrame),
-        origin: details.initiatorOrigin,
-        url: details.url,
-        resourceType: details.resourceType,
-      })
-    ) {
-      callback({ cancel: false });
-      return;
-    }
     const decision = egressDecision(details.url);
     if (decision === "cancel") log(`cancelled egress to ${details.url.slice(0, 120)}`);
     callback({ cancel: decision === "cancel" });

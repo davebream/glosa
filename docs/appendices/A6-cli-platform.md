@@ -72,43 +72,26 @@
 
 ## F34 — opt-in dictation configuration
 
-- `glosa dictation configure --provider wispr-flow` requires macOS or Linux and an interactive TTY. Before changing state it
-  discloses that microphone audio and up to 256 KiB of visible Glosa plaintext may be sent to Wispr,
-  API approval/billing is separate, recording begins only after clicking Dictate, and the result is a
-  draft that is never submitted automatically. Declining or using a noninteractive terminal/`--json`
-  fails before a credential prompt or write.
-- The organization key is entered through the inherited macOS Keychain prompt, never as a command
-  argument. Service is `ai.glosa.dictation.wispr-flow`; account and provider client ID are independent
-  random UUIDs. Packaged Glosa uses secure OS storage exclusively. A source checkout may use
-  `WISPR_FLOW_API_KEY` only when `GLOSA_WISPR_FLOW_ALLOW_ENV_KEY=1` explicitly enables the development
-  override; tests inject a credential reader.
-- Durable state is one atomic mode-0600 file in `GLOSA_HOME` containing only schema version, enabled
-  state, provider ID, consent version/time, `visible-prose` context policy and 262,144-byte cap,
-  client UUID, Keychain account UUID, configuration time, and optional disabled time. A new consent
-  version invalidates old configuration rather than silently widening it.
-- On Linux, the provider uses libsecret (`secret-tool`) and systemd (`busctl`) with the user
-  Secret Service on D-Bus. Manjaro/KDE requires KWallet Secret Service (`ksecretd`), an initialized
-  default wallet and a working desktop session bus. Install packages from Manjaro repositories with
-  `sudo pacman -S libsecret systemd kwallet`. Glosa does not install or activate a replacement wallet.
-  Launch from the desktop session carrying `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`;
-  existing daemon inheritance preserves them. Helpers receive only HOME/USER, these session variables
-  and DISPLAY/WAYLAND_DISPLAY/XAUTHORITY, with fixed PATH and locale. They inherit no API keys.
-- Linux status uses metadata-only `SearchItems`. Reading uses `secret-tool search` without
-  `--unlock`, never `lookup`. Status and Dictate never unlock a wallet. Unlock it in the desktop
-  wallet manager and retry; reload the page if dictation was unavailable at page load. Missing
-  utilities, session services or permission leave review/editing usable and never select plaintext
-  storage. Setup and interactive disable may prompt; JSON/non-TTY disable and rollback never do.
-  Operations have bounded output and deadlines (5 seconds unattended, 2 minutes interactive).
-- `glosa dictation status [--json]` reads configuration and secure item presence only. It never
-  contacts Wispr. `glosa dictation disable [--json]` commits inactive state before attempting to
-  remove the secure item; removal failure is a warning because egress is already disabled.
-- The Linux Electron shell reuses the daemon-served SPA and browser-direct adapter. Each click
-  on Dictate asks for microphone access with Allow once, Deny and Cancel. Only that foreground
-  attempt may capture audio from the SPA main frame or connect to the exact Wispr WebSocket.
-  Cancellation, completion, failure, navigation, window destruction or the six-minute shell
-  deadline revokes the attempt. The existing recording limit remains 5m45s. Camera, screen capture,
-  subframes and desk browser tabs receive no permission. macOS shell permission behavior is unchanged.
-  Real Manjaro/KDE and installed-package/live-provider qualification remain held for #434/#435.
+- Settings → Dictation accepts a password-field OpenAI API key and explicit versioned consent.
+  `glosa dictation configure --provider openai` provides an interactive TTY equivalent with hidden
+  input. Non-TTY and `--json` configuration refuse before mutation. API billing is separate.
+- macOS Keychain service is `ai.glosa.dictation.openai`; Linux uses libsecret/Secret Service with
+  an initialized desktop wallet and session D-Bus. Helpers inherit only approved session variables,
+  never API keys. Keys go through private stdin, never argv or plaintext config. No environment-key
+  override. Status is local metadata only and never unlocks a wallet or contacts OpenAI.
+- Atomic mode-0600 `dictation-openai.json` holds schema 1, enabled/context/cleanup flags, consent
+  version 1, revision UUID and credential account UUID or null. A replacement writes a new secure
+  item before committing the config, then removes the prior item. Declined/failed saves preserve
+  prior state. `glosa dictation disable` disables egress before removing its secure credential;
+  failure is reported and can be retried. Old Wispr files/keys are not read, migrated or deleted.
+- Recording uses native MediaRecorder, WebM/Opus or MP4/AAC. The microphone icon changes to Stop,
+  with Cancel during permission/upload. Stop ends capture before daemon upload. Limit 5m45s/12 MiB.
+  English, Polish, German and Spanish are detected automatically. Context starts on (8 KiB of visible
+  text); cleanup starts off. Neither transcription nor cleanup submits a draft. Newer draft edits
+  survive failures, cancellation and late responses. Browser CSP stays same-origin.
+- Both desktop platforms ask per-attempt microphone permission. Only the SPA main frame may receive
+  audio access. Navigation, failure, completion, cancellation and shell deadline revoke the grant.
+  Real installed-package and native Linux desktop qualification remain separate from offline CI.
 
 - **Experimental managed chat** (2026-10-01) is enabled per provider through an explicit Account
   settings acceptance, off by default and recorded in the agent control journal. It is bound to the
@@ -293,7 +276,7 @@
 | `metadata` | `set <descriptor.json>\|show\|clear [--workspace <path>]` | register/read/clear durable workspace metadata v1 | 0;2;3;4;8 |
 | `session` | `bind <session-id> [--workspace <path>] [--provider <id>]` | register or refresh a session and explicitly bind it to the artifact workspace; provider-owned environment discovery supplies identity, with generic MCP fallback when unavailable | 0;2;3;4;8 |
 | `token` | `rotate\|revoke` | atomically rotate or revoke the local pairing credential; never prints token material | 0;2;70 |
-| `dictation` | `configure --provider wispr-flow\|status\|disable` | disclose and configure a Keychain-backed provider, report local availability without a provider call, or disable egress before credential removal | 0;2;5;70 |
+| `dictation` | `configure --provider openai\|status\|disable` | disclose and configure a Keychain-backed provider, report local availability without a provider call, or disable egress before credential removal | 0;2;5;70 |
 | `forget` | `<workspace> [--yes]` | issue #156: the one supported whole-bus deletion primitive, addressed by slug (see `status --json`), never a path — a workspace's on-disk path may already be gone. Naming a historical loose-file source sealed into a directory workspace resolves to the owning target and forgets the complete unit, never just the source. Removes the registration, journal, inbox, and shadow-git history, including any historical loose-file source sealed into it by adoption; never touches work-tree files. Refuses before any deletion when a live bound session, a live claim (named with its holder), or an in-progress adoption exists, naming each blocker (adoption AND new session register/bind on the same target refuse symmetrically while a forget is committing — one shared per-workspace lock). Interactive use previews the exact paths first and asks once; `--yes` skips the prompt; a non-interactive caller (no TTY, or `--json`) without `--yes` is a usage error. Confinement is proven for every member of the deletion set before a durable marker is written or a single file is touched. `glosa doctor`/`glosa status` name an interrupted run explicitly with its exact resume command, even once the workspace's own directory is gone; re-running `forget` on the same slug (or a since-forgotten source's own slug) finishes it and still reports the complete original set of removed paths | 0;2;3;4;12;70 |
 | `doctor` | `[dir] --json [--workspace <registered-slug>] [--repair-baseline]` | 19 enumerated checks, incl. live artifact-update state (#219), the resolved workspace root (#146), leftover `glosa init` config (#152), and `install` (#371): this CLI's install kind and package root, what `<GLOSA_HOME>/bin/glosa` records and whether it is this install, and every other glosa executable it can see (warn, never fail) | 0(warns ok);9 any FAIL;5 |
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; workspace rows may include additive provider-owned connect prompts and live-update state; never fails on daemon-down (state in data) | 0;70 |

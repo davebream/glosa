@@ -29,7 +29,7 @@ desktop shell's one exception to the no-build-step rule.
 Linux promotion additionally requires a GitHub environment named `linux-release` with required
 maintainer reviewers. Configure it before using promotion. The publication script checks that the
 reviewer rule exists and fails if the environment was automatically created without protection.
-Native account credentials and Wispr credentials never belong in Actions secrets or artifacts.
+Native account credentials and OpenAI dictation credentials never belong in Actions secrets or artifacts.
 
 Set these under the repository's Settings, Secrets and variables, Actions.
 

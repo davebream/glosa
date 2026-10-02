@@ -57,7 +57,7 @@ function stage(options: { sourceCheckout?: boolean } = {}): Stage {
   for (const dir of ["packages/cli/src", "packages/daemon/src", "packages/spa/src"]) {
     cpSync(join(REPO, dir), join(root, dir), { recursive: true });
   }
-  for (const provider of ["claude-code", "codex", "wispr-flow"]) {
+  for (const provider of ["claude-code", "codex", "openai-transcription"]) {
     cpSync(join(REPO, "packages/providers", provider, "src"), join(root, "packages/providers", provider, "src"), {
       recursive: true,
     });

@@ -12,7 +12,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sourceSha256 } from "../artifact-render.ts";
-import type { DictationBrowserAsset } from "../dictation/interface.ts";
+interface AdditionalSpaAsset {
+  route: string;
+  filePath: string;
+  contentType: string;
+}
 
 // The SPA's static source dir (`packages/spa/src/`), resolved relative to this file rather than
 // `process.cwd()` so it's correct regardless of where `glosa` is invoked from (P1.4).
@@ -70,6 +74,7 @@ export const SPA_ASSETS: Readonly<Record<string, string>> = {
   "vendor/image-viewer.js": "text/javascript; charset=utf-8",
   "vendor/image-viewer.css": "text/css; charset=utf-8",
   "data-access.js": "text/javascript; charset=utf-8",
+  "dictation-settings.js": "text/javascript; charset=utf-8",
   "dictation.js": "text/javascript; charset=utf-8",
   "viewer.js": "text/javascript; charset=utf-8",
   "viewer-shell.js": "text/javascript; charset=utf-8",
@@ -177,7 +182,7 @@ function builtIn(dir: string, route: string): { path: string; contentType: strin
 export function liveSpaAssets(options: {
   dir?: string;
   buildHash: string | null;
-  providerAsset?: (route: string) => DictationBrowserAsset | undefined;
+  providerAsset?: (route: string) => AdditionalSpaAsset | undefined;
 }): SpaAssetSource {
   const dir = options.dir ?? SPA_SRC_DIR;
   return {
@@ -196,13 +201,13 @@ export function liveSpaAssets(options: {
   };
 }
 
-function toFile(asset: DictationBrowserAsset | undefined): { path: string; contentType: string } | null {
+function toFile(asset: AdditionalSpaAsset | undefined): { path: string; contentType: string } | null {
   return asset === undefined ? null : { path: asset.filePath, contentType: asset.contentType };
 }
 
 /** Every file an installed daemon pins at boot: `shell.html`, the allowlist and the providers'
  *  browser assets. Also the curated file set the install guard watches (R-L2). */
-export function pinnedFilePaths(dir: string, providerAssets: readonly DictationBrowserAsset[]): string[] {
+export function pinnedFilePaths(dir: string, providerAssets: readonly AdditionalSpaAsset[]): string[] {
   return [
     join(dir, "shell.html"),
     ...Object.keys(SPA_ASSETS).map((name) => join(dir, name)),
@@ -215,7 +220,7 @@ export function pinnedFilePaths(dir: string, providerAssets: readonly DictationB
 export function pinnedSpaAssets(options: {
   dir?: string;
   buildHash: string;
-  providerAssets: readonly DictationBrowserAsset[];
+  providerAssets: readonly AdditionalSpaAsset[];
 }): SpaAssetSource {
   const dir = options.dir ?? SPA_SRC_DIR;
   const shell = stampShell(readFileSync(join(dir, "shell.html"), "utf8"), options.buildHash);

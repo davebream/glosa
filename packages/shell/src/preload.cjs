@@ -82,7 +82,7 @@ if (spaOrigin && globalThis.location && globalThis.location.origin === spaOrigin
     },
     /** One-shot: the presentation token for this window load, or null once taken (R-P1, R-P2). */
     presentationToken: () => ipcRenderer.invoke("glosa:presentation-token"),
-    ...(process.platform === "linux"
+    ...(["linux", "darwin"].includes(process.platform)
       ? {
           beginDictation: (id) => ipcRenderer.invoke("glosa:dictation-begin", id),
           endDictation: (id) => ipcRenderer.invoke("glosa:dictation-end", id),

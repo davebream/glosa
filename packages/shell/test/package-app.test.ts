@@ -147,7 +147,7 @@ describe("package-app: the staged tree", () => {
     const report = inspectStagedTree(cleanTree(), ["zod"], 1);
     expect(report.problems).toHaveLength(1);
     expect(report.problems[0]).toContain("above the");
-    expect(STAGED_TREE_CEILING_BYTES).toBeGreaterThan(30e6);
+    expect(STAGED_TREE_CEILING_BYTES).toBe(73e6);
   });
 });
 

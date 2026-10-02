@@ -5231,8 +5231,12 @@ input,
 }
 
 .glosa-dictation-toggle {
-  min-height: 1.75rem;
-  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--bg);
@@ -9745,4 +9749,24 @@ button:is(
   .glosa-attention-label {
     display: none;
   }
+}
+
+.glosa-dictation-settings {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 42rem;
+}
+.glosa-dictation-settings label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.glosa-dictation-settings label:has(input[type="password"]) {
+  align-items: stretch;
+  flex-direction: column;
+}
+.glosa-dictation-settings input[type="password"] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2);
 }

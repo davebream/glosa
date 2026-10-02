@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.29", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "2.0", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -1134,38 +1134,37 @@ registration's own canonical path; reopening names the star by id. See A3 §4 "S
   **404** `not-found` (unknown id), **422** `star-folder-missing` (checked before the index is
   touched; the star is kept until the writer unstars it).
 
-### 5.22 Opt-in dictation (contract 1.14)
+### 5.22 Opt-in dictation (contract 2.0)
 
-These routes expose a provider-neutral input capability. They never accept audio, context, transcript,
-workspace, artifact, path, session, or participant data. Provider-specific token exchange and browser
-wire formats remain in provider packages.
+Provider-neutral, authenticated input routes. Every response is `Cache-Control: no-store`.
+GET requires Bearer; PUT, DELETE and POST also require the trusted Origin. The generic core works
+with no provider and imports no external provider package. No workspace paths or identities are sent.
 
-- `GET /api/dictation/status` — Bearer required (authed read), always `Cache-Control: no-store`.
-  It checks only local versioned consent and credential presence; it never contacts a provider.
-  **200** with exactly one state:
-```json
-{ "state": "unconfigured" }
-{ "state": "ready", "provider": "wispr-flow", "display_name": "Wispr Flow",
-  "client_module": "/app/providers/wispr-flow/browser.js" }
-{ "state": "error", "provider": "wispr-flow", "display_name": "Wispr Flow",
-  "code": "credential-unavailable", "message": "the Wispr Flow organization key is unavailable" }
-```
-- `POST /api/dictation/session` — Bearer + Origin (state-changing), no request body, always
-  `Cache-Control: no-store`. It is the only daemon route that may contact the configured provider:
-  for Wispr Flow, it reads the organization key from Keychain and requests a 600-second client JWT
-  with only the persisted random client UUID and lifetime. No user, workspace, artifact, document,
-  path, filesystem, session, or participant metadata is included. **200**:
-```json
-{ "provider": "wispr-flow",
-  "websocket_url": "wss://platform-api.wisprflow.ai/api/v1/dash/client_ws",
-  "access_token": "<short-lived JWT>", "expires_at": "2026-09-21T10:10:00.000Z" }
-```
-  The response is renderer-memory-only. API keys, JWTs, token-bearing URLs, audio, context, and
-  transcripts are never logged. The provider request has a ten-second timeout and no retry.
-  Typed failures are `409 dictation-unconfigured`, `429 dictation-rate-limited`,
-  `502 dictation-authentication-failed|dictation-invalid-response|dictation-provider-unavailable`,
-  `503 dictation-credential-unavailable`, and `504 dictation-timeout`; details never forward provider
-  response bodies or credentials. Retry is a new foreground user action.
+- `GET /api/dictation/status` returns settings plus `state: ready|unconfigured|error` and an optional
+  safe local error message. It checks credential presence only, never reads the key or calls the cloud.
+- `GET /api/dictation/settings` returns `enabled`, `context`, `cleanup`, `credential_present`,
+  `revision` and `consent_version`, plus optional safe `credential_error` when metadata lookup fails.
+  Local toggles and revision remain readable then, so disabling does not require an unlocked wallet.
+  Defaults are disabled, context on, cleanup off, consent version 1.
+- `PUT /api/dictation/settings` accepts `enabled`, `context`, `cleanup`, `revision`, `consent_version`
+  and optional write-only `api_key`. Require current revision and consent. Save the candidate key
+  first, atomically commit config, then remove the old key. Failed commits preserve the old state.
+- `DELETE /api/dictation/settings` accepts `revision`. Disable first, then remove the credential.
+  A failed removal leaves dictation disabled with its credential reference retained for retry.
+- `POST /api/dictation/transcribe` accepts multipart `audio`, `revision`, and optional `context`.
+  No duplicate or unknown fields. Limit audio to 12 MiB, WebM or MP4 container; limit context to
+  8 KiB serialized UTF-8 and the whole body to 12 MiB + 64 KiB before form parsing. Settings JSON
+  has a 16 KiB body limit. The provider enforces current consent, revision, enablement and context
+  toggle again. The response is `{text, cleanup: "off"|"applied"|"failed"}`. A failed optional cleanup
+  retains raw text; cancelled work never inserts. The old session endpoint is removed (404).
+
+Only transcription may perform configured cloud calls. Audio and transcripts stay in memory and are
+never logged. OpenAI transcription has a 90-second timeout; optional cleanup has 30 seconds. No SDK
+retry or redirects. The route disables Bun's connection idle timeout while processing; request/auth
+cancellation, configuration changes and shutdown propagate to the provider. One active transcription
+per daemon. Safe typed errors: 400 invalid input; 409 unconfigured, stale settings, busy or cancelled;
+429 rate limit; 502 provider/auth/model/quota/response failure; 503 secure storage unavailable;
+504 timeout. Raw provider/helper bodies and API keys never reach error responses or logs.
 
 ### 5.23 A folder's default style (contract 1.21, issue #407)
 
@@ -1350,10 +1349,10 @@ which needs the identical disable for the identical reason.
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
 | 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale, or the file changed underneath a save (`source-changed`); the target file's bytes are not valid UTF-8 (`not-utf8`); claims (§5.11f): another session holds it (`claim-held`), the caller's claim ended (`claim-revoked`/`claim-expired`/`claim-superseded`), the entry is already closed (`entry-resolved`), no claim to prove a resolve (`no-claim`), too many live claims (`claim-limit`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
 | 413 | request body over 1 MiB | any POST |
-| 429 | configured dictation provider rate-limited a foreground token request | `POST /api/dictation/session` |
-| 502 | configured dictation provider rejected credentials or returned an invalid/failing response | `POST /api/dictation/session` |
-| 503 | configured dictation credential unavailable locally | `POST /api/dictation/session` |
-| 504 | configured dictation provider token request timed out | `POST /api/dictation/session` |
+| 429 | configured dictation provider rate-limited a foreground transcription request | `POST /api/dictation/transcribe` |
+| 502 | configured dictation provider rejected credentials or returned an invalid/failing response | `POST /api/dictation/transcribe` |
+| 503 | configured dictation credential unavailable locally | `POST /api/dictation/transcribe` |
+| 504 | configured dictation provider transcription request timed out | `POST /api/dictation/transcribe` |
 | 500 | unhandled daemon error | any route |
 
 ---

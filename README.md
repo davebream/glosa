@@ -228,14 +228,17 @@ A few commands worth knowing:
   files. It refuses while a live session or apply lease is active and previews the exact paths first.
 - `glosa open --document <file>` opens one document with no file navigator. Its link also works in an
   open workspace tab: unsaved edits need a discard confirmation first, and cancelling keeps the draft.
-- `glosa dictation configure --provider wispr-flow` explicitly enables Wispr Flow for the four prose
-  composers after showing its data disclosure and storing the organization key in macOS Keychain
-  or Linux Secret Service. Linux needs `libsecret`, `systemd` utilities and an initialized desktop
-  wallet such as KWallet. Status and Dictate never unlock a locked wallet; unlock it in the desktop
-  wallet manager, then retry. The Linux app asks for microphone access per dictation attempt.
-  `glosa dictation status` is local-only; `glosa dictation disable` turns egress off before removing
-  the credential. Manjaro/KDE and paid Wispr qualification remain pending; see the
-  [attended Linux procedure](docs/compatibility/linux-qualification.md).
+- **Settings → Dictation** accepts your OpenAI API key and explicit consent. Dictation starts off;
+  visible context starts on and optional text cleanup starts off. Click the microphone icon in an
+  annotation, review reply, conversation or attention reply, then click Stop to transcribe.
+  English, Polish, German and Spanish are detected automatically, including mixed-language speech.
+  Text stays in the draft until you send it. Recording is limited to 5m45s and 12 MiB.
+- Keys stay in macOS Keychain or Linux Secret Service, never browser storage or a plaintext config.
+  Linux needs `libsecret`, `systemd` utilities and an initialized desktop wallet such as KWallet.
+  Unlock a locked wallet in its manager and retry. Saving settings and checking status make no
+  OpenAI request. OpenAI API billing is separate from ChatGPT and Wispr subscriptions.
+  CLI equivalents are `glosa dictation configure --provider openai`, `glosa dictation status`
+  and `glosa dictation disable`. Local transcription models are a future option.
 
 ### Desktop app
 
@@ -378,8 +381,9 @@ honestly attributed across many files and agent sessions?
 - glosa has no telemetry, cloud sync, background checks, warm-ups, or unconfigured external calls.
   It looks for updates only when you run `glosa update` or click Check for Updates… in the app.
   The page's fonts ship inside glosa, so opening a document fetches nothing from outside your Mac.
-  Optional Wispr Flow dictation sends microphone audio and up to 256 KiB of visible plaintext only
-  after versioned consent and a Dictate click; it inserts a draft and never submits it. Your agent may
+  Optional OpenAI dictation sends recorded audio and, when enabled, up to 8 KiB of visible context
+  after versioned consent and a foreground recording. Optional cleanup sends the transcript and
+  enabled context in a separate request; it inserts a draft and never submits it. Your agent may
   still send content to its own provider under that tool's terms.
 - Versions live in a shadow repository glosa keeps for itself: in the workspace's `.glosa/` folder, or under `~/.glosa/state/` when it cannot sit beside your files (a single file opened on its own, a folder you cannot write to, or a folder opened with `glosa open --external-state`). glosa never modifies your real Git repository. History does not expire and single versions cannot be deleted; `glosa forget <slug>` deletes a workspace's whole history and leaves your files alone.
 - Attribution is never guessed. A change is credited to a session only when an apply lease proves it. Everything else is yours or unknown, and a change glosa only finds on disk is reported as an outside edit, never as yours.

@@ -12,9 +12,8 @@ export const REQUIRED_PACK_FILES: readonly string[] = [
   "packages/providers/codex/src/index.ts",
   "packages/providers/claude-code/src/runtime-locks/linux-x64.lock",
   "packages/providers/codex/src/runtime-locks/linux-x64.lock",
-  "packages/providers/wispr-flow/src/index.ts",
-  "packages/providers/wispr-flow/src/browser.js",
-  "packages/providers/wispr-flow/src/wispr-flow-worklet.js",
+  "packages/providers/openai-transcription/src/index.ts",
+  "packages/spa/src/dictation-settings.js",
   "packages/spa/src/index.ts",
   ".claude-plugin/marketplace.json",
   "glosa-plugin/.claude-plugin/plugin.json",
@@ -31,6 +30,7 @@ export const REQUIRED_PACK_FILES: readonly string[] = [
 ];
 
 export const FORBIDDEN_PACK_PATTERNS: readonly RegExp[] = [
+  /^packages\/providers\/wispr-flow\//,
   /(^|\/)test(s)?\//,
   /^docs\//,
   /^\.context\//,

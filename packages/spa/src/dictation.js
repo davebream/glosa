@@ -1,19 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 // Provider-neutral dictation coordinator. One instance belongs to one SPA and one active prose
-// field at a time. Provider wire formats stay in fixed browser modules served by provider packages.
+// field at a time. Audio uses native recording; provider transport stays in the daemon.
 
-export const DICTATION_CONTEXT_LIMIT_BYTES = 262_144;
+export const DICTATION_CONTEXT_LIMIT_BYTES = 8192;
 export const DICTATION_MAX_DURATION_MS = 345_000;
 
-const ALLOWED_CLIENT_MODULES = new Map([["wispr-flow", "/app/providers/wispr-flow/browser.js"]]);
 const encoder = new TextEncoder();
-
-/** A provider's `/app/…` module, resolved beside this file so it inherits the page's build scope
- *  (`/app/@<hash>/…`, #432 R-L6) and can never load another build's code. */
-function scopedModule(route) {
-  return typeof route === "string" && route.startsWith("/app/")
-    ? new URL(`.${route.slice("/app".length)}`, import.meta.url).href
-    : route;
+const AUDIO_LIMIT = 12 * 1024 * 1024;
+const ICONS = {
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>',
+  stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  cancel: '<path d="m6 6 12 12M6 18 18 6"/>',
+};
+function icon(name) {
+  return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">${ICONS[name]}</svg>`;
+}
+function recordingMime(scope) {
+  return ["audio/webm;codecs=opus", "audio/webm", "audio/mp4;codecs=mp4a.40.2", "audio/mp4"].find((type) =>
+    scope.MediaRecorder?.isTypeSupported(type),
+  );
+}
+function contextText(field, raw) {
+  // Reserve space for the JSON labels before enforcing the final serialized UTF-8 cap.
+  let budget = DICTATION_CONTEXT_LIMIT_BYTES - 256;
+  let text = JSON.stringify(buildDictationContext(field, raw, budget));
+  while (bytes(text) > DICTATION_CONTEXT_LIMIT_BYTES && budget > 0) {
+    budget = Math.max(0, budget - (bytes(text) - DICTATION_CONTEXT_LIMIT_BYTES));
+    text = JSON.stringify(buildDictationContext(field, raw, budget));
+  }
+  return text;
 }
 
 function bytes(value) {
@@ -112,9 +127,7 @@ export function buildDictationContext(field, raw = {}, limit = DICTATION_CONTEXT
 }
 
 function browserSupported(scope) {
-  return Boolean(
-    scope.navigator?.mediaDevices?.getUserMedia && scope.AudioContext && scope.AudioWorkletNode && scope.WebSocket,
-  );
+  return Boolean(scope.navigator?.mediaDevices?.getUserMedia && recordingMime(scope));
 }
 
 function statusText(error) {
@@ -128,7 +141,7 @@ function statusText(error) {
  *   dataAccess?: any,
  *   scope?: any,
  *   document?: any,
- *   loadModule?: (specifier: string) => Promise<any>,
+ *   onSettings?: () => void,
  *   maximumDurationMs?: number,
  * }} [options]
  */
@@ -136,13 +149,14 @@ export function createDictationController({
   dataAccess,
   scope = globalThis,
   document = globalThis.document,
-  loadModule = (specifier) => import(specifier),
+  onSettings = () => {},
   maximumDurationMs = DICTATION_MAX_DURATION_MS,
 } = {}) {
   const bindings = new Set();
   let availability = null;
   let active = null;
   let destroyed = false;
+  let statusGeneration = 0;
   const shell = scope.glosaShell;
   const unsubscribeShell = shell?.onDictationEnded?.((id) => {
     if (active?.shellId === id) void cancel();
@@ -154,19 +168,27 @@ export function createDictationController({
     void shell.endDictation(id).catch(() => {});
   }
 
-  const readiness =
-    browserSupported(scope) && typeof dataAccess?.getDictationStatus === "function"
-      ? dataAccess
-          .getDictationStatus()
-          .then((status) => {
-            if (status?.state === "ready" && ALLOWED_CLIENT_MODULES.get(status.provider) === status.client_module) {
-              availability = status;
-            }
-            refreshBindings();
-            return availability;
-          })
-          .catch(() => null)
-      : Promise.resolve(null);
+  async function refreshStatus() {
+    if (destroyed || !browserSupported(scope) || typeof dataAccess?.getDictationStatus !== "function") return null;
+    const generation = ++statusGeneration;
+    try {
+      const status = await dataAccess.getDictationStatus();
+      if (destroyed || generation !== statusGeneration) return null;
+      if (active && active.revision !== status.revision) await cancel("settings changed");
+      availability = status;
+    } catch {
+      availability = null;
+    }
+    refreshBindings();
+    return availability;
+  }
+  const readiness = refreshStatus();
+  const onSettingsChanged = () => {
+    void cancel("settings changed");
+    void refreshStatus();
+  };
+  scope.addEventListener?.("focus", refreshStatus);
+  document.addEventListener("glosa-dictation-settings-changed", onSettingsChanged);
 
   /** Drops the bindings whose field has left the page — and ONLY those.
    *
@@ -196,11 +218,18 @@ export function createDictationController({
   function refreshBindings() {
     pruneBindings();
     for (const binding of bindings) {
-      binding.host.hidden = !availability;
+      binding.host.hidden = !browserSupported(scope);
       const isActive = binding === active?.binding;
-      binding.button.disabled = Boolean(active && !isActive) || active?.state === "finalizing";
-      const label = !isActive ? "Start dictation" : active.state === "finalizing" ? "Transcribing…" : "Stop dictation";
-      binding.button.textContent = label;
+      binding.button.disabled = Boolean(active && !isActive);
+      const label = !isActive
+        ? availability?.state === "ready"
+          ? "Start dictation"
+          : "Set up dictation"
+        : active.state === "recording"
+          ? "Stop dictation"
+          : "Cancel dictation";
+      binding.button.innerHTML = icon(!isActive ? "mic" : active.state === "recording" ? "stop" : "cancel");
+      binding.button.title = label;
       binding.button.setAttribute("aria-label", label);
       binding.button.setAttribute("aria-pressed", String(isActive && active.state === "recording"));
     }
@@ -223,13 +252,10 @@ export function createDictationController({
     const { binding, snapshot } = activeSession;
     binding.field.readOnly = activeSession.fieldReadOnly;
     for (const [control, disabled] of activeSession.controlStates ?? []) control.disabled = disabled;
-    if (!inserted && binding.field.value !== snapshot.value) {
-      binding.field.value = snapshot.value;
-      binding.field.dispatchEvent(new scope.Event("input", { bubbles: true }));
-    }
     if (binding.field.isConnected && (document.activeElement === binding.field || snapshot.focused)) {
       binding.field.focus({ preventScroll: true });
-      if (!inserted) binding.field.setSelectionRange(snapshot.start, snapshot.end, snapshot.direction);
+      if (!inserted && binding.field.value === snapshot.value)
+        binding.field.setSelectionRange(snapshot.start, snapshot.end, snapshot.direction);
     }
   }
 
@@ -238,12 +264,10 @@ export function createDictationController({
     if (!session) return;
     active = null;
     clearTimeout(session.maximumTimer);
+    clearInterval(session.elapsedTimer);
     session.abort.abort(reason);
     releaseShell(session);
-    await session.providerSession?.cancel?.().catch(() => {});
-    if (!session.providerSession) {
-      for (const track of session.stream?.getTracks?.() ?? []) track.stop();
-    }
+    releaseRecording(session);
     restore(session);
     session.binding.status.textContent = "";
     refreshBindings();
@@ -253,9 +277,28 @@ export function createDictationController({
     if (active !== session || session.state === "finalizing") return;
     session.state = "finalizing";
     clearTimeout(session.maximumTimer);
+    clearInterval(session.elapsedTimer);
     refreshBindings();
     try {
-      const transcript = String((await session.providerSession.stop()) ?? "").trim();
+      session.binding.status.textContent = "Transcribing…";
+      session.finishTimer = setTimeout(
+        () => void fail(session, new Error("The recording could not be finalized. Please try again.")),
+        5000,
+      );
+      session.recorder.stop();
+      const audio = await session.recorded;
+      releaseRecording(session);
+      releaseShell(session);
+      if (active !== session) return;
+      if (!audio.size || audio.size > AUDIO_LIMIT)
+        throw new Error("The recording is empty or too large. Please record again.");
+      const result = await dataAccess.transcribeDictation(
+        audio,
+        session.context,
+        session.revision,
+        session.abort.signal,
+      );
+      const transcript = String(result.text ?? "").trim();
       if (active !== session) return;
       if (!session.binding.field.isConnected || session.binding.field.value !== session.snapshot.value) {
         throw new Error("The draft changed during dictation, so no text was inserted.");
@@ -266,14 +309,17 @@ export function createDictationController({
       active = null;
       releaseShell(session);
       restore(session, { inserted: true });
-      session.binding.status.textContent = "Dictation inserted. Review the draft before sending.";
+      session.binding.status.textContent =
+        result.cleanup === "failed"
+          ? "Transcript inserted. Cleanup was unavailable; review the draft."
+          : "Dictation inserted. Review the draft before sending.";
       refreshBindings();
     } catch (error) {
       if (active !== session) return;
       active = null;
       session.abort.abort("dictation failed");
       releaseShell(session);
-      await session.providerSession?.cancel?.().catch(() => {});
+      releaseRecording(session);
       restore(session);
       session.binding.status.textContent = statusText(error);
       refreshBindings();
@@ -284,17 +330,37 @@ export function createDictationController({
     if (active !== session) return;
     active = null;
     clearTimeout(session.maximumTimer);
+    clearInterval(session.elapsedTimer);
     session.abort.abort("provider error");
     releaseShell(session);
-    await session.providerSession?.cancel?.().catch(() => {});
+    releaseRecording(session);
     restore(session);
     session.binding.status.textContent = statusText(error);
     refreshBindings();
   }
 
+  function releaseRecording(session) {
+    clearTimeout(session.maximumTimer);
+    clearTimeout(session.finishTimer);
+    clearInterval(session.elapsedTimer);
+    if (session.recorder && session.recorder.state !== "inactive") {
+      try {
+        session.recorder.stop();
+      } catch {
+        /* Already stopped by device loss. */
+      }
+    }
+    for (const track of session.stream?.getTracks() ?? []) track.stop();
+    session.chunks = [];
+  }
+
   async function start(binding) {
-    if (destroyed || active || !availability) return;
-    binding.status.textContent = "Requesting microphone access…";
+    if (destroyed || active) return;
+    if (availability?.state !== "ready") {
+      onSettings();
+      binding.status.textContent = availability?.message ?? "Enable OpenAI dictation in Settings → Dictation.";
+      return;
+    }
     const invocation = binding.invocation;
     binding.invocation = null;
     const snapshot = {
@@ -309,61 +375,94 @@ export function createDictationController({
       snapshot,
       state: "permission",
       abort: new AbortController(),
-      providerSession: null,
       stream: null,
-      maximumTimer: null,
+      recorder: null,
+      chunks: [],
+      size: 0,
+      revision: availability?.revision,
+      context: availability?.context ? contextText(binding.field, binding.getContext?.() ?? {}) : undefined,
       shellId: shell?.beginDictation ? globalThis.crypto.randomUUID() : null,
     };
     active = session;
     lock(session);
     refreshBindings();
+    binding.status.textContent = "Requesting microphone access…";
     try {
-      if (session.shellId) {
-        const allowed = await shell.beginDictation(session.shellId);
-        if (active !== session) return;
-        if (!allowed) throw new DOMException("Microphone permission was not granted.", "NotAllowedError");
+      // Begin the shell grant synchronously with the click, preserving transient user activation.
+      const permission = session.shellId
+        ? shell.beginDictation(session.shellId).catch(() => false)
+        : Promise.resolve(true);
+      ++statusGeneration;
+      const status = await dataAccess.getDictationStatus();
+      if (active !== session) return;
+      availability = status;
+      if (status.state !== "ready") {
+        onSettings();
+        throw new Error(status.message ?? "Enable OpenAI dictation in Settings → Dictation.");
       }
-      const stream = await scope.navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 }, video: false });
+      if (status.revision !== session.revision) throw new Error("Dictation settings changed. Please start again.");
+      const allowed = await permission;
+      if (active !== session) return;
+      if (!allowed) throw new DOMException("Microphone permission was not granted.", "NotAllowedError");
+      const stream = await scope.navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: { ideal: 1 }, echoCancellation: true, noiseSuppression: true },
+        video: false,
+      });
       session.stream = stream;
       if (active !== session) {
-        for (const track of stream.getTracks()) track.stop();
+        releaseRecording(session);
         return;
       }
-      const [grant, module] = await Promise.all([
-        dataAccess.createDictationSession(session.abort.signal),
-        loadModule(scopedModule(availability.client_module)),
-      ]);
-      if (active !== session) {
-        for (const track of stream.getTracks()) track.stop();
-        return;
-      }
-      const rawContext = binding.getContext?.() ?? {};
-      session.providerSession = await module.createWisprFlowSession({
-        grant,
-        stream,
-        context: buildDictationContext(binding.field, rawContext),
-        signal: session.abort.signal,
+      const recorder = new scope.MediaRecorder(stream, { mimeType: recordingMime(scope), audioBitsPerSecond: 64000 });
+      session.recorder = recorder;
+      session.recorded = new Promise((resolve, reject) => {
+        recorder.addEventListener("dataavailable", (event) => {
+          if (active !== session || !event.data.size) return;
+          session.size += event.data.size;
+          if (session.size > AUDIO_LIMIT) {
+            void fail(session, new Error("The recording is too large. Please record a shorter message."));
+            return;
+          }
+          session.chunks.push(event.data);
+        });
+        recorder.addEventListener("stop", () => resolve(new scope.Blob(session.chunks, { type: recorder.mimeType })), {
+          once: true,
+        });
+        recorder.addEventListener(
+          "error",
+          () => {
+            const error = new Error("Microphone recording failed. Please try again.");
+            reject(error);
+            void fail(session, error);
+          },
+          { once: true },
+        );
       });
-      if (active !== session) {
-        await session.providerSession.cancel?.().catch(() => {});
-        return;
-      }
-      session.providerSession.error?.catch((error) => void fail(session, error));
+      session.recorded.catch(() => {});
+      for (const track of stream.getTracks())
+        track.addEventListener(
+          "ended",
+          () => {
+            if (session.state === "recording")
+              void fail(session, new Error("The microphone disconnected. Please record again."));
+          },
+          { once: true },
+        );
+      recorder.start(1000);
+      session.started = performance.now();
       session.state = "recording";
-      binding.status.textContent = "Listening…";
+      const elapsed = () => {
+        if (active !== session || session.state !== "recording") return;
+        const seconds = Math.floor((performance.now() - session.started) / 1000);
+        binding.status.textContent = `Listening · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+        if (performance.now() - session.started >= maximumDurationMs) void finalize(session);
+      };
+      elapsed();
+      session.elapsedTimer = setInterval(elapsed, 1000);
       session.maximumTimer = setTimeout(() => void finalize(session), maximumDurationMs);
       refreshBindings();
     } catch (error) {
-      if (active !== session) return;
-      session.abort.abort("dictation failed");
-      releaseShell(session);
-      if (!session.providerSession) {
-        for (const track of session.stream?.getTracks?.() ?? []) track.stop();
-      }
-      active = null;
-      restore(session);
-      binding.status.textContent = statusText(error);
-      refreshBindings();
+      await fail(session, error);
     }
   }
 
@@ -390,7 +489,7 @@ export function createDictationController({
       const button = document.createElement("button");
       button.type = "button";
       button.className = "glosa-dictation-toggle";
-      button.textContent = "Start dictation";
+      button.innerHTML = icon("mic");
       button.setAttribute("aria-label", "Start dictation");
       button.setAttribute("aria-pressed", "false");
       const status = document.createElement("span");
@@ -431,6 +530,8 @@ export function createDictationController({
       destroyed = true;
       void cancel();
       unsubscribeShell?.();
+      scope.removeEventListener?.("focus", refreshStatus);
+      document.removeEventListener("glosa-dictation-settings-changed", onSettingsChanged);
       document.removeEventListener("keydown", onKeydown, true);
       removalObserver.disconnect();
       for (const binding of bindings) binding.host.remove();

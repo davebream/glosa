@@ -42,7 +42,7 @@ export const NATIVE_GATES = [
   "codex-process-cleanup",
   "installed-app-g4",
   "t8-signoff",
-  "wispr-live-consent",
+  "dictation-live-consent",
 ] as const;
 const LOCKS = [
   "bun.lock",

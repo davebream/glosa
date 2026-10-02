@@ -99,7 +99,8 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 // v1.28 (#459): human-only attention delivery and immutable requester identity.
 // v1.29 (#460): stale bound composer queueing, terminal-session invalidations and provider-normalized system events.
 // Existing receipts and chats_changed frames retain their shapes; older pages render unknown events safely.
-export const CONTRACT_VERSION = "1.29";
+// v2.0: replace dictation session grants with consent settings and bounded audio transcription.
+export const CONTRACT_VERSION = "2.0";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };
