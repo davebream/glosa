@@ -369,6 +369,17 @@ describe("MCP shim real-process lifetime (#140)", () => {
     await withCleanup(
       async () => {
         expect(await waitForHandshake(port, 15_000, daemon)).not.toBeNull();
+        // Binding no longer opens a workspace. Establish the fixture before testing shutdown.
+        const opened = await fetch(`http://127.0.0.1:${port}/api/workspaces/open`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${TOKEN}`,
+            Origin: `http://127.0.0.1:${port}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ path: agentCwd }),
+        });
+        expect(opened.status).toBe(200);
         const env = baseEnv(home, port, { CODEX_HOME: codexHome });
         const proc = Bun.spawn({
           cmd: [process.execPath, MAIN_PATH, "mcp"],
@@ -392,7 +403,11 @@ describe("MCP shim real-process lifetime (#140)", () => {
             arguments: { session_id: "ac3-codex-thread", provider: "codex", workspace: agentCwd },
           },
         });
-        expect((await io.readLines(1, 15_000)).length).toBe(1);
+        const bound = await io.readLines(1, 15_000);
+        expect(bound).toHaveLength(1);
+        expect(JSON.parse(bound[0]!).result).toMatchObject({
+          structuredContent: { bound: true, workspace_binding: agentCwd },
+        });
         expect(await Promise.race([accepted.then(() => true), Bun.sleep(5_000).then(() => false)])).toBe(true);
         const eofAt = Date.now();
         (proc.stdin as unknown as { end(): void }).end();

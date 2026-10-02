@@ -623,7 +623,7 @@ describe("official TypeScript MCP SDK contract", () => {
       },
       bindSession: async (workspace, sessionId) => {
         calls.push(["bind", workspace, sessionId]);
-        return { bound: true, session_id: sessionId };
+        return { bound: true, session_id: sessionId, workspace_binding: workspace };
       },
     };
     const hook = new FakeDaemonClient();
@@ -648,7 +648,7 @@ describe("official TypeScript MCP SDK contract", () => {
       ]);
       expect(hook.heartbeats).toHaveLength(2);
       expect(new Set(hook.heartbeats).size).toBe(1);
-      expect(hook.registered?.session_id).toBe("s1");
+      expect(hook.registered?.session_id).toBe(hook.heartbeats[0]);
     } finally {
       await connected.close();
     }
@@ -659,7 +659,11 @@ describe("official TypeScript MCP SDK contract", () => {
     const attached: unknown[] = [];
     let attachAborted = false;
     const api: Partial<GlosaApiClient> = {
-      bindSession: async (_workspace, sessionId) => ({ bound: true, session_id: sessionId }),
+      bindSession: async (_workspace, sessionId) => ({
+        bound: true,
+        session_id: sessionId,
+        workspace_binding: "/review/note.md",
+      }),
     };
     const connected = await connect({
       ...deps(hook, api),
@@ -682,7 +686,8 @@ describe("official TypeScript MCP SDK contract", () => {
       arguments: { workspace: "/review", session_id: "thread-exact", provider: "codex" },
     });
     expect(result.isError).not.toBe(true);
-    expect(attached).toEqual([{ sessionId: "thread-exact", workspace: "/review", cwd: "/workspace" }]);
+    expect(hook.registered).toBeNull();
+    expect(attached).toEqual([{ sessionId: "thread-exact", workspace: "/review/note.md", cwd: "/workspace" }]);
     const pulled = await callTool(connected.client, {
       name: "glosa_inbox_pull",
       arguments: { workspace: "/review" },
@@ -1433,7 +1438,7 @@ describe("official TypeScript MCP SDK contract", () => {
         },
         bindSession: async (path, sessionId) => {
           calls.push(`bind:${path}:${sessionId}`);
-          return { bound: true, session_id: sessionId };
+          return { bound: true, session_id: sessionId, workspace_binding: path };
         },
       };
       const connected = await connect({
@@ -1505,7 +1510,7 @@ describe("official TypeScript MCP SDK contract", () => {
         },
         bindSession: async (path, sessionId) => {
           calls.push(`bind:${path}:${sessionId}`);
-          return { bound: true, session_id: sessionId };
+          return { bound: true, session_id: sessionId, workspace_binding: path };
         },
       };
       const connected = await connect({

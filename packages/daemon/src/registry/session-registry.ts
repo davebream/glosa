@@ -160,21 +160,29 @@ export class SessionRegistry {
   bind(
     sessionId: string,
     workspace: string,
-    metadata: { provider?: string; cwd?: string; source?: string; transcript_path?: string } = {},
+    metadata: { provider?: string; cwd?: string; source?: string; transcript_path?: string; principal?: string } = {},
+    beforeCommit?: () => void,
   ): Promise<SessionRecord> {
-    return this.mutex.runExclusive(() =>
-      this.upsert({
-        session_id: sessionId,
-        provider: metadata.provider ?? this.sessions.get(sessionId)?.provider ?? "mcp",
-        cwd: metadata.cwd ?? this.sessions.get(sessionId)?.cwd ?? workspace,
-        source: metadata.source ?? "manual",
-        workspace_binding: workspace,
-        transcript_path: metadata.transcript_path,
-      }),
-    );
+    return this.mutex.runExclusive(() => {
+      // The HTTP owner lock can be held while this mutex is busy. Recheck ownership at the
+      // actual commit boundary; upsert(false) publishes synchronously without index writes.
+      beforeCommit?.();
+      return this.upsert(
+        {
+          session_id: sessionId,
+          provider: metadata.provider ?? this.sessions.get(sessionId)?.provider ?? "mcp",
+          cwd: metadata.cwd ?? this.sessions.get(sessionId)?.cwd ?? workspace,
+          source: metadata.source ?? "manual",
+          workspace_binding: workspace,
+          transcript_path: metadata.transcript_path,
+          principal: metadata.principal,
+        },
+        false,
+      );
+    });
   }
 
-  private async upsert(input: RegisterInput): Promise<SessionRecord> {
+  private async upsert(input: RegisterInput, registerWorkspace = true): Promise<SessionRecord> {
     const prior = this.sessions.get(input.session_id);
     if (prior && prior.provider !== "mcp" && input.provider !== "mcp" && prior.provider !== input.provider) {
       throw new SessionProviderConflict();
@@ -198,7 +206,9 @@ export class SessionRegistry {
     // mint one for `$HOME` or for a directory already inside a registered workspace, and refuses a
     // path a `glosa forget` is midway through deleting. A null result is an ordinary outcome — the
     // session stays registered and reachable by MCP pull with no workspace invented for it.
-    const resolved = await this.index?.upsertSessionWorkspace(record.workspace_binding ?? record.cwd);
+    const resolved = registerWorkspace
+      ? await this.index?.upsertSessionWorkspace(record.workspace_binding ?? record.cwd)
+      : undefined;
     // When it resolved us to an ENCLOSING workspace rather than our own directory, that workspace
     // becomes the binding. Declining to register the subdirectory without this would be strictly
     // worse than the duplicate it prevents: `forWorkspace`'s fallback rung matches a session whose

@@ -592,13 +592,13 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
   const session = lazyHandler(
     {
       name: "session",
-      description: "Bind a live agent session to a workspace",
+      description: "Bind an agent session to an existing workspace; open or present new targets first",
       args: {
         ...GLOBAL_ARGS,
         action: { type: "positional", required: true, description: "Session action (bind)" },
         id: { type: "positional", required: true, description: "Live session ID" },
         provider: { type: "string", description: "Session provider when not available from the environment" },
-        workspace: { type: "string", description: "Workspace directory" },
+        workspace: { type: "string", description: "Existing workspace file or directory" },
       },
     },
     async (context) => {

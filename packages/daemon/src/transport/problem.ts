@@ -5,6 +5,9 @@
 import type { ManagedAgentCode } from "../agents/interface.ts";
 
 export type ProblemSlug =
+  | "workspace-not-registered"
+  | "workspace-ambiguous"
+  | "workspace-changed"
   | "read-only-unavailable"
   | "path-exists"
   | "claimed"

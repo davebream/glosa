@@ -59,6 +59,30 @@ describe("deriveAgentConnection", () => {
     ]);
   });
 
+  test("loose-file connections and prompts use canonical identity, not the shared directory", () => {
+    const status = statusFor([session({ workspace_binding: "/work/alpha/one.md" })], {
+      canonical_path: "/work/alpha/one.md",
+    });
+    status.workspaces.push({
+      ...status.workspaces[0]!,
+      slug: "sibling",
+      canonical_path: "/work/alpha/two.md",
+    } as (typeof status.workspaces)[number]);
+    expect(deriveAgentConnection(status, "alpha")?.state).toBe("connected");
+    expect(deriveAgentConnection(status, "sibling")?.state).toBe("unbound");
+    expect(buildAgentConnectPrompt(deriveAgentConnection(status, "alpha"), "codex")).toContain(
+      "Path: /work/alpha/one.md",
+    );
+    expect(
+      deriveAgentConnection(
+        statusFor([session({ workspace_binding: "/work/alpha/one.md", liveness: "stale" })], {
+          canonical_path: "/work/alpha/one.md",
+        }),
+        "alpha",
+      )?.state,
+    ).toBe("stale");
+  });
+
   test("builds a generic wrapper around provider-owned copy and the CLI fallback", () => {
     const connection = deriveAgentConnection(statusFor(), "alpha")!;
     const prompt = buildAgentConnectPrompt(connection, "codex");

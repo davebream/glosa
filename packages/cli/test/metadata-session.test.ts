@@ -51,13 +51,17 @@ describe("metadata/session CLI contract", () => {
     ).not.toContain("/private/workspace");
   });
 
-  test("session bind reports only the session id and bound state", async () => {
+  test("session bind reports the resolved canonical workspace with the bound session", async () => {
     const client: Partial<GlosaApiClient> = {
-      bindSession: async (_workspace, sessionId) => ({ bound: true, session_id: sessionId }),
+      bindSession: async (_workspace, sessionId) => ({
+        bound: true,
+        session_id: sessionId,
+        workspace_binding: _workspace,
+      }),
     };
     const result = await runSessionBind("/private/workspace", "session-1", async () => client as GlosaApiClient);
-    expect(result.data).toEqual({ bound: true, session_id: "session-1" });
-    expect(JSON.stringify(result.data)).not.toContain("/private/workspace");
+    expect(result.data).toEqual({ bound: true, session_id: "session-1", workspace_binding: "/private/workspace" });
+    expect(result.data).toHaveProperty("workspace_binding", "/private/workspace");
   });
 
   test("metadata set rejects unreadable or invalid JSON before contacting the daemon", async () => {

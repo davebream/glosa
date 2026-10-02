@@ -37,7 +37,7 @@ describe("session recovery and connection-held leases (#141)", () => {
     expect(registry.get("s")?.provider).toBe("codex");
   });
 
-  test("failed persistence never publishes registration or changes a prior binding", async () => {
+  test("failed registration persistence preserves sessions; explicit binding never writes the index", async () => {
     let fail = false;
     const index = {
       upsertSessionWorkspace: async () => {
@@ -48,10 +48,16 @@ describe("session recovery and connection-held leases (#141)", () => {
     await registry.bind("s", "/before");
     const prior = { ...registry.get("s")! };
     fail = true;
-    await expect(registry.bind("s", "/after")).rejects.toThrow("ENOSPC");
-    await expect(registry.bind("new", "/after")).rejects.toThrow("ENOSPC");
+    await expect(registry.register({ session_id: "s", provider: "mcp", cwd: "/after", source: "mcp" })).rejects.toThrow(
+      "ENOSPC",
+    );
+    await expect(
+      registry.register({ session_id: "new", provider: "mcp", cwd: "/after", source: "mcp" }),
+    ).rejects.toThrow("ENOSPC");
     expect(registry.get("s")).toEqual(prior);
     expect(registry.get("new")).toBeNull();
+    await registry.bind("s", "/after");
+    expect(registry.get("s")?.workspace_binding).toBe("/after");
   });
 
   test("connection ownership survives replacement and stale timers cannot resurrect a session", async () => {

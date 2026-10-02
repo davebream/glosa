@@ -436,11 +436,12 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       if (intakeClosed) return Promise.reject(new Error("glosa mcp is shutting down"));
       const hints = args as { session_id?: string; provider?: string; workspace?: string };
       const call = (async () => {
-        await ensureSession(
-          hints.session_id,
-          hints.provider,
-          name === "glosa_inbox_pull" ? hints.workspace : undefined,
-        );
+        if (name !== "glosa_session_bind")
+          await ensureSession(
+            hints.session_id,
+            hints.provider,
+            name === "glosa_inbox_pull" ? hints.workspace : undefined,
+          );
         return handler(args, extra);
       })();
       activeCalls.add(call);
@@ -592,7 +593,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     {
       title: "Bind agent session",
       description:
-        "Register or refresh an agent session and explicitly bind it to a workspace (authoritative routing).",
+        "Register or refresh an agent session and bind it to an existing workspace. Open or present new targets first.",
       inputSchema: sessionBindInputSchema,
       outputSchema: sessionBindOutputSchema,
       annotations: {
@@ -614,7 +615,10 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         const attachAbort = new AbortController();
         codexAttachAbort = attachAbort;
         const signal = AbortSignal.any([shutdownAbort.signal, attachAbort.signal]);
-        const task = deps.startCodexAttachment({ sessionId, workspace: root, cwd: session.cwd }, signal);
+        const task = deps.startCodexAttachment(
+          { sessionId, workspace: structuredContent.workspace_binding, cwd: session.cwd },
+          signal,
+        );
         codexAttachTasks.add(task);
         task
           .finally(() => {

@@ -8,7 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AdapterRegistry, AdapterSessionHint } from "../adapters/interface.ts";
 import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "../adapters/workspace-metadata.ts";
@@ -830,11 +830,20 @@ function discoverTranscript(
   }
 }
 
-async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
+/** Carries a route refusal through the session mutex without publishing a session. */
+class SessionBindingRefusal extends Error {
+  constructor(readonly response: Response) {
+    super("session binding refused");
+  }
+}
 
+async function handleSessionBinding(ctx: ApiContext, slug: string | null, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  // Preserve the slug endpoint's lookup-before-body error precedence.
+  if (slug !== null) {
+    const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+    if (!resolved.ok) return resolved.response;
+  }
   let body: unknown;
   try {
     body = await req.json();
@@ -855,45 +864,106 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
   if (cwd === null)
     return problem(400, "invalid-path", "cwd does not resolve to a real directory", undefined, url.pathname);
 
-  // issue #156 revised approach: session binding shares the SAME per-target ownership lock a
-  // `glosa forget` commit holds while it re-checks liveness and writes its durable marker — never
-  // just the lock-free `workspaceOrNotFound` read above, which can go stale in the gap before this
-  // mutation actually lands. Re-checking fresh state under the lock closes that race in both
-  // directions: a bind that wins the lock is a live session `forget`'s own recheck will see, and a
-  // bind that loses it sees the marker and refuses instead of resurrecting a workspace mid-deletion.
-  //
-  // `:slug` can name a sealed adopted source directly (still "adopted", not yet "forgetting" —
-  // `workspaceOrNotFound` above only refuses the latter) — `provenanceOwner` canonicalizes to the
-  // OWNING target for both the lock key and the bound path, so this can never lock or bind against
-  // a different registration than the one `forget`'s own commit locks (review finding 4).
-  const owner = provenanceOwner(ctx.workspaceIndex, resolved.entry);
-  try {
-    const blocked = await ownershipCoordinator(ctx).run(owner.registration_id, async () => {
-      const fresh = ctx.workspaceIndex.getWorkspaceByRegistration(owner.registration_id);
-      if (fresh?.lifecycle?.state === "forgetting") return true;
-      await ctx.sessionRegistry.bind(sessionId, owner.canonical_path, {
-        provider: b?.provider as string | undefined,
-        cwd,
-        source: b?.source as string | undefined,
-        transcript_path: discoverTranscript(ctx, {
-          session_id: sessionId,
-          provider: (b?.provider as string | undefined) ?? ctx.sessionRegistry.get(sessionId)?.provider ?? "mcp",
-          cwd: cwd ?? ctx.sessionRegistry.get(sessionId)?.cwd ?? owner.canonical_path,
-          source: (b?.source as string | undefined) ?? "manual",
-        }),
-      });
-      return false;
-    });
-    if (blocked) {
+  if (slug === null && (typeof b?.path !== "string" || b.path.length === 0)) {
+    return problem(400, "validation-failed", "path is required", undefined, url.pathname);
+  }
+  const select = (): WorkspaceEntry | Response => {
+    if (slug !== null) {
+      const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+      return resolved.ok ? resolved.entry : resolved.response;
+    }
+    const candidates = ctx.workspaceIndex.bindingCandidates(b!.path as string);
+    const prior = ctx.sessionRegistry.get(sessionId)?.workspace_binding;
+    const selected =
+      candidates.length === 1 ? candidates[0] : candidates.find((entry) => entry.canonical_path === prior);
+    if (selected) return selected;
+    if (candidates.length > 1) {
       return problem(
         409,
-        "workspace-forgetting",
-        "workspace is being forgotten",
-        forgetRemedy(owner.slug),
+        "workspace-ambiguous",
+        "multiple loose-file workspaces match this directory",
+        `Bind an exact file path: ${candidates
+          .map((entry) => JSON.stringify(entry.canonical_path))
+          .sort()
+          .join(", ")}`,
         url.pathname,
       );
     }
+    return problem(
+      404,
+      "workspace-not-registered",
+      "workspace is not registered",
+      "Open the target with glosa open or glosa_present before binding the session.",
+      url.pathname,
+    );
+  };
+  let owner: WorkspaceEntry;
+  try {
+    const selected = select();
+    if (selected instanceof Response) return selected;
+    owner = provenanceOwner(ctx.workspaceIndex, selected);
+    const refusal = await ownershipCoordinator(ctx).run(owner.registration_id, async () => {
+      const beforeCommit = () => {
+        const selectedNow = select();
+        if (selectedNow instanceof Response) throw new SessionBindingRefusal(selectedNow);
+        const fresh = ctx.workspaceIndex.getWorkspaceByRegistration(owner.registration_id);
+        if (
+          !fresh ||
+          selectedNow.registration_id !== selected.registration_id ||
+          provenanceOwner(ctx.workspaceIndex, selectedNow).registration_id !== owner.registration_id
+        ) {
+          throw new SessionBindingRefusal(
+            problem(409, "workspace-changed", "workspace ownership changed; retry binding", undefined, url.pathname),
+          );
+        }
+        if (isBeingForgotten(fresh) || isBeingForgotten(selectedNow)) {
+          throw new SessionBindingRefusal(
+            problem(
+              409,
+              "workspace-forgetting",
+              "workspace is being forgotten",
+              forgetRemedy(owner.slug),
+              url.pathname,
+            ),
+          );
+        }
+        if (fresh.lifecycle?.state === "adopting" || selectedNow.lifecycle?.state === "adopting") {
+          throw new SessionBindingRefusal(
+            problem(409, "workspace-adopting", "workspace adoption is in progress", undefined, url.pathname),
+          );
+        }
+      };
+      await ctx.sessionRegistry.bind(
+        sessionId,
+        owner.canonical_path,
+        {
+          provider: b?.provider as string | undefined,
+          principal: principalOfRequest(req),
+          cwd,
+          source: b?.source as string | undefined,
+          transcript_path: discoverTranscript(ctx, {
+            session_id: sessionId,
+            provider: (b?.provider as string | undefined) ?? ctx.sessionRegistry.get(sessionId)?.provider ?? "mcp",
+            cwd: cwd ?? ctx.sessionRegistry.get(sessionId)?.cwd ?? owner.canonical_path,
+            source: (b?.source as string | undefined) ?? "manual",
+          }),
+        },
+        beforeCommit,
+      );
+      return null;
+    });
+    if (refusal) return refusal;
   } catch (error) {
+    if (error instanceof SessionBindingRefusal) return error.response;
+    if (error instanceof WorkspaceOpenError) return problem(400, error.code, error.message, undefined, url.pathname);
+    if (error instanceof AdoptionError)
+      return problem(
+        409,
+        error.code,
+        error.message,
+        error.code === "workspace-forgetting" ? forgetRemedyForPath(ctx, b!.path as string) : undefined,
+        url.pathname,
+      );
     if (error instanceof SessionProviderConflict)
       return problem(409, "session-provider-conflict", error.message, undefined, url.pathname);
     throw error;
@@ -915,7 +985,11 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
     /* binding succeeded; hydration is an optimisation for the reads that follow it */
   }
 
-  return Response.json({ bound: true, session_id: sessionId });
+  return Response.json({
+    bound: true,
+    session_id: sessionId,
+    ...(slug === null ? { workspace_binding: owner.canonical_path } : {}),
+  });
 }
 
 function metadataUnavailable(pathname: string): Response {
@@ -2033,11 +2107,24 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
  * another. */
 function forgetRemedyForPath(ctx: ApiContext, rawPath: string): string {
   try {
-    const canonical = canonicalize(rawPath);
+    let canonical = resolve(rawPath).normalize("NFC");
+    try {
+      canonical = canonicalize(rawPath);
+    } catch {
+      /* the file may already be gone */
+    }
+    const operation = ctx.workspaceIndex
+      .pendingForgetOperations()
+      .find((candidate) =>
+        candidate.members.some((member) => member.canonical_path === canonical || member.worktree_path === canonical),
+      );
+    if (operation) return forgetRemedy(operation.target_slug);
     const row = ctx.workspaceIndex
       .list()
       .find(
-        (e) => e.lifecycle?.state === "forgetting" && (e.canonical_path === canonical || e.worktree_path === rawPath),
+        (entry) =>
+          entry.lifecycle?.state === "forgetting" &&
+          (entry.canonical_path === canonical || entry.worktree_path === canonical),
       );
     return row ? forgetRemedy(row.slug) : forgetRemedyWithoutSlug();
   } catch {
@@ -2551,6 +2638,7 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         // (or every OTHER row's own `path` field, below: always `WorkspaceEntry.worktree_path`) is
         // addressed by. `worktree_path` is captured in the immutable snapshot for exactly this.
         path: targetMember.worktree_path,
+        canonical_path: targetMember.canonical_path,
         last_seen: op.started_at,
         pending_count: 0,
         has_attention: false,
@@ -2560,7 +2648,7 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         connect: {
           providers: (ctx.providerRegistry?.list() ?? []).map((provider) => ({
             provider: provider.id,
-            ...provider.connectPrompt({ slug: op.target_slug, path: targetMember.worktree_path }),
+            ...provider.connectPrompt({ slug: op.target_slug, path: targetMember.canonical_path }),
           })),
           cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
         },
@@ -2574,6 +2662,7 @@ function handleStatusAggregate(ctx: ApiContext): Response {
       return {
         slug: e.slug,
         path: e.worktree_path,
+        canonical_path: e.canonical_path,
         last_seen: e.last_seen,
         // BADGE-facing, and the one the SPA actually renders (`agent-feedback.js`). `glosa doctor`'s
         // pending-delivery check reads it too, and says "queued, no live session" — a promise an
@@ -2600,7 +2689,7 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         connect: {
           providers: (ctx.providerRegistry?.list() ?? []).map((provider) => ({
             provider: provider.id,
-            ...provider.connectPrompt({ slug: e.slug, path: e.worktree_path }),
+            ...provider.connectPrompt({ slug: e.slug, path: e.canonical_path }),
           })),
           cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
         },
@@ -3086,6 +3175,9 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     pathname,
   );
   if (attentionRoute) return attentionRoute;
+  if (method === "POST" && pathname === "/api/workspaces/session-binding") {
+    return { routeClass: "state-changing", handle: (req) => handleSessionBinding(ctx, null, req) };
+  }
   if (method === "GET" && pathname === "/api/status") {
     return { routeClass: "authed-read", handle: () => handleStatusAggregate(ctx) };
   }
