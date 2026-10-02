@@ -101,28 +101,39 @@ export function effortPresentation(value) {
   return { label, bars, description };
 }
 
-export function effortIcon(value) {
+/** A model's effort levels from least to most, so stepping through them always climbs. Levels this
+    vocabulary does not know keep their catalog order after the ones it does. */
+export function effortLadder(ids) {
+  const order = ["auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const rank = (id) => (order.includes(id) ? order.indexOf(id) : order.length);
+  return [...ids].sort((a, b) => rank(a) - rank(b));
+}
+
+/** Draws the four-bar mark, or re-inks `svg` in place so a change of level can ease. */
+export function effortIcon(value, svg) {
   const { bars } = effortPresentation(value);
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 20 16");
-  svg.setAttribute("class", "glosa-effort-mark");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("focusable", "false");
-  for (let index = 0; index < 4; index++) {
-    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    const height = 4 + index * 3;
-    for (const [name, content] of Object.entries({
-      x: 1 + index * 5,
-      y: 15 - height,
-      width: 3,
-      height,
-      rx: 1,
-      fill: "currentColor",
-      opacity: index < bars ? 1 : 0.2,
-    }))
-      rect.setAttribute(name, String(content));
-    svg.append(rect);
+  if (!svg) {
+    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 20 16");
+    svg.setAttribute("class", "glosa-effort-mark");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    for (let index = 0; index < 4; index++) {
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      const height = 4 + index * 3;
+      for (const [name, content] of Object.entries({
+        x: 1 + index * 5,
+        y: 15 - height,
+        width: 3,
+        height,
+        rx: 1,
+        fill: "currentColor",
+      }))
+        rect.setAttribute(name, String(content));
+      svg.append(rect);
+    }
   }
+  for (const [index, rect] of [...svg.children].entries()) rect.setAttribute("opacity", index < bars ? "1" : "0.2");
   return svg;
 }
 

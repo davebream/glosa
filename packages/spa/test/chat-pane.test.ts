@@ -76,9 +76,8 @@ test("the model picker shows one resolved choice without rewriting a saved defau
     expect(choices().map((button) => button.firstElementChild!.textContent)).toEqual(["Opus 5.5", "Haiku 4.5"]);
     expect(choices().find((button) => button.getAttribute("aria-pressed") === "true")!.dataset.modelId).toBe(selected);
     expect(changes).toEqual([]);
-    const effort = f.host.querySelector('[aria-label="Effort"]') as HTMLSelectElement;
-    effort.value = "low";
-    effort.dispatchEvent(new Event("change"));
+    const effort = f.host.querySelector(".glosa-chat-effort") as HTMLButtonElement;
+    effort.click();
     await flush();
     expect(changes).toEqual([selected]);
     modelButton(f.host, "haiku").click();
@@ -424,9 +423,8 @@ test("settings must finish saving before an ordinary or feedback turn can be sen
           }
         };
       });
-    const effort = f.host.querySelector('[aria-label="Effort"]') as HTMLSelectElement;
-    effort.value = "low";
-    effort.dispatchEvent(new Event("change"));
+    const effort = f.host.querySelector(".glosa-chat-effort") as HTMLButtonElement;
+    effort.click();
     const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
     draft.value = "Use the selected effort";
     draft.dispatchEvent(new Event("input", { bubbles: true }));
@@ -438,7 +436,7 @@ test("settings must finish saving before an ordinary or feedback turn can be sen
     expect((f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).disabled).toBe(true);
     finish();
     await flush();
-    expect(effort.value).toBe(fails ? "high" : "low");
+    expect(effort.dataset.effort).toBe(fails ? "high" : "low");
     expect(f.state.settings.permissionMode).toBe("default");
     draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await flush();
@@ -446,6 +444,60 @@ test("settings must finish saving before an ordinary or feedback turn can be sen
     expect(f.sends[0].configRevision).toBe(fails ? 1 : 2);
     f.pane.destroy();
   }
+});
+
+test("effort steps up one level a press, wraps past the top and keeps presses made while saving", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  // Catalog order is not ladder order: the control climbs low → medium → high → max whatever it is handed.
+  f.catalog.capabilities.a.models[0]!.efforts = ["max", "high", "low", "medium"];
+  [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
+  await flush();
+  const saved: string[] = [];
+  let finish!: () => void;
+  let hold = false;
+  f.dataAccess.changeChat = (_slug: string, _id: string, input: { settings: typeof f.state.settings }) =>
+    new Promise<void>((resolve) => {
+      finish = () => {
+        saved.push(input.settings.effort);
+        f.state.settings = input.settings;
+        f.state.configRevision++;
+        resolve();
+      };
+      if (!hold) finish();
+    });
+  const effort = f.host.querySelector(".glosa-chat-effort") as HTMLButtonElement;
+  expect(effort.tagName).toBe("BUTTON");
+  expect(f.host.querySelector(".glosa-chat-effort-field select")).toBeNull();
+  expect(effort.textContent).toBe("EffortHigh");
+  effort.click();
+  await flush();
+  expect(effort.dataset.effort).toBe("max");
+  effort.click();
+  await flush();
+  expect(effort.dataset.effort).toBe("low");
+  expect(saved).toEqual(["max", "low"]);
+  // Two more presses land while the first save is still out: the label follows each press at once
+  // and the chat ends on the level the person stopped at.
+  hold = true;
+  effort.click();
+  effort.click();
+  effort.click();
+  expect(effort.dataset.effort).toBe("max");
+  expect(effort.disabled).toBe(false);
+  finish();
+  await flush();
+  finish();
+  await flush();
+  expect(saved).toEqual(["max", "low", "medium", "max"]);
+  expect(f.state.settings.effort).toBe("max");
+  hold = false;
+  effort.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  await flush();
+  expect(f.state.settings.effort).toBe("high");
+  expect(f.host.querySelector(".glosa-chat-effort-field [role=status]")!.textContent).toBe("Effort: High");
+  expect(effort.querySelector<HTMLElement>(".glosa-chat-effort-label")!.dataset.widest).toBe("Maximum");
+  f.pane.destroy();
 });
 
 test("uploads block sending and keep successful attachments when a later file fails", async () => {

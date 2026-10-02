@@ -6942,7 +6942,9 @@ input,
 
   .glosa-appearance-trigger,
   .glosa-appearance-option,
-  .glosa-tools-trigger {
+  .glosa-tools-trigger,
+  .glosa-chat-pane .glosa-chat-effort,
+  .glosa-effort-mark rect {
     transition: none;
   }
 
@@ -8272,32 +8274,34 @@ nav.glosa-chat-actions[hidden] {
   max-width: 100%;
   align-items: center;
 }
-.glosa-chat-pane .glosa-chat-field select {
-  appearance: none;
-  position: absolute;
-  inset: 0;
-  grid-area: 1 / 1;
-  width: 100%;
-  max-width: 100%;
-  color: var(--muted);
-  font: var(--text-sm) / 1.4 var(--font-sans);
-  height: 30px;
-  padding: 4px 18px 4px 6px;
+.glosa-chat-pane .glosa-chat-effort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   border: 0;
-  background-color: transparent;
-  cursor: pointer;
+  min-height: 30px;
+  padding: var(--space-1) var(--space-2);
+  color: var(--muted);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
-.glosa-chat-pane .glosa-chat-field select:hover:not(:disabled) {
-  background-color: var(--surface-sunken);
+.glosa-chat-pane .glosa-chat-effort:hover:not(:disabled) {
   color: var(--ink);
 }
-.glosa-chat-pane .glosa-chat-field select:disabled {
-  opacity: 0.5;
-  cursor: default;
+.glosa-chat-pane .glosa-chat-effort:active:not(:disabled) {
+  background: var(--border);
 }
-.glosa-chat-field select option {
-  color: var(--ink);
-  background: var(--bg);
+/* The label is as wide as the longest level this model offers, so stepping never moves the button. */
+.glosa-chat-effort-label {
+  display: inline-grid;
+  justify-items: start;
+  white-space: nowrap;
+}
+.glosa-chat-effort-label::after {
+  content: attr(data-widest);
+  height: 0;
+  visibility: hidden;
 }
 .glosa-chat-compose-actions {
   display: flex;
@@ -8305,13 +8309,6 @@ nav.glosa-chat-actions[hidden] {
   align-items: center;
   gap: 4px;
   padding: 4px 6px;
-}
-.glosa-chat-compose-actions .glosa-chat-field > .glosa-visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
 }
 .glosa-chat-pane .glosa-chat-attach {
   border: 0;
@@ -8515,9 +8512,6 @@ nav.glosa-chat-actions[hidden] {
     gap: 3px;
     padding-inline: 3px;
   }
-  .glosa-chat-compose-actions select {
-    max-width: 145px;
-  }
   .glosa-chat-key-hint {
     display: none;
   }
@@ -8657,47 +8651,15 @@ button:is(
   }
 }
 
-.glosa-chat-field::after {
-  content: attr(data-selection);
-  grid-area: 1 / 1;
-  font: var(--text-sm) / 1.4 var(--font-sans);
-  padding: 4px 26px 4px 6px;
-  max-width: 28ch;
-  white-space: nowrap;
-  visibility: hidden;
-  pointer-events: none;
-}
-.glosa-chat-field::before {
-  content: "";
-  position: absolute;
-  z-index: 1;
-  right: 8px;
-  top: calc(50% - 4px);
-  width: 5px;
-  height: 5px;
-  border-right: 1px solid var(--muted);
-  border-bottom: 1px solid var(--muted);
-  transform: rotate(45deg);
-  pointer-events: none;
-}
-.glosa-chat-effort-field::after,
-.glosa-chat-pane .glosa-chat-effort-field select {
-  padding-left: 28px;
-}
 .glosa-effort-mark {
-  width: 20px;
-  height: 16px;
-  color: var(--muted);
-  pointer-events: none;
-}
-.glosa-chat-effort-field > .glosa-effort-mark {
-  position: absolute;
-  left: 6px;
+  flex: none;
   width: 16px;
   height: 14px;
+  color: inherit;
+  pointer-events: none;
 }
-.glosa-chat-effort-field:has(select:disabled) .glosa-effort-mark {
-  opacity: 0.5;
+.glosa-effort-mark rect {
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 .glosa-control-tooltip {
   position: absolute;
