@@ -1511,7 +1511,8 @@ export function createChatPane(
           (row.node.contains(selection.anchorNode) || row.node.contains(selection.focusNode))
         )
       ) {
-        tableFit?.unobserve(row.content);
+        // Only a message row is watched; a live line or a turn's state line has no content to unwatch.
+        if (row.content) tableFit?.unobserve(row.content);
         row.node.remove();
         rows.delete(key);
       }

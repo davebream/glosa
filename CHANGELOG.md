@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A chat no longer freezes after its first reply. The live line ("Writing 34s") kept counting after
+  the reply had finished, and the next message stayed on "Sending…" without ever being sent, until
+  the window was reloaded.
+
 ## [0.1.0-alpha.41] · 2026-10-02
 
 ### Changed
