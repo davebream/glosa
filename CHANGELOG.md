@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Chat turns no longer repeat the chosen model and effort under every message. A turn says what it
+  ran on only when the agent reported something different. A turn's reasoning is one summary with
+  its formatting rendered, and usage and limits open from the chat's menu.
 - The chat composer's effort control is a button instead of a menu. Each press steps to the next
   level and the highest wraps to the lowest. Arrow Up and Arrow Down step in either direction.
 

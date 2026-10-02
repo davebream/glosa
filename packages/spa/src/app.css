@@ -5363,6 +5363,8 @@ input,
   color: var(--muted);
   font-size: var(--text-base);
   text-wrap: pretty;
+  /* A body may list things: its line breaks are kept. */
+  white-space: pre-line;
 }
 
 .glosa-dialog-actions {

@@ -359,7 +359,13 @@ test("usage separates current session totals from account limits without inventi
   };
   f.state.revision++;
   f.snapshot();
-  const usage = [...f.host.querySelectorAll("details")].find((row) => row.textContent!.includes("Usage & limits"))!;
+  // Usage is the chat's bookkeeping: it opens from the chat menu and is never a row in the thread.
+  expect(f.host.querySelector(".glosa-chat-history")!.textContent).not.toContain("Token usage");
+  const action = f.host.querySelector('[data-chat-action="usage"]') as HTMLButtonElement;
+  expect(action.hidden).toBe(false);
+  action.click();
+  const usage = document.querySelector("dialog.glosa-dialog") as HTMLDialogElement;
+  expect(usage.querySelector("h2")!.textContent).toBe("Usage and limits");
   expect(usage.textContent).toContain("current session totals");
   expect(usage.textContent).toContain("Context capacity (tokens): 200,000");
   expect(usage.textContent).toContain("Current context use: Not reported");
@@ -368,6 +374,59 @@ test("usage separates current session totals from account limits without inventi
   expect(usage.textContent).toContain("Source: Codex account");
   expect(usage.textContent).not.toContain("150%");
   expect(usage.textContent).not.toContain("primaryUsedPercent");
+  usage.close();
+  f.pane.destroy();
+});
+
+test("a turn names its model only when it ran on something else, and shows its reasoning as one summary", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  expect((f.host.querySelector('[data-chat-action="usage"]') as HTMLButtonElement).hidden).toBe(true);
+  const settings = { model: "model", effort: "high", permissionMode: "default" };
+  f.state.turns = [
+    // The alias resolved to the model the catalog names for it: the person's own choice.
+    { id: "same", text: "First", status: "completed", settings, effective: { model: "claude-sonnet-5" } },
+    { id: "silent", text: "Second", status: "completed", settings },
+    {
+      id: "other",
+      text: "Third",
+      status: "completed",
+      settings,
+      effective: { model: "claude-haiku-4-5", effort: "high" },
+    },
+    { id: "effort", text: "Fourth", status: "completed", settings, effective: { model: "model", effort: "low" } },
+  ];
+  (f.state.content as unknown[]) = [
+    { id: "r1", turnId: "same", kind: "reasoning", role: "assistant", text: "Weighing the outline" },
+    {
+      id: "t1",
+      turnId: "same",
+      kind: "tool",
+      role: "assistant",
+      name: "Read",
+      status: "completed",
+      text: "outline.md",
+    },
+    { id: "r2", turnId: "same", kind: "reasoning", role: "assistant", text: "Checking the ending" },
+    { id: "a1", turnId: "same", kind: "text", role: "assistant", text: "Done." },
+  ];
+  f.state.revision++;
+  f.snapshot();
+  const summaries = [...f.host.querySelectorAll(".glosa-chat-history summary")].map((node) => node.textContent);
+  expect(summaries).toEqual([
+    "Reasoning summary",
+    "Read · completed",
+    "Ran on a different model",
+    "Ran at a different effort",
+  ]);
+  expect(f.host.querySelector(".glosa-chat-history")!.textContent).not.toContain("Model and effort");
+  const reasoning = f.host.querySelector('.glosa-chat-message[data-kind="reasoning"] .glosa-chat-text')!;
+  expect(reasoning.textContent).toBe("Weighing the outline\n\nChecking the ending");
+  const mismatch = [...f.host.querySelectorAll("details")].find((row) =>
+    row.textContent!.includes("Ran on a different model"),
+  )!;
+  expect(mismatch.textContent).toContain("You chose: model · high");
+  expect(mismatch.textContent).toContain("The agent reported: claude-haiku-4-5 · high");
   f.pane.destroy();
 });
 
