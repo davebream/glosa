@@ -610,6 +610,52 @@ test("a turn at work shows a live line under its last row and it goes when the t
   f.pane.destroy();
 });
 
+test("a finished turn's live line goes, and the next message sends, where the engine has a ResizeObserver", async () => {
+  // The test DOM has no ResizeObserver, so the pane never watched a row there. A browser has one,
+  // and it refuses anything that is not an element: the live line has no content to unwatch.
+  const targets = new Set<unknown>();
+  class StrictResizeObserver {
+    observe(target: unknown) {
+      if (!(target instanceof Element)) throw new TypeError("observe: parameter 1 is not of type 'Element'");
+      targets.add(target);
+    }
+    unobserve(target: unknown) {
+      if (!(target instanceof Element)) throw new TypeError("unobserve: parameter 1 is not of type 'Element'");
+      targets.delete(target);
+    }
+    disconnect() {
+      targets.clear();
+    }
+  }
+  const scope = globalThis as { ResizeObserver?: unknown };
+  const before = scope.ResizeObserver;
+  scope.ResizeObserver = StrictResizeObserver;
+  try {
+    const f = fixture();
+    await f.pane.ready;
+    const settings = { model: "model", effort: "high", permissionMode: "default" };
+    f.state.turns = [{ id: "t", text: "hey", status: "running", at: new Date().toISOString(), settings }];
+    f.state.revision++;
+    f.snapshot();
+    expect(f.host.querySelector(".glosa-chat-live")).not.toBeNull();
+    (f.state.content as unknown[]) = [{ id: "a1", turnId: "t", kind: "text", role: "assistant", text: "Hello." }];
+    f.state.turns[0].status = "completed";
+    f.state.revision++;
+    f.snapshot();
+    expect(f.host.querySelector(".glosa-chat-live")).toBeNull();
+    expect(targets.size).toBeGreaterThan(0);
+    const draft = f.host.querySelector("textarea")!;
+    draft.value = "good, you?";
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(f.sends.map((send) => send.text)).toEqual(["good, you?"]);
+    f.pane.destroy();
+  } finally {
+    scope.ResizeObserver = before;
+  }
+});
+
 test("tools and access open as a dialog from the line under the composer, and revoking asks first", async () => {
   const f = fixture();
   const consents: boolean[] = [];
