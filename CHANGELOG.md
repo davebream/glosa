@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.1.0-alpha.39] · 2026-10-02
 
+Includes the changes listed below for alpha.38. That candidate failed its release gate and was not
+published; alpha.39 carries those changes forward.
+
+### Changed
+
+- Installation now leads the README, with the macOS desktop command, direct downloads, architecture
+  selection and launch help before the feature tour. CLI/Linux installation, agent setup, updates
+  and supporting documentation have their own links.
+
+### Fixed
+
+- The browser acceptance test for saving during an agent claim now waits for visible source-editor
+  focus and checks that real keyboard input reaches the draft before Save. A lost input is reported
+  at that boundary while the disk, journal and provenance assertions remain intact.
+
 ## [0.1.0-alpha.38] · 2026-10-02
 
 ### Added
