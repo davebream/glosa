@@ -20,10 +20,10 @@ const CHROMIUM_CANDIDATES = [
   "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 ] as const;
 
-async function installedChromium(): Promise<{ executable: string; version: string }> {
+async function installedChromium(env: NodeJS.ProcessEnv): Promise<{ executable: string; version: string }> {
   for (const executable of CHROMIUM_CANDIDATES) {
     if (!existsSync(executable)) continue;
-    const probe = Bun.spawn({ cmd: [executable, "--version"], stdout: "pipe", stderr: "ignore" });
+    const probe = Bun.spawn({ cmd: [executable, "--version"], env, stdout: "pipe", stderr: "ignore" });
     const version = (await new Response(probe.stdout).text()).trim();
     await probe.exited;
     const major = Number(version.match(/\b(\d{3})\b/)?.[1]);
@@ -32,23 +32,118 @@ async function installedChromium(): Promise<{ executable: string; version: strin
   throw new Error(`T8 real-browser gate requires installed Chromium >=111; checked: ${CHROMIUM_CANDIDATES.join(", ")}`);
 }
 
-async function readBrowserDump(child: Bun.Subprocess<"ignore", "pipe", "ignore">, deadlineMs: number): Promise<string> {
-  const reader = child.stdout.getReader();
-  const decoder = new TextDecoder();
-  let output = "";
+interface BrowserResponse {
+  id?: number;
+  error?: unknown;
+  result?: { exceptionDetails?: unknown; result?: { value?: unknown } };
+}
+
+async function readBrowserReport(
+  child: Bun.Subprocess<"ignore", "ignore", "pipe">,
+  port: number,
+  deadlineMs: number,
+): Promise<string> {
+  // --dump-dom with a virtual-time budget can wait indefinitely for navigation, before observing
+  // any security result. Read the real page's completed report over CDP instead. Every wait has
+  // one wall-clock deadline; browser errors and early exit remain failures, never retries.
+  const stderr = new Response(child.stderr).text();
+  let failed = false;
+  let socket: WebSocket | undefined;
+  let nextId = 0;
+  const pending = new Map<number, { resolve: (value: BrowserResponse) => void; reject: (error: Error) => void }>();
   const deadline = Date.now() + deadlineMs;
   try {
-    while (!output.includes("</html>")) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error("Chromium did not emit a complete --dump-dom document before the deadline");
-      const result = await Promise.race([reader.read(), Bun.sleep(remaining).then(() => ({ timeout: true }) as const)]);
-      if ("timeout" in result) throw new Error("Chromium --dump-dom timed out");
-      if (result.done) break;
-      output += decoder.decode(result.value, { stream: true });
+    while (!socket) {
+      if (child.exitCode !== null) throw new Error(`Chromium exited before its page was ready: ${child.exitCode}`);
+      if (Date.now() >= deadline) throw new Error("Chromium page discovery timed out");
+      let targets: { type: string; webSocketDebuggerUrl?: string }[] = [];
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(500) });
+        if (response.ok) targets = await response.json();
+      } catch {
+        // The browser has not opened its private debugging port yet.
+      }
+      const target = targets.find((item) => item.type === "page" && item.webSocketDebuggerUrl);
+      if (!target) {
+        await Bun.sleep(50);
+        continue;
+      }
+      socket = new WebSocket(target.webSocketDebuggerUrl!);
+      const connected = socket;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("Chromium debugging socket timed out")),
+          Math.max(1, deadline - Date.now()),
+        );
+        connected.addEventListener(
+          "open",
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          { once: true },
+        );
+        connected.addEventListener(
+          "error",
+          () => {
+            clearTimeout(timer);
+            reject(new Error("Chromium debugging socket failed"));
+          },
+          { once: true },
+        );
+      });
     }
-    output += decoder.decode();
-    return output;
+    socket.addEventListener("message", (event) => {
+      const response = JSON.parse(String(event.data)) as BrowserResponse;
+      if (response.id !== undefined) pending.get(response.id)?.resolve(response);
+    });
+    socket.addEventListener("close", () => {
+      for (const call of pending.values()) call.reject(new Error("Chromium debugging socket closed"));
+    });
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null)
+        throw new Error(`Chromium exited before completing its security report: ${child.exitCode}`);
+      const id = ++nextId;
+      const response = await new Promise<BrowserResponse>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("Chromium security report read timed out")),
+          Math.max(1, deadline - Date.now()),
+        );
+        pending.set(id, {
+          resolve: (value) => {
+            clearTimeout(timer);
+            pending.delete(id);
+            resolve(value);
+          },
+          reject: (error) => {
+            clearTimeout(timer);
+            pending.delete(id);
+            reject(error);
+          },
+        });
+        socket!.send(
+          JSON.stringify({
+            id,
+            method: "Runtime.evaluate",
+            params: { expression: 'document.getElementById("result")?.textContent', returnByValue: true },
+          }),
+        );
+      });
+      if (response.error || response.result?.exceptionDetails)
+        throw new Error(`Chromium security report evaluation failed: ${JSON.stringify(response)}`);
+      const value = response.result?.result?.value;
+      if (typeof value === "string" && value !== "pending") return value;
+      await Bun.sleep(50);
+    }
+    throw new Error("Chromium did not complete its security report before the deadline");
+  } catch (error) {
+    failed = true;
+    throw new Error(
+      `${error instanceof Error ? error.message : error}; browser PID ${child.pid}, exit ${child.exitCode}`,
+      { cause: error },
+    );
   } finally {
+    socket?.close();
     try {
       child.kill("SIGTERM");
     } catch {
@@ -59,12 +154,8 @@ async function readBrowserDump(child: Bun.Subprocess<"ignore", "pipe", "ignore">
       child.kill("SIGKILL");
       await child.exited;
     }
-    try {
-      await reader.cancel();
-    } catch {
-      // the child closing stdout first is the normal successful path
-    }
-    reader.releaseLock();
+    const diagnostics = await Promise.race([stderr, Bun.sleep(2_000).then(() => "<stderr did not close>")]);
+    if (failed) process.stderr.write(`Chromium security probe diagnostics:\n${diagnostics.slice(-8_000)}\n`);
   }
 }
 
@@ -151,13 +242,16 @@ describe("A3 §5 attacks #1/#2 — production class-F CSP honored by a real brow
   });
 
   test("direct navigation has opaque storage and remote fetch/WebSocket/image/form attempts violate CSP", async () => {
-    const browser = await installedChromium();
+    const childEnv = { ...process.env };
+    delete childEnv.ANTHROPIC_API_KEY;
+    const browser = await installedChromium(childEnv);
     const policyResponse = await fetch(classFUrl);
     const policy = policyResponse.headers.get("Content-Security-Policy");
     await policyResponse.arrayBuffer();
     expect(policy).toContain("form-action 'none'");
     expect(policy).toContain("sandbox allow-scripts;");
     expect(policy).not.toContain("allow-forms");
+    const debuggingPort = randomPort();
     const child = Bun.spawn({
       cmd: [
         browser.executable,
@@ -175,16 +269,17 @@ describe("A3 §5 attacks #1/#2 — production class-F CSP honored by a real brow
         // The throwaway profile must not wait for access to the desktop Keychain.
         "--use-mock-keychain",
         `--user-data-dir=${browserProfile}`,
-        "--virtual-time-budget=1500",
-        "--dump-dom",
+        "--remote-debugging-address=127.0.0.1",
+        `--remote-debugging-port=${debuggingPort}`,
         classFUrl,
       ],
-      stdout: "pipe",
-      stderr: "ignore",
+      env: childEnv,
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "pipe",
     });
-    const dom = await readBrowserDump(child, 30_000);
-    expect(dom.length, browser.version).toBeGreaterThan(0);
-    const serialized = dom.match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
+    const serialized = await readBrowserReport(child, debuggingPort, 30_000);
+    expect(serialized.length, browser.version).toBeGreaterThan(0);
     expect(serialized).toBeString();
     const report = JSON.parse(serialized!) as {
       storage: string;
