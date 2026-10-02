@@ -656,9 +656,14 @@ test("a queued message can be cancelled without stopping the current turn", asyn
   };
   f.state.revision++;
   f.snapshot();
-  expect(f.host.querySelector(".glosa-chat-queue-notice")!.textContent).toContain("apply after it");
+  // The queued message says where it stands on its own edge, right under its pencil bubble.
+  const queued = [...f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')].at(-1)!;
+  expect(queued.hasAttribute("data-pending")).toBe(true);
+  expect(queued.nextElementSibling!.className).toBe("glosa-chat-turn-state");
+  expect(queued.nextElementSibling!.textContent).toBe("Queued. Sends after the current replyContinueCancel");
+  expect(f.host.querySelector(".glosa-chat-composer")!.textContent).not.toContain("waiting");
   expect((f.host.querySelector('[aria-label="Queue message"]') as HTMLButtonElement).disabled).toBe(true);
-  [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Cancel queued message")!.click();
+  [...f.host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === "Cancel queued message")!.click();
   await flush();
   expect(stopped).toEqual(["next"]);
   expect(f.state.turns[0].status).toBe("running");
@@ -700,13 +705,13 @@ test("held messages require Continue and cancelled messages can restore a draft 
   };
   f.snapshot();
   expect(resumed).toHaveLength(0);
-  [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Continue held message")!.click();
+  [...f.host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === "Continue held message")!.click();
   await flush();
   expect(resumed).toEqual(["held"]);
   f.state.turns[0].status = "cancelled";
   f.state.revision++;
   f.snapshot();
-  [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Use message as draft")!.click();
+  [...f.host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === "Use message as draft")!.click();
   await flush();
   expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("Review this again");
   expect(f.saves.at(-1).text).toBe("Review this again");
