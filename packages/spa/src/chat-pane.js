@@ -13,7 +13,7 @@ import {
   modelPicker,
 } from "./agent-ui.js";
 import { loadChatMarkdown } from "./chat-markdown.js";
-import { confirmDialog } from "./dialog.js";
+import { confirmDialog, noticeDialog } from "./dialog.js";
 import { createElement as el } from "./viewer-shell.js";
 
 /** Pure stream projection. Durable snapshots restore prompt/blob content; delta frames never start work. */
@@ -613,6 +613,14 @@ export function createChatPane(
     return accepted;
   }
   controls.append(picker.element, effortField);
+  // Usage is the chat's own bookkeeping, not part of the conversation: it opens from the chat's menu.
+  const usageAction = el("button", {
+    type: "button",
+    textContent: "Usage and limits",
+    "data-chat-action": "usage",
+    hidden: true,
+    onClick: () => void noticeDialog({ title: "Usage and limits", body: usageText(), dismissLabel: "Close" }),
+  });
   menu.popup.append(
     el("button", {
       type: "button",
@@ -624,6 +632,7 @@ export function createChatPane(
     }),
   );
   menu.popup.append(
+    usageAction,
     el("button", {
       type: "button",
       textContent: "Pin chat",
@@ -926,6 +935,89 @@ export function createChatPane(
     if (window.getSelection?.()?.isCollapsed) render();
   }
   document.addEventListener("selectionchange", selectionChanged);
+  /** The chat's token totals and account limits as the agent last reported them, in plain lines. */
+  function usageText() {
+    const value = state.usage;
+    const labels = {
+      input_tokens: "Input tokens",
+      inputTokens: "Input tokens",
+      output_tokens: "Output tokens",
+      outputTokens: "Output tokens",
+      totalTokens: "Total tokens",
+      cachedInputTokens: "Cached input tokens",
+      reasoningOutputTokens: "Reasoning output tokens",
+      cache_read_input_tokens: "Cache-read tokens",
+      cache_creation_input_tokens: "Cache-write tokens",
+      contextWindow: "Context capacity (tokens)",
+      estimatedCostUsd: "Estimated cost (USD)",
+      primaryUsedPercent: "Primary limit used (%)",
+      secondaryUsedPercent: "Secondary limit used (%)",
+      primaryResetsAt: "Primary limit resets",
+      secondaryResetsAt: "Secondary limit resets",
+      quota_status: "Status",
+      quota_resetsAt: "Resets",
+      quota_utilization: "Reported utilization",
+      quota_rateLimitType: "Limit type",
+    };
+    const observedAt = (date) => {
+      const parsed = new Date(typeof date === "number" ? date * 1000 : date);
+      return Number.isNaN(parsed.getTime()) ? String(date) : parsed.toLocaleString();
+    };
+    const metrics = [];
+    const limits = [];
+    for (const [key, item] of Object.entries(value)) {
+      if (["source", "scope", "asOf", "quotaSource", "quotaAsOf"].includes(key)) continue;
+      const label = labels[key] ?? key.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("_", " ");
+      const formatted =
+        item == null
+          ? "Not reported"
+          : /resetsAt$/i.test(key)
+            ? observedAt(item)
+            : typeof item === "number"
+              ? item.toLocaleString(undefined, { maximumFractionDigits: 6 })
+              : String(item);
+      const target = key.startsWith("quota_") || /^(primary|secondary)/.test(key) ? limits : metrics;
+      target.push(`${label}: ${formatted}`);
+    }
+    const profile = catalog?.profiles.find((item) => item.id === state.profileId);
+    const sections = [`Account: ${profile?.label ?? agentName(state.provider)}`];
+    if (metrics.length)
+      sections.push(
+        [
+          `Token usage · ${value.scope === "native-thread" ? "current session totals" : "agent-reported totals"}`,
+          `Source: ${value.source ?? agentName(state.provider)}`,
+          `Observed: ${value.asOf ? observedAt(value.asOf) : "Not reported"}`,
+          ...metrics,
+          "Current context use: Not reported",
+        ].join("\n"),
+      );
+    if (limits.length)
+      sections.push(
+        [
+          "Account limits",
+          `Source: ${value.quotaSource ?? agentName(state.provider)}`,
+          `Observed: ${value.quotaAsOf ? observedAt(value.quotaAsOf) : "Not reported"}`,
+          ...limits,
+        ].join("\n"),
+      );
+    if (value.estimatedCostUsd != null) sections.push("Cost estimates are not subscription charges or invoices.");
+    return sections.join("\n\n");
+  }
+  /** Null when a turn ran on what the person chose, or the agent did not say. An alias and the
+   * model it resolves to are the same choice. */
+  function settingsMismatch(turn) {
+    const asked = turn.settings;
+    const ran = turn.effective;
+    if (!asked || !ran) return null;
+    const resolved = catalog?.capabilities?.[state.profileId]?.models.find((m) => m.id === asked.model)?.resolvedModel;
+    const model = !!ran.model && ran.model !== asked.model && ran.model !== resolved;
+    const effort = !!ran.effort && !!asked.effort && ran.effort !== asked.effort;
+    if (!model && !effort) return null;
+    return {
+      label: model ? "Ran on a different model" : "Ran at a different effort",
+      text: `You chose: ${asked.model} · ${asked.effort || "default"}\nThe agent reported: ${ran.model ?? "no model"} · ${ran.effort ?? "no effort"}`,
+    };
+  }
   function renderMessages() {
     render();
   }
@@ -966,26 +1058,38 @@ export function createChatPane(
           row.references = true;
         }
       }
-      if (typeof turn.text === "string" && turn.settings)
-        textRow(
-          `settings:${turn.id}`,
-          "Model and effort",
-          `Requested: ${turn.settings.model} · ${turn.settings.effort || "default"}\nReported: ${turn.effective?.model ?? "unknown"} · effort ${turn.effective?.effort ?? "unknown"}`,
-          true,
-        );
-      for (const item of state.content.filter((c) => c.turnId === turn.id))
+      // What a turn ran on is said only when it is not what the person chose: the composer already
+      // shows the choice, so repeating it under every message is noise.
+      const ranOn = typeof turn.text === "string" ? settingsMismatch(turn) : null;
+      if (ranOn) textRow(`settings:${turn.id}`, ranOn.label, ranOn.text, true);
+      const shortened = (item) =>
+        item.text + (item.truncated ? "\n\nDisplay shortened. Export the chat for the complete message." : "");
+      const items = state.content.filter((c) => c.turnId === turn.id);
+      // A session reports its reasoning in fragments; a turn shows them as one summary, in order.
+      const reasoning = items.filter((item) => item.kind === "reasoning");
+      let reasoned = false;
+      for (const item of items) {
+        if (item.kind === "reasoning") {
+          if (!reasoned)
+            textRow(
+              `${turn.id}:reasoning`,
+              "Reasoning summary",
+              reasoning.map(shortened).join("\n\n"),
+              true,
+              true,
+              "reasoning",
+            );
+          reasoned = true;
+          continue;
+        }
         textRow(
           `${turn.id}:${item.id}`,
-          item.kind === "tool"
-            ? `${item.name} · ${item.status}`
-            : item.kind === "reasoning"
-              ? "Reasoning summary"
-              : "Assistant",
-          item.text + (item.truncated ? "\n\nDisplay shortened. Export the chat for the complete message." : ""),
-          ["tool", "reasoning"].includes(item.kind),
+          item.kind === "tool" ? `${item.name} · ${item.status}` : "Assistant",
+          shortened(item),
+          item.kind === "tool",
           item.kind === "text",
-          item.kind === "reasoning" ? "reasoning" : undefined,
         );
+      }
       if (turn.error && (typeof turn.text === "string" || state.content.some((item) => item.turnId === turn.id)))
         textRow(`error:${turn.id}`, "Needs attention", turn.error);
       const waiting = ["accepted", "queued", "held"].includes(turn.status);
@@ -1201,73 +1305,7 @@ export function createChatPane(
     files.disabled = pending || !!sendIntent || editing || !!state.archived;
     attach.disabled = files.disabled;
     for (const button of attachmentList.querySelectorAll("button")) button.disabled = pending || !!sendIntent;
-    if (state.usage) {
-      const value = state.usage;
-      const labels = {
-        input_tokens: "Input tokens",
-        inputTokens: "Input tokens",
-        output_tokens: "Output tokens",
-        outputTokens: "Output tokens",
-        totalTokens: "Total tokens",
-        cachedInputTokens: "Cached input tokens",
-        reasoningOutputTokens: "Reasoning output tokens",
-        cache_read_input_tokens: "Cache-read tokens",
-        cache_creation_input_tokens: "Cache-write tokens",
-        contextWindow: "Context capacity (tokens)",
-        estimatedCostUsd: "Estimated cost (USD)",
-        primaryUsedPercent: "Primary limit used (%)",
-        secondaryUsedPercent: "Secondary limit used (%)",
-        primaryResetsAt: "Primary limit resets",
-        secondaryResetsAt: "Secondary limit resets",
-        quota_status: "Status",
-        quota_resetsAt: "Resets",
-        quota_utilization: "Reported utilization",
-        quota_rateLimitType: "Limit type",
-      };
-      const observedAt = (date) => {
-        const parsed = new Date(typeof date === "number" ? date * 1000 : date);
-        return Number.isNaN(parsed.getTime()) ? String(date) : parsed.toLocaleString();
-      };
-      const metrics = [];
-      const limits = [];
-      for (const [key, item] of Object.entries(value)) {
-        if (["source", "scope", "asOf", "quotaSource", "quotaAsOf"].includes(key)) continue;
-        const label = labels[key] ?? key.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("_", " ");
-        const formatted =
-          item == null
-            ? "Not reported"
-            : /resetsAt$/i.test(key)
-              ? observedAt(item)
-              : typeof item === "number"
-                ? item.toLocaleString(undefined, { maximumFractionDigits: 6 })
-                : String(item);
-        const target = key.startsWith("quota_") || /^(primary|secondary)/.test(key) ? limits : metrics;
-        target.push(`${label}: ${formatted}`);
-      }
-      const profile = catalog?.profiles.find((item) => item.id === state.profileId);
-      const sections = [`Account: ${profile?.label ?? agentName(state.provider)}`];
-      if (metrics.length)
-        sections.push(
-          [
-            `Token usage · ${value.scope === "native-thread" ? "current session totals" : "agent-reported totals"}`,
-            `Source: ${value.source ?? agentName(state.provider)}`,
-            `Observed: ${value.asOf ? observedAt(value.asOf) : "Not reported"}`,
-            ...metrics,
-            "Current context use: Not reported",
-          ].join("\n"),
-        );
-      if (limits.length)
-        sections.push(
-          [
-            "Account limits",
-            `Source: ${value.quotaSource ?? agentName(state.provider)}`,
-            `Observed: ${value.quotaAsOf ? observedAt(value.quotaAsOf) : "Not reported"}`,
-            ...limits,
-          ].join("\n"),
-        );
-      if (value.estimatedCostUsd != null) sections.push("Cost estimates are not subscription charges or invoices.");
-      textRow("usage", "Usage & limits", sections.join("\n\n"), true);
-    }
+    usageAction.hidden = !state.usage;
     const selection = window.getSelection?.();
     for (const [key, row] of rows)
       if (
