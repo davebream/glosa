@@ -479,6 +479,9 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         await client.send("Page.enable");
         await client.send("Runtime.enable");
         await client.send("Network.enable");
+        // These targets model the page a person is using. Headless target creation alone does
+        // not establish foreground focus for trusted keyboard input or animation-frame work.
+        await client.send("Page.bringToFront");
         return client;
       }
       await Bun.sleep(100);
@@ -549,6 +552,35 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       return true;
     })()`);
     if (!found) throw new Error(`no ${selector} inside the pane for ${path}`);
+  };
+
+  /** Replaces text through the real input pipeline in one named pane. Wait for the same visible
+   * control to keep focus across two frames, then observe the draft before submitting anything. */
+  const replacePaneText = async (client: CdpClient, path: string, selector: string, text: string) => {
+    const control = `Array.from(document.querySelectorAll('.glosa-pane'))
+      .find(el => el.getAttribute('aria-label') === ${JSON.stringify(path)})
+      ?.querySelector(${JSON.stringify(selector)})`;
+    await client.send("Page.bringToFront");
+    await waitForState(client, `input ready in ${path} (${selector})`, async () =>
+      Boolean(
+        await client.evaluate(`(async () => {
+          const area = ${control};
+          if (!area || !area.checkVisibility()) return false;
+          area.focus(); area.select();
+          for (let frame = 0; frame < 2; frame++) {
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            if (!area.isConnected || (${control}) !== area || !area.checkVisibility()
+              || !document.hasFocus() || document.activeElement !== area) return false;
+          }
+          return true;
+        })()`),
+      ),
+    );
+    await client.send("Input.insertText", { text });
+    expect(
+      await client.evaluate<string>(`(${control})?.value`),
+      `real keyboard input must reach the draft in ${path} before submission`,
+    ).toBe(text);
   };
 
   /** Activates a tab with a REAL pointer press at its own coordinates. A scripted `.click()` does
@@ -834,29 +866,7 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
       await clickInPane(tab, ALPHA, ".glosa-tools-edit-source");
       await clickInPane(tab, ALPHA, ".glosa-face-source");
-      // CDP typing needs the actual source face to be visible and focused. A scripted toolbar
-      // click alone establishes neither, especially in the unpartitioned browser suite.
-      await tab.send("Page.bringToFront");
-      await waitForState(tab, "source editor ready for human input", async () =>
-        Boolean(
-          await tab.evaluate(`(async () => {
-            const area = document.querySelector('.glosa-edit-area');
-            if (!area || !area.checkVisibility()) return false;
-            area.focus(); area.select();
-            for (let frame = 0; frame < 2; frame++) {
-              await new Promise(resolve => requestAnimationFrame(resolve));
-              if (!area.checkVisibility() || !document.hasFocus() || document.activeElement !== area) return false;
-            }
-            return true;
-          })()`),
-        ),
-      );
-      const revision = "# Alpha\n\nHuman revision.\n";
-      await tab.send("Input.insertText", { text: revision });
-      expect(
-        await tab.evaluate<string>("document.querySelector('.glosa-edit-area')?.value"),
-        "real keyboard input must reach the human draft before Save",
-      ).toBe(revision);
+      await replacePaneText(tab, ALPHA, ".glosa-edit-area", "# Alpha\n\nHuman revision.\n");
       await clickInPane(tab, ALPHA, ".glosa-save");
       await waitForState(
         tab,
@@ -933,11 +943,29 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       const { browser, cdpPort } = await launchBrowser();
       const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
       await waitForReady(tab, "workspace opened");
+      // Read native MessagePort deliveries without changing their data or the production handler.
+      // The receipt is a barrier: an unchanged draft checked before a queued message arrives proves nothing.
+      await tab.evaluate(`(() => {
+        window.previewSelectionReceipts = 0;
+        const NativeMessageChannel = window.MessageChannel;
+        window.MessageChannel = class extends NativeMessageChannel {
+          constructor() {
+            super();
+            this.port1.addEventListener('message', event => {
+              if (event.data?.type === 'selection') window.previewSelectionReceipts++;
+            });
+          }
+        };
+      })()`);
       await openFromNavigator(tab, PREVIEW);
       await waitForState(tab, "class-F document opened", (state) => Boolean(paneFor(state, PREVIEW)));
       const deadline = Date.now() + 10000;
       let composer = false;
       let frameSession: string | undefined;
+      let selectionSent = false;
+      const previewPane = `Array.from(document.querySelectorAll('.glosa-pane'))
+        .find(el => el.getAttribute('aria-label') === ${JSON.stringify(PREVIEW)})`;
+      const selectPreviewText = `(() => { const p=document.querySelector('[data-chunk-id]'); if(!p?.firstChild)return false; const r=document.createRange();r.setStart(p.firstChild,0);r.setEnd(p.firstChild,p.firstChild.textContent.length);const selection=getSelection();selection.removeAllRanges();selection.addRange(r);document.dispatchEvent(new MouseEvent('mouseup',{bubbles:true})); return true; })()`;
       while (Date.now() < deadline && !composer) {
         if (!frameSession) {
           const targets = await browser.send("Target.getTargets");
@@ -949,29 +977,58 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
             frameSession = attached.result.sessionId;
           }
         }
-        if (frameSession) {
-          await browser.send(
+        if (frameSession && !selectionSent) {
+          // One selection is one user action. Repeating mouseup while waiting for its asynchronous
+          // parent message queues fresh composers that can replace the draft after typing begins.
+          const selected = await browser.send(
             "Runtime.evaluate",
             {
-              expression: `(() => { const p=document.querySelector('[data-chunk-id]'); if(!p)return; const r=document.createRange();r.setStart(p.firstChild,0);r.setEnd(p.firstChild,p.firstChild.textContent.length);const selection=getSelection();selection.removeAllRanges();selection.addRange(r);document.dispatchEvent(new MouseEvent('mouseup',{bubbles:true})); })()`,
+              expression: selectPreviewText,
+              returnByValue: true,
             },
             15000,
             frameSession,
           );
+          if (selected.result?.exceptionDetails) throw new Error(JSON.stringify(selected.result.exceptionDetails));
+          selectionSent = selected.result?.result?.value === true;
         }
-        composer = await tab.evaluate<boolean>(`!!document.querySelector('.glosa-composer-input')`);
+        composer = await tab.evaluate<boolean>(`!!(${previewPane})?.querySelector('.glosa-composer-input')`);
         if (!composer) await Bun.sleep(25);
       }
       expect(composer, "selection inside the sandboxed preview reached the composer").toBe(true);
-      await tab.evaluate(`document.querySelector('.glosa-composer-input').focus()`);
-      await tab.send("Input.insertText", { text: "Please revise this sentence." });
+      await replacePaneText(tab, PREVIEW, ".glosa-composer-input", "Please revise this sentence.");
+      const receiptsBeforeDuplicate = await tab.evaluate<number>("window.previewSelectionReceipts");
+      await tab.evaluate(
+        `window.previewComposerBeforeDuplicate = (${previewPane})?.querySelector('.glosa-composer-input')`,
+      );
+      await browser.send("Runtime.evaluate", { expression: selectPreviewText }, 15000, frameSession);
+      await waitForState(
+        tab,
+        "duplicate preview selection delivered",
+        async () => (await tab.evaluate<number>("window.previewSelectionReceipts")) > receiptsBeforeDuplicate,
+      );
+      expect(
+        await tab.evaluate<{ sameControl: boolean; text: string; focused: boolean }>(`(() => {
+          const input = (${previewPane})?.querySelector('.glosa-composer-input');
+          return { sameControl: input === window.previewComposerBeforeDuplicate,
+            text: input?.value, focused: document.activeElement === input };
+        })()`),
+        "duplicate preview selections preserve the existing composer draft and focus",
+      ).toEqual({ sameControl: true, text: "Please revise this sentence.", focused: true });
       await clickInPane(tab, PREVIEW, ".glosa-composer-send");
-      const card = `document.querySelector('.glosa-annotation')`;
+      const card = `(${previewPane})?.querySelector('.glosa-annotation')`;
       await waitForState(tab, "class-F note posted", async () =>
         Boolean(await tab.evaluate(`${card}?.textContent.includes('Please revise this sentence.')`)),
       );
       expect(await tab.evaluate(`${card}.textContent`)).not.toContain("Lost its place");
       expect(await tab.evaluate<string>(`${card}.getAttribute('data-anchored')`)).toBe("true");
+      // The guard is scoped to an open composer: after posting, the same passage opens a new note.
+      await browser.send("Runtime.evaluate", { expression: selectPreviewText }, 15000, frameSession);
+      await waitForState(tab, "the same preview passage opens a fresh composer after posting", async () =>
+        Boolean(await tab.evaluate(`(${previewPane})?.querySelector('.glosa-composer-input')`)),
+      );
+      expect(await tab.evaluate<string>(`(${previewPane})?.querySelector('.glosa-composer-input')?.value`)).toBe("");
+      await clickInPane(tab, PREVIEW, ".glosa-composer .glosa-composer-actions .glosa-btn-ghost");
       await tab.reload();
       await waitForReady(tab, "class-F note reloaded");
       await waitForState(tab, "class-F note hydrated", async () => Boolean(await tab.evaluate(card)));
