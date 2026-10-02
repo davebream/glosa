@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   locally; turning it off stops active work. Native and release qualification remain pending (#435).
 - Experimental Linux dictation through Secret Service credentials and per-attempt desktop microphone
   permission. Locked wallets fail without background prompts; cancellation preserves drafts and
-  stops capture and transport. Manjaro/KDE and paid-provider qualification remain pending (#434).
+  stops capture and transport. Manjaro/KDE and installed live-provider qualification remain pending (#430).
 - Pinned Claude Code and Codex runtime candidates for Linux x86_64/glibc, with frozen locks,
   platform-specific identities and verified staging before repair. Existing runtime installations
   require explicit reinstall; their directories, account profiles and chat history are preserved.
