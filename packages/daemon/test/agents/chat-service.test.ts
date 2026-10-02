@@ -1876,3 +1876,43 @@ test("stopping the reply at work holds what waits, and a removed message never r
   expect(turns.map((turn) => !!turn.started)).toEqual([true, false, false]);
   expect(h.inputs).toHaveLength(1);
 });
+
+test("Send now after the reply failed on its own still holds what waits", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  h.send(chat.id, "second");
+  const third = h.send(chat.id, "third");
+  // The failure is being cleared up when the person asks for the third message.
+  h.events.get(chat.sessionId)!({
+    type: "failed",
+    code: "native-disconnected",
+    message: "Disconnected",
+    outcomeUnknown: true,
+  });
+  await h.service.sendNow(h.workspace, chat.id, third.turnId);
+  await eventually(() => !h.service.busy);
+  expect(h.store.chat(chat.id).state.turns.map((turn) => turn.status)).toEqual(["outcome_unknown", "held", "held"]);
+  expect(h.inputs).toHaveLength(1);
+});
+
+test("a Send now choice survives the account's run limit and goes first when a slot frees", async () => {
+  const h = setup(),
+    x = h.chat(),
+    y = h.chat(),
+    z = h.chat();
+  h.send(x.id, "x first");
+  h.send(y.id, "y first");
+  await eventually(() => h.inputs.length === 2);
+  h.send(z.id, "z first");
+  h.send(x.id, "x second");
+  const chosen = h.send(x.id, "x third");
+  // Stopping x frees a slot that z, waiting longer, takes: x is passed over at the limit of two.
+  await h.service.sendNow(h.workspace, x.id, chosen.turnId);
+  await eventually(() => h.inputs.length === 3);
+  expect(h.inputs[2]!.text).toBe("z first");
+  h.events.get(y.sessionId)!({ type: "completed" });
+  await eventually(() => h.inputs.length === 4);
+  expect(h.inputs[3]!.text).toBe("x third");
+});

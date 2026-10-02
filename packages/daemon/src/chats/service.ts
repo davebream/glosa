@@ -1720,7 +1720,10 @@ export class ManagedChatService {
     }
     const run = this.runs.get(chatId);
     if (run && run.turnId !== turnId) {
-      run.sendNow = true;
+      const atWork = log.state.turns.find((item) => item.id === run.turnId);
+      // Only a reply the person ends here lets the queue move on. One that already failed on its
+      // own is still being cleared up, and what waits behind it is held for review as always.
+      run.sendNow = !run.finishing && !!atWork && !terminalStates.has(atWork.status);
       await this.stop(workspace, chatId, run.turnId);
       return;
     }
@@ -1754,8 +1757,6 @@ export class ManagedChatService {
             this.ready.delete(chatId);
             continue;
           }
-          if (turn.id === next || !state.turns.some((item) => item.id === next && waitingStates.has(item.status)))
-            this.sendNext.delete(chatId);
           if ([...this.runs.values()].filter((run) => run.profileId === state.profileId).length >= 2) continue;
           this.ready.delete(chatId);
           try {
@@ -1769,6 +1770,10 @@ export class ManagedChatService {
             });
             continue;
           }
+          // The choice is spent only once its turn really goes: a chat passed over at the account's
+          // limit keeps it for the next pass.
+          if (turn.id === next || !state.turns.some((item) => item.id === next && waitingStates.has(item.status)))
+            this.sendNext.delete(chatId);
           const run: LiveRun = {
             chatId,
             turnId: turn.id,

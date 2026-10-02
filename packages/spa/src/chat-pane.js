@@ -40,6 +40,8 @@ export function applyChatEvent(state, record) {
     if (value) {
       value.status = event.status;
       value.error = event.error;
+      // As the daemon's own replay does: a turn that got this far reached the agent.
+      if (["dispatching", "running", "waiting", "stopping"].includes(event.status)) value.started = true;
     }
   } else if (event.type === "effective_settings") {
     const turn = state.turns.find((t) => t.id === event.turnId);
@@ -1277,12 +1279,31 @@ export function createChatPane(
     });
     if (row.kind === "failed")
       return [
-        verb("Retry", "Retry sending message", () => {
-          for (const entry of outbox) entry.state = "sending";
-          status.textContent = "";
-          render();
-          void drainOutbox();
-        }),
+        verb(
+          "Retry",
+          "Retry sending message",
+          () =>
+            void (async () => {
+              // Told that the draft changed elsewhere, the person retries on the draft as it now is:
+              // the message is sent as it stands and takes that draft's place.
+              if (outbox.some((entry) => entry.conflict)) {
+                try {
+                  const next = await dataAccess.getChat(slug, chatId, pageBefore);
+                  if (disposed) return;
+                  if (next.revision >= state.revision) state = next;
+                  baseDraftRevision = next.draftRevision;
+                  lastDraft = next.draft;
+                } catch (error) {
+                  return failure(error);
+                }
+                for (const entry of outbox) Object.assign(entry, { conflict: false, unsaved: false });
+              }
+              for (const entry of outbox) entry.state = "sending";
+              status.textContent = "";
+              render();
+              void drainOutbox();
+            })(),
+        ),
         edit,
         remove,
       ];
@@ -1770,6 +1791,7 @@ export function createChatPane(
       await saving;
       while (!disposed && outbox[0]?.state === "sending") {
         const entry = outbox[0];
+        let saveFailed = true;
         try {
           if (entry.unsaved) {
             const saved = await dataAccess.saveChatDraft(slug, chatId, {
@@ -1784,6 +1806,7 @@ export function createChatPane(
             lastDraft = entry.text;
             entry.unsaved = false;
           }
+          saveFailed = false;
           // A retry of a send whose answer was lost repeats the same request, so it cannot duplicate.
           entry.intent ??= {
             requestId: crypto.randomUUID(),
@@ -1838,6 +1861,10 @@ export function createChatPane(
           }
           // Nothing behind a message that did not go is sent ahead of it.
           for (const waiting of outbox) waiting.state = "failed";
+          if (!entry.intent && (saveFailed || ["stale-chat", "stale-draft"].includes(refusal))) {
+            entry.conflict = true;
+            status.textContent += " Retry sends it as it is and replaces the draft saved elsewhere.";
+          }
           if (!refused) status.textContent += " Retry sends the same request; it will not create a duplicate.";
           break;
         }

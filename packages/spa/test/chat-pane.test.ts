@@ -342,6 +342,7 @@ function fixture(options: { sourceChatId?: string } = {}) {
     dataAccess,
     status: (value: string) => stream.onStatus(value),
     snapshot: () => stream.onEvent({ event: "chat_snapshot", data: structuredClone(state) }),
+    event: (data: unknown) => stream.onEvent({ event: "chat_event", data }),
   };
 }
 
@@ -784,6 +785,53 @@ test("a waiting message can be edited or sent now, and Stop ends only the reply 
   (f.host.querySelector(".glosa-chat-stop") as HTMLButtonElement).click();
   await flush();
   expect(calls).toEqual(["now:b", "stop:a", "stop:active"]);
+  f.pane.destroy();
+});
+
+test("a reply stopped in another window keeps its message in the thread here", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  // This window learned of the turn while it still waited, and hears the rest as status events only.
+  f.state.turns = [{ id: "t", text: "Review it", status: "queued", at: new Date().toISOString() }];
+  f.state.revision++;
+  f.snapshot();
+  let seq = f.state.revision;
+  for (const status of ["dispatching", "running", "stopping", "cancelled"])
+    f.event({ seq: ++seq, data: { type: "turn_status", turnId: "t", status } });
+  const bubble = f.host.querySelector('.glosa-chat-message[data-kind="human"] .glosa-chat-text');
+  expect(bubble?.textContent).toBe("Review it");
+  expect(f.host.querySelector(".glosa-chat-turn-state")!.textContent).toBe("CancelledUse as draft");
+  f.pane.destroy();
+});
+
+test("after a draft conflict, Retry sends the waiting messages on the draft as it now is", async () => {
+  const f = fixture();
+  accepting(f);
+  await f.pane.ready;
+  f.state.turns = [{ id: "t", text: "First", status: "running", started: true, at: new Date().toISOString() }];
+  f.state.revision++;
+  f.snapshot();
+  const draft = f.host.querySelector("textarea")!;
+  draft.value = "Second";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  // Another window saves the draft before this one has: this window's save is refused.
+  f.state.draft = "Other window";
+  f.state.draftRevision = 3;
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  type(f, "Third");
+  await flush();
+  expect(f.sends).toHaveLength(0);
+  expect([...f.host.querySelectorAll(".glosa-chat-tray-state")].map((node) => node.textContent)).toEqual([
+    "Not sent",
+    "Not sent",
+  ]);
+  expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("replaces the draft saved elsewhere");
+  (f.host.querySelector('[aria-label="Retry sending message"]') as HTMLButtonElement).click();
+  await flush();
+  expect(f.sends.map((sent) => [sent.text, sent.draftRevision])).toEqual([
+    ["Second", 3],
+    ["Third", 4],
+  ]);
   f.pane.destroy();
 });
 
