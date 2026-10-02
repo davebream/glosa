@@ -11,6 +11,7 @@ import type { ShadowDiagnosis } from "../../daemon/src/git/shadow-health.ts";
 // need to fake those — widening this interface into that one would mean every one of those
 // tests' fakes grows methods it never calls.
 
+import { resolve } from "node:path";
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
 import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
 import { authedRequest, ensureDaemon, glosaHome } from "../../daemon/src/index.ts";
@@ -58,6 +59,7 @@ function unreachableError(reason: string): DaemonUnreachableError {
 }
 
 export interface WorkspaceStatusSummary {
+  canonical_path?: string;
   slug: string;
   path: string;
   last_seen: string;
@@ -383,7 +385,7 @@ export interface GlosaApiClient {
     path: string,
     sessionId: string,
     metadata?: { provider?: string; cwd?: string; source?: string },
-  ): Promise<{ bound: true; session_id: string }>;
+  ): Promise<{ bound: true; session_id: string; workspace_binding: string }>;
   /** Mint a short-TTL single-use presentation token for MCP/present URLs (`p=`). */
   mintPresentationToken?(): Promise<{ token: string; expires_in_s: number }>;
   /** `glosa_watch`'s daemon call (#153 Part 2, `GET /w/:slug/watch`) — a held read; writes
@@ -632,13 +634,23 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
       return (await call("DELETE", `/w/${encodeURIComponent(workspace.slug)}/metadata`)).json();
     },
     async bindSession(path, sessionId, metadata) {
-      const workspace = await openWorkspace(path);
-      return (
-        await call("POST", `/w/${encodeURIComponent(workspace.slug)}/session-binding`, {
-          session_id: sessionId,
-          ...metadata,
-        })
-      ).json();
+      try {
+        return (
+          await call("POST", "/api/workspaces/session-binding", {
+            path: resolve(path),
+            session_id: sessionId,
+            ...metadata,
+          })
+        ).json();
+      } catch (error) {
+        if (isApiError(error) && error.status === 404 && !error.problem?.type?.endsWith("workspace-not-registered")) {
+          throw apiError(404, {
+            title: "session binding is unavailable",
+            detail: "Update the glosa daemon to support binding existing workspaces.",
+          });
+        }
+        throw error;
+      }
     },
     async mintPresentationToken() {
       return (await call("POST", "/api/presentation-token/mint", {})).json();

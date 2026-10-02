@@ -2,7 +2,7 @@
 import { isApiError, type GlosaApiClient } from "./api-client.ts";
 import { daemonUnreachableEnvelope, EXIT_CODES, printJsonEnvelope, type CommandEnvelope } from "./envelope.ts";
 
-type SessionData = { bound?: boolean; session_id?: string };
+type SessionData = { bound?: boolean; session_id?: string; workspace_binding?: string };
 
 export async function runSessionBind(
   workspace: string,
@@ -31,7 +31,7 @@ export async function runSessionBind(
         exitCode: EXIT_CODES.ENTRY_ERROR,
         data: {},
         warnings: [],
-        error: { code: "session-bind-failed", kind: "entry_error", message: error.problem?.title ?? error.message },
+        error: { code: "session-bind-failed", kind: "entry_error", message: error.message },
       };
     }
     return { ...daemonUnreachableEnvelope("session", (error as Error).message), data: {} };

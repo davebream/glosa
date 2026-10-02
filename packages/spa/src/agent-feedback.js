@@ -26,7 +26,7 @@ export function deriveAgentConnection(status, slug) {
   if (!workspace) return null;
 
   const explicit = (status.sessions ?? [])
-    .filter((session) => session.workspace_binding === workspace.path)
+    .filter((session) => session.workspace_binding === (workspace.canonical_path ?? workspace.path))
     .sort(byRecentActivity);
   const live = explicit.filter((session) => session.liveness === "alive");
   const stale = explicit.filter((session) => session.liveness === "stale");
@@ -81,7 +81,7 @@ export function buildAgentConnectPrompt(connection, providerId) {
     "Connect this agent session to glosa.",
     "",
     `Workspace: ${connection.workspace.slug}`,
-    `Path: ${connection.workspace.path}`,
+    `Path: ${connection.workspace.canonical_path ?? connection.workspace.path}`,
     "",
     provider.instruction,
     ...(fallback ? ["", "If the glosa MCP tool is unavailable, use the CLI fallback:", fallback] : []),

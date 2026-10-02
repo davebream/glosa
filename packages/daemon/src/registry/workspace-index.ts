@@ -25,7 +25,7 @@ import {
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fsyncContainingDir, type WriteSync, writeAllSync } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
 import { peekJournalAt, retentionPendingCount } from "../bus/peek.ts";
@@ -1033,6 +1033,16 @@ export class WorkspaceIndex {
   upsertSessionWorkspace(canonicalPath: string): Promise<WorkspaceEntry | null> {
     return this.mutex.runExclusive(() => {
       const index = this.loadForMutation();
+      // A reconnect to a bound loose file must not register that file as a directory.
+      const loose = Object.values(index.workspaces).find(
+        (entry) => entry.kind === "loose-file" && entry.canonical_path === canonicalPath,
+      );
+      if (loose) {
+        if (loose.lifecycle?.state === "forgetting") {
+          throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+        }
+        return loose;
+      }
       const owning = Object.values(index.workspaces)
         .filter(
           (entry) =>
@@ -1156,6 +1166,54 @@ export class WorkspaceIndex {
     return Object.values(index.forget_operations).some(
       (op) => !op.completed_at && op.members.some((m) => m.canonical_path === canonicalPath),
     );
+  }
+
+  /** Read-only resolution for binding: never register, refresh, or adopt a workspace. */
+  bindingCandidates(rawPath: string): WorkspaceEntry[] {
+    // A durable forget still governs a path after its on-disk file or registration is gone.
+    if (this.activeForgetOperationForCanonicalPath(resolve(rawPath).normalize("NFC"))) {
+      throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+    }
+    let leaf: ReturnType<typeof lstatSync>;
+    let canonical: string;
+    try {
+      leaf = lstatSync(rawPath);
+      canonical = leaf.isFile() ? canonicalFilePath(rawPath, this.realpath) : canonicalPath(rawPath, this.realpath);
+    } catch {
+      throw new WorkspaceOpenError("invalid-path", "workspace path does not exist or cannot be canonicalized");
+    }
+    if (leaf.isSymbolicLink() || (!leaf.isFile() && !leaf.isDirectory())) {
+      throw new WorkspaceOpenError("unsupported-file", "bind requires a regular file or directory, not a symlink");
+    }
+    if (this.activeForgetOperationForCanonicalPath(canonical)) {
+      throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+    }
+    const entries = this.list();
+    const exact = entries.find((entry) => entry.canonical_path === canonical);
+    if (exact) return [exact];
+    const owning = entries
+      .filter((entry) => entry.present && entry.kind === "directory" && isInside(entry.worktree_path, canonical))
+      .sort((a, b) => b.worktree_path.length - a.worktree_path.length)[0];
+    if (owning) {
+      if (isHomeOrAncestor(owning.worktree_path, this.userHomeDir)) {
+        throw new WorkspaceOpenError(
+          "home-workspace-registered",
+          "refusing to infer a binding to a home-directory workspace; name that directory explicitly",
+        );
+      }
+      if (leaf.isDirectory() || matchTrackedFile(owning, canonical)) return [owning];
+    }
+    if (
+      leaf.isDirectory() &&
+      this.pendingForgetOperations().some((operation) =>
+        operation.members.some((member) => member.kind === "loose-file" && member.worktree_path === canonical),
+      )
+    ) {
+      throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+    }
+    return leaf.isDirectory()
+      ? entries.filter((entry) => entry.present && entry.kind === "loose-file" && entry.worktree_path === canonical)
+      : [];
   }
 
   resolveOpenTarget(

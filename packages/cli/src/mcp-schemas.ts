@@ -232,12 +232,17 @@ export const sessionBindInputSchema = z
   .object({
     session_id: sessionId,
     provider: z.string().min(1).optional(),
-    workspace: workspacePath.optional(),
+    workspace: workspacePath
+      .describe(
+        "Existing workspace file or directory path; defaults to cwd. Open or present unregistered targets first.",
+      )
+      .optional(),
   })
   .strict();
 
 export const sessionBindOutputSchema = z
   .object({
+    workspace_binding: z.string().describe("Canonical path of the bound workspace."),
     bound: z.literal(true).describe("Always true on success."),
     session_id: sessionId,
   })
