@@ -834,10 +834,29 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       await clickInPane(tab, ALPHA, ".glosa-tools-trigger");
       await clickInPane(tab, ALPHA, ".glosa-tools-edit-source");
       await clickInPane(tab, ALPHA, ".glosa-face-source");
-      await tab.evaluate(
-        `(() => { const area = document.querySelector('.glosa-edit-area'); area.focus(); area.select(); })()`,
+      // CDP typing needs the actual source face to be visible and focused. A scripted toolbar
+      // click alone establishes neither, especially in the unpartitioned browser suite.
+      await tab.send("Page.bringToFront");
+      await waitForState(tab, "source editor ready for human input", async () =>
+        Boolean(
+          await tab.evaluate(`(async () => {
+            const area = document.querySelector('.glosa-edit-area');
+            if (!area || !area.checkVisibility()) return false;
+            area.focus(); area.select();
+            for (let frame = 0; frame < 2; frame++) {
+              await new Promise(resolve => requestAnimationFrame(resolve));
+              if (!area.checkVisibility() || !document.hasFocus() || document.activeElement !== area) return false;
+            }
+            return true;
+          })()`),
+        ),
       );
-      await tab.send("Input.insertText", { text: "# Alpha\n\nHuman revision.\n" });
+      const revision = "# Alpha\n\nHuman revision.\n";
+      await tab.send("Input.insertText", { text: revision });
+      expect(
+        await tab.evaluate<string>("document.querySelector('.glosa-edit-area')?.value"),
+        "real keyboard input must reach the human draft before Save",
+      ).toBe(revision);
       await clickInPane(tab, ALPHA, ".glosa-save");
       await waitForState(
         tab,

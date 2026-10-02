@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.39] · 2026-10-02
+
+Includes the changes listed below for alpha.38. That candidate failed its release gate and was not
+published; alpha.39 carries those changes forward.
+
+### Changed
+
+- Installation now leads the README, with the macOS desktop command, direct downloads, architecture
+  selection and launch help before the feature tour. CLI/Linux installation, agent setup, updates
+  and supporting documentation have their own links.
+
+### Fixed
+
+- The browser acceptance test for saving during an agent claim now waits for visible source-editor
+  focus and checks that real keyboard input reaches the draft before Save. A lost input is reported
+  at that boundary while the disk, journal and provenance assertions remain intact.
+
 ## [0.1.0-alpha.38] · 2026-10-02
 
 ### Added
@@ -1737,7 +1754,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.38...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.39...HEAD
+[0.1.0-alpha.39]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.39
 [0.1.0-alpha.38]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.38
 [0.1.0-alpha.37]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.36...v0.1.0-alpha.37
 [0.1.0-alpha.36]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.35...v0.1.0-alpha.36
