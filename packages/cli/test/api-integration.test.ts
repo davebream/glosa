@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ensureToken, inboxEntryPath, lockPath, readLock } from "@glosa/daemon";
 // Share the daemon-test port allocator so this long-lived ensureDaemon child cannot collide with
 // hermetic `spawnDaemon` suites that also pick from [20000, 40000) during the same `bun test` run.
@@ -183,6 +183,58 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     expect(unknown.data.bound_session).toBe("not-registered");
     expect(unknown.warnings.some((warning) => warning.code === "bind-failed")).toBe(false);
   }, 20000);
+
+  test("binding an older daemon gives upgrade guidance without opening the requested path", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ pathname: string; body: unknown }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ pathname: new URL(String(input)).pathname, body: JSON.parse(String(init?.body)) });
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    try {
+      await expect(client.bindSession!("relative-workspace", "legacy")).rejects.toThrow("Update the glosa daemon");
+      expect(requests).toEqual([
+        {
+          pathname: "/api/workspaces/session-binding",
+          body: { path: resolve("relative-workspace"), session_id: "legacy" },
+        },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("loose-file open and parent bind preserve registration and allow annotations on the original slug", async () => {
+    const directory = freshWorkspaceDir();
+    const file = join(directory, "seed.md");
+    writeFileSync(file, "seed\n");
+    const opened = await client.openWorkspace(file);
+    const snapshot = () => JSON.parse(readFileSync(join(home, "workspaces.json"), "utf8")).workspaces;
+    const before = snapshot();
+    const bound = await client.bindSession!(file, "loose-owner", { cwd: directory, provider: "codex" });
+    expect(bound.workspace_binding).toBe(realpathSync(file));
+    expect(await client.bindSession!(directory, "loose-owner")).toEqual(bound);
+    // Codex attachment and later MCP registration must preserve the same identity too.
+    const daemon = await createHttpDaemonClient();
+    await daemon.register({
+      session_id: "loose-owner",
+      provider: "codex",
+      cwd: directory,
+      workspace_binding: bound.workspace_binding,
+      source: "codex-app-server",
+    });
+    expect(snapshot()).toEqual(before);
+    expect(existsSync(join(directory, ".glosa"))).toBe(false);
+    const status = await client.getStatus();
+    expect(status.workspaces.find((entry) => entry.slug === opened.slug)).toMatchObject({
+      path: realpathSync(directory),
+      canonical_path: realpathSync(file),
+    });
+    const id = await createEntry(opened.slug, "seed.md", "still writable");
+    expect(id).toBeTruthy();
+    const registered = Object.values(snapshot()) as Array<{ slug: string; lifecycle: { state: string } }>;
+    expect(registered.find((entry) => entry.slug === opened.slug)?.lifecycle.state).toBe("active");
+  });
 
   test("open -> apply-begin -> 2nd apply-begin conflicts (409) -> resolve(applied) proves a real pre..post diff -> status reflects it", async () => {
     const workspaceDir = freshWorkspaceDir();

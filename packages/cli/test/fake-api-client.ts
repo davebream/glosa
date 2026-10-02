@@ -44,7 +44,7 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   inboxListResult: InboxListResult = { entries: [] };
   inboxListImpl: ((path: string, opts?: { all?: boolean }) => Promise<InboxListResult>) | null = null;
   inboxPresentationResult: InboxPresentationResult | null = null;
-  bindSessionResult: { bound: true; session_id: string } | null = null;
+  bindSessionResult: { bound: true; session_id: string; workspace_binding: string } | null = null;
   bindSessionError: Error | null = null;
   mintPresentationTokenResult: { token: string; expires_in_s: number } = {
     token: "present-token-abc",
@@ -167,10 +167,13 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     return this.statusResult;
   }
 
-  async bindSession(path: string, sessionId: string): Promise<{ bound: true; session_id: string }> {
+  async bindSession(
+    path: string,
+    sessionId: string,
+  ): Promise<{ bound: true; session_id: string; workspace_binding: string }> {
     this.calls.push({ method: "bindSession", args: [path, sessionId] });
     if (this.bindSessionError) throw this.bindSessionError;
-    return this.bindSessionResult ?? { bound: true, session_id: sessionId };
+    return this.bindSessionResult ?? { bound: true, session_id: sessionId, workspace_binding: path };
   }
 
   async mintPresentationToken(): Promise<{ token: string; expires_in_s: number }> {

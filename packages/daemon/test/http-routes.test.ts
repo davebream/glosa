@@ -22,6 +22,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AdoptionCoordinator } from "../src/adoption.ts";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
 import { sourceSha256 } from "../src/artifact-render.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
@@ -2463,6 +2464,215 @@ describe("A1 §5 route catalog", () => {
     expect(await res.json()).toEqual({ pending_count: 0, attention: [] });
   });
 
+  describe("binding existing workspaces by path", () => {
+    const bindPath = (path: string, session_id = "path-bound", extra = {}) =>
+      fetchFn(
+        stateChangingReq("/api/workspaces/session-binding", {
+          method: "POST",
+          body: JSON.stringify({ path, session_id, cwd: root, ...extra }),
+        }),
+      );
+
+    test("parent binding reuses one loose file, preserves a matching sibling binding and refuses ambiguity", async () => {
+      const directory = join(userHome, "loose");
+      mkdirSync(directory);
+      const firstPath = join(directory, "one.md");
+      const secondPath = join(directory, "two.md");
+      writeFileSync(firstPath, "one\n");
+      writeFileSync(secondPath, "two\n");
+      const providerRegistry = new AgentProviderRegistry();
+      providerRegistry.register({
+        id: "test-agent",
+        connectPrompt: ({ path }) => ({ display_name: "Test Agent", instruction: `Bind ${JSON.stringify(path)}` }),
+        detectSession: () => null,
+        capabilities: () => ({ push: false, mcpPull: true }),
+        deliver: async () => ({ via: "mcp_pull", outcome: "attempted" }),
+        liveness: () => "alive",
+        transcriptPath: () => null,
+      });
+      ctx.providerRegistry = providerRegistry;
+      const first = (await workspaceIndex.resolveOpenTarget(firstPath)).entry;
+      const before = readFileSync(join(home, "workspaces.json"), "utf8");
+      expect(await (await bindPath(directory)).json()).toMatchObject({ workspace_binding: first.canonical_path });
+      expect(readFileSync(join(home, "workspaces.json"), "utf8")).toBe(before);
+      const second = (await workspaceIndex.resolveOpenTarget(secondPath)).entry;
+      const snapshots = readFileSync(join(home, "workspaces.json"), "utf8");
+      expect(await (await bindPath(directory)).json()).toMatchObject({ workspace_binding: first.canonical_path });
+      const refused = await bindPath(directory, "ambiguous");
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({
+        type: expect.stringContaining("workspace-ambiguous"),
+        detail: expect.stringContaining(second.canonical_path),
+      });
+      expect(sessionRegistry.get("ambiguous")).toBeNull();
+      expect(await (await bindPath(secondPath)).json()).toMatchObject({ workspace_binding: second.canonical_path });
+      expect(readFileSync(join(home, "workspaces.json"), "utf8")).toBe(snapshots);
+      expect(existsSync(join(directory, ".glosa"))).toBe(false);
+      const status = await (await fetchFn(req("/api/status"))).json();
+      expect(status.workspaces.find((entry: { slug: string }) => entry.slug === first.slug)).toMatchObject({
+        path: directory,
+        canonical_path: firstPath,
+        connect: { providers: [{ instruction: `Bind ${JSON.stringify(firstPath)}` }] },
+      });
+      expect(sessionRegistry.get("path-bound")?.principal).toMatch(/^token:/);
+      await busRegistry.close(first);
+      await busRegistry.close(second);
+    });
+
+    test("bind resolves the nearest registered owner and refuses untracked, unregistered and indirect loose targets", async () => {
+      const child = join(root, "child");
+      mkdirSync(child);
+      const nested = await workspaceIndex.upsertWorkspace(child, "glosa-open");
+      const file = join(child, "note.md");
+      writeFileSync(file, "note\n");
+      const before = readFileSync(join(home, "workspaces.json"), "utf8");
+      expect(await (await bindPath(file)).json()).toMatchObject({ workspace_binding: child });
+      const ignored = join(child, "untracked.bin");
+      writeFileSync(ignored, "ignored");
+      expect((await bindPath(ignored, "ignored")).status).toBe(404);
+      const outside = join(userHome, "outside");
+      mkdirSync(outside);
+      const unregistered = await bindPath(outside, "unknown");
+      expect(unregistered.status).toBe(404);
+      expect(await unregistered.json()).toMatchObject({
+        type: expect.stringContaining("workspace-not-registered"),
+        detail: expect.stringContaining("glosa_present"),
+      });
+      expect(sessionRegistry.get("unknown")).toBeNull();
+      expect(readFileSync(join(home, "workspaces.json"), "utf8")).toBe(before);
+      const deeper = join(outside, "deeper");
+      mkdirSync(deeper);
+      const looseFile = join(deeper, "loose.md");
+      writeFileSync(looseFile, "loose\n");
+      await workspaceIndex.resolveOpenTarget(looseFile);
+      expect((await bindPath(outside, "indirect")).status).toBe(404);
+      await busRegistry.close(nested);
+    });
+
+    test("bind retains home and symlink restrictions and provider conflicts without changing the session", async () => {
+      await workspaceIndex.upsertWorkspace(userHome, "glosa-open");
+      const file = join(userHome, "note.md");
+      writeFileSync(file, "note\n");
+      const refused = await bindPath(file);
+      expect(refused.status).toBe(400);
+      expect((await refused.json()).type).toContain("home-workspace-registered");
+      const link = join(root, "link.md");
+      symlinkSync(file, link);
+      expect((await bindPath(link)).status).toBe(400);
+      expect((await bindPath(root, "provider", { provider: "codex" })).status).toBe(200);
+      const prior = sessionRegistry.get("provider");
+      expect((await bindPath(root, "provider", { provider: "claude-code" })).status).toBe(409);
+      expect(sessionRegistry.get("provider")).toEqual(prior);
+      const foreign = await fetchFn(
+        req("/api/workspaces/session-binding", {
+          method: "POST",
+          headers: { Origin: "https://foreign.invalid" },
+          body: JSON.stringify({ path: root, session_id: "foreign" }),
+        }),
+      );
+      expect(foreign.status).toBe(403);
+      expect(sessionRegistry.get("foreign")).toBeNull();
+    });
+
+    test("bind waiting for ownership refuses a forget even after its registration disappears", async () => {
+      const coordinator = new AdoptionCoordinator();
+      ctx.adoptionCoordinator = coordinator;
+      const entry = workspaceIndex.getBySlug(slug)!;
+      let entered!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const hold = coordinator.run(entry.registration_id, async () => {
+        entered();
+        await gate;
+      });
+      await ready;
+      const original = coordinator.run.bind(coordinator);
+      let requested!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        requested = resolve;
+      });
+      coordinator.run = (id, fn) => {
+        requested();
+        return original(id, fn);
+      };
+      const response = bindPath(root);
+      try {
+        await waiting;
+        await workspaceIndex.beginForgetOperation(entry, [entry]);
+        await workspaceIndex.forget(slug);
+      } finally {
+        release();
+      }
+      await hold;
+      const refused = await response;
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({
+        type: expect.stringContaining("workspace-forgetting"),
+        detail: expect.stringContaining("glosa forget"),
+      });
+      expect(sessionRegistry.get("path-bound")).toBeNull();
+      expect(workspaceIndex.getBySlug(slug)).toBeNull();
+    });
+
+    test("binding queued behind session registration refuses a newly adopting source, then binds its committed owner", async () => {
+      const directory = join(userHome, "adoption");
+      mkdirSync(directory);
+      const file = join(directory, "note.md");
+      writeFileSync(file, "note\n");
+      const source = (await workspaceIndex.resolveOpenTarget(file)).entry;
+      mkdirSync(source.bus_path, { recursive: true });
+      const target = await workspaceIndex.upsertWorkspace(directory, "glosa-open");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const occupied = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const upsert = workspaceIndex.upsertSessionWorkspace.bind(workspaceIndex);
+      workspaceIndex.upsertSessionWorkspace = async (path) => {
+        entered();
+        await gate;
+        return upsert(path);
+      };
+      const registration = sessionRegistry.register({ session_id: "busy", provider: "mcp", cwd: root, source: "test" });
+      await occupied;
+      const bind = sessionRegistry.bind.bind(sessionRegistry);
+      let reached!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      sessionRegistry.bind = (...args) => {
+        reached();
+        return bind(...args);
+      };
+      const binding = bindPath(file);
+      let operation: Awaited<ReturnType<WorkspaceIndex["beginAdoption"]>> = null;
+      try {
+        await waiting;
+        operation = await workspaceIndex.beginAdoption(target);
+        expect(operation).not.toBeNull();
+      } finally {
+        release();
+      }
+      await registration;
+      workspaceIndex.upsertSessionWorkspace = upsert;
+      sessionRegistry.bind = bind;
+      expect((await binding).status).toBe(409);
+      expect(sessionRegistry.get("path-bound")).toBeNull();
+      // The full adoption transaction remains covered by adoption.test.ts.
+      await workspaceIndex.commitAdoption(operation!.adoption_id);
+      expect(await (await bindPath(file)).json()).toMatchObject({ workspace_binding: directory });
+      await busRegistry.close(target);
+    });
+  });
+
   // --- POST /w/:slug/session-binding (5.11) ---
 
   test("POST session-binding with a live registered session → 200 {bound:true}", async () => {
@@ -4359,6 +4569,22 @@ describe("A1 §5 route catalog", () => {
         // never the raw file path — matches every other row's own `path` field.
         expect(row.path).toBe(looseParent);
         expect(row.path).not.toBe(artifact);
+        expect(row.canonical_path).toBe(artifact);
+        unlinkSync(artifact);
+        for (const path of [artifact, looseParent]) {
+          const bind = await fetchFn(
+            stateChangingReq("/api/workspaces/session-binding", {
+              method: "POST",
+              body: JSON.stringify({ path, session_id: "missing-loose", cwd: root }),
+            }),
+          );
+          expect(bind.status).toBe(409);
+          expect(await bind.json()).toMatchObject({
+            type: expect.stringContaining("workspace-forgetting"),
+            detail: expect.stringContaining(`glosa forget ${looseSlug} --yes`),
+          });
+        }
+        expect(sessionRegistry.get("missing-loose")).toBeNull();
       } finally {
         // `workspaceIndex.forget()` already evicted the loose-file bus via `onHardRemove` above.
         rmSync(looseParent, { recursive: true, force: true });
