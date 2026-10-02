@@ -735,7 +735,9 @@ Linked Claude sessions load user, project and local settings. Linked Codex sessi
 native credential store and project configuration. Native hooks, plugins and MCP servers are included;
 workspace permission explicitly covers startup hooks before sending. Glosa still selects the model,
 effort and execution mode, suppresses telemetry/update checks and refuses conflicting billing routes.
-The `glosa` MCP server name is reserved. Configuration revision joins the workspace consent digest.
+The `glosa-managed` MCP server name is reserved for the app-owned, session-scoped grant bridge.
+The native companion integration keeps its `glosa` name, so linking a native account does not
+conflict with its existing Glosa integration. Configuration revision joins the workspace consent digest.
 A changed revision blocks subsequent admission until the user grants permission again. Skill bodies
 and descriptions do not themselves renew workspace authority.
 
