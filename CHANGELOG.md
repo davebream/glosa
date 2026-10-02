@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.41] · 2026-10-02
+
 ### Changed
 
 - A chat turn that is still at work shows it in the conversation: a live line says what the agent
@@ -25,6 +27,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   in a folder with no window no longer puts a number on the icon.
 - The chat composer's effort control is a button instead of a menu. Each press steps to the next
   level and the highest wraps to the lowest. Arrow Up and Arrow Down step in either direction.
+
+### Fixed
+
+- Passage requests quoted from Markdown source now find rendered headings, lists and blockquotes,
+  including requests whose surrounding context contains formatting. Ambiguous passages still
+  require distinguishing context.
+- Binding an agent session preserves an existing loose-file workspace and its annotations instead
+  of registering a second workspace for the containing folder. The connection panel correctly
+  shows the bound file as connected. The API contract advances to 2.1.
 
 ## [0.1.0-alpha.40] · 2026-10-02
 
@@ -1787,7 +1798,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.40...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.41...HEAD
+[0.1.0-alpha.41]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.40...v0.1.0-alpha.41
 [0.1.0-alpha.40]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.39...v0.1.0-alpha.40
 [0.1.0-alpha.39]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.39
 [0.1.0-alpha.38]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.38
