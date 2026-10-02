@@ -2446,6 +2446,21 @@ export function createArtifactPane(host, deps) {
       interactive,
       onSelection: (target) => {
         if (modeState.mode !== "review") return;
+        // The bridge reports both selectionchange and mouseup. A delayed duplicate must not
+        // reopen the same composer and erase text, focus or its attached input controller.
+        // Once that composer closes, selecting the same passage may open a fresh note.
+        const previous = composer?.record?.target;
+        if (
+          previous &&
+          previous.quote?.exact === target.quote?.exact &&
+          previous.quote?.prefix === target.quote?.prefix &&
+          previous.quote?.suffix === target.quote?.suffix &&
+          previous.position?.start === target.position?.start &&
+          previous.position?.end === target.position?.end &&
+          previous.chunk_id === target.chunk_id
+        ) {
+          return;
+        }
         openComposer({ body: "", intent: "content", target });
       },
       onError: (message) => {
