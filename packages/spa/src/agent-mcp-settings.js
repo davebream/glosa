@@ -2,7 +2,8 @@
 import { createElement as el } from "./viewer-shell.js";
 import { confirmDialog } from "./dialog.js";
 
-/** Editable MCP configuration. Saving consents to configuration, never launches a server. */
+/** Editable MCP configuration. Saving consents to configuration, never launches a server. A person
+ * reads "tool server": MCP is the protocol's name, not theirs. */
 export function mountMcpSettings(host, { servers = [], onSave, onReset = null }) {
   let values = structuredClone(servers),
     busy = false;
@@ -12,7 +13,7 @@ export function mountMcpSettings(host, { servers = [], onSave, onReset = null })
   root.append(
     el("p", {
       textContent:
-        "These tools connect only when you send a message. They may read data the agent passes to them. Glosa's own feedback tools remain available separately.",
+        "Tool servers give the agent extra abilities, such as looking something up. They connect only when you send a message, and may read what the agent passes to them. glosa's own tools for notes and documents are always available.",
     }),
     list,
     status,
@@ -49,7 +50,7 @@ export function mountMcpSettings(host, { servers = [], onSave, onReset = null })
         render();
       });
       card.append(
-        el("legend", { textContent: "MCP server" }),
+        el("legend", { textContent: "Tool server" }),
         label("Enabled", enabled),
         label("Name", name),
         label("Connection", transport),
@@ -98,13 +99,15 @@ export function mountMcpSettings(host, { servers = [], onSave, onReset = null })
       root.removeAttribute("aria-busy");
     }
   };
-  root.append(
+  const actions = el("div", { className: "glosa-chat-tools-actions" });
+  root.append(actions);
+  actions.append(
     el("button", {
       type: "button",
-      textContent: "Add server",
+      textContent: "Add a tool server",
       onClick: () => {
         if (values.length >= 8) {
-          status.textContent = "At most eight MCP servers can be configured.";
+          status.textContent = "At most eight tool servers can be configured.";
           return;
         }
         values.push({
@@ -120,7 +123,8 @@ export function mountMcpSettings(host, { servers = [], onSave, onReset = null })
     }),
     el("button", {
       type: "button",
-      textContent: "Save servers",
+      className: "glosa-agent-primary",
+      textContent: "Save",
       onClick: () =>
         void run(async () => {
           const configured = values
@@ -129,7 +133,7 @@ export function mountMcpSettings(host, { servers = [], onSave, onReset = null })
             .join("\n");
           if (
             !(await confirmDialog({
-              title: "Save MCP access?",
+              title: "Save tool access?",
               body: `Affected chats will stop. Enabled servers can receive workspace content when you next send a message.\n${configured || "No external servers enabled."}`,
               confirmLabel: "Save configuration",
             }))
@@ -140,7 +144,7 @@ export function mountMcpSettings(host, { servers = [], onSave, onReset = null })
     }),
   );
   if (onReset)
-    root.append(
+    actions.append(
       el("button", {
         type: "button",
         textContent: "Use account defaults",
@@ -148,7 +152,7 @@ export function mountMcpSettings(host, { servers = [], onSave, onReset = null })
           void run(async () => {
             if (
               await confirmDialog({
-                title: "Use account MCP defaults?",
+                title: "Use this account's default tools?",
                 body: "Affected chats will stop. The next send requires you to review workspace access again.",
                 confirmLabel: "Use defaults",
               })
@@ -157,12 +161,6 @@ export function mountMcpSettings(host, { servers = [], onSave, onReset = null })
           }),
       }),
     );
-  root.append(
-    el("p", {
-      textContent:
-        "Check native connection status from the chat. Open native MCP sign-in to connect a server using this private account. Authentication remains owned by the coding agent.",
-    }),
-  );
   host.append(root);
   render();
   return {

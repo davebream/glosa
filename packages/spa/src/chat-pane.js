@@ -464,35 +464,74 @@ export function createChatPane(
     }),
   );
 
-  const mcp = el("details", { className: "glosa-chat-mcp" }, [
-      el("summary", { textContent: "Tools & workspace access" }),
-    ]),
-    mcpHost = el("div");
-  mcp.append(mcpHost);
-  mcp.addEventListener("toggle", () => {
-    if (!mcp.open && nativeLogin) {
-      void nativeLogin.destroy();
-      nativeLogin = null;
+  // Tools and access are settings of the chat, not part of writing a message: a dialog the chat's
+  // menu and one quiet line under the composer open, never a panel beneath the draft.
+  const mcpHost = el("div"),
+    mcpTitle = `chat-tools-${crypto.randomUUID()}`;
+  const mcp = el("dialog", { className: "glosa-dialog glosa-chat-tools", "aria-labelledby": mcpTitle }, [
+    el("h2", { id: mcpTitle, textContent: "Tools and workspace access" }),
+    mcpHost,
+  ]);
+  mcp.addEventListener("click", (event) => {
+    if (event.target === mcp) mcp.close();
+  });
+  // In the document only while it is open, so it is never a second dialog for anything to find.
+  mcp.addEventListener("close", () => {
+    mcp.remove();
+    if (!nativeLogin) return;
+    void nativeLogin.destroy();
+    nativeLogin = null;
+  });
+  const toolsLine = el("button", {
+    type: "button",
+    className: "glosa-chat-tools-line",
+    textContent: "Tools and access",
+    onClick: () => void openTools(),
+  });
+  /** How many tool servers this chat's account has switched on here, for the line under the composer. */
+  async function refreshToolsLine() {
+    let enabled;
+    try {
+      const policy = await dataAccess.getMcpPolicy?.(slug, state.profileId);
+      enabled = policy?.servers.filter((server) => server.enabled).length;
+    } catch {
+      // The line still opens the dialog; only its count is unknown.
     }
-    if (!mcp.open || !state) return;
-    void act(async () => {
+    if (disposed) return;
+    toolsLine.textContent =
+      enabled === undefined
+        ? "Tools and access"
+        : enabled === 0
+          ? "No extra tools on"
+          : `${enabled} ${enabled === 1 ? "tool" : "tools"} on`;
+  }
+  function openTools() {
+    if (!state) return;
+    return act(async () => {
       const profileId = state.profileId,
         policy = await dataAccess.getMcpPolicy(slug, profileId);
       if (disposed || state.profileId !== profileId) return;
       mcpHost.replaceChildren();
+      const saved = () => {
+        mcp.close();
+        void refreshToolsLine();
+      };
       mountMcpSettings(mcpHost, {
         servers: policy.servers,
         onSave: async (servers) => {
           await dataAccess.setMcpPolicy(slug, profileId, { revision: policy.revision, servers });
-          mcp.open = false;
+          saved();
         },
         onReset: async () => {
           await dataAccess.setMcpPolicy(slug, profileId, { revision: policy.revision, servers: null });
-          mcp.open = false;
+          saved();
         },
       });
+      if (mcp.open) return;
+      root.append(mcp);
+      mcp.showModal();
     });
-  });
+  }
   async function openMcpManager(serverId) {
     if (nativeLogin) throw new Error("Finish the current native sign-in first.");
     const profile = catalog.profiles.find((p) => p.id === state.profileId);
@@ -532,9 +571,9 @@ export function createChatPane(
     }
     if (
       !(await confirmDialog({
-        title: "Open native MCP sign-in?",
-        body: "Stop this account's active chats first. The agent will connect the enabled servers using this workspace's approved configuration. Credentials stay in this account's private native storage.",
-        confirmLabel: "Open native sign-in",
+        title: "Sign in to a tool server?",
+        body: "Stop this account's active chats first. The agent will connect the enabled servers using this workspace's approved configuration. Credentials stay in this account's own private storage.",
+        confirmLabel: "Open sign-in",
       }))
     )
       return;
@@ -546,54 +585,86 @@ export function createChatPane(
       signal: lifetime.signal,
       onFinished: () => {
         nativeLogin = null;
-        mcp.open = false;
+        mcp.close();
       },
     });
   }
   mcp.append(
-    el("button", {
-      type: "button",
-      textContent: "Check native connections",
-      onClick: () =>
-        void act(async () => {
-          const result = await dataAccess.nativeChatMcp(slug, chatId);
-          const inventory = el("div", { role: "status" });
-          for (const server of result.servers) {
-            const row = el("p", {
-              textContent: `${server.name} · ${server.source === "native" ? "Native configuration · " : ""}${server.status} · authentication ${server.auth}`,
-            });
-            if (server.login && server.name !== "glosa")
-              row.append(
-                el("button", {
-                  type: "button",
-                  textContent: "Sign in / reconnect",
-                  onClick: () =>
-                    void act(async () => {
-                      await openMcpManager(server.name.replace(/^glosa-user-/, ""));
+    el("section", { className: "glosa-chat-tools-section" }, [
+      el("h3", { textContent: "Connections" }),
+      el("p", {
+        textContent:
+          "See which tools the agent has connected in this chat, or sign in to one that asks for it. Signing in is handled by the agent itself.",
+      }),
+      el("div", { className: "glosa-chat-tools-actions" }, [
+        el("button", {
+          type: "button",
+          textContent: "Check connections",
+          onClick: () =>
+            void act(async () => {
+              const result = await dataAccess.nativeChatMcp(slug, chatId);
+              const inventory = el("div", { role: "status" });
+              for (const server of result.servers) {
+                const row = el("p", {
+                  textContent: `${server.name} · ${server.source === "native" ? "From the agent's own settings · " : ""}${server.status} · sign-in ${server.auth}`,
+                });
+                if (server.login && server.name !== "glosa")
+                  row.append(
+                    el("button", {
+                      type: "button",
+                      textContent: "Sign in / reconnect",
+                      onClick: () =>
+                        void act(async () => {
+                          await openMcpManager(server.name.replace(/^glosa-user-/, ""));
+                        }),
                     }),
-                }),
-              );
-            inventory.append(row);
-          }
-          mcpHost.querySelector("[data-native-mcp]")?.remove();
-          inventory.dataset.nativeMcp = "true";
-          mcpHost.append(inventory);
+                  );
+                inventory.append(row);
+              }
+              mcpHost.querySelector("[data-native-mcp]")?.remove();
+              inventory.dataset.nativeMcp = "true";
+              mcpHost.append(inventory);
+            }),
         }),
-    }),
-    el("button", {
-      type: "button",
-      textContent: "Open native MCP sign-in",
-      onClick: () => void act(() => openMcpManager(undefined)),
-    }),
-    el("button", {
-      type: "button",
-      textContent: "Revoke workspace access",
-      onClick: () =>
-        void act(async () => {
-          await dataAccess.setAgentConsent(state.profileId, slug, false);
-          status.textContent = "Workspace access revoked. Its runs have stopped.";
+        el("button", {
+          type: "button",
+          textContent: "Sign in to a server",
+          onClick: () => void act(() => openMcpManager(undefined)),
         }),
-    }),
+      ]),
+    ]),
+    el("section", { className: "glosa-chat-tools-section" }, [
+      el("h3", { textContent: "Workspace access" }),
+      el("p", {
+        textContent:
+          "This account may read this folder and receive your messages. Revoking stops its running chats here, and you are asked again before the next message.",
+      }),
+      el("div", { className: "glosa-chat-tools-actions" }, [
+        el("button", {
+          type: "button",
+          className: "glosa-chat-danger",
+          textContent: "Revoke access",
+          onClick: () =>
+            void act(async () => {
+              if (
+                !(await confirmDialog({
+                  title: "Revoke workspace access?",
+                  body: "This account's running chats in this folder will stop. You will be asked to allow access again before the next message.",
+                  confirmLabel: "Revoke access",
+                  danger: true,
+                }))
+              )
+                return;
+              await dataAccess.setAgentConsent(state.profileId, slug, false);
+              mcp.close();
+              status.textContent = "Workspace access revoked. Its runs have stopped.";
+            }),
+        }),
+      ]),
+    ]),
+    el("div", { className: "glosa-dialog-actions" }, [
+      el("button", { type: "button", textContent: "Close", onClick: () => mcp.close() }),
+    ]),
   );
   async function showNativeConnections() {
     let result;
@@ -651,6 +722,12 @@ export function createChatPane(
   );
   menu.popup.append(
     usageAction,
+    el("button", {
+      type: "button",
+      textContent: "Tools and workspace access",
+      "data-chat-action": "tools",
+      onClick: () => void openTools(),
+    }),
     el("button", {
       type: "button",
       textContent: "Pin chat",
@@ -723,10 +800,8 @@ export function createChatPane(
     onAction: async (action) => {
       if (attachments.length)
         throw new Error("Remove attachments before using a workspace action. Your draft has been kept.");
-      if (action === "mcp") {
-        mcp.open = true;
-        mcp.scrollIntoView?.({ block: "nearest" });
-      } else await showNativeConnections();
+      if (action === "mcp") await openTools();
+      else await showNativeConnections();
       return true;
     },
     onChange: () => {
@@ -748,7 +823,7 @@ export function createChatPane(
     decisions,
     readiness,
     composer,
-    el("div", { className: "glosa-chat-utilities" }, [mcp, feedback]),
+    el("div", { className: "glosa-chat-utilities" }, [toolsLine, feedback]),
     footer,
   );
   host.append(root);
@@ -1786,6 +1861,7 @@ export function createChatPane(
     await refresh();
     await refreshFeedback();
     if (disposed) return;
+    void refreshToolsLine();
     status.textContent = catalog.reason ?? "Drafts save automatically.";
     connectStream();
   })().catch(failure);

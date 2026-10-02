@@ -610,6 +610,52 @@ test("a turn at work shows a live line under its last row and it goes when the t
   f.pane.destroy();
 });
 
+test("tools and access open as a dialog from the line under the composer, and revoking asks first", async () => {
+  const f = fixture();
+  const consents: boolean[] = [];
+  f.dataAccess.getMcpPolicy = async () => ({
+    revision: 1,
+    servers: [
+      { id: "a", label: "Library", enabled: true, transport: "http", url: "https://example.com/mcp" },
+      { id: "b", label: "Off", enabled: false, transport: "stdio", command: "/bin/x", args: [] },
+    ],
+  });
+  f.dataAccess.setAgentConsent = async (_profile: string, _slug: string, allowed: boolean) => {
+    consents.push(allowed);
+  };
+  await f.pane.ready;
+  await flush();
+  // Nothing about tools sits under the composer but one line, and no dialog exists until asked for.
+  expect(f.host.querySelector(".glosa-chat-utilities details")).toBeNull();
+  expect(document.querySelector("dialog")).toBeNull();
+  const line = f.host.querySelector(".glosa-chat-tools-line") as HTMLButtonElement;
+  expect(line.textContent).toBe("1 tool on");
+  line.click();
+  await flush();
+  const tools = document.querySelector("dialog.glosa-chat-tools") as HTMLDialogElement;
+  expect(tools.open).toBe(true);
+  expect(tools.querySelector("h2")!.textContent).toBe("Tools and workspace access");
+  expect(tools.textContent).not.toMatch(/MCP|native/i);
+  const press = (scope: ParentNode, label: string) =>
+    [...scope.querySelectorAll("button")].find((b) => b.textContent === label)!.click();
+  const confirm = () =>
+    [...document.querySelectorAll("dialog")].find((d) => d.textContent!.includes("Revoke workspace access?"))!;
+  press(tools, "Revoke access");
+  await flush();
+  expect(consents).toEqual([]);
+  press(confirm(), "Cancel");
+  await flush();
+  expect(consents).toEqual([]);
+  expect(tools.open).toBe(true);
+  press(tools, "Revoke access");
+  await flush();
+  press(confirm(), "Revoke access");
+  await flush();
+  expect(consents).toEqual([false]);
+  expect(document.querySelector("dialog.glosa-chat-tools")).toBeNull();
+  f.pane.destroy();
+});
+
 test("uploads block sending and keep successful attachments when a later file fails", async () => {
   const f = fixture();
   await f.pane.ready;
