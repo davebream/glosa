@@ -36,6 +36,8 @@ import {
   navigationDecision,
   needsConfirmation,
   newestRelease,
+  type BadgeReport,
+  badgeTotal,
   notifyDecision,
   openArgsFor,
   PAPER,
@@ -584,6 +586,34 @@ describe("notify: the Dock badge and notifications from the SPA (#391)", () => {
     expect(notifyDecision({ badge: 0 }, seen)).toEqual({ badge: 0 });
     for (const badge of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "2", null])
       expect(notifyDecision({ badge }, seen)).toEqual({});
+  });
+
+  test("a badge carries its workspace; a scope without a badge, or a malformed one, is dropped", () => {
+    const seen = new RecentIds();
+    expect(notifyDecision({ badge: 2, scope: "alpha-1f" }, seen)).toEqual({ badge: 2, scope: "alpha-1f" });
+    expect(notifyDecision({ scope: "alpha-1f" }, seen)).toEqual({});
+    for (const scope of ["", "x".repeat(257), 7, null])
+      expect(notifyDecision({ badge: 2, scope }, seen)).toEqual({ badge: 2 });
+  });
+
+  test("the Dock shows what is waiting in the workspaces that have a window open, each once", () => {
+    const reports = new Map<number, BadgeReport>();
+    expect(badgeTotal(reports)).toBe(0);
+    reports.set(1, { count: 2, scope: "alpha" });
+    reports.set(2, { count: 1, scope: "beta" });
+    expect(badgeTotal(reports)).toBe(3);
+    // A desk and a companion on one folder report the same number: it counts once, as last reported.
+    reports.set(3, { count: 4, scope: "alpha" });
+    expect(badgeTotal(reports)).toBe(5);
+    // Closing beta's window takes its count with it.
+    reports.delete(2);
+    expect(badgeTotal(reports)).toBe(4);
+    // Pages that send no scope each report one count for everything: the last, never their sum.
+    const unscoped = new Map<number, BadgeReport>([
+      [1, { count: 6 }],
+      [2, { count: 7 }],
+    ]);
+    expect(badgeTotal(unscoped)).toBe(7);
   });
 
   test("a badge alone shows nothing", () => {

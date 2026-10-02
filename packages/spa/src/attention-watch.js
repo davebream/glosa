@@ -8,8 +8,10 @@
 // daemon only through the data-access module (AGENTS.md invariant 6) and speaks to the shell only
 // through `bridge.notify({ id, title, body, badge })`, which carries no path (A3 "Desktop shell").
 //
-//   badge    = sum over every workspace of attention_count + decision_count, on every change and
-//              on focus. The shell takes the latest value; every window reports the same number.
+//   badge    = this window's own workspace: its attention_count + decision_count, on every change
+//              and on focus, sent with the workspace's slug as `scope`. The shell adds up the
+//              workspaces its open windows are on, each once, so the Dock never shows a number
+//              that no open window explains. A window with no workspace reports 0.
 //   notify   = while the window is not focused: a new attention request that asks something
 //              (a question, a review, an approval; not a bare "look here"), a chat that starts
 //              waiting on a decision, and on a desk surface a chat reply that finishes in the
@@ -57,7 +59,7 @@ export function attentionBody(entry) {
  * @param {{
  *   dataAccess: { getWorkspaces: () => Promise<any>, getInbox: (slug: string) => Promise<any>,
  *                 getChats: (slug: string) => Promise<any> },
- *   bridge: { notify: (message: { id?: string, title?: string, body?: string, badge?: number }) => unknown },
+ *   bridge: { notify: (message: { id?: string, title?: string, body?: string, badge?: number, scope?: string }) => unknown },
  *   desk?: boolean,
  *   currentSlug?: () => string | null | undefined,
  *   hasFocus?: () => boolean,
@@ -113,13 +115,14 @@ export function createAttentionWatch({
   async function refreshBadge() {
     const rows = await dataAccess.getWorkspaces();
     const list = Array.isArray(rows) ? rows : [];
-    let total = 0;
+    const current = currentSlug();
+    let own = 0;
     for (const row of list) {
       if (typeof row?.slug !== "string") continue;
       names.set(row.slug, folderName(row));
       const attention = Number.isInteger(row.attention_count) && row.attention_count > 0 ? row.attention_count : 0;
       const decisions = Number.isInteger(row.decision_count) && row.decision_count > 0 ? row.decision_count : 0;
-      total += attention + decisions;
+      if (row.slug === current) own = attention + decisions;
       if (!seenAttention.has(row.slug)) {
         if (attention === 0) seenAttention.set(row.slug, new Set());
         else seenAttention.set(row.slug, new Set((await readInbox(row.slug)).map((entry) => entry.id)));
@@ -129,7 +132,7 @@ export function createAttentionWatch({
         else seenDecisions.set(row.slug, decisionCounts(await readChats(row.slug)));
       }
     }
-    if (!destroyed) send({ badge: total });
+    if (!destroyed) send(current ? { badge: own, scope: current } : { badge: 0 });
   }
 
   function decisionCounts(chats) {
@@ -235,7 +238,7 @@ export function createAttentionWatch({
       for (const slug of seenDecisions.keys()) dirtyChats.add(slug);
       schedule();
     },
-    /** The window came back: the badge is re-read. */
+    /** The window came back, or moved to another workspace: the badge is re-read. */
     refresh() {
       schedule();
     },

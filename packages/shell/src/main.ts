@@ -30,6 +30,8 @@ import {
 } from "electron";
 import {
   appearanceDecision,
+  type BadgeReport,
+  badgeTotal,
   BROWSER_PARTITION,
   BROWSER_READ_MAX,
   BROWSER_READ_SCRIPT,
@@ -202,6 +204,8 @@ interface WindowState {
   installId: string | null;
 }
 const windows = new Map<number, WindowState>();
+/** Each window's latest Dock badge report, keyed like `windows`, in the order they arrived. */
+const badgeReports = new Map<number, BadgeReport>();
 
 type DictationAttempt = { id: string; approved: boolean; abort: AbortController; timer: ReturnType<typeof setTimeout> };
 const dictationAttempts = new Map<number, DictationAttempt>();
@@ -495,6 +499,8 @@ function createWindow(origin: string | null): BrowserWindow {
   win.on("closed", () => {
     pendingTokens.delete(wc.id);
     windows.delete(wc.id);
+    // A closed window's workspace no longer counts toward the Dock badge.
+    if (badgeReports.delete(wc.id) && !hidden) app.setBadgeCount(badgeTotal(badgeReports));
   });
   return win;
 }
@@ -918,8 +924,9 @@ function installIpc(): void {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     return revealIn(BrowserWindow.fromWebContents(event.sender));
   });
-  // Dock badge and notifications (#391). Every window reports the same daemon-wide attention, so
-  // the badge is the latest value (never a sum) and a notification id already shown is dropped.
+  // Dock badge and notifications (#391). Each window reports what is waiting in its own workspace;
+  // the badge adds up the workspaces that have a window open (`badgeTotal`), and a notification id
+  // already shown is dropped.
   const shownNotifications = new RecentIds();
   // Held until clicked or closed: an unreferenced Notification can be collected, and its click
   // handler with it.
@@ -927,7 +934,15 @@ function installIpc(): void {
   ipcMain.handle("glosa:notify", (event, payload: unknown) => {
     if (!fromSpa(event)) throw new Error("rejected: not the SPA origin");
     const decision = notifyDecision(payload, shownNotifications);
-    if (decision.badge !== undefined && !hidden) app.setBadgeCount(decision.badge);
+    if (decision.badge !== undefined) {
+      // Re-set, so the Map's order is the order the reports arrived in.
+      badgeReports.delete(event.sender.id);
+      badgeReports.set(event.sender.id, {
+        count: decision.badge,
+        ...(decision.scope ? { scope: decision.scope } : {}),
+      });
+      if (!hidden) app.setBadgeCount(badgeTotal(badgeReports));
+    }
     if (decision.show && !hidden && Notification.isSupported()) {
       const note = new Notification(decision.show);
       liveNotifications.add(note);

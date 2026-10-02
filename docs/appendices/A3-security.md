@@ -249,9 +249,10 @@ evidence: `docs/research/2026-09-25-desktop-shell-readiness.md` §1, §1b):
   derives the file from the window's own URL (`a=`) under the folder `glosa open` answered with (`data.path`, the workspace's
   absolute `worktree_path`), reveals nothing when the URL's workspace (`w=`) is not the one that
   window opened, and requires the file's real path to stay inside the folder's real path, so a
-  symlink in a workspace cannot point Finder outside it (#160). The notification call takes one message, `{ id, title, body, badge }`, and no
-  path: the main process sets the Dock badge from a whole number from zero up (the latest value, since
-  every window reports the same daemon-wide count), clamps title and body, shows a notification at
+  symlink in a workspace cannot point Finder outside it (#160). The notification call takes one message, `{ id, title, body, badge, scope }`, and no
+  path: `scope` is a workspace's slug, and the main process sets the Dock badge to the sum of what
+  the open windows report for their own workspaces, each workspace once, each a whole number from
+  zero up, clamps title and body, shows a notification at
   most once per id, and focuses the reporting window on click. The page's own web Notification and
   permission requests stay denied except the Linux dictation grant below (#391, #434). The appearance call takes one message,
   `{ source, scheme, background }`, and no path: `source` is `system`, `light` or `dark` (whether

@@ -2169,6 +2169,8 @@ export function mountApp(
     clearTimeout(chatsRefreshTimer);
     chatsRefreshGeneration++;
     currentSlug = slug;
+    // The Dock badge is this window's own workspace: a move to another is a new count.
+    attentionWatch?.refresh();
     readOnlyGeneration++;
     knownReadOnly.clear();
     const fileHeading = root.querySelector(".glosa-artifact-list-toggle .glosa-sidebar-section-label");

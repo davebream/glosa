@@ -1910,3 +1910,22 @@ native work. This replaces the daemon environment preview switch.
 The decision permits experimentation while the offering determination and G2–G4 evidence remain
 open. It does not mark any runtime qualified or authorize a Linux release claim. Installation still
 requires a foreground action, and workspace/MCP consent remains separate.
+
+## 2026-10-02: The Dock badge counts only the folders that have a window open
+
+The Dock badge was the sum of every registered workspace's waiting requests and chat decisions
+(#389, #391; feature map decision 4, "attention is daemon-wide"). In use that read as a fault: a
+person opened the app on one folder, saw a red 1, and found nothing waiting anywhere in the window.
+The 1 was an eleven-day-old request in a different folder that had no window.
+
+The maintainer decided that a window never shows another folder's badge. Each window now reports
+what is waiting in its own workspace, with the workspace's slug, and the shell adds up the
+workspaces that have a window open, each once however many windows show it. Closing a window
+removes its folder's count. A page that sends no slug is treated as before: one count for
+everything, the latest wins.
+
+Notifications are unchanged and stay daemon-wide: a new question in a folder with no window still
+raises one, named for its folder, because that is the only way to learn of it.
+
+**Rejected.** Keeping the badge daemon-wide and naming the other folder in the Attention tray: it
+explains the number but keeps a count on the Dock that the open window cannot act on.

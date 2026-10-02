@@ -1124,7 +1124,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
     await new Promise((resolve) => setTimeout(resolve, 300));
     unmount();
-    expect(messages).toContainEqual({ badge: 0 });
+    // The count is this window's own workspace, named once one is selected.
+    expect(messages).toContainEqual(expect.objectContaining({ badge: 0 }));
+    expect(
+      messages.every((message) => Object.keys(message as object).every((key) => ["badge", "scope"].includes(key))),
+    ).toBe(true);
     // Without a bridge the page read the workspace list only for its own navigator.
     expect(tabReads).toBeLessThanOrEqual(1);
   });

@@ -537,22 +537,28 @@ export class RecentIds {
 }
 
 export interface NotifyDecision {
-  /** The Dock badge to set: the latest count, never summed across windows. 0 clears it. */
+  /** What this window has waiting, to be counted into the Dock badge (`badgeTotal`). */
   badge?: number;
+  /** The workspace that count belongs to. Absent from a page that reports one count for everything. */
+  scope?: string;
   /** A notification to show, once per id. */
   show?: { title: string; body: string };
 }
 
 /**
- * What one `notify({ id, title, body, badge })` from the SPA does (#391). A badge must be a
- * whole number from 0 up; anything else is ignored rather than shown. A notification needs a
+ * What one `notify({ id, title, body, badge, scope })` from the SPA does (#391). A badge must be a
+ * whole number from 0 up; anything else is ignored rather than shown. A scope is a workspace's slug
+ * and travels only with a badge. A notification needs a
  * title or a body, and one whose id was already shown is dropped. Title and body are clamped as
  * before (120 and 400 characters). The message never carries a path (A3 "Desktop shell").
  */
 export function notifyDecision(payload: unknown, seen: RecentIds): NotifyDecision {
   const p = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
   const decision: NotifyDecision = {};
-  if (typeof p.badge === "number" && Number.isInteger(p.badge) && p.badge >= 0) decision.badge = p.badge;
+  if (typeof p.badge === "number" && Number.isInteger(p.badge) && p.badge >= 0) {
+    decision.badge = p.badge;
+    if (typeof p.scope === "string" && p.scope.length > 0 && p.scope.length <= 256) decision.scope = p.scope;
+  }
   const hasText =
     (typeof p.title === "string" && p.title.length > 0) || (typeof p.body === "string" && p.body.length > 0);
   if (!hasText) return decision;
@@ -562,6 +568,31 @@ export function notifyDecision(payload: unknown, seen: RecentIds): NotifyDecisio
     body: typeof p.body === "string" ? p.body.slice(0, 400) : "",
   };
   return decision;
+}
+
+/** One window's latest badge report: what is waiting, and in which workspace. */
+export interface BadgeReport {
+  count: number;
+  scope?: string;
+}
+
+/**
+ * The Dock badge: what is waiting in the workspaces the open windows are on. Each workspace counts
+ * once however many windows show it (a desk and a companion on one folder report the same number),
+ * taking the report made last. A workspace no window has open adds nothing, so the Dock never shows
+ * a number that no open window explains.
+ *
+ * A page that sends no scope is reporting one count for everything it knows; such reports are one
+ * shared entry, the last of them, so they are never added to each other.
+ *
+ * @param reports per window, in the order the reports arrived (a Map re-set on every report).
+ */
+export function badgeTotal(reports: ReadonlyMap<number, BadgeReport>): number {
+  const byScope = new Map<string, number>();
+  for (const report of reports.values()) byScope.set(report.scope ?? "", report.count);
+  let total = 0;
+  for (const count of byScope.values()) total += count;
+  return total;
 }
 
 // ---------- the window follows glosa's appearance (#405) ----------
