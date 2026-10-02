@@ -783,6 +783,7 @@ test("experimental account control requires confirmation and keeps an unqualifie
   document.body.append(host);
   let enabled = false;
   const changes: unknown[] = [];
+  const creates: unknown[] = [];
   const pane = mountAgentSettings(host, {
     appearance: undefined,
     onChange: undefined,
@@ -807,6 +808,9 @@ test("experimental account control requires confirmation and keeps an unqualifie
         ],
         profiles: [],
       }),
+      createAgentProfile: async (input: unknown) => {
+        creates.push(input);
+      },
       setAgentExperimental: async (input: unknown) => {
         changes.push(input);
         enabled = true;
@@ -815,6 +819,24 @@ test("experimental account control requires confirmation and keeps an unqualifie
   });
   try {
     await pane.ready;
+    const form = () => host.querySelector(".glosa-agent-add-account") as HTMLFormElement;
+    const submit = () => form().querySelector('button[type="submit"]') as HTMLButtonElement;
+    expect(submit().disabled, "account submission stays disabled until the provider is admitted").toBe(true);
+    expect(host.textContent).toContain("Enable experimental managed chat above to add an account.");
+    expect(host.textContent).not.toContain("Account setup is unavailable in this build.");
+    expect(host.textContent).not.toContain("Chat support is not available in this build yet.");
+    const name = form().querySelector("input") as HTMLInputElement;
+    name.value = "Work";
+    const configuration = form().querySelector("select") as HTMLSelectElement;
+    configuration.value = "linked";
+    configuration.dispatchEvent(new Event("change"));
+    const path = form().querySelector('[aria-label="Native configuration directory"]') as HTMLInputElement;
+    path.value = "/fixture/native-account";
+    path.dispatchEvent(new Event("input"));
+    submit().click();
+    form().dispatchEvent(new Event("submit", { cancelable: true }));
+    await flush();
+    expect(creates).toHaveLength(0);
     const control = host.querySelector(".glosa-agent-experimental button") as HTMLButtonElement;
     expect(control.textContent).toBe("Enable experimental managed chat");
     expect(control.getAttribute("aria-pressed")).toBe("false");
@@ -829,6 +851,17 @@ test("experimental account control requires confirmation and keeps an unqualifie
     ]);
     expect(host.querySelector(".glosa-agent-experimental button")?.getAttribute("aria-pressed")).toBe("true");
     expect(host.textContent).toContain("Experimental chat is available");
+    expect(submit().disabled).toBe(false);
+    expect((form().querySelector("input") as HTMLInputElement).value).toBe("Work");
+    expect((form().querySelector("select") as HTMLSelectElement).value).toBe("linked");
+    expect((form().querySelector('[aria-label="Native configuration directory"]') as HTMLInputElement).value).toBe(
+      "/fixture/native-account",
+    );
+    form().dispatchEvent(new Event("submit", { cancelable: true }));
+    await flush();
+    expect(creates).toMatchObject([
+      { provider: "codex", label: "Work", configuration: { mode: "linked", path: "/fixture/native-account" } },
+    ]);
   } finally {
     pane.destroy();
   }

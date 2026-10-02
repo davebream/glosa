@@ -353,7 +353,7 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
     events: AgentEvent[] = [];
   let stopped = 0,
     configured!: Parameters<ClaudeSdk["query"]>[0];
-  let readiness = { name: "glosa", status: "connected", tools: [{ name: "glosa_present" }] };
+  let readiness = { name: "glosa-managed", status: "connected", tools: [{ name: "glosa_present" }] };
   let releaseStatus!: () => void;
   const statusGate = new Promise<void>((resolve) => {
     releaseStatus = resolve;
@@ -476,6 +476,12 @@ test("Claude SDK seam keeps native IO supervised, isolates auth and routes a per
     });
     expect((await connection.commands!()).map((entry) => entry.name)).toEqual(["review", "compact"]);
     expect(connection.capabilities.models[0]?.resolvedModel).toBe("claude-sonnet-5");
+    expect(configured.options.mcpServers!["glosa-managed"]).toEqual({
+      type: "http",
+      url: spec.mcp!.url,
+      headers: { Authorization: "Bearer ${GLOSA_MANAGED_MCP_GRANT}" },
+    });
+    expect(configured.options.mcpServers!.glosa).toBeUndefined();
     expect(configured.options.systemPrompt).toEqual({
       type: "preset",
       preset: "claude_code",
@@ -546,6 +552,9 @@ test("linked Claude loads enabled native plugins and tracks their authority with
     JSON.stringify({ version: 2, plugins: { "writing@local": [{ scope: "user", installPath: plugin }] } }),
   );
   writeFileSync(join(plugin, "hooks", "hooks.json"), JSON.stringify({ hooks: {} }));
+  const nativeMcp = JSON.stringify({ mcpServers: { glosa: { command: "native-glosa" } } });
+  writeFileSync(join(plugin, ".mcp.json"), nativeMcp);
+  writeFileSync(join(cwd, ".mcp.json"), nativeMcp);
   let configured: Parameters<ClaudeSdk["query"]>[0] | undefined;
   let finish!: () => void;
   const closed = new Promise<void>((resolve) => {
@@ -604,9 +613,18 @@ test("linked Claude loads enabled native plugins and tracks their authority with
     expect(configured!.options.settingSources).toEqual(["user", "project", "local"]);
     expect(configured!.options.strictMcpConfig).toBe(false);
     expect(configured!.options.plugins).toEqual([{ type: "local", path: plugin }]);
+    expect(connection.capabilities.models).toEqual([]);
     await connection.close();
-    writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { glosa: { command: "conflict" } } }));
-    expect(() => adapter.configurationRevision(configRoot, cwd)).toThrow("reserved glosa");
+    expect(readFileSync(join(plugin, ".mcp.json"), "utf8")).toBe(nativeMcp);
+    expect(readFileSync(join(cwd, ".mcp.json"), "utf8")).toBe(nativeMcp);
+    writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { "glosa-managed": { command: "conflict" } } }));
+    expect(() => adapter.configurationRevision(configRoot, cwd)).toThrow("reserved glosa-managed");
+    writeFileSync(join(cwd, ".mcp.json"), nativeMcp);
+    writeFileSync(
+      join(configRoot, "settings.json"),
+      JSON.stringify({ enabledPlugins: { "writing@local": true }, apiKeyHelper: "fixture-api-billing" }),
+    );
+    expect(() => adapter.configurationRevision(configRoot, cwd)).toThrow("Native billing configuration");
   } finally {
     finish();
     rmSync(root, { recursive: true, force: true });

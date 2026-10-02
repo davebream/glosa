@@ -436,7 +436,7 @@ test("Codex waits for the built-in catalog before sending and reinstalls guidanc
     release = done;
   });
   let server = {
-    name: "glosa",
+    name: "glosa-managed",
     runtimeStatus: "connected",
     authStatus: "unsupported",
     tools: { present: { name: "glosa_present" } } as Record<string, { name: string }>,
@@ -479,7 +479,7 @@ test("Codex waits for the built-in catalog before sending and reinstalls guidanc
     expect(starts.map((frame) => frame.method)).toContain("thread/resume");
     for (const frame of starts) {
       expect(frame.params.developerInstructions).toBe("App-owned Glosa workflow");
-      expect(frame.params.config["mcp_servers.glosa"]).toEqual({
+      expect(frame.params.config["mcp_servers.glosa-managed"]).toEqual({
         url: f.spec.mcp.url,
         bearer_token_env_var: "GLOSA_MANAGED_MCP_GRANT",
       });
@@ -488,7 +488,7 @@ test("Codex waits for the built-in catalog before sending and reinstalls guidanc
     expect(f.sent.find((frame) => frame.method === "turn/start")!.params.input).toEqual([
       { type: "text", text: "Review the draft" },
     ]);
-    expect((await connection.mcpStatus!()).find((item) => item.name === "glosa")!.login).toBe(false);
+    expect((await connection.mcpStatus!()).find((item) => item.name === "glosa-managed")!.login).toBe(false);
   } finally {
     await connection.close();
   }
@@ -522,8 +522,18 @@ test("linked Codex preserves native credentials and project tools but refuses a 
   mkdirSync(join(f.spec.cwd, ".codex"));
   writeFileSync(join(f.spec.cwd, ".codex", "config.toml"), "[features]\nplugins = true\n");
   f.setLayers([{ name: { type: "project" }, config: { features: { plugins: true } } }]);
-  const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, () => {});
+  const nativeConfig = readFileSync(join(f.spec.cwd, ".codex", "config.toml"), "utf8");
+  f.setConfig({ mcp_servers: { glosa: { command: "native-glosa" } } });
+  const adapter = new CodexManagedAdapter();
+  expect(await adapter.probe(f.spec, f.launcher)).toMatchObject({ state: "authenticated" });
+  const connection = await adapter.connect(f.spec, f.launcher, () => {});
+  expect(connection.capabilities.models).toHaveLength(1);
   await connection.close();
-  f.setConfig({ mcp_servers: { glosa: { command: "conflict" } } });
-  await expect(new CodexManagedAdapter().connect(f.spec, f.launcher, () => {})).rejects.toThrow("reserved glosa");
+  expect(readFileSync(join(f.spec.cwd, ".codex", "config.toml"), "utf8")).toBe(nativeConfig);
+  f.setConfig({ mcp_servers: { "glosa-managed": { command: "conflict" } } });
+  await expect(adapter.connect(f.spec, f.launcher, () => {})).rejects.toThrow("reserved glosa-managed");
+  const accountReads = f.sent.filter((frame) => frame.method === "account/read").length;
+  f.setConfig({ mcp_servers: { glosa: { command: "native-glosa" } }, openai_base_url: "https://routing.example.test" });
+  await expect(adapter.preflight(f.spec, f.launcher)).rejects.toThrow("Native routing");
+  expect(f.sent.filter((frame) => frame.method === "account/read")).toHaveLength(accountReads);
 });

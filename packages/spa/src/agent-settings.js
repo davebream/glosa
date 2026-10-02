@@ -389,7 +389,15 @@ export function mountAgentSettings(
     const focused = root.contains(document.activeElement) ? document.activeElement : null;
     const focusedProfile = focused?.closest("[data-profile-id]")?.dataset.profileId;
     const focusedLabel = focused?.getAttribute("aria-label") ?? focused?.textContent;
-    message.textContent = state.recovery ?? (state.available ? "" : "Chat support is not available in this build yet.");
+    message.textContent =
+      state.recovery ??
+      (state.available
+        ? ""
+        : state.providers.some(
+              (provider) => provider.installed && provider.experimental?.runtimeId && !provider.experimental.enabled,
+            )
+          ? "Enable experimental managed chat for a provider below to set up accounts and chats."
+          : (state.reason ?? "Managed chat is currently unavailable. Check the provider settings below."));
     retry.hidden = true;
     message.setAttribute("role", "status");
     selectedProvider ??= state.providers[0]?.id;
@@ -576,7 +584,12 @@ export function mountAgentSettings(
         hidden: provider.installed && available,
         textContent: !provider.installed
           ? "Accounts become available after installation."
-          : "Account setup is unavailable in this build.",
+          : (state.recovery ??
+            (provider.experimental?.runtimeId && !provider.experimental.enabled
+              ? provider.experimental.renewalRequired
+                ? "The runtime changed. Enable experimental managed chat again above to add an account."
+                : "Enable experimental managed chat above to add an account."
+              : (state.reason ?? "Account setup is currently unavailable."))),
       });
       accountArea.setAttribute("aria-label", `${provider.name} accounts`);
       section.append(blockedReason, accountArea);
@@ -930,7 +943,7 @@ export function mountAgentSettings(
         configuration,
         configurationPath,
         configurationHelp,
-        el("button", { type: "submit", textContent: "Add account" }),
+        el("button", { type: "submit", textContent: "Add account", disabled: !available }),
       ]);
       form.addEventListener("submit", (event) => {
         event.preventDefault();
