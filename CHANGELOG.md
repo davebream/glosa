@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Tools and workspace access moved from a panel under the chat composer to a dialog, opened from
   the chat's menu or from one line under the composer. Its wording is plain, and revoking access
   now asks for confirmation.
+- The chat's messages fade out above the composer instead of being cut off, notices appear above
+  the composer only when there is one, and the line under it is a single quiet row.
 - Chat turns no longer repeat the chosen model and effort under every message. A turn says what it
   ran on only when the agent reported something different. A turn's reasoning is one summary with
   its formatting rendered, and usage and limits open from the chat's menu.

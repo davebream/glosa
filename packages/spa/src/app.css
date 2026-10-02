@@ -7926,9 +7926,12 @@ input,
   min-height: 96px;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 28px var(--chat-gutter) 18px;
+  padding: 28px var(--chat-gutter) 40px;
   scroll-padding-block: 16px;
   scrollbar-gutter: stable both-edges;
+  /* The thread fades out over its last 24px instead of being cut by the composer's edge; its own
+     end pad is deeper than the fade, so the last line is never dimmed at rest. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
 }
 .glosa-chat-actions {
   display: flex;
@@ -8207,7 +8210,6 @@ nav.glosa-chat-actions[hidden] {
 /* The composer and what sits with it take the reply's column, never a wider one. */
 .glosa-chat-composer,
 .glosa-chat-footer,
-.glosa-chat-utilities,
 .glosa-chat-readiness {
   width: min(calc(100% - 2 * var(--chat-gutter)), var(--chat-measure));
   margin-inline: auto;
@@ -8474,6 +8476,13 @@ nav.glosa-chat-actions[hidden] {
   white-space: nowrap;
   border-radius: var(--radius-pill);
 }
+.glosa-chat-send-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin-left: auto;
+}
 .glosa-chat-pane .glosa-chat-send {
   font-size: var(--text-base);
 }
@@ -8506,30 +8515,35 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-footer {
   display: flex;
   flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 3px 12px;
-  padding-block: 3px 10px;
+  align-items: center;
+  gap: 2px 10px;
+  padding-block: 4px 10px;
   color: var(--muted);
   font-size: var(--text-xs);
 }
-.glosa-chat-status {
-  margin: 0;
-  font: inherit;
-  overflow-wrap: anywhere;
-}
-.glosa-chat-utilities {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding-top: 8px;
-}
-.glosa-chat-utilities > button {
-  margin-left: auto;
+.glosa-chat-footer > button {
   border-color: transparent;
   font-size: var(--text-xs);
   min-height: 24px;
   padding: 0 4px;
+}
+.glosa-chat-footer > button[hidden] {
+  display: none;
+}
+.glosa-chat-key-hint {
+  margin-left: auto;
+}
+/* What the pane has to say, above the composer and in its column. Empty, it takes no room. */
+.glosa-chat-status {
+  width: min(calc(100% - 2 * var(--chat-gutter)), var(--chat-measure));
+  margin: 0 auto 8px;
+  flex: none;
+  color: var(--ink);
+  font: var(--text-sm) / 1.5 var(--font-sans);
+  overflow-wrap: anywhere;
+}
+.glosa-chat-status:empty {
+  display: none;
 }
 /* The one line about tools under the composer: a recessive verb that opens the dialog. */
 .glosa-chat-pane button.glosa-chat-tools-line {
@@ -8580,11 +8594,25 @@ nav.glosa-chat-actions[hidden] {
   background: var(--danger);
   color: var(--on-danger);
 }
-.glosa-chat-jump {
-  align-self: center;
+.glosa-chat-jump-anchor {
+  position: relative;
+  flex: none;
+  height: 0;
+}
+.glosa-chat-pane button.glosa-chat-jump {
   position: absolute;
-  bottom: 290px;
-  background: var(--bg) !important;
+  left: 50%;
+  bottom: 12px;
+  translate: -50% 0;
+  min-height: 28px;
+  padding: 2px var(--space-3);
+  border-radius: 999px;
+  background: var(--elevated-bg);
+  box-shadow: var(--shadow-menu);
+  font-size: var(--text-xs);
+}
+.glosa-chat-pane button.glosa-chat-jump[hidden] {
+  display: none;
 }
 /* A long question scrolls here; its scrollbar takes the same room on both edges, as the history's
    does, so the card stays on the reply's column. */
@@ -8675,7 +8703,7 @@ nav.glosa-chat-actions[hidden] {
   }
   .glosa-chat-composer,
   .glosa-chat-footer,
-  .glosa-chat-utilities,
+  .glosa-chat-status,
   .glosa-chat-readiness {
     width: calc(100% - 24px);
   }

@@ -626,7 +626,7 @@ test("tools and access open as a dialog from the line under the composer, and re
   await f.pane.ready;
   await flush();
   // Nothing about tools sits under the composer but one line, and no dialog exists until asked for.
-  expect(f.host.querySelector(".glosa-chat-utilities details")).toBeNull();
+  expect(f.host.querySelector(".glosa-chat-footer details")).toBeNull();
   expect(document.querySelector("dialog")).toBeNull();
   const line = f.host.querySelector(".glosa-chat-tools-line") as HTMLButtonElement;
   expect(line.textContent).toBe("1 tool on");
