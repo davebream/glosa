@@ -947,11 +947,13 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       // The receipt is a barrier: an unchanged draft checked before a queued message arrives proves nothing.
       await tab.evaluate(`(() => {
         window.previewSelectionReceipts = 0;
+        window.previewBridgeReady = false;
         const NativeMessageChannel = window.MessageChannel;
         window.MessageChannel = class extends NativeMessageChannel {
           constructor() {
             super();
             this.port1.addEventListener('message', event => {
+              if (event.data?.type === 'ready') window.previewBridgeReady = true;
               if (event.data?.type === 'selection') window.previewSelectionReceipts++;
             });
           }
@@ -959,6 +961,13 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       })()`);
       await openFromNavigator(tab, PREVIEW);
       await waitForState(tab, "class-F document opened", (state) => Boolean(paneFor(state, PREVIEW)));
+      // DOM presence precedes the iframe load/nonce/MessagePort handshake on slower hosts.
+      // A one-shot selection before the actual ready receipt is silently ignored by the bridge.
+      await waitForState(
+        tab,
+        "preview bridge handshake completed before selection",
+        async () => (await tab.evaluate<boolean>("window.previewBridgeReady")) === true,
+      );
       const deadline = Date.now() + 10000;
       let composer = false;
       let frameSession: string | undefined;
