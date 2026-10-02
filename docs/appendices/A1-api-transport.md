@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "2.0", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "2.1", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -225,7 +225,7 @@ Contract 1.5 additively permits this workspace field (optional for N-1 clients):
 The provider package owns `display_name` and `instruction`; the daemon supplies only workspace
 identity and the generic CLI fallback. Reading this field has no registration or binding side effect.
 Session rows retain their existing `workspace_binding` and `liveness` fields. A client derives an
-explicit connection as follows: any alive row whose `workspace_binding` equals the workspace path is
+explicit connection as follows: any alive row whose `workspace_binding` equals the workspace `canonical_path` (falling back to `path` for an older daemon) is
 connected; otherwise any stale explicit row is stale; otherwise it is unbound. Cwd-ancestor routing
 does not count as an explicit connection.
 
@@ -781,6 +781,29 @@ unreachable”. `GET /api/status` session rows also expose `source` and `lease_e
 An authenticated session push stream refreshes the same lease every 20 seconds while open.
 Cancellation, replacement, credential revocation, and daemon shutdown release its handle. Closing
 stops refreshes rather than immediately ending the session; existing lease expiry remains the truth.
+
+### 5.12a `POST /api/workspaces/session-binding`
+
+Contract 2.1. Same authentication, Origin checks, metadata validation and session semantics as
+§5.12. Body: `{path, session_id, provider?, cwd?, source?}`. CLI/MCP resolve relative paths against
+caller cwd before sending. Success: `{bound:true, session_id, workspace_binding}`, with the resolved
+canonical identity. This route never opens, creates or adopts a workspace.
+
+Resolution uses the exact registered identity first, then the nearest owning directory, subject
+to tracked-file and home-directory restrictions. If neither matches a directory target, consider
+only loose files whose immediate worktree directory equals that target: preserve the session's
+matching binding, otherwise require a sole candidate. Explicit file targets override prior bindings.
+
+- **404 workspace-not-registered**: open/present the target first.
+- **409 workspace-ambiguous**: detail lists exact file targets; no session mutation occurs.
+- **409 workspace-changed**: selection or ownership changed while waiting for its lock; retry.
+- Existing adopting/forgetting guards and recovery guidance remain authoritative, including when
+  a pending forget has already removed its registration. Adopted sources resolve to their owner.
+
+Status workspace rows add optional `canonical_path`, including interrupted-forget rows. `path`
+remains the worktree directory. Provider prompts receive canonical identity, and the SPA uses it
+for connection state and copied paths. Old responses fall back to `path`. Clients missing the new
+binding endpoint receive upgrade guidance, never an implicit open fallback.
 
 ### 5.13 `POST /w/:slug/capability/:artifactPath`
 Bearer required, Origin-gated. `:artifactPath` follows §6's encoding rule and confinement. Issues

@@ -198,6 +198,13 @@ generic.**
   bindings/transcripts; conflicting concrete providers fail. Bindings remain in memory and require
   explicit restoration after daemon restart. Session registration, rebinding, deregistration and
   lease transitions invalidate the desk chat list through the shared workspace stream.
+- **Explicit binding never opens or registers a workspace.** CLI/MCP binding resolves an existing
+  registration by exact canonical path, then the nearest eligible owning directory. A containing
+  directory may select an immediate loose-file registration: preserve the session's matching
+  binding, otherwise require a sole candidate. Ambiguity requires an exact file path; an
+  unregistered target requires `glosa open` or `glosa_present` first. Binding does not adopt loose
+  files. Status exposes canonical identity separately from the worktree directory, so the
+  connection panel and copied prompts identify the same workspace as session routing.
 - **Routing precedence**: (1) an **explicit session binding** supplied through the API, CLI, or MCP
   contract (authoritative); (2) the generic cwd-ancestor fallback. This supports artifact workspaces
   that differ from the agent process cwd without teaching glosa about an external workflow. Two sessions bound to one
@@ -366,7 +373,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v2.0: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v2.1: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
