@@ -66,7 +66,7 @@ export function createComposerPicker(
     generation = 0,
     suppressed = false;
   const appCommands = [
-    { id: "mcp", name: "mcp", description: "Tools & workspace access", kind: "app" },
+    { id: "mcp", name: "mcp", description: "Tools and workspace access", kind: "app" },
     { id: "mcp-status", name: "mcp-status", description: "Show current tool connections", kind: "app" },
   ];
   function highlight() {
