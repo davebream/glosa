@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.38] · 2026-10-02
+
 ### Added
 
 - OpenAI dictation with a secure API key in Settings, native browser recording, automatic English,
@@ -1735,7 +1737,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.38...HEAD
+[0.1.0-alpha.38]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.38
 [0.1.0-alpha.37]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.36...v0.1.0-alpha.37
 [0.1.0-alpha.36]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.35...v0.1.0-alpha.36
 [0.1.0-alpha.35]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.34...v0.1.0-alpha.35
