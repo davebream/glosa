@@ -12,6 +12,7 @@ import {
   effortPresentation,
   modelPicker,
 } from "./agent-ui.js";
+import { elapsedLabel, turnActivity } from "./chat-activity.js";
 import { loadChatMarkdown } from "./chat-markdown.js";
 import { confirmDialog, noticeDialog } from "./dialog.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -48,6 +49,13 @@ export function applyChatEvent(state, record) {
   else return null; // Blob references, draft conflicts and settings require an authoritative snapshot.
   return state;
 }
+
+/** A step's state, drawn: done, failed, stopped before it finished. A running step pulses (app.css). */
+const STEP_MARKS = {
+  completed: '<svg viewBox="0 0 12 12"><path d="M2.5 6.4l2.3 2.3 4.7-5.2"/></svg>',
+  failed: '<svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg>',
+  stopped: '<svg viewBox="0 0 12 12"><path d="M3 6h6"/></svg>',
+};
 
 export function createChatPane(
   host,
@@ -86,6 +94,7 @@ export function createChatPane(
     accountGeneration = 0,
     changingAccount = false,
     changingSettings = false,
+    liveTimer = 0,
     effortSaving = false,
     effortTarget = null,
     uploading = false,
@@ -103,6 +112,9 @@ export function createChatPane(
           for (const entry of entries) fitTables(entry.target);
         })
       : null;
+  // What each step acted on, remembered from its start, and each turn's status at the last render.
+  const stepSubjects = new Map(),
+    turnStatuses = new Map();
   const rows = new Map(),
     decisionRows = new Map(),
     decisionIntents = new Map(),
@@ -188,7 +200,13 @@ export function createChatPane(
     },
     { signal: lifetime.signal },
   );
-  const history = el("div", { className: "glosa-chat-history", tabIndex: 0, "aria-label": "Chat messages" });
+  // A log: what arrives is announced politely, and held back while a turn is still writing.
+  const history = el("div", {
+    className: "glosa-chat-history",
+    tabIndex: 0,
+    role: "log",
+    "aria-label": "Chat messages",
+  });
   const older = el("button", {
     type: "button",
     textContent: "Earlier messages",
@@ -751,6 +769,7 @@ export function createChatPane(
     ready: null,
     destroy() {
       disposed = true;
+      clearInterval(liveTimer);
       accountGeneration++;
       lifetime.abort();
       tableFit?.disconnect();
@@ -1018,6 +1037,89 @@ export function createChatPane(
       text: `You chose: ${asked.model} · ${asked.effort || "default"}\nThe agent reported: ${ran.model ?? "no model"} · ${ran.effort ?? "no effort"}`,
     };
   }
+  /** A turn's tool steps as one closed row: a count, then each step with its state and, on
+   * request, what the tool reported. Steps are updated in place so an open one stays open. */
+  function stepsRow(turnId, work) {
+    const key = `${turnId}:steps`;
+    wantedRows.add(key);
+    let row = rows.get(key);
+    if (!row) {
+      const summary = el("summary");
+      const list = el("ol", { className: "glosa-chat-step-list" });
+      const node = el("details", { className: "glosa-chat-message glosa-chat-steps", "data-kind": "steps" }, [
+        summary,
+        list,
+      ]);
+      history.append(node);
+      row = { node, summary, list, steps: new Map() };
+      rows.set(key, row);
+    }
+    if (row.summary.textContent !== work.summary) row.summary.textContent = work.summary;
+    for (const step of work.steps) {
+      let entry = row.steps.get(step.id);
+      if (!entry) {
+        const mark = el("span", { className: "glosa-chat-step-mark", "aria-hidden": "true" });
+        const label = el("span");
+        const detail = el("pre", { className: "glosa-chat-step-detail" });
+        const item = el("li", {}, [el("details", {}, [el("summary", {}, [mark, label]), detail])]);
+        row.list.append(item);
+        entry = { item, mark, label, detail };
+        row.steps.set(step.id, entry);
+      }
+      if (entry.item.dataset.state !== step.state) {
+        entry.item.dataset.state = step.state;
+        entry.mark.innerHTML = STEP_MARKS[step.state] ?? "";
+      }
+      // The state is said in words too: the mark's colour is never the only signal.
+      const text = step.label + (["failed", "stopped"].includes(step.state) ? ` · ${step.state}` : "");
+      if (entry.label.textContent !== text) entry.label.textContent = text;
+      if (entry.detail.textContent !== step.detail) entry.detail.textContent = step.detail;
+    }
+    return row;
+  }
+  /** The line under a turn that is still at work: what it is doing now and for how long. It goes
+   * when the turn ends; the header's status says the same to a screen reader, so this is silent. */
+  function liveRow(turn, work, tail) {
+    const before = turnStatuses.get(turn.id);
+    turnStatuses.set(turn.id, turn.status);
+    if (!work.live) return;
+    const key = `live:${turn.id}`;
+    wantedRows.add(key);
+    let row = rows.get(key);
+    if (!row) {
+      const label = el("span");
+      const time = el("span", { className: "glosa-chat-live-time" });
+      const node = el("div", { className: "glosa-chat-live", "aria-hidden": "true" }, [
+        el("span", { className: "glosa-chat-live-mark" }),
+        label,
+        time,
+      ]);
+      history.append(node);
+      // Counted from when it started here; a turn found already at work counts from its own time.
+      const sent = Date.parse(turn.at);
+      row = { node, label, time, since: before || Number.isNaN(sent) ? Date.now() : sent };
+      rows.set(key, row);
+    }
+    if (row.label.textContent !== work.live) row.label.textContent = work.live;
+    row.node.dataset.status = turn.status;
+    if (tail && row.node.previousSibling !== tail) tail.after(row.node);
+    tickLive();
+    liveTimer ||= setInterval(tickLive, 1000);
+  }
+  function tickLive() {
+    let live = false;
+    for (const [key, row] of rows) {
+      if (!key.startsWith("live:")) continue;
+      live = true;
+      const seconds = (Date.now() - row.since) / 1000;
+      // A wait on the person is not the agent's time, and the first moments need no count.
+      const text = row.node.dataset.status === "waiting" || seconds < 2 ? "" : elapsedLabel(seconds);
+      if (row.time.textContent !== text) row.time.textContent = text;
+    }
+    if (live) return;
+    clearInterval(liveTimer);
+    liveTimer = 0;
+  }
   function renderMessages() {
     render();
   }
@@ -1065,12 +1167,22 @@ export function createChatPane(
       const shortened = (item) =>
         item.text + (item.truncated ? "\n\nDisplay shortened. Export the chat for the complete message." : "");
       const items = state.content.filter((c) => c.turnId === turn.id);
-      // A session reports its reasoning in fragments; a turn shows them as one summary, in order.
+      const work = turnActivity(turn, items, stepSubjects);
+      // The last row this turn has drawn: its live line sits right under it.
+      let tail = rows.get(ranOn ? `settings:${turn.id}` : `user:${turn.id}`)?.node;
+      // A session reports its reasoning in fragments and its tools one by one; a turn shows one
+      // summary of each, where the first of its kind arrived.
       const reasoning = items.filter((item) => item.kind === "reasoning");
       let reasoned = false;
+      let stepped = false;
       for (const item of items) {
+        if (item.kind === "tool") {
+          if (!stepped) tail = stepsRow(turn.id, work).node;
+          stepped = true;
+          continue;
+        }
         if (item.kind === "reasoning") {
-          if (!reasoned)
+          if (!reasoned) {
             textRow(
               `${turn.id}:reasoning`,
               "Reasoning summary",
@@ -1079,17 +1191,15 @@ export function createChatPane(
               true,
               "reasoning",
             );
+            tail = rows.get(`${turn.id}:reasoning`).node;
+          }
           reasoned = true;
           continue;
         }
-        textRow(
-          `${turn.id}:${item.id}`,
-          item.kind === "tool" ? `${item.name} · ${item.status}` : "Assistant",
-          shortened(item),
-          item.kind === "tool",
-          item.kind === "text",
-        );
+        textRow(`${turn.id}:${item.id}`, "Assistant", shortened(item), false, item.kind === "text");
+        tail = rows.get(`${turn.id}:${item.id}`).node;
       }
+      liveRow(turn, work, tail);
       if (turn.error && (typeof turn.text === "string" || state.content.some((item) => item.turnId === turn.id)))
         textRow(`error:${turn.id}`, "Needs attention", turn.error);
       const waiting = ["accepted", "queued", "held"].includes(turn.status);
@@ -1280,6 +1390,7 @@ export function createChatPane(
             : "Working…"
           : "";
     activity.dataset.working = String(!!active);
+    history.setAttribute("aria-busy", String(!!active && active.status !== "waiting"));
     handle.attentionCount = state.decisions.filter((decision) => decision.status === "pending").length;
     handle.activityLabel = activity.textContent;
     const editing = changingAccount || changingSettings || uploading;

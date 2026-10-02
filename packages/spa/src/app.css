@@ -8021,6 +8021,111 @@ nav.glosa-chat-actions[hidden] {
   background: transparent;
   border-radius: 0;
 }
+/* A turn's tool steps: one closed row, then each step as a line with a drawn state. */
+.glosa-chat-steps {
+  margin-bottom: 10px;
+}
+.glosa-chat-steps > summary {
+  font-weight: 400;
+}
+.glosa-chat-step-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.glosa-chat-step-list summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 0;
+  font: var(--text-sm) / 1.5 var(--font-sans);
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+}
+.glosa-chat-step-list summary::-webkit-details-marker {
+  display: none;
+}
+.glosa-chat-step-list summary:hover,
+.glosa-chat-step-list details[open] > summary {
+  color: var(--ink);
+}
+.glosa-chat-step-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+}
+.glosa-chat-step-mark svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.glosa-chat-step-list li[data-state="failed"] .glosa-chat-step-mark {
+  color: var(--danger);
+}
+.glosa-chat-step-detail {
+  margin: 2px 0 8px calc(12px + var(--space-2));
+  padding: 10px 12px;
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--text-xs) / 1.6 var(--font-mono);
+  background: var(--surface);
+  border-radius: var(--radius-tool);
+}
+.glosa-chat-step-detail:empty {
+  display: none;
+}
+/* The line under a turn still at work. The mark is the session's ink, never the hand. */
+.glosa-chat-live {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: var(--chat-measure);
+  margin: 0 auto 28px;
+  font: var(--text-sm) / 1.5 var(--font-sans);
+  color: var(--muted);
+}
+.glosa-chat-live-time {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.glosa-chat-live-mark,
+.glosa-chat-step-list li[data-state="running"] .glosa-chat-step-mark::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 3px;
+  border-radius: 50%;
+  background: var(--ink);
+  animation: glosa-chat-pulse 1.4s var(--ease-out) infinite alternate;
+}
+.glosa-chat-live[data-status="waiting"] .glosa-chat-live-mark {
+  animation: none;
+  background: var(--muted);
+}
+@keyframes glosa-chat-pulse {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glosa-chat-live-mark,
+  .glosa-chat-step-list li[data-state="running"] .glosa-chat-step-mark::before {
+    animation: none;
+  }
+}
 .glosa-chat-message[data-kind="error"] {
   padding: 12px;
   border: 1px solid var(--border-strong);

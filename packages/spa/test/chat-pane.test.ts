@@ -415,7 +415,8 @@ test("a turn names its model only when it ran on something else, and shows its r
   const summaries = [...f.host.querySelectorAll(".glosa-chat-history summary")].map((node) => node.textContent);
   expect(summaries).toEqual([
     "Reasoning summary",
-    "Read · completed",
+    "1 step",
+    "Read a file",
     "Ran on a different model",
     "Ran at a different effort",
   ]);
@@ -558,6 +559,54 @@ test("effort steps up one level a press, wraps past the top and keeps presses ma
   expect(f.state.settings.effort).toBe("high");
   expect(f.host.querySelector(".glosa-chat-effort-field [role=status]")!.textContent).toBe("Effort: High");
   expect(effort.querySelector<HTMLElement>(".glosa-chat-effort-label")!.dataset.widest).toBe("Maximum");
+  f.pane.destroy();
+});
+
+test("a turn at work shows a live line under its last row and it goes when the turn ends", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  const history = f.host.querySelector(".glosa-chat-history")!;
+  expect(history.getAttribute("role")).toBe("log");
+  const settings = { model: "model", effort: "high", permissionMode: "default" };
+  const at = new Date(Date.now() - 65_000).toISOString();
+  f.state.turns = [{ id: "t", text: "Review it", status: "running", at, settings }];
+  f.state.revision++;
+  f.snapshot();
+  const live = () => f.host.querySelector(".glosa-chat-live");
+  // Nothing has arrived yet: the thread itself says the agent is at work, and for how long.
+  expect(live()!.textContent).toBe("Thinking1m 05s");
+  expect(live()!.previousElementSibling!.getAttribute("data-kind")).toBe("human");
+  expect(history.getAttribute("aria-busy")).toBe("true");
+  (f.state.content as unknown[]) = [
+    {
+      id: "s1",
+      turnId: "t",
+      kind: "tool",
+      role: "tool",
+      name: "Read",
+      status: "running",
+      text: '{"file_path":"a/outline.md"}',
+    },
+  ];
+  f.state.revision++;
+  f.snapshot();
+  expect(live()!.textContent).toStartWith("Reading outline.md");
+  const steps = f.host.querySelector(".glosa-chat-steps") as HTMLDetailsElement;
+  expect(steps.open).toBe(false);
+  expect(live()!.previousElementSibling).toBe(steps);
+  expect(steps.querySelector("li")!.dataset.state).toBe("running");
+  (f.state.content as unknown[]) = [
+    { id: "s1", turnId: "t", kind: "tool", role: "tool", name: "Read", status: "failed", text: "No such file" },
+    { id: "a1", turnId: "t", kind: "text", role: "assistant", text: "I could not find it." },
+  ];
+  f.state.turns[0].status = "completed";
+  f.state.revision++;
+  f.snapshot();
+  expect(live()).toBeNull();
+  expect(history.getAttribute("aria-busy")).toBe("false");
+  expect(steps.querySelector(":scope > summary")!.textContent).toBe("1 step · 1 failed");
+  // The file's name was learned while the step ran, and its failure is said in words.
+  expect(steps.querySelector("li")!.textContent).toBe("Read outline.md · failedNo such file");
   f.pane.destroy();
 });
 

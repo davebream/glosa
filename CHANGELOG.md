@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- A chat turn that is still at work shows it in the conversation: a live line says what the agent
+  is doing now, such as "Thinking" or "Reading outline.md", and for how long. Its tool calls are
+  one "3 steps" row that opens to each step and its result, instead of a row per raw tool name.
 - Chat turns no longer repeat the chosen model and effort under every message. A turn says what it
   ran on only when the agent reported something different. A turn's reasoning is one summary with
   its formatting rendered, and usage and limits open from the chat's menu.
