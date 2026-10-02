@@ -18,6 +18,7 @@
 //     sent about itself. A card that ran them together would present a claim as a fact (A4 §F05's
 //     honesty rule, applied to identity).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { renderMarkdown } from "../../daemon/src/artifact-render.ts";
 import { createArtifactPane } from "../src/artifact-pane.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
 
@@ -238,6 +239,34 @@ describe("Review mode — the agent's half of the margin", () => {
       // Not by colour alone: the question's mark names its author in words, and has a tab.
       expect(q(host, ".glosa-session-by").textContent).toBe("Claude Code · requester-a asks");
       expect(q(host, ".glosa-session-tab").getAttribute("aria-label")).toContain("Question from Claude Code");
+    } finally {
+      hl.restore();
+    }
+  });
+
+  test("a source heading quote marks the rendered heading without a lost-passage warning", async () => {
+    const hl = installHighlights();
+    try {
+      const source = "### The kind list (for Dawid's yes)";
+      const { host } = await mountPane(
+        fakeDataAccess([askAboutPremise({ passage: { quote: { exact: source } } })], {
+          async getArtifact() {
+            return {
+              source_path: "notes.md",
+              content: source,
+              rendered_html: renderMarkdown(source),
+              source_sha256: "sha-1",
+              rendered_sha256: "r-1",
+              class: "R",
+            };
+          },
+        }),
+      );
+      expect(hl.words("glosa-session-asks", host)).toEqual(["The kind list (for Dawid's yes)"]);
+      expect(q(host, "h3").getAttribute("data-session-mark")).toBe("true");
+      expect(qa(host, ".glosa-session-bracket")).toHaveLength(1);
+      expect(q(host, ".glosa-agent-card")).toBeTruthy();
+      expect(q(host, ".glosa-agent-lost")).toBeNull();
     } finally {
       hl.restore();
     }
