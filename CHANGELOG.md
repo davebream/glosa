@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.40] · 2026-10-02
+
+### Fixed
+
+- Existing native Glosa MCP integrations no longer prevent linked Codex account verification or
+  Claude model discovery. Managed chats use a separate internal MCP name and preserve native
+  configuration, while retaining billing, routing and required-tool checks.
+- Account settings explain how to enable experimental managed chat and disable Add account until
+  the selected provider is available. Account names and configuration paths survive confirmation.
+- Documents-only navigation hides folders with no eligible documents instead of showing empty
+  branches. Folder visibility follows the selected document filter and ignored-file setting.
+
 ## [0.1.0-alpha.39] · 2026-10-02
 
 Includes the changes listed below for alpha.38. That candidate failed its release gate and was not
@@ -1755,7 +1767,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.39...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.40...HEAD
+[0.1.0-alpha.40]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.39...v0.1.0-alpha.40
 [0.1.0-alpha.39]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.39
 [0.1.0-alpha.38]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.38
 [0.1.0-alpha.37]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.36...v0.1.0-alpha.37
