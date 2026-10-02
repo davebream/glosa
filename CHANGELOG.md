@@ -19,9 +19,10 @@ published; alpha.39 carries those changes forward.
 
 ### Fixed
 
-- The browser acceptance test for saving during an agent claim now waits for visible source-editor
-  focus and checks that real keyboard input reaches the draft before Save. A lost input is reported
-  at that boundary while the disk, journal and provenance assertions remain intact.
+- Repeated selection messages from HTML previews preserve an open annotation draft and its keyboard
+  focus. Selecting the same passage after posting still opens a fresh note. Browser checks verify
+  the draft survives delivered duplicate messages and that typing reaches the intended pane
+  before saving or posting.
 
 ## [0.1.0-alpha.38] · 2026-10-02
 
