@@ -1557,7 +1557,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(972);
+    ).toBe(975);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -2107,7 +2107,9 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // Every per-cause loss, shipped/ablated guard, missed and false-alarm numerator stays unchanged.
   // Alpha.39 adds six changelog blocks and five edits: 972 / 889. Only its release-reference
   // cause grows (35 to 36); shipped stays 1/1, ablated becomes 52/52, missed/false alarms stay zero.
-  const BLOCKS = 972;
+  // Alpha.40 adds three release-note blocks and two generated edits: 975 / 891.
+  // Only its release-reference cause grows (36 to 37); shipped stays 1/1, ablated becomes 53/53.
+  const BLOCKS = 975;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -2143,7 +2145,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 57 of 972 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 58 of 975 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2165,7 +2167,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     ).toBe(BLOCKS);
     // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
     // per-cause record below is too brittle and relaxing it.
-    expect(misses).toBeLessThanOrEqual(57);
+    expect(misses).toBeLessThanOrEqual(58);
     // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
     // the 3 bracket/backslash-escaping blocks M1 removed (43 → 40), minus the one front-matter block
     // #143 removed (40 → 39), plus the one `## [0.1.0-alpha.18]` heading the alpha.18 release added
@@ -2183,10 +2185,10 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     expect(
       byCause,
       countNote(
-        "the per-cause record, a NUMERATOR totalling 57. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
+        "the per-cause record, a NUMERATOR totalling 58. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
       ),
     ).toEqual({
-      "link reference definition inlined": 36,
+      "link reference definition inlined": 37,
       "continuation-line indent dropped": 6,
       "soft break inside a code span collapsed": 5,
       "indented blockquote marker normalised": 5,
@@ -2205,7 +2207,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // to 4.9-5.1s run alone, and the unpartitioned CI suite runs it about three times slower than that:
   // 15.3s on main at d3a3626, which timed out against 15s. The measurements did not change; only the
   // runner's time limit did, and every edit is still swept.
-  test("metrics 2 and 3 — 1 dishonest write of 889; the guard fires on it and, ablated, on 52", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 891; the guard fires on it and, ablated, on 53", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2296,9 +2298,9 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // link definition, which the ablated path re-serializes and the shipped path restores, so
       // `shipped` held at 1/1 and metric 1's only per-cause move was the reference-link one.
     ).toEqual({
-      edits: 889,
+      edits: 891,
       shipped: { dishonest: 1, fired: 1 },
-      ablated: { dishonest: 52, fired: 52 },
+      ablated: { dishonest: 53, fired: 53 },
     });
   }, 30_000);
 
