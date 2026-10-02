@@ -38,16 +38,16 @@ function world() {
       return { chats: chats.get(slug) ?? [] };
     },
   };
-  const sent: Array<{ id?: string; title?: string; body?: string; badge?: number }> = [];
+  const sent: Array<{ id?: string; title?: string; body?: string; badge?: number; scope?: string }> = [];
   const bridge = { notify: (message: (typeof sent)[number]) => sent.push(message) };
   const focus = { value: false };
   const timers: Array<() => void> = [];
-  const make = (options: { desk?: boolean; current?: string } = {}) =>
+  const make = (options: { desk?: boolean; current?: string | null } = {}) =>
     createAttentionWatch({
       dataAccess,
       bridge,
       desk: options.desk ?? false,
-      currentSlug: () => options.current ?? "a",
+      currentSlug: () => (options.current === undefined ? "a" : options.current),
       hasFocus: () => focus.value,
       setTimer: (fn: () => void) => {
         timers.push(fn);
@@ -85,19 +85,32 @@ describe("what interrupts someone", () => {
 });
 
 describe("the Dock badge", () => {
-  test("is the sum of every workspace's attention and decision counts", async () => {
+  test("is this window's own workspace, named, and never another's", async () => {
     const w = world();
     w.rows[0]!.attention_count = 2;
+    w.rows[0]!.decision_count = 1;
     w.rows[1]!.decision_count = 3;
     w.inbox.set("a", [
       { id: "x1", message: "one" },
       { id: "x2", message: "two" },
     ]);
+    w.chats.set("a", [{ id: "c0", pendingDecisions: 1 }]);
     w.chats.set("b", [{ id: "c1", pendingDecisions: 3 }]);
     const watch = w.make();
     watch.start();
     await watch.flush();
-    expect(w.badges()).toEqual([5]);
+    // Workspace b has three waiting, and this window is on a: they are not this window's to show.
+    expect(w.sent.filter((m) => m.badge !== undefined)).toEqual([{ badge: 3, scope: "a" }]);
+  });
+
+  test("a window with no workspace reports nothing waiting", async () => {
+    const w = world();
+    w.rows[1]!.attention_count = 4;
+    w.inbox.set("b", [{ id: "q", message: "?" }]);
+    const watch = w.make({ current: null });
+    watch.start();
+    await watch.flush();
+    expect(w.sent.filter((m) => m.badge !== undefined)).toEqual([{ badge: 0 }]);
   });
 
   test("a burst of frames is one pass, not one per frame", async () => {
@@ -117,8 +130,8 @@ describe("the Dock badge", () => {
     const watch = w.make();
     watch.start();
     await watch.flush();
-    w.rows[1]!.attention_count = 1;
-    w.inbox.set("b", [{ id: "q", message: "?" }]);
+    w.rows[0]!.attention_count = 1;
+    w.inbox.set("a", [{ id: "q", message: "?" }]);
     watch.refresh();
     await watch.flush();
     expect(w.badges()).toEqual([0, 1]);

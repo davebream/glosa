@@ -111,9 +111,10 @@ Preload exposes at most `openFolder()`, `notify()`, `revealInFinder()`, beside t
 token. No daemon route gains a path. `revealInFinder()` exists (#160): it takes no argument, and the
 main process derives the file from the window's URL and the folder `glosa open` answered with. The
 File menu's "Reveal in Finder" (⌥⌘R) does the same for the focused window without a preload call.
-`notify()` carries the Dock badge as well as notifications (#391): `notify({ id, title, body, badge })`,
-so the bridge stays at these three calls. The SPA sums every workspace's `attention_count` and
-`decision_count` for the badge, and notifies, only while its window is unfocused, for a new request
+`notify()` carries the Dock badge as well as notifications (#391): `notify({ id, title, body, badge, scope })`,
+so the bridge stays at these three calls. Each window reports its own workspace's `attention_count`
+plus `decision_count` with that workspace's slug as `scope`, and the shell adds up the workspaces
+that have a window open, each once (revised 2026-10-02, see `docs/decisions.md`). The SPA notifies, only while its window is unfocused, for a new request
 that asks something, a chat that starts waiting on a decision, and on a desk surface a finished reply.
 
 ## 4. Decisions before the shell exists
@@ -123,7 +124,9 @@ that asks something, a chat that starts waiting on a decision, and on a desk sur
 2. **Daemon outlives the app.** The app never kills a daemon it did not spawn, and never one with
    a bound session. Replaces "kill children on quit" in #160.
 3. **Layout per window, not per workspace,** or the second window opens with a read-only layout.
-4. **Attention is daemon-wide;** the current workspace is window-scoped by fragment.
+4. **Attention is daemon-wide;** the current workspace is window-scoped by fragment. Revised
+   2026-10-02 for the Dock badge only: it counts the workspaces that have a window open.
+   Notifications stay daemon-wide.
 5. **Kind at open, not at registration** (decided 2026-09-25): the link carries `kind=`, the SPA
    gates chats, stars and the connection chip on it, and no workspace row or index field exists for
    it. The shell keeps one kind per window; a presentation arriving for a folder a desk window shows
