@@ -2158,8 +2158,8 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         const html = `<!doctype html><html><head><meta charset="utf-8"><title>PRIVATE-PRINT-TITLE</title>
           <link rel="stylesheet" href="/app/vendor/dockview.css"><link rel="stylesheet" href="/app/themes.css">
           <link rel="stylesheet" href="/app/app.css"></head>
-          <body><div id="app"><div data-screen="ready"><div class="glosa-app"><header class="glosa-topbar">APP-CHROME</header><main class="glosa-main">
-          <aside class="glosa-sidebar">SIDEBAR-CHROME</aside><div class="glosa-dock-host"></div></main></div></div></div>
+          <body><div id="app"><div data-screen="ready"><div class="glosa-app" data-nav-open="true"><header class="glosa-topbar">APP-CHROME</header>
+          <aside class="glosa-sidebar">SIDEBAR-CHROME</aside><main class="glosa-main"><div class="glosa-dock-host"></div></main></div></div></div>
           <script type="module">
           import { createDockview } from '/app/vendor/dockview.js';
           import { createArtifactPane } from '/app/artifact-pane.js';
@@ -2221,6 +2221,10 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
               contain: getComputedStyle(overlay).contain};
           })()`);
           expect(screen.height).toBeGreaterThan(100);
+          // The navigator is the application's separate grid column. Nesting it in main gives
+          // the fixture auto-sized rows and sub-floor panes whose font-driven resize corrupts
+          // the pre-print baseline. Exercise two panes at the real workbench's width floor.
+          expect(screen.width, "the print fixture must use a full-width application pane").toBeGreaterThanOrEqual(360);
           expect(screen.contain).toContain("paint");
           // On screen a fenced block's code is set at the block's own 13px (DESIGN.md: "code blocks
           // in prose at 13px / 1.6"). Only code inside a line of prose is set smaller, at 0.85em.
