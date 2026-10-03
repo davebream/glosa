@@ -229,7 +229,9 @@ A turn freezes account identity/epoch, native manifest, model/effort, MCP digest
 Restart holds undispatched turns and marks potentially handed-off turns outcome-unknown. Never
 blindly resend. Decisions reserve their response durably before one native write; an uncertain
 response cannot be resubmitted as a new decision. Invalid multi-field answers are rejected before
-reservation. An unsuccessful turn holds queued work for explicit continuation.
+reservation. An unsuccessful turn holds queued work for explicit continuation. One case is not held:
+a reply the person stops with Send now, where the chosen waiting turn goes next and the rest keep
+their order behind it. A stop that cannot be confirmed still blocks everything.
 
 Managed feedback uses immutable inbox IDs and the existing delivery reservation/acknowledgment
 path. Grants cannot claim another chat's targeted feedback. Claims/resolve use the ordinary workspace

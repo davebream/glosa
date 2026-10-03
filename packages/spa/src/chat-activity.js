@@ -131,3 +131,46 @@ export function elapsedLabel(seconds) {
   const whole = Math.max(0, Math.floor(seconds));
   return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
 }
+
+const WAITING = new Set(["accepted", "queued", "held"]);
+const AT_WORK = new Set(["dispatching", "running", "waiting", "stopping"]);
+
+/** Where each of a chat's messages stands: the one at work, the one starting, and the ones that
+ * wait in the tray above the composer. A message is in the thread once it is the one going to the
+ * agent; until then it is a row in the tray, and one removed from there never appears at all.
+ * @param {{id: string, status: string, text?: string, started?: boolean}[]} turns the chat's turns, oldest first
+ * @param {{id: string, state: "sending" | "failed", text: string}[]} [outbox] sent here, not yet taken by the daemon
+ * @param {Set<string>} [kept] cancelled before starting, but to stay in the thread for reuse
+ */
+export function chatQueue(turns, outbox = [], kept = new Set()) {
+  const active = turns.findLast((turn) => AT_WORK.has(turn.status)) ?? null;
+  const waiting = turns.filter((turn) => WAITING.has(turn.status));
+  // With nothing at work, the first message free to go is already on its way: it is starting.
+  const head = active ? null : (waiting.find((turn) => turn.status !== "held") ?? null);
+  const local = outbox
+    .filter((entry) => !turns.some((turn) => turn.id === entry.id))
+    .map((entry) => ({ id: entry.id, kind: entry.state === "failed" ? "failed" : "sending", text: entry.text, entry }));
+  const localHead = !active && !head && local[0]?.kind === "sending" ? local.shift() : null;
+  let place = 0;
+  const tray = [
+    ...waiting
+      .filter((turn) => turn !== head)
+      .map((turn) => ({ id: turn.id, kind: turn.status === "held" ? "held" : "queued", text: turn.text, turn })),
+    ...local,
+  ].map((row) => ({
+    ...row,
+    label:
+      row.kind === "held"
+        ? "Held"
+        : row.kind === "failed"
+          ? "Not sent"
+          : row.kind === "sending"
+            ? "Sending"
+            : ++place === 1
+              ? "Next"
+              : `Queued · ${place}`,
+  }));
+  const hidden = new Set(tray.map((row) => row.id));
+  for (const turn of turns) if (turn.status === "cancelled" && !turn.started && !kept.has(turn.id)) hidden.add(turn.id);
+  return { active, head, localHead, tray, hidden };
+}

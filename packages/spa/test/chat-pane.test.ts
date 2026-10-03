@@ -174,13 +174,16 @@ test("an unresolved send remains retryable after the selected account is disable
   const refresh = [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!;
   refresh.click();
   await flush();
-  expect(send.disabled).toBe(false);
-  expect(send.textContent).toContain("Retry");
-  send.click();
+  // The message left the composer when it was sent. Its answer was lost, so it waits in the tray
+  // as not sent, and Retry repeats the same request whatever happened to the account since.
+  expect(draft.value).toBe("");
+  const row = f.host.querySelector(".glosa-chat-tray li")!;
+  expect(row.textContent).toBe("Not sentPreserve this requestRetryEditRemove");
+  (row.querySelector('[aria-label="Retry sending message"]') as HTMLButtonElement).click();
   await flush();
   expect(f.sends).toHaveLength(2);
   expect(f.sends[1]).toEqual(f.sends[0]);
-  expect(draft.value).toBe("Preserve this request");
+  expect(f.host.querySelector(".glosa-chat-tray-words")!.textContent).toBe("Preserve this request");
   f.pane.destroy();
 });
 
@@ -339,6 +342,7 @@ function fixture(options: { sourceChatId?: string } = {}) {
     dataAccess,
     status: (value: string) => stream.onStatus(value),
     snapshot: () => stream.onEvent({ event: "chat_snapshot", data: structuredClone(state) }),
+    event: (data: unknown) => stream.onEvent({ event: "chat_event", data }),
   };
 }
 
@@ -656,6 +660,181 @@ test("a finished turn's live line goes, and the next message sends, where the en
   }
 });
 
+/** A daemon that takes what is sent: each message becomes a turn, queued behind whatever is there. */
+function accepting(f: ReturnType<typeof fixture>) {
+  f.dataAccess.sendChatTurn = async (_s: string, _id: string, input: any) => {
+    f.sends.push(input);
+    if (input.draftRevision !== f.state.draftRevision) throw new Error("stale draft");
+    f.state.turns.push({ id: input.turnId, text: input.text, status: "queued", at: new Date().toISOString() });
+    f.state.draft = "";
+    f.state.draftRevision++;
+    f.state.revision++;
+  };
+}
+function type(f: ReturnType<typeof fixture>, text: string) {
+  const draft = f.host.querySelector("textarea")!;
+  draft.value = text;
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  return draft;
+}
+
+test("sending never locks the composer: messages line up in the tray behind the reply at work", async () => {
+  const f = fixture();
+  accepting(f);
+  await f.pane.ready;
+  f.state.turns = [{ id: "t", text: "First", status: "running", at: new Date().toISOString() }];
+  f.state.revision++;
+  f.snapshot();
+  const draft = type(f, "Second");
+  // The words leave the composer on Enter, before the daemon has answered, and it is free again.
+  expect(draft.value).toBe("");
+  expect(draft.disabled).toBe(false);
+  const send = f.host.querySelector(".glosa-chat-send") as HTMLButtonElement;
+  expect(send.textContent).toBe("↑");
+  expect(send.disabled).toBe(false);
+  expect(f.host.querySelector(".glosa-chat-tray")!.textContent).toBe("SendingSecond");
+  type(f, "Third");
+  await flush();
+  expect(f.sends.map((sent) => sent.text)).toEqual(["Second", "Third"]);
+  expect([...f.host.querySelectorAll(".glosa-chat-tray li")].map((row) => row.textContent)).toEqual([
+    "NextSecondEditRemoveSend now",
+    "Queued · 2ThirdEditRemoveSend now",
+  ]);
+  expect(f.host.querySelector(".glosa-chat-composer [role=status]")!.textContent).toBe("2 messages waiting");
+  // Neither is in the thread: a message joins the conversation when its turn starts.
+  expect(f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')).toHaveLength(1);
+  for (const text of ["4", "5", "6"]) type(f, text);
+  await flush();
+  expect(f.sends).toHaveLength(5);
+  // A sixth has nowhere to wait: it stays in the composer, and the pane says why.
+  expect(type(f, "One too many").value).toBe("One too many");
+  await flush();
+  expect(f.sends).toHaveLength(5);
+  expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("Five messages are already waiting");
+  f.pane.destroy();
+});
+
+test("a message sent with nothing ahead of it is in the thread at once and says it is starting", async () => {
+  const f = fixture();
+  accepting(f);
+  const taken = f.dataAccess.sendChatTurn;
+  let answer!: () => void;
+  f.dataAccess.sendChatTurn = async (...args: unknown[]) => {
+    await new Promise<void>((done) => {
+      answer = done;
+    });
+    return taken(...args);
+  };
+  await f.pane.ready;
+  type(f, "hey");
+  await flush();
+  const live = () => f.host.querySelector(".glosa-chat-live");
+  const bubbles = () => f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]');
+  // Before the daemon has answered: the bubble is there, with a live line, and nothing is in the tray.
+  expect(bubbles()).toHaveLength(1);
+  expect(live()!.textContent).toBe("Sending");
+  expect((f.host.querySelector(".glosa-chat-tray") as HTMLElement).hidden).toBe(true);
+  expect(f.host.querySelector(".glosa-chat-history")!.getAttribute("aria-busy")).toBe("true");
+  // While the daemon has not answered, a redraw still leaves the composer and its button free.
+  f.state.revision++;
+  f.snapshot();
+  const send = f.host.querySelector(".glosa-chat-send") as HTMLButtonElement;
+  expect([send.disabled, send.textContent]).toEqual([false, "↑"]);
+  expect(f.host.querySelector("textarea")!.value).toBe("");
+  answer();
+  await flush();
+  // Taken, and waiting for its agent to start: the same bubble, and the thread says what the wait is.
+  expect(bubbles()).toHaveLength(1);
+  expect(live()!.textContent).toBe("Starting");
+  expect((f.host.querySelector(".glosa-chat-tray") as HTMLElement).hidden).toBe(true);
+  expect((f.host.querySelector(".glosa-chat-stop") as HTMLButtonElement).hidden).toBe(false);
+  f.pane.destroy();
+});
+
+test("a waiting message can be edited or sent now, and Stop ends only the reply at work", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  f.state.turns = [
+    { id: "active", text: "First", status: "running", started: true, at: new Date().toISOString() },
+    { id: "a", text: "Second", status: "queued", attachments: [] },
+    { id: "b", text: "Third", status: "queued", attachments: [] },
+  ];
+  const calls: string[] = [];
+  f.dataAccess.stopChat = async (_s: string, _id: string, turnId?: string) => {
+    calls.push(`stop:${turnId}`);
+    const turn = f.state.turns.find((item) => item.id === turnId)!;
+    turn.status = "cancelled";
+    f.state.revision++;
+  };
+  f.dataAccess.sendChatTurnNow = async (_s: string, _id: string, turnId: string) => {
+    calls.push(`now:${turnId}`);
+  };
+  f.state.revision++;
+  f.snapshot();
+  const rows = () => [...f.host.querySelectorAll(".glosa-chat-tray li")] as HTMLElement[];
+  (rows()[1]!.querySelector('[aria-label="Send this message now"]') as HTMLButtonElement).click();
+  await flush();
+  expect(calls).toEqual(["now:b"]);
+  // Edit takes the message out of the queue and back into the composer.
+  (rows()[0]!.querySelector('[aria-label="Edit waiting message"]') as HTMLButtonElement).click();
+  await flush();
+  expect(calls).toEqual(["now:b", "stop:a"]);
+  expect(f.host.querySelector("textarea")!.value).toBe("Second");
+  expect(rows().map((row) => row.querySelector(".glosa-chat-tray-words")!.textContent)).toEqual(["Third"]);
+  (f.host.querySelector(".glosa-chat-stop") as HTMLButtonElement).click();
+  await flush();
+  expect(calls).toEqual(["now:b", "stop:a", "stop:active"]);
+  f.pane.destroy();
+});
+
+test("a reply stopped in another window keeps its message in the thread here", async () => {
+  const f = fixture();
+  await f.pane.ready;
+  // This window learned of the turn while it still waited, and hears the rest as status events only.
+  f.state.turns = [{ id: "t", text: "Review it", status: "queued", at: new Date().toISOString() }];
+  f.state.revision++;
+  f.snapshot();
+  let seq = f.state.revision;
+  for (const status of ["dispatching", "running", "stopping", "cancelled"])
+    f.event({ seq: ++seq, data: { type: "turn_status", turnId: "t", status } });
+  const bubble = f.host.querySelector('.glosa-chat-message[data-kind="human"] .glosa-chat-text');
+  expect(bubble?.textContent).toBe("Review it");
+  expect(f.host.querySelector(".glosa-chat-turn-state")!.textContent).toBe("CancelledUse as draft");
+  f.pane.destroy();
+});
+
+test("after a draft conflict, Retry sends the waiting messages on the draft as it now is", async () => {
+  const f = fixture();
+  accepting(f);
+  await f.pane.ready;
+  f.state.turns = [{ id: "t", text: "First", status: "running", started: true, at: new Date().toISOString() }];
+  f.state.revision++;
+  f.snapshot();
+  const draft = f.host.querySelector("textarea")!;
+  draft.value = "Second";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  // Another window saves the draft before this one has: this window's save is refused.
+  f.state.draft = "Other window";
+  f.state.draftRevision = 3;
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  type(f, "Third");
+  await flush();
+  expect(f.sends).toHaveLength(0);
+  expect([...f.host.querySelectorAll(".glosa-chat-tray-state")].map((node) => node.textContent)).toEqual([
+    "Not sent",
+    "Not sent",
+  ]);
+  expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("replaces the draft saved elsewhere");
+  (f.host.querySelector('[aria-label="Retry sending message"]') as HTMLButtonElement).click();
+  await flush();
+  expect(f.sends.map((sent) => [sent.text, sent.draftRevision])).toEqual([
+    ["Second", 3],
+    ["Third", 4],
+  ]);
+  f.pane.destroy();
+});
+
 test("tools and access open as a dialog from the line under the composer, and revoking asks first", async () => {
   const f = fixture();
   const consents: boolean[] = [];
@@ -748,18 +927,23 @@ test("a queued message can be cancelled without stopping the current turn", asyn
   };
   f.state.revision++;
   f.snapshot();
-  // The queued message says where it stands on its own edge, right under its pencil bubble.
-  const queued = [...f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')].at(-1)!;
-  expect(queued.hasAttribute("data-pending")).toBe(true);
-  expect(queued.nextElementSibling!.className).toBe("glosa-chat-turn-state");
-  expect(queued.nextElementSibling!.textContent).toBe("Queued. Sends after the current replyContinueCancel");
-  expect(f.host.querySelector(".glosa-chat-composer")!.textContent).not.toContain("waiting");
-  expect((f.host.querySelector('[aria-label="Queue message"]') as HTMLButtonElement).disabled).toBe(true);
-  [...f.host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === "Cancel queued message")!.click();
+  // The waiting message is a row at the top of the composer, not a bubble in the thread, and the
+  // composer stays free for the next one.
+  const humans = () => [...f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')];
+  expect(humans().map((node) => node.querySelector(".glosa-chat-text")!.textContent)).toEqual(["First"]);
+  const tray = f.host.querySelector(".glosa-chat-composer > .glosa-chat-tray") as HTMLElement;
+  expect(tray.hidden).toBe(false);
+  expect(tray.textContent).toBe("NextSecondEditRemoveSend now");
+  expect(f.host.querySelector(".glosa-chat-composer [role=status]")!.textContent).toBe("1 message waiting");
+  expect((f.host.querySelector('[aria-label="Queue message"]') as HTMLButtonElement).disabled).toBe(false);
+  (tray.querySelector('[aria-label="Remove waiting message"]') as HTMLButtonElement).click();
   await flush();
   expect(stopped).toEqual(["next"]);
   expect(f.state.turns[0].status).toBe("running");
-  expect((f.host.querySelector('[aria-label="Queue message"]') as HTMLButtonElement).disabled).toBe(false);
+  // Removed before it reached the agent, it was never part of the conversation.
+  expect(tray.hidden).toBe(true);
+  expect(humans()).toHaveLength(1);
+  expect(f.host.querySelector(".glosa-chat-turn-state")).toBeNull();
   f.pane.destroy();
 });
 
@@ -797,9 +981,12 @@ test("held messages require Continue and cancelled messages can restore a draft 
   };
   f.snapshot();
   expect(resumed).toHaveLength(0);
+  expect(f.host.querySelector(".glosa-chat-tray")!.textContent).toBe("HeldReview this againContinueEditRemove");
   [...f.host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === "Continue held message")!.click();
   await flush();
   expect(resumed).toEqual(["held"]);
+  // Stopped after it reached the agent, it stays in the thread and can be used again.
+  f.state.turns[0].started = true;
   f.state.turns[0].status = "cancelled";
   f.state.revision++;
   f.snapshot();
@@ -878,11 +1065,13 @@ test("ambiguous send retries its original durable request and does not duplicate
   const send = f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement;
   send.click();
   await flush();
-  send.click();
+  expect(draft.value).toBe("");
+  expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("it will not create a duplicate");
+  (f.host.querySelector('[aria-label="Retry sending message"]') as HTMLButtonElement).click();
   await flush();
   expect(f.sends).toHaveLength(2);
   expect(f.sends[1]).toEqual(f.sends[0]);
-  expect(draft.value).toBe("Please review");
+  expect(f.host.querySelector(".glosa-chat-tray-words")!.textContent).toBe("Please review");
   f.pane.destroy();
 });
 

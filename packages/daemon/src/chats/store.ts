@@ -260,7 +260,11 @@ const turn = z
     feedbackIds: z.array(z.string().min(1).max(512)).max(8).optional(),
   })
   .strict();
-export type ChatTurn = z.infer<typeof turn> & { error?: string; effective?: { model?: string; effort?: string } };
+export type ChatTurn = z.infer<typeof turn> & {
+  error?: string;
+  effective?: { model?: string; effort?: string };
+  started?: boolean;
+};
 const decision = z
   .object({
     id,
@@ -516,6 +520,9 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
       if (event.status === "completed" && target.contextHash === state.handoffHash) state.handoffHash = undefined;
       target.status = event.status;
       target.error = event.error;
+      // Whether the message ever went to the agent, replayed from the journal: a message cancelled
+      // while it was still waiting was never part of the conversation.
+      if (["dispatching", "running", "waiting", "stopping"].includes(event.status)) target.started = true;
       break;
     }
     case "content": {

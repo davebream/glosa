@@ -1581,7 +1581,6 @@ test("tool preparation failure is unsent and an explicit resend can recover", as
   };
   h.send(chat.id, "Review the draft");
   await eventually(() => entered);
-  expect(() => h.send(chat.id, "Next request")).toThrow("already a waiting turn");
   expect(h.inputs).toHaveLength(0);
   release();
   await eventually(() => !h.service.busy);
@@ -1828,4 +1827,92 @@ test("unlinking native configuration never launches logout or deletes native fil
   } finally {
     rmSync(external, { recursive: true, force: true });
   }
+});
+
+test("five messages can wait behind the one at work, a sixth is refused, and they go in order", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  for (let i = 2; i <= 6; i++) h.send(chat.id, `message ${i}`);
+  expect(() => h.send(chat.id, "one too many")).toThrow("Five messages are already waiting");
+  const state = h.store.chat(chat.id).state;
+  expect(state.turns.map((turn) => turn.status)).toEqual(["running", ...Array(5).fill("queued")]);
+  h.events.get(state.sessionId)!({ type: "completed" });
+  await eventually(() => h.inputs.length === 2);
+  expect(h.inputs[1]!.text).toBe("message 2");
+});
+
+test("Send now stops the reply at work and sends the chosen message, with the rest still queued behind it", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  h.send(chat.id, "second");
+  const third = h.send(chat.id, "third");
+  await h.service.sendNow(h.workspace, chat.id, third.turnId);
+  await eventually(() => h.inputs.length === 2);
+  expect(h.inputs[1]!.text).toBe("third");
+  const state = h.store.chat(chat.id).state;
+  expect(state.turns.map((turn) => turn.status)).toEqual(["cancelled", "queued", "running"]);
+  h.events.get(state.sessionId)!({ type: "completed" });
+  await eventually(() => h.inputs.length === 3);
+  expect(h.inputs[2]!.text).toBe("second");
+  await expect(h.service.sendNow(h.workspace, chat.id, third.turnId)).rejects.toThrow("Only a waiting message");
+});
+
+test("stopping the reply at work holds what waits, and a removed message never reached the agent", async () => {
+  const h = setup(),
+    chat = h.chat();
+  const first = h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  const second = h.send(chat.id, "second");
+  h.send(chat.id, "third");
+  await h.service.stop(h.workspace, chat.id, second.turnId);
+  await h.service.stop(h.workspace, chat.id, first.turnId);
+  const turns = new AgentStore(h.root).chat(chat.id).state.turns;
+  expect(turns.map((turn) => turn.status)).toEqual(["cancelled", "cancelled", "held"]);
+  // Replayed from the journal: only the first was ever sent on.
+  expect(turns.map((turn) => !!turn.started)).toEqual([true, false, false]);
+  expect(h.inputs).toHaveLength(1);
+});
+
+test("Send now after the reply failed on its own still holds what waits", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  h.send(chat.id, "second");
+  const third = h.send(chat.id, "third");
+  // The failure is being cleared up when the person asks for the third message.
+  h.events.get(chat.sessionId)!({
+    type: "failed",
+    code: "native-disconnected",
+    message: "Disconnected",
+    outcomeUnknown: true,
+  });
+  await h.service.sendNow(h.workspace, chat.id, third.turnId);
+  await eventually(() => !h.service.busy);
+  expect(h.store.chat(chat.id).state.turns.map((turn) => turn.status)).toEqual(["outcome_unknown", "held", "held"]);
+  expect(h.inputs).toHaveLength(1);
+});
+
+test("a Send now choice survives the account's run limit and goes first when a slot frees", async () => {
+  const h = setup(),
+    x = h.chat(),
+    y = h.chat(),
+    z = h.chat();
+  h.send(x.id, "x first");
+  h.send(y.id, "y first");
+  await eventually(() => h.inputs.length === 2);
+  h.send(z.id, "z first");
+  h.send(x.id, "x second");
+  const chosen = h.send(x.id, "x third");
+  // Stopping x frees a slot that z, waiting longer, takes: x is passed over at the limit of two.
+  await h.service.sendNow(h.workspace, x.id, chosen.turnId);
+  await eventually(() => h.inputs.length === 3);
+  expect(h.inputs[2]!.text).toBe("z first");
+  h.events.get(y.sessionId)!({ type: "completed" });
+  await eventually(() => h.inputs.length === 4);
+  expect(h.inputs[3]!.text).toBe("x third");
 });
