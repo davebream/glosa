@@ -1,10 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import {
+  readdirSync,
+  readFileSync,
+  statSync,
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  cpSync,
+  mkdirSync,
+  existsSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { MIN_JUNIT_BUN } from "../scripts/test-runner.ts";
 import rootPackage from "../package.json";
+import {
+  cacheReuseProblems,
+  writeVerifiedCacheConfig,
+  type PolicyConstructor,
+} from "../scripts/cache-security-backport.ts";
 
 const root = resolve(import.meta.dir, "..");
 const workflows = ["ci.yml", "release.yml"].map((name) => readFileSync(join(root, ".github/workflows", name), "utf8"));
@@ -16,6 +32,109 @@ function job(yaml: string, name: string): string {
 }
 
 describe("repository quality gates", () => {
+  test("cache backport refuses restricted reuse and preserves legitimate stale caching, including serialized policies", () => {
+    const directory = mkdtempSync(join(tmpdir(), "glosa-cache-ablation-"));
+    const packagePath = join(root, "node_modules/http-cache-semantics");
+    try {
+      cpSync(packagePath, directory, { recursive: true });
+      const load = createRequire(join(directory, "package.json"));
+      expect(cacheReuseProblems(load(join(directory, "index.js")) as PolicyConstructor)).toEqual([]);
+      const ablated = Bun.spawnSync(
+        ["patch", "-R", "--silent", "-p1", "-i", join(root, "patches/http-cache-semantics-4.2.0.patch")],
+        {
+          cwd: directory,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(ablated.exitCode, ablated.stderr.toString()).toBe(0);
+      const ablatedFile = join(directory, "ablated.cjs");
+      cpSync(join(directory, "index.js"), ablatedFile);
+      const problems = cacheReuseProblems(load(ablatedFile) as PolicyConstructor);
+      for (const path of ["max-stale", "stale-if-error", "stale-while-revalidate"]) {
+        expect(problems).toContain(`shared cookie: constructed ${path} must refuse reuse`);
+      }
+      expect(problems.some((problem) => problem.includes("must allow reuse"))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  test("fixed-advisory record disappears when either installed patch or lock declaration is missing", () => {
+    const directory = mkdtempSync(join(tmpdir(), "glosa-cache-record-"));
+    const output = join(directory, ".context/security/osv-scanner.toml");
+    try {
+      const patch = "patches/http-cache-semantics-4.2.0.patch";
+      mkdirSync(join(directory, "patches"));
+      cpSync(join(root, patch), join(directory, patch));
+      for (const project of [".", "packages/shell"]) {
+        const target = join(directory, project);
+        mkdirSync(target, { recursive: true });
+        for (const file of ["package.json", "bun.lock"]) cpSync(join(root, project, file), join(target, file));
+        mkdirSync(join(target, "node_modules"));
+        cpSync(join(root, "node_modules/http-cache-semantics"), join(target, "node_modules/http-cache-semantics"), {
+          recursive: true,
+        });
+      }
+      writeVerifiedCacheConfig(directory);
+      const record = Bun.TOML.parse(readFileSync(output, "utf8")) as { IgnoredVulns: Array<{ id: string }> };
+      expect(record.IgnoredVulns).toHaveLength(1);
+      expect(record.IgnoredVulns[0]?.id).toBe("GHSA-ch52-4w7c-c8xp");
+      expect(readFileSync(output, "utf8")).toContain("ignoreUntil = 2026-11-03");
+      for (const project of [".", "packages/shell"]) {
+        for (const [file, replacement, message] of [
+          [
+            "node_modules/http-cache-semantics/index.js",
+            "module.exports = class {};",
+            "installed cache backport digest mismatch",
+          ],
+          ["bun.lock", "{}", "cache backport declaration missing"],
+          ["package.json", "{}", "cache backport declaration missing"],
+        ]) {
+          const path = join(directory, project, file!);
+          const original = readFileSync(path);
+          writeFileSync(path, replacement!);
+          try {
+            expect(() => writeVerifiedCacheConfig(directory)).toThrow(message);
+            expect(existsSync(output)).toBe(false);
+          } finally {
+            writeFileSync(path, original);
+          }
+          writeVerifiedCacheConfig(directory);
+        }
+        // An alias or nested install must not escape verification just because its directory
+        // has another name, or because the ordinary hoisted copy is correctly patched.
+        for (const copy of ["cache-alias", "consumer/node_modules/cache-alias"]) {
+          const target = join(directory, project, "node_modules", copy);
+          mkdirSync(join(target, ".."), { recursive: true });
+          cpSync(join(root, "node_modules/http-cache-semantics"), target, { recursive: true });
+          writeFileSync(join(target, "index.js"), "module.exports = class {};");
+          try {
+            expect(() => writeVerifiedCacheConfig(directory)).toThrow("installed cache backport digest mismatch");
+            expect(existsSync(output)).toBe(false);
+          } finally {
+            rmSync(target, { recursive: true, force: true });
+          }
+          writeVerifiedCacheConfig(directory);
+        }
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  test("CI and release require installed patch verification before using the fixed-advisory record", () => {
+    for (const yaml of workflows) {
+      const security = job(yaml, "security");
+      expect(security).toContain(
+        "bun install --frozen-lockfile --ignore-scripts && bun install --cwd packages/shell --frozen-lockfile --ignore-scripts",
+      );
+      expect(security).toContain("bun run scripts/cache-security-backport.ts");
+      expect(security).toContain("--config=.context/security/osv-scanner.toml");
+      expect(security.indexOf("bun run scripts/cache-security-backport.ts")).toBeLessThan(
+        security.indexOf("--config="),
+      );
+      expect(security).not.toContain("continue-on-error");
+    }
+  });
   test("lint rejects focused and skipped tests while allowing negative fixture source strings", () => {
     const directory = mkdtempSync(join(tmpdir(), "glosa-lint-policy-"));
     const file = join(directory, "fixture.test.ts");

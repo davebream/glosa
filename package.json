@@ -1,6 +1,6 @@
 {
   "name": "@davebream/glosa",
-  "version": "0.1.0-alpha.41",
+  "version": "0.1.0-alpha.42",
   "description": "Local-first writing and review workspace for people working with AI coding agents.",
   "license": "Apache-2.0",
   "author": "Dawid Leszczyński",
@@ -23,7 +23,8 @@
     "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "patches/http-cache-semantics-4.2.0.patch"
   ],
   "workspaces": [
     "packages/cli",
@@ -117,5 +118,8 @@
     "ip-address": "10.7.1",
     "tar": "7.5.22",
     "undici": "6.28.1"
+  },
+  "patchedDependencies": {
+    "http-cache-semantics@4.2.0": "patches/http-cache-semantics-4.2.0.patch"
   }
 }

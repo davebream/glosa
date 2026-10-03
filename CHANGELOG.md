@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.42] · 2026-10-03
+
 ### Changed
 
 - Sending a chat message never locks the composer. The message leaves the draft the moment you
@@ -21,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Development dependencies now apply a cache security backport: restricted responses cannot be
+  reused through max-stale, stale-while-revalidate or stale-if-error. Both locked dependency trees
+  verify the installed patch before recording the advisory as locally fixed.
 - A chat no longer freezes after its first reply. The live line ("Writing 34s") kept counting after
   the reply had finished, and the next message stayed on "Sending…" without ever being sent, until
   the window was reloaded.
@@ -1817,7 +1822,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.41...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.42...HEAD
+[0.1.0-alpha.42]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.41...v0.1.0-alpha.42
 [0.1.0-alpha.41]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.40...v0.1.0-alpha.41
 [0.1.0-alpha.40]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.39...v0.1.0-alpha.40
 [0.1.0-alpha.39]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.39

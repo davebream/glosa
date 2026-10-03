@@ -13,6 +13,9 @@
   "trustedDependencies": [
     "electron",
   ],
+  "patchedDependencies": {
+    "http-cache-semantics@4.2.0": "../../patches/http-cache-semantics-4.2.0.patch",
+  },
   "packages": {
     "@electron-internal/extract-zip": ["@electron-internal/extract-zip@1.0.5", "", {}, "sha512-+bqFCP98pLI0Tt0XQo1TmlXtwjWchISndDOxCkEcIuUgXWpBnLyRI+2DU+mesvnMMX6L1XDqYNA0lXNDHd/yiA=="],
 
