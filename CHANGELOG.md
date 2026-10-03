@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Development dependencies now apply a cache security backport: restricted responses cannot be
+  reused through max-stale, stale-while-revalidate or stale-if-error. Both locked dependency trees
+  verify the installed patch before recording the advisory as locally fixed.
 - A chat no longer freezes after its first reply. The live line ("Writing 34s") kept counting after
   the reply had finished, and the next message stayed on "Sending…" without ever being sent, until
   the window was reloaded.

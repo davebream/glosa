@@ -6,6 +6,7 @@
 
 export const REQUIRED_PACK_FILES: readonly string[] = [
   "package.json",
+  "patches/http-cache-semantics-4.2.0.patch",
   "packages/cli/src/main.ts",
   "packages/daemon/src/index.ts",
   "packages/providers/claude-code/src/index.ts",

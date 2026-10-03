@@ -101,6 +101,30 @@ tag with a missing secret fails instead of falling back to an ad-hoc build.
 
 ## Rehearsing locally
 
+### Temporary cache security backport
+
+Both Bun manifests apply `patches/http-cache-semantics-4.2.0.patch` to the development-only cache
+dependency used by the license checker and Electron packaging tools. The backport starts from
+[upstream PR #58](https://github.com/kornelski/http-cache-semantics/pull/58) and also enforces reuse
+restrictions in stale-if-error, stale-while-revalidate and cache lifetime decisions. It preserves
+explicit public/immutable cookie caching and private-cache behavior. The package retains its
+published 4.2.0 identity; this is a local patch, not an upstream release.
+
+CI and release install both locked dependency trees without lifecycle scripts, then execute
+`scripts/cache-security-backport.ts`. That guard verifies the committed patch digest, declarations
+in both manifests and locks, every installed copy's exact source digest, and cache reuse decisions
+before generating a scanner record for GHSA-ch52-4w7c-c8xp. Failure removes any stale record and
+blocks the job. The scanner still checks both complete lockfiles and every other advisory.
+
+The generated record expires on **2026-11-03**, when the finding becomes blocking again. Replace
+the backport with a reviewed upstream patched version before then, and remove the patch, guard,
+scanner config argument and backport-specific digest checks together. Retain the cache reuse
+regression cases against the upstream replacement. npm includes the patch file;
+desktop staging copies it into the isolated production install, even though the patched dependency
+itself does not ship in the runtime.
+
+### Local desktop build
+
 An unsigned build of the current checkout, then its smoke test:
 
 ```sh

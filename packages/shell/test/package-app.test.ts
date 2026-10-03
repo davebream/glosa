@@ -35,6 +35,7 @@ import {
   renderBuilderConfig,
   renderLinuxBuilderConfig,
   STAGED_TREE_CEILING_BYTES,
+  stageDependencyManifests,
   unpackedPathFor,
   unzipCommand,
   upgradeFixtureVersion,
@@ -102,6 +103,18 @@ describe("package-app: Bun checksums", () => {
 });
 
 describe("package-app: the staged tree", () => {
+  test("the isolated production install receives the committed Bun patch with its manifests", () => {
+    const source = join(import.meta.dir, "../../..");
+    const destination = temp();
+    stageDependencyManifests(source, destination);
+    const patch = "patches/http-cache-semantics-4.2.0.patch";
+    expect(readFileSync(join(destination, patch))).toEqual(readFileSync(join(source, patch)));
+    expect(
+      JSON.parse(readFileSync(join(destination, "package.json"), "utf8")).patchedDependencies[
+        "http-cache-semantics@4.2.0"
+      ],
+    ).toBe(patch);
+  });
   test("a clean tree passes, and third-party test directories are left alone", () => {
     expect(inspectStagedTree(cleanTree(), ["zod"]).problems).toEqual([]);
   });

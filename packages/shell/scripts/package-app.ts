@@ -374,6 +374,23 @@ function parseArgs(argv: string[]): { arches: Arch[]; unsigned: boolean; smoke: 
   return { arches, unsigned, smoke, stageOnly };
 }
 
+/** Bun needs patch files even when the patched dependency is development-only. */
+export function stageDependencyManifests(sourceRoot: string, destination: string): void {
+  mkdirSync(destination, { recursive: true });
+  for (const file of ["package.json", "bun.lock"]) cpSync(join(sourceRoot, file), join(destination, file));
+  for (const workspace of WORKSPACE_MANIFESTS) {
+    mkdirSync(join(destination, workspace), { recursive: true });
+    cpSync(join(sourceRoot, workspace, "package.json"), join(destination, workspace, "package.json"));
+  }
+  const manifest = JSON.parse(readFileSync(join(sourceRoot, "package.json"), "utf8")) as {
+    patchedDependencies?: Record<string, string>;
+  };
+  for (const patch of Object.values(manifest.patchedDependencies ?? {})) {
+    mkdirSync(join(destination, patch, ".."), { recursive: true });
+    cpSync(join(sourceRoot, patch), join(destination, patch));
+  }
+}
+
 function stageSources(rootDependencies: string[]): void {
   const packDir = join(stageDir, "pack");
   mkdirSync(packDir, { recursive: true });
@@ -392,11 +409,7 @@ function stageSources(rootDependencies: string[]): void {
   // checkout's own node_modules, Electron and the typechecker are untouched.
   const depsDir = join(stageDir, "deps");
   mkdirSync(depsDir, { recursive: true });
-  for (const file of ["package.json", "bun.lock"]) cpSync(join(repoRoot, file), join(depsDir, file));
-  for (const workspace of WORKSPACE_MANIFESTS) {
-    mkdirSync(join(depsDir, workspace), { recursive: true });
-    cpSync(join(repoRoot, workspace, "package.json"), join(depsDir, workspace, "package.json"));
-  }
+  stageDependencyManifests(repoRoot, depsDir);
   run(process.execPath, ["install", "--frozen-lockfile", "--production", "--ignore-scripts"], { cwd: depsDir });
   // `.bin` directories are symlinks, and `@glosa` holds the workspace links into packages/* (which
   // would drag test trees in); the CLI resolves its own packages by relative import.
