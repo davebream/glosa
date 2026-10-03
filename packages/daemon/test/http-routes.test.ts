@@ -252,6 +252,9 @@ describe("A1 §5 route catalog", () => {
     expect(existsSync(join(root, "nested/.git"))).toBe(true);
   });
 
+  // This scenario performs several real Git checkpoints and restores. The alpha.42 tag's full run took
+  // 5.2s on macOS; Bun's implicit 5s deadline started teardown while the last restore was still
+  // finishing. This is a bounded hang guard, not a five-second product latency requirement.
   test("folder history restores binary assets and empty directories only at a free destination", async () => {
     const act = (action: string, body: object) =>
       fetchFn(stateChangingReq(`/w/${slug}/files/${action}`, { method: "POST", body: JSON.stringify(body) }));
@@ -297,7 +300,7 @@ describe("A1 §5 route catalog", () => {
     });
     expect(literalRestore.status, await literalRestore.clone().text()).toBe(200);
     expect(readFileSync(join(root, "original.md"), "utf8")).toBe("Saved words");
-  });
+  }, 30_000);
 
   test("tree Trash round trip preserves bytes and identity, undo is single-use and refuses a reused name", async () => {
     const act = (action: string, body: object) =>
