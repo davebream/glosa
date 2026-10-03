@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.1.0-alpha.42] · 2026-10-03
+## [0.1.0-alpha.43] · 2026-10-03
 
 ### Changed
 
@@ -1822,8 +1822,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.42...HEAD
-[0.1.0-alpha.42]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.41...v0.1.0-alpha.42
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.43...HEAD
+[0.1.0-alpha.43]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.41...v0.1.0-alpha.43
 [0.1.0-alpha.41]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.40...v0.1.0-alpha.41
 [0.1.0-alpha.40]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.39...v0.1.0-alpha.40
 [0.1.0-alpha.39]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.37...v0.1.0-alpha.39
