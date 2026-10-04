@@ -366,7 +366,7 @@ export function mountAgentSettings(
           fn,
           label.includes("runtime")
             ? "Installing runtime…"
-            : label === "Load models"
+            : label === "Refresh models"
               ? "Loading models…"
               : "Saving changes…",
           control,
@@ -449,7 +449,7 @@ export function mountAgentSettings(
         const explanation = enabled
           ? "Experimental managed chat is on for this runtime. Native account isolation, process cleanup and release qualification are still unverified."
           : experimental.renewalRequired
-            ? "The agent runtime changed. Review and enable experimental managed chat again."
+            ? "The permission text changed. Review and enable experimental managed chat again."
             : "Experimental managed chat is off. Native account isolation, process cleanup and release qualification are still unverified.";
         const experimentalControl = button(
           enabled ? "Disable experimental managed chat" : "Enable experimental managed chat",
@@ -461,7 +461,7 @@ export function mountAgentSettings(
                   ? `Enable experimental ${agentName(provider.id)} chat?`
                   : `Disable experimental ${agentName(provider.id)} chat?`,
                 body: next
-                  ? "Native account isolation, process cleanup and release qualification are still unverified. Agent turns may make changes to files after you send a message."
+                  ? "Native account isolation, process cleanup and release qualification are still unverified. Agent turns may make changes to files after you send a message. In every workspace you open, an enabled account can read the workspace files and receives your messages, attachments and the web pages it reads through its configured provider; a linked account also runs its native settings, hooks, plugins and MCP servers. This is the one permission: no workspace asks again."
                   : "Active chats and sign-in operations will stop. Chat history and account credentials stay available.",
                 confirmLabel: next ? "Enable experimental chat" : "Disable and stop chats",
               }))
@@ -587,7 +587,7 @@ export function mountAgentSettings(
           : (state.recovery ??
             (provider.experimental?.runtimeId && !provider.experimental.enabled
               ? provider.experimental.renewalRequired
-                ? "The runtime changed. Enable experimental managed chat again above to add an account."
+                ? "The permission text changed. Enable experimental managed chat again above to add an account."
                 : "Enable experimental managed chat above to add an account."
               : (state.reason ?? "Account setup is currently unavailable."))),
       });
@@ -765,17 +765,8 @@ export function mountAgentSettings(
             !!profile.configuration || !profile.enabled || !available,
           ),
           button(
-            "Load models",
+            "Refresh models",
             async () => {
-              if (
-                profile.configuration &&
-                !(await confirmDialog({
-                  title: "Load models with native configuration?",
-                  body: "This starts an owned session in a neutral directory. Native plugins, hooks and MCP servers may run before any message is sent. No workspace message will be sent.",
-                  confirmLabel: "Load models",
-                }))
-              )
-                return;
               await dataAccess.discoverAgentModels(profile.id);
             },
             !available || !profile.enabled || profile.auth.state !== "authenticated",

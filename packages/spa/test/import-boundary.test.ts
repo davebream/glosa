@@ -298,6 +298,8 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./dock.js",
     "./panel-identity.js",
     "./chat-pane.js",
+    // The protocol log pane reads the chat journal through the injected dataAccess only.
+    "./chat-log-pane.js",
     "./agent-settings.js",
     "./agent-ui.js",
     "./palette.js",

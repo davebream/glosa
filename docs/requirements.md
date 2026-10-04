@@ -289,18 +289,21 @@ generic.**
 **Managed-chat amendment (2026-09-23).** Companion sessions remain externally owned. An additional,
 explicitly selected managed topology may launch the unmodified Claude/Codex runtime through a
 provider adapter and an owned Bun guardian. It uses private account profiles or explicitly linked
-native configuration directories, native subscription login, foreground versioned workspace/MCP
-consent and durable chat intent. Linked profiles use the native agent’s settings, skills, plugins,
-hooks and MCP servers after foreground approval; startup hooks can run before a prompt is sent.
-Unlinking never invokes native logout or deletes native configuration. Configuration authority changes
-invalidate workspace consent. Existing profiles remain private and isolated. Opening history never
-starts a runtime. No account fallback, API fallback, credential import or external-session takeover.
+native configuration directories, native subscription login, one versioned acceptance per provider
+and durable chat intent. Linked profiles use the native agent’s settings, skills, plugins,
+hooks and MCP servers; startup hooks can run before a prompt is sent.
+Unlinking never invokes native logout or deletes native configuration. Existing profiles remain
+private and isolated. Opening a chat with history never starts a runtime; a chat the person has just
+started may check its account’s models as it opens, and a message that never reached an agent before
+a daemon restart goes once the daemon is serving again (2026-10-04). No account fallback, API fallback, credential import or external-session takeover.
 Release-qualified managed execution stays unavailable until the joint Claude/Codex qualification
 and offering gates in the [implementation contract](design/2026-09-23-agent-chat-implementation.md)
 pass. As a maintainer-approved experimental exception, a person may explicitly enable managed chat
-per provider in Account settings on supported macOS and Linux hosts. Acceptance is off by default,
-versioned and bound to the pinned native runtime tuple; a changed tuple requires fresh acceptance.
-It never marks that tuple qualified or satisfies G1–G4. Turning it off fences active work and native
+per provider in Account settings on supported macOS and Linux hosts. Acceptance is off by default
+and versioned; its text names what every workspace sends to the provider, and it is the one consent:
+no workspace, runtime version or model check asks again (2026-10-04). It is bound to the host platform
+and architecture, not to the pinned runtime version. It never marks any runtime qualified or
+satisfies G1–G4. Turning it off fences active work and native
 login, while preserving account cleanup through previously accepted, integrity-verified bytes.
 Pluginless managed registration grants only its exact session/workspace; the existing inbox journal,
 claim interval and human-save precedence remain authoritative. This amendment supersedes the old

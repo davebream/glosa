@@ -122,6 +122,8 @@ export const SPA_ASSETS: Readonly<Record<string, string>> = {
   "vendor/markdown-it.js": "text/javascript; charset=utf-8",
   "composer-picker.js": "text/javascript; charset=utf-8",
   "chat-pane.js": "text/javascript; charset=utf-8",
+  // The protocol log: a chat's journal read plainly, opened from the chat's menu.
+  "chat-log-pane.js": "text/javascript; charset=utf-8",
   "vendor/xterm.mjs": "text/javascript; charset=utf-8",
   "vendor/xterm.css": "text/css; charset=utf-8",
   "panel-identity.js": "text/javascript; charset=utf-8",

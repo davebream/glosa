@@ -133,6 +133,33 @@ test("conversation transfer freezes only visible user and assistant text with ex
   expect(response.headers.get("Cache-Control")).toBe("no-store");
 });
 
+test("the protocol log route reads a journal page with a bounded cursor and never writes", async () => {
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const calls: unknown[][] = [];
+  const deps = {
+    workspaceIndex: {
+      getBySlug: () => ({ registration_id: "a".repeat(64), first_seen: "epoch", canonical_path: "/tmp/fixture" }),
+    },
+    service: {
+      bindAuthorization() {},
+      journalPage: (...args: unknown[]) => {
+        calls.push(args);
+        return { total: 3, hasEarlier: false, records: [] };
+      },
+    },
+  } as unknown as Parameters<typeof chatRoutes>[0];
+  const path = `/w/test/chats/${chatId}/log`;
+  const route = chatRoutes(deps, "GET", path)!;
+  expect(route.routeClass).toBe("authed-read");
+  const response = await route.handle(request(`${path}?before=40&limit=20`));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ total: 3, hasEarlier: false, records: [] });
+  expect(calls[0]!.slice(1)).toEqual([chatId, 40, 20]);
+  expect((await chatRoutes(deps, "GET", path)!.handle(request(`${path}?limit=0`))).status).toBe(422);
+  expect(calls).toHaveLength(1);
+  expect(chatRoutes(deps, "POST", `/w/test/chats/${chatId}/log`)!.routeClass).toBe("state-changing");
+});
+
 test("a consent grant records the consent text the page showed, and an older page's records the first (#440)", async () => {
   const profileId = "22222222-2222-4222-8222-222222222222";
   const path = `/api/agents/profiles/${profileId}/consent`;

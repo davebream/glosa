@@ -4,6 +4,7 @@ import { composerToken, editReferences, createComposerPicker } from "../src/comp
 import MarkdownIt from "markdown-it";
 import { createSafeChatRenderer } from "../src/chat-markdown.js";
 import { createChatPane, applyChatEvent } from "../src/chat-pane.js";
+import { createChatLogPane } from "../src/chat-log-pane.js";
 import { modelChoices, modelPresentation } from "../src/agent-ui.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
 let dom: DomEnv;
@@ -178,7 +179,9 @@ test("an unresolved send remains retryable after the selected account is disable
   // as not sent, and Retry repeats the same request whatever happened to the account since.
   expect(draft.value).toBe("");
   const row = f.host.querySelector(".glosa-chat-tray li")!;
-  expect(row.textContent).toBe("Not sentPreserve this requestRetryEditRemove");
+  // The row says why, under the words, instead of hiding the reason in a tooltip.
+  expect(row.textContent).toBe("Not sentPreserve this requestRetryEditRemoveConnection lost");
+  expect(row.querySelector(".glosa-chat-tray-why")!.textContent).toBe("Connection lost");
   (row.querySelector('[aria-label="Retry sending message"]') as HTMLButtonElement).click();
   await flush();
   expect(f.sends).toHaveLength(2);
@@ -187,23 +190,66 @@ test("an unresolved send remains retryable after the selected account is disable
   f.pane.destroy();
 });
 
-test("missing model data blocks a fresh keyboard send and exposes local recovery", async () => {
+test("with no model list yet, the first send asks the agent for its models and then goes", async () => {
   const f = fixture();
   await f.pane.ready;
   f.catalog.capabilities.a.models = [];
+  f.state.settings.model = "";
+  f.state.revision++;
+  const calls: string[] = [];
+  f.dataAccess.discoverAgentModels = async (profileId: string) => {
+    calls.push(`discover:${profileId}`);
+    f.catalog.capabilities.a.models = [{ id: "found", name: "Found", efforts: ["medium"] }];
+  };
+  f.dataAccess.changeChat = async (_s: string, _i: string, input: any) => {
+    calls.push(`settings:${input.settings.model}:${input.settings.effort}`);
+    f.state.settings = input.settings;
+    f.state.configRevision++;
+    f.state.revision++;
+  };
+  f.dataAccess.sendChatTurn = async (_s: string, _i: string, input: any) => {
+    f.sends.push(input);
+    f.state.turns.push({ id: input.turnId, text: input.text, status: "queued", at: new Date().toISOString() });
+    f.state.draft = "";
+    f.state.draftRevision++;
+    f.state.revision++;
+  };
   [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!.click();
   await flush();
+  // Nothing asks the person to load models: the composer is open, and no such action exists.
+  expect((f.host.querySelector(".glosa-chat-readiness") as HTMLElement).hidden).toBe(true);
+  expect([...f.host.querySelectorAll("button")].some((button) => button.textContent === "Load models")).toBe(false);
   const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
-  draft.value = "Not ready yet";
+  draft.value = "First words";
   draft.dispatchEvent(new Event("input", { bubbles: true }));
+  const send = f.host.querySelector(".glosa-chat-send") as HTMLButtonElement;
+  expect(send.disabled).toBe(false);
   draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("Checking which models");
+  // The words stay in the composer until the agent has answered.
+  expect(draft.value).toBe("First words");
   await flush();
-  expect(f.sends).toHaveLength(0);
-  expect((f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).disabled).toBe(true);
-  expect((f.host.querySelector(".glosa-chat-readiness") as HTMLElement).hidden).toBe(false);
-  expect(f.host.querySelector(".glosa-chat-readiness")!.textContent).toContain("Load models");
-  expect(draft.value).toBe("Not ready yet");
+  await flush();
+  expect(calls).toEqual(["discover:a", "settings:found:medium"]);
+  expect(f.sends.map((sent) => sent.text)).toEqual(["First words"]);
+  expect(draft.value).toBe("");
   f.pane.destroy();
+});
+
+test("a chat just started checks its account's models as it opens; a chat with history asks nothing", async () => {
+  for (const fresh of [true, false]) {
+    const f = fixture({ models: [] });
+    if (!fresh) f.state.turns.push({ id: "old", text: "Earlier", status: "completed" });
+    const calls: string[] = [];
+    f.dataAccess.discoverAgentModels = async (profileId: string) => {
+      calls.push(profileId);
+      f.catalog.capabilities.a.models = [{ id: "model", name: "Model", efforts: ["high"] }];
+    };
+    await f.pane.ready;
+    await flush();
+    expect(calls).toEqual(fresh ? ["a"] : []);
+    f.pane.destroy();
+  }
 });
 
 test("account discovery locks other choices and sending until success or recoverable failure", async () => {
@@ -261,7 +307,7 @@ function profileButton(host: HTMLElement, id: string) {
     (button) => button.dataset.profileId === id,
   )!;
 }
-function fixture(options: { sourceChatId?: string } = {}) {
+function fixture({ models, ...options }: { sourceChatId?: string; models?: any[] } = {}) {
   const state = {
     id: "chat",
     profileId: "a",
@@ -292,7 +338,9 @@ function fixture(options: { sourceChatId?: string } = {}) {
       { id: "b", provider: "codex", enabled: true, label: "Work" },
     ],
     capabilities: {
-      a: { models: [{ id: "model", name: "Model", resolvedModel: "claude-sonnet-5", efforts: ["high", "low"] }] },
+      a: {
+        models: models ?? [{ id: "model", name: "Model", resolvedModel: "claude-sonnet-5", efforts: ["high", "low"] }],
+      },
       b: { models: [{ id: "codex-model", name: "Codex model", efforts: ["medium"] }] },
     },
   };
@@ -690,8 +738,11 @@ test("sending never locks the composer: messages line up in the tray behind the 
   // The words leave the composer on Enter, before the daemon has answered, and it is free again.
   expect(draft.value).toBe("");
   expect(draft.disabled).toBe(false);
+  // Behind a reply at work the one button says Queue, and the key hint with it.
   const send = f.host.querySelector(".glosa-chat-send") as HTMLButtonElement;
-  expect(send.textContent).toBe("↑");
+  expect(send.textContent).toBe("Queue");
+  expect(send.getAttribute("aria-label")).toBe("Queue message");
+  expect(f.host.querySelector(".glosa-chat-key-hint")!.textContent).toBe("Enter to queue · Shift Enter for a new line");
   expect(send.disabled).toBe(false);
   expect(f.host.querySelector(".glosa-chat-tray")!.textContent).toBe("SendingSecond");
   type(f, "Third");
@@ -699,7 +750,7 @@ test("sending never locks the composer: messages line up in the tray behind the 
   expect(f.sends.map((sent) => sent.text)).toEqual(["Second", "Third"]);
   expect([...f.host.querySelectorAll(".glosa-chat-tray li")].map((row) => row.textContent)).toEqual([
     "NextSecondEditRemoveSend now",
-    "Queued · 2ThirdEditRemoveSend now",
+    "2ndThirdEditRemoveSend now",
   ]);
   expect(f.host.querySelector(".glosa-chat-composer [role=status]")!.textContent).toBe("2 messages waiting");
   // Neither is in the thread: a message joins the conversation when its turn starts.
@@ -739,8 +790,9 @@ test("a message sent with nothing ahead of it is in the thread at once and says 
   // While the daemon has not answered, a redraw still leaves the composer and its button free.
   f.state.revision++;
   f.snapshot();
+  // A second message would go behind the one on its way, and the button says so.
   const send = f.host.querySelector(".glosa-chat-send") as HTMLButtonElement;
-  expect([send.disabled, send.textContent]).toEqual([false, "↑"]);
+  expect([send.disabled, send.textContent, send.dataset.mode]).toEqual([false, "Queue", "queue"]);
   expect(f.host.querySelector("textarea")!.value).toBe("");
   answer();
   await flush();
@@ -835,9 +887,8 @@ test("after a draft conflict, Retry sends the waiting messages on the draft as i
   f.pane.destroy();
 });
 
-test("tools and access open as a dialog from the line under the composer, and revoking asks first", async () => {
+test("tools and access open as a dialog from the line under the composer, with nothing to revoke per workspace", async () => {
   const f = fixture();
-  const consents: boolean[] = [];
   f.dataAccess.getMcpPolicy = async () => ({
     revision: 1,
     servers: [
@@ -845,9 +896,6 @@ test("tools and access open as a dialog from the line under the composer, and re
       { id: "b", label: "Off", enabled: false, transport: "stdio", command: "/bin/x", args: [] },
     ],
   });
-  f.dataAccess.setAgentConsent = async (_profile: string, _slug: string, allowed: boolean) => {
-    consents.push(allowed);
-  };
   await f.pane.ready;
   await flush();
   // Nothing about tools sits under the composer but one line, and no dialog exists until asked for.
@@ -861,22 +909,11 @@ test("tools and access open as a dialog from the line under the composer, and re
   expect(tools.open).toBe(true);
   expect(tools.querySelector("h2")!.textContent).toBe("Tools and workspace access");
   expect(tools.textContent).not.toMatch(/MCP|native/i);
-  const press = (scope: ParentNode, label: string) =>
-    [...scope.querySelectorAll("button")].find((b) => b.textContent === label)!.click();
-  const confirm = () =>
-    [...document.querySelectorAll("dialog")].find((d) => d.textContent!.includes("Revoke workspace access?"))!;
-  press(tools, "Revoke access");
+  // Access is the account's, granted once with experimental chat: no per-workspace revoke here.
+  expect([...tools.querySelectorAll("button")].map((b) => b.textContent)).not.toContain("Revoke access");
+  expect(tools.textContent).toContain("Agents & accounts");
+  [...tools.querySelectorAll("button")].find((b) => b.textContent === "Close")!.click();
   await flush();
-  expect(consents).toEqual([]);
-  press(confirm(), "Cancel");
-  await flush();
-  expect(consents).toEqual([]);
-  expect(tools.open).toBe(true);
-  press(tools, "Revoke access");
-  await flush();
-  press(confirm(), "Revoke access");
-  await flush();
-  expect(consents).toEqual([false]);
   expect(document.querySelector("dialog.glosa-chat-tools")).toBeNull();
   f.pane.destroy();
 });
@@ -1651,4 +1688,81 @@ test("composer trigger boundaries and UTF-16 reference edits preserve surroundin
   expect(editReferences("😀 @a", "x😀 @a", [ref])[0]?.start).toBe(4);
   expect(editReferences("😀 @a", "😀 @ab", [ref])).toEqual([]);
   expect(editReferences("😀 @a", "😀 @z", [ref])).toEqual([]);
+});
+
+test("the protocol log shows the journal as written, filters by kind, follows the stream and opens one record", async () => {
+  const record = (seq: number, type: string, data: Record<string, unknown> = {}) => ({
+    seq,
+    at: `2026-10-04T10:00:0${seq}.000Z`,
+    type,
+    bytes: 100 + seq,
+    data: { type, ...data },
+  });
+  const pages: unknown[] = [];
+  let stream: any;
+  const dataAccess = {
+    getChatLog: async (_s: string, _i: string, before?: number) => {
+      pages.push(before);
+      return before
+        ? { total: 4, hasEarlier: false, records: [record(1, "created", { chat: { title: "T" } })] }
+        : {
+            total: 4,
+            hasEarlier: true,
+            records: [
+              record(2, "turn", { turn: { status: "accepted" } }),
+              record(3, "runtime", { state: "spawned" }),
+              record(4, "turn_status", { turnId: "t", status: "running" }),
+            ],
+          };
+    },
+    openChatStream: (_s: string, _i: string, callbacks: any) => {
+      stream = callbacks;
+      return () => {};
+    },
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const pane = createChatLogPane(host, { dataAccess, slug: "ws", chatId: "chat", title: "Draft review" });
+  await pane.ready;
+  await flush();
+  const rows = () => [...host.querySelectorAll(".glosa-chat-log-record")] as HTMLElement[];
+  expect(pane.title).toBe("Log · Draft review");
+  expect(rows().map((row) => row.querySelector(".glosa-chat-log-seq")!.textContent)).toEqual(["2", "3", "4"]);
+  expect(rows()[2]!.querySelector(".glosa-chat-log-gist")!.textContent).toBe("running");
+  expect(host.querySelector(".glosa-chat-log-count")!.textContent).toBe("4 records");
+  // A record arriving on the stream joins the end; a gap means the page is read again, not guessed.
+  stream.onEvent({
+    event: "chat_event",
+    data: { seq: 5, at: "2026-10-04T10:00:05.000Z", data: { type: "content", content: { kind: "text", text: "hi" } } },
+  });
+  expect(rows().map((row) => row.querySelector(".glosa-chat-log-seq")!.textContent)).toEqual(["2", "3", "4", "5"]);
+  expect(rows()[3]!.querySelector(".glosa-chat-log-gist")!.textContent).toBe("text · 2 chars");
+  // One kind at a time, from what the journal holds.
+  const select = host.querySelector("select") as HTMLSelectElement;
+  expect([...select.options].map((option) => option.value)).toEqual([
+    "all",
+    "content",
+    "runtime",
+    "turn",
+    "turn_status",
+  ]);
+  select.value = "turn_status";
+  select.dispatchEvent(new Event("change"));
+  expect(rows().map((row) => row.querySelector(".glosa-chat-log-seq")!.textContent)).toEqual(["4"]);
+  select.value = "all";
+  select.dispatchEvent(new Event("change"));
+  // The record itself, on request only.
+  const first = rows()[0]!;
+  expect(first.querySelector("pre")!.textContent).toBe("");
+  (first as any).open = true;
+  first.dispatchEvent(new Event("toggle"));
+  expect(JSON.parse(first.querySelector("pre")!.textContent!)).toMatchObject({ seq: 2, type: "turn" });
+  // Earlier records go in front.
+  (host.querySelector(".glosa-chat-log-scroll > button") as HTMLButtonElement).click();
+  await flush();
+  expect(pages).toEqual([undefined, 2]);
+  expect(rows().map((row) => row.querySelector(".glosa-chat-log-seq")!.textContent)).toEqual(["1", "2", "3", "4", "5"]);
+  expect((host.querySelector(".glosa-chat-log-scroll > button") as HTMLButtonElement).hidden).toBe(true);
+  pane.destroy();
+  expect(host.children).toHaveLength(0);
 });

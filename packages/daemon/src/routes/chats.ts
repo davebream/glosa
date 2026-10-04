@@ -204,6 +204,16 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
           }
           if (!id && method === "POST") return json(service.create(workspace, await req.json()));
           if (id && !action && method === "GET") return json(service.snapshot(workspace, id, historyCursor(req)));
+          if (id && action === "log" && method === "GET") {
+            const params = new URL(req.url).searchParams;
+            const page = z
+              .object({
+                before: z.coerce.number().int().positive().optional(),
+                limit: z.coerce.number().int().min(1).max(500).default(200),
+              })
+              .parse({ before: params.get("before") ?? undefined, limit: params.get("limit") ?? undefined });
+            return json(service.journalPage(workspace, id, page.before, page.limit));
+          }
           if (id && !action && method === "POST") return json(service.change(workspace, id, await req.json()));
           if (id && action === "commands")
             return json(

@@ -185,7 +185,7 @@ interface ManagedConnection {
 
 Capabilities are observed per runtime version/account/session, not assumed from provider name. Include native resume, model listing, effort values, model/effort change strategy, input attachments, approvals, structured questions, cancellation, MCP status/auth, context usage and account limits. For each control report `supported`, `unsupported` or `unavailable` with a reason; unavailable is not an empty successful result.
 
-No dynamic model request when merely reading history. Cache the last foreground result with its account/version provenance. A user-activated Refresh models action can run foreground discovery for the selected profile. First Send can also start the authorized runtime and discover models before inference; if the selection is unavailable, stop admission and ask the user to choose. Never substitute a cheaper, newer or cross-provider model silently. Persist the native-reported effective setting, separately from the requested setting.
+No dynamic model request when merely reading history. Cache the last foreground result with its account/version provenance. A user-activated Refresh models action in Account settings can run foreground discovery for the selected profile. The composer never asks for a separate load: a chat the person has just started checks its account's models as it opens, the first Send of a chat whose account has no list yet checks before the message goes, and every live run's own capability report refreshes the cached list as it connects (2026-10-04). If the selection is unavailable, stop admission and ask the user to choose. Never substitute a cheaper, newer or cross-provider model silently. Persist the native-reported effective setting, separately from the requested setting.
 
 ## 4. Persistence, replay and concurrency
 
@@ -480,6 +480,14 @@ Use a managed tested runtime normally; optionally allow an absolute custom execu
 The new APIs require a Bun minimum that actually supports native Terminal and tested process-group behavior. The current application's old floor is insufficient evidence. Set the new floor from a compatibility test on that release, update package/CLI diagnostics/A6/CI together, and refuse managed features on an unsupported Bun while preserving any supported document-only operation. The probes in §13 use Bun 1.4.2; they do not establish a lower supported floor.
 
 ### 10.2 Consent records
+
+**Amendment (2026-10-04).** The experimental acceptance per provider (Account settings) is the one
+consent. Its text names what an enabled account receives in every workspace. There is no
+per-workspace grant, no renewed acceptance for a changed runtime version, no Continue after a reply
+that failed on its own, and no Continue for a message that never reached an agent before a daemon
+restart: it stays queued and goes once the daemon is serving. A stop by the person, an uncertain
+outcome and an account change still hold what waits. The paragraphs below describe the original
+per-workspace model and remain as the record of what the acceptance text must cover.
 
 Versioned consent names provider/profile, workspace root/scope, transmitted prompt/attachments/instructions, tool execution policy, MCP endpoints, runtime version policy and action purpose. Connect permits native authentication, not automatic model inference. First Send permits the stated run and explicit queue; browsing history permits neither. Expanding scope or changing effective billing route requires a new consent revision before dispatch.
 

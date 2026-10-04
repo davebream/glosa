@@ -132,6 +132,8 @@ export function elapsedLabel(seconds) {
   return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
 }
 
+/** Where a message stands in line, as a reader counts: 2nd, 3rd, 4th. */
+const ordinal = (place) => ({ 2: "2nd", 3: "3rd" })[place] ?? `${place}th`;
 const WAITING = new Set(["accepted", "queued", "held"]);
 const AT_WORK = new Set(["dispatching", "running", "waiting", "stopping"]);
 
@@ -168,7 +170,7 @@ export function chatQueue(turns, outbox = [], kept = new Set()) {
             ? "Sending"
             : ++place === 1
               ? "Next"
-              : `Queued · ${place}`,
+              : ordinal(place),
   }));
   const hidden = new Set(tray.map((row) => row.id));
   for (const turn of turns) if (turn.status === "cancelled" && !turn.started && !kept.has(turn.id)) hidden.add(turn.id);

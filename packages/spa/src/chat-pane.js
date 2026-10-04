@@ -72,6 +72,7 @@ export function createChatPane(
     onNewChat,
     onSettings,
     onDeleted = () => {},
+    onOpenLog = /** @type {(() => void) | undefined} */ (undefined),
     getFiles = () => [],
   },
 ) {
@@ -101,6 +102,7 @@ export function createChatPane(
     effortSaving = false,
     effortTarget = null,
     uploading = false,
+    checkingModels = false,
     stopping = false,
     stopTarget = null;
   // Messages the person has sent that the daemon has not yet taken, oldest first. The composer is
@@ -143,24 +145,8 @@ export function createChatPane(
   ]);
   const readiness = el("div", { className: "glosa-chat-readiness", hidden: true });
   const readinessText = el("span");
-  const loadModels = el("button", {
-    type: "button",
-    textContent: "Load models",
-    onClick: () =>
-      void act(async () => {
-        loadModels.disabled = true;
-        status.textContent = "Loading this account’s models…";
-        try {
-          await dataAccess.discoverAgentModels(state.profileId);
-          catalog = await dataAccess.getAgentStatus();
-          status.textContent = "Models refreshed.";
-        } finally {
-          loadModels.disabled = false;
-        }
-      }),
-  });
   const manageAccount = el("button", { type: "button", textContent: "Manage account", onClick: onSettings });
-  readiness.append(readinessText, loadModels, manageAccount);
+  readiness.append(readinessText, manageAccount);
   const picker = modelPicker({
     onModel: (id) => changeSettings(id),
     onProfile: (id) => changeAccount(id),
@@ -261,12 +247,18 @@ export function createChatPane(
     hidden: true,
   });
   const attachmentList = el("div", { className: "glosa-chat-attachments" });
+  // One button, two words: it sends while nothing is at work, and queues behind the reply when
+  // something is. The word changes with the state so the person is never guessing which it does.
   const send = el("button", {
     type: "button",
     textContent: "↑",
     className: "glosa-agent-primary glosa-chat-send",
     "aria-label": "Send message",
     onClick: () => void submit(),
+  });
+  const keyHint = el("span", {
+    className: "glosa-chat-key-hint",
+    textContent: "Enter to send · Shift Enter for a new line",
   });
   const stop = el("button", {
     type: "button",
@@ -303,6 +295,7 @@ export function createChatPane(
   const header = el("header", { className: "glosa-chat-header" }, [identity, title, activity, menu.element]);
   menu.popup.append(
     el("button", { type: "button", textContent: "Agents & accounts", onClick: onSettings }),
+    el("button", { type: "button", textContent: "Protocol log", hidden: !onOpenLog, onClick: () => onOpenLog?.() }),
     el("button", {
       type: "button",
       textContent: "Export",
@@ -652,30 +645,8 @@ export function createChatPane(
       el("h3", { textContent: "Workspace access" }),
       el("p", {
         textContent:
-          "This account may read this folder and receive your messages. Revoking stops its running chats here, and you are asked again before the next message.",
+          "This account may read this folder and receive your messages wherever experimental chat is on. To stop it everywhere, disable the account or experimental chat under Agents & accounts.",
       }),
-      el("div", { className: "glosa-chat-tools-actions" }, [
-        el("button", {
-          type: "button",
-          className: "glosa-chat-danger",
-          textContent: "Revoke access",
-          onClick: () =>
-            void act(async () => {
-              if (
-                !(await confirmDialog({
-                  title: "Revoke workspace access?",
-                  body: "This account's running chats in this folder will stop. You will be asked to allow access again before the next message.",
-                  confirmLabel: "Revoke access",
-                  danger: true,
-                }))
-              )
-                return;
-              await dataAccess.setAgentConsent(state.profileId, slug, false);
-              mcp.close();
-              status.textContent = "Workspace access revoked. Its runs have stopped.";
-            }),
-        }),
-      ]),
     ]),
     el("div", { className: "glosa-dialog-actions" }, [
       el("button", { type: "button", textContent: "Close", onClick: () => mcp.close() }),
@@ -692,29 +663,6 @@ export function createChatPane(
     status.textContent = result.servers.length
       ? result.servers.map((server) => `${server.name}: ${server.status}`).join(" · ")
       : "No agent is running. Connections will be listed while a chat is active.";
-  }
-  async function allowWorkspace(confirmLabel) {
-    const policy = await dataAccess.getMcpPolicy?.(slug, state.profileId);
-    const profile = catalog.profiles.find((item) => item.id === state.profileId);
-    const servers = (policy?.servers ?? [])
-      .filter((server) => server.enabled)
-      .map((server) => `${server.label}: ${server.transport === "http" ? server.url : server.command}`)
-      .join("\n");
-    const accepted = await confirmDialog({
-      title: "Allow this account to work in this workspace?",
-      body:
-        "The coding agent can read workspace files and receive your messages and attachments through its configured provider. File changes and commands follow its approval mode." +
-        // Browser tools (#440): existing permissions are asked once more for this sentence
-        // (CONSENT_DISCLOSURE in packages/daemon/src/chats/store.ts).
-        " In the glosa desktop app it can also open web pages in this window's browser tabs and read them while it answers you. The text of those pages, including pages you are signed in to, goes to its provider." +
-        (profile?.configuration
-          ? " Its native settings, permission rules, plugins, hooks and MCP servers will also run, including startup hooks before a message is sent. Configuration changes require renewed permission."
-          : " This permission lasts until revoked in this workspace.") +
-        (servers ? `\nEnabled MCP servers may receive this content:\n${servers}` : ""),
-      confirmLabel,
-    });
-    if (accepted) await dataAccess.setAgentConsent(state.profileId, slug, true);
-    return accepted;
   }
   controls.append(picker.element, effortField);
   // Usage is the chat's own bookkeeping, not part of the conversation: it opens from the chat's menu.
@@ -808,16 +756,7 @@ export function createChatPane(
     getFiles,
     enabled: () => !changingAccount && !changingSettings,
     getCatalog: () => dataAccess.getChatCommands?.(slug, chatId) ?? Promise.resolve({ commands: [], loaded: false }),
-    loadCatalog: async () => {
-      try {
-        return await dataAccess.refreshChatCommands(slug, chatId);
-      } catch (error) {
-        if (!error.problem?.type?.endsWith("/consent-required")) throw error;
-        if (!(await allowWorkspace("Allow and load commands")))
-          throw new Error("Command loading was cancelled. Your draft has been kept.");
-        return dataAccess.refreshChatCommands(slug, chatId);
-      }
-    },
+    loadCatalog: () => dataAccess.refreshChatCommands(slug, chatId),
     onAction: async (action) => {
       if (attachments.length)
         throw new Error("Remove attachments before using a workspace action. Your draft has been kept.");
@@ -833,11 +772,7 @@ export function createChatPane(
 
   // One quiet line under the composer. What the pane has to say (a save that failed, a message
   // accepted) is said above the composer, beside the work, and only while there is something to say.
-  const footer = el("div", { className: "glosa-chat-footer" }, [
-    toolsLine,
-    feedback,
-    el("span", { className: "glosa-chat-key-hint", textContent: "Enter to send · Shift Enter for a new line" }),
-  ]);
+  const footer = el("div", { className: "glosa-chat-footer" }, [toolsLine, feedback, keyHint]);
   root.append(header, transfer, pageControls, history, jumpAnchor, decisions, readiness, status, composer, footer);
   host.append(root);
   void loadChatMarkdown()
@@ -917,27 +852,26 @@ export function createChatPane(
     const accountReady =
       !!profile?.enabled && !profile.removed && (!profile.auth || profile.auth.state === "authenticated");
     const selectedModel = models.find((m) => m.id === state.settings.model);
+    // With no model list yet, the first send asks the agent itself (`ensureModels`): the person
+    // is never sent to a separate action to load what the account offers.
     readyToSend =
       accountReady &&
-      !!selectedModel &&
-      (!state.settings.effort || selectedModel.efforts.includes(state.settings.effort));
+      (!models.length ||
+        (!!selectedModel && (!state.settings.effort || selectedModel.efforts.includes(state.settings.effort))));
     // The control stays live while its own save is in flight, so a run of presses is not dropped.
     effort.disabled = changingAccount || (changingSettings && !effortSaving) || !selectedModel?.efforts.length;
     readiness.hidden = readyToSend || !executionAvailable() || state.archived;
     readinessText.textContent = !accountReady
       ? "This account needs attention before it can send."
-      : !models.length
-        ? "Load this account’s models to continue."
-        : "Choose an available model and effort to continue.";
-    loadModels.hidden = !accountReady;
+      : "Choose an available model and effort to continue.";
     manageAccount.hidden = accountReady;
     identity.replaceChildren(agentIcon(state.provider));
     identity.title = agentName(state.provider);
     picker.render({
       state,
       catalog,
-      disabled: changingSettings || uploading || outbox.length > 0 || !!state.archived,
-      busy: changingAccount || changingSettings,
+      disabled: changingSettings || uploading || checkingModels || outbox.length > 0 || !!state.archived,
+      busy: changingAccount || changingSettings || checkingModels,
       subscriptionBlocked:
         state.turns.some((turn) => !["completed", "failed", "cancelled", "outcome_unknown"].includes(turn.status)) ||
         (!!state.runtime && state.runtime.state !== "stopped"),
@@ -1345,16 +1279,19 @@ export function createChatPane(
         const place = el("span", { className: "glosa-chat-tray-state" });
         const words = el("span", { className: "glosa-chat-tray-words" });
         const verbs = el("span", { className: "glosa-chat-tray-verbs" });
-        row = { node: el("li", {}, [place, words, verbs]), place, words, verbs, kind: "", item };
+        const why = el("span", { className: "glosa-chat-tray-why", hidden: true });
+        row = { node: el("li", {}, [place, words, verbs, why]), place, words, verbs, why, kind: "", item };
         trayRows.set(item.id, row);
       }
       row.item = item;
       const text = typeof item.text === "string" ? item.text.replace(/\s+/gu, " ").trim() : "Waiting message";
       if (row.place.textContent !== item.label) row.place.textContent = item.label;
       if (row.words.textContent !== text) row.words.textContent = text;
-      // Why a message is held or was not sent is said in words, on the row.
+      // Why a message is held or was not sent is said in words, on the row, under the message.
       const reason = item.turn?.error ?? item.entry?.error ?? "";
-      row.words.title = reason ? `${text}\n${reason}` : text;
+      row.words.title = text;
+      if (row.why.textContent !== reason) row.why.textContent = reason;
+      row.why.hidden = !reason;
       const kind = item.kind === "queued" && item.turn?.origin === "feedback" ? "feedback" : item.kind;
       row.node.dataset.kind = item.kind;
       if (row.kind !== kind) {
@@ -1642,11 +1579,23 @@ export function createChatPane(
     const queued = queue.tray.length > 0 || !!queue.head || !!sent;
     feedback.disabled = editing || !executionAvailable() || state.archived || queued;
     // Sending never locks the composer: a message sent while another is at work waits in the tray.
-    send.disabled = editing || !executionAvailable() || !!state.archived || !readyToSend;
-    send.textContent = uploading ? "Attaching…" : changingSettings ? "Saving…" : "↑";
+    send.disabled = editing || checkingModels || !executionAvailable() || !!state.archived || !readyToSend;
     const behind = !!working;
+    send.textContent = uploading
+      ? "Attaching…"
+      : changingSettings
+        ? "Saving…"
+        : checkingModels
+          ? "Checking…"
+          : behind
+            ? "Queue"
+            : "↑";
+    send.dataset.mode = behind ? "queue" : "send";
     send.setAttribute("aria-label", behind ? "Queue message" : "Send message");
-    send.title = behind ? "Queue next message" : "Send message";
+    send.title = behind ? "Queue next message: it goes after the reply at work" : "Send message";
+    keyHint.textContent = behind
+      ? "Enter to queue · Shift Enter for a new line"
+      : "Enter to send · Shift Enter for a new line";
     draft.disabled = !!state.archived;
     draft.placeholder = state.archived ? "Restore this chat to send a message." : "What would you like to work on?";
     files.disabled = editing || !!state.archived;
@@ -1749,12 +1698,60 @@ export function createChatPane(
   }
   /** Enter takes the message out of the composer at once. It goes into the thread when nothing is
    * ahead of it, and into the tray when something is; the daemon is told behind the scenes. */
+  /** The account's own answer to which models it offers, asked once and kept. A fresh account has
+   * no list yet; the first send asks before the message goes, and a new chat asks as it opens. */
+  async function ensureModels() {
+    if (!state || checkingModels) return false;
+    if (catalog?.capabilities?.[state.profileId]?.models?.length || !dataAccess.discoverAgentModels) return true;
+    const profile = catalog?.profiles?.find((p) => p.id === state.profileId);
+    if (!profile?.enabled || profile.removed || (profile.auth && profile.auth.state !== "authenticated")) return false;
+    checkingModels = true;
+    status.textContent = "Checking which models this account offers…";
+    render();
+    try {
+      await dataAccess.discoverAgentModels(state.profileId);
+      if (disposed) return false;
+      catalog = await dataAccess.getAgentStatus();
+      if (disposed) return false;
+      const found = catalog.capabilities?.[state.profileId]?.models ?? [];
+      const target = found.find((m) => m.id === state.settings.model) ?? found[0];
+      if (!target) throw new Error("This account reported no models. Check it under Agents & accounts.");
+      const effort = target.efforts.includes(state.settings.effort) ? state.settings.effort : (target.efforts[0] ?? "");
+      if (target.id !== state.settings.model || effort !== state.settings.effort) {
+        await dataAccess.changeChat(slug, chatId, {
+          requestId: crypto.randomUUID(),
+          revision: state.configRevision,
+          settings: { model: target.id, effort, permissionMode: state.settings.permissionMode },
+        });
+        await refresh();
+        if (disposed) return false;
+      }
+      status.textContent = "";
+      return true;
+    } catch (error) {
+      failure(error);
+      return false;
+    } finally {
+      checkingModels = false;
+      if (!disposed) {
+        renderControls();
+        render();
+      }
+    }
+  }
   function submit() {
-    if (!state || changingAccount || changingSettings || uploading) return;
+    if (!state || changingAccount || changingSettings || uploading || checkingModels) return;
     if (!executionAvailable() || state.archived || !readyToSend || !draft.value.trim()) return;
     const waiting = state.turns.filter((turn) => ["accepted", "queued", "held"].includes(turn.status)).length;
     if (waiting + outbox.length >= MAX_WAITING) {
       status.textContent = "Five messages are already waiting. Remove one, or wait for a reply.";
+      return;
+    }
+    // No model list yet: the agent is asked first, and the message goes once it has answered.
+    if (!catalog?.capabilities?.[state.profileId]?.models?.length && dataAccess.discoverAgentModels) {
+      void ensureModels().then((ready) => {
+        if (ready && !disposed) submit();
+      });
       return;
     }
     completion.resolveTyped();
@@ -1817,16 +1814,7 @@ export function createChatPane(
             references: entry.references,
             attachments: entry.attachments,
           };
-          try {
-            await dataAccess.sendChatTurn(slug, chatId, entry.intent);
-          } catch (error) {
-            if (!error.problem?.type?.endsWith("/consent-required")) throw error;
-            if (!(await allowWorkspace("Allow and send")))
-              throw Object.assign(new Error("This account is not allowed to work in this workspace yet."), {
-                refused: true,
-              });
-            await dataAccess.sendChatTurn(slug, chatId, entry.intent);
-          }
+          await dataAccess.sendChatTurn(slug, chatId, entry.intent);
         } catch (error) {
           if (disposed) return;
           const refusal = error.problem?.type?.split("/").pop();
@@ -2073,6 +2061,9 @@ export function createChatPane(
     void refreshToolsLine();
     status.textContent = catalog.reason ?? "";
     connectStream();
+    // A chat just started is the person's own ask: its account's models are checked as it opens.
+    // A chat with history opens as it was and asks nothing of the agent until the next send.
+    if (!state.turns.length && !state.archived && executionAvailable()) void ensureModels();
   })().catch(failure);
   function connectStream() {
     stopStream?.();
