@@ -231,7 +231,8 @@ class CdpClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
-        reject(new Error(`CDP call ${method} did not answer within ${timeoutMs}ms`));
+        const phase = typeof params.type === "string" ? ` (${params.type})` : "";
+        reject(new Error(`CDP call ${method}${phase} did not answer within ${timeoutMs}ms`));
       }, timeoutMs);
       this.#pending.set(id, {
         resolve: (msg) => {
@@ -275,7 +276,7 @@ class CdpClient {
     return res.result?.result?.value;
   }
 
-  /** A REAL keyboard event for one printable character — `keyDown` (the physical key going down),
+  /** A REAL keyboard event for one printable character — `rawKeyDown` (the physical key going down),
    * `char` (the character it produces; Chrome inserts text on THIS event type, not `keyDown`, and
    * putting `text` on both double-inserts — measured), `keyUp`. This drives the browser's actual
    * input pipeline (composition, `beforeinput`, `input`), which is what a real keystroke does and
@@ -285,19 +286,21 @@ class CdpClient {
     const spec = KEY_SPECS[char];
     if (!spec) throw new Error(`no CDP key mapping for ${JSON.stringify(char)}`);
     const { code, windowsVirtualKeyCode: vk } = spec;
+    // Chromium's split physical/text sequence uses rawKeyDown + char. Native virtual codes are
+    // platform-specific (a Windows Space code is not a macOS Space code); omit that optional
+    // field so renderer input cannot fall through to the browser's native keyboard path.
+    // https://github.com/chromium/chromium/blob/main/content/browser/devtools/protocol/input_handler.cc
     await this.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
+      type: "rawKeyDown",
       key: char,
       code,
       windowsVirtualKeyCode: vk,
-      nativeVirtualKeyCode: vk,
     });
     await this.send("Input.dispatchKeyEvent", {
       type: "char",
       key: char,
       code,
       windowsVirtualKeyCode: vk,
-      nativeVirtualKeyCode: vk,
       text: char,
       unmodifiedText: char,
     });
@@ -306,7 +309,6 @@ class CdpClient {
       key: char,
       code,
       windowsVirtualKeyCode: vk,
-      nativeVirtualKeyCode: vk,
     });
   }
 
@@ -1967,9 +1969,19 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         try {
           mounted = await client.evaluate(mountAndPlaceCaretScript(slug, "spaces.md", "apart"));
           if (!mounted.ok) throw new Error(mounted.reason ?? "mount failed");
+          await client.evaluate(`(() => {
+            window.__spaceEvents = [];
+            const host = window.__glosaTest.container.querySelector("[contenteditable]");
+            for (const type of ["keydown", "keyup", "input"])
+              host.addEventListener(type, event => window.__spaceEvents.push({type, trusted:event.isTrusted}));
+          })()`);
           // Four separate real keyboard events — exactly what four real spacebar presses do to a
           // live contenteditable, not a single string handed to one editing command.
           for (let i = 0; i < 4; i += 1) await client.keyPress(" ");
+          const events: Array<{ type: string; trusted: boolean }> = await client.evaluate("window.__spaceEvents");
+          for (const type of ["keydown", "keyup", "input"])
+            expect(events.filter((event) => event.type === type)).toHaveLength(4);
+          expect(events.every((event) => event.trusted)).toBe(true);
         } catch (error) {
           const { out, err } = await terminateAndDrainChrome();
           throw new Error(`spaces.md: in-browser edit failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);

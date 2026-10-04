@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.44] · 2026-10-04
+
+### Changed
+
+- Enabling experimental chat for a provider now authorizes it in every registered directory
+  workspace. The updated acceptance names the workspace files, messages, attachments, web pages
+  and linked account configuration it may receive. Existing users accept the updated disclosure
+  once; runtime upgrades retain that acceptance.
+- New chats discover models automatically. A first send also discovers them when the account has
+  no cached list, and live runs keep that list current with the agent's reported capabilities.
+- Messages that never reached an agent resume after a daemon restart, and the next queued message
+  proceeds after a failed reply. Pressing Stop still holds the queue, as does an uncertain outcome.
+- The send button reads "Queue" while a reply is at work. Held and unsent messages show their
+  reason directly in the tray.
+
+### Added
+
+- "Protocol log" in the chat menu opens the chat's journal beside the conversation, with record
+  details, a kind filter, live updates and earlier pages.
+
+### Fixed
+
+- Daemon shutdown retires artifact watchers before asynchronous cleanup starts. Pending scans
+  and allocations cannot open new watches after retirement.
+- Managed process guardians stay alive until their asynchronous exit drain writes its ownership
+  receipt, including when the daemon closes the control pipe during cancellation.
+
 ## [0.1.0-alpha.43] · 2026-10-03
 
 ### Changed
@@ -1822,7 +1849,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.43...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.44...HEAD
+[0.1.0-alpha.44]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.43...v0.1.0-alpha.44
 [0.1.0-alpha.43]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.41...v0.1.0-alpha.43
 [0.1.0-alpha.41]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.40...v0.1.0-alpha.41
 [0.1.0-alpha.40]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.39...v0.1.0-alpha.40

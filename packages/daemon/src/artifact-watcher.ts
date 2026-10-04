@@ -303,6 +303,7 @@ export class ArtifactWatcherRegistry {
     ArtifactWatcherRegistryOptions["initialResolveTrackedFiles"]
   >;
   private budgetWarned = false;
+  private abandoned = false;
 
   constructor(options: ArtifactWatcherRegistryOptions = {}) {
     this.maxTrackedArtifacts = options.maxTrackedArtifacts ?? DEFAULT_MAX_TRACKED_ARTIFACTS;
@@ -362,6 +363,7 @@ export class ArtifactWatcherRegistry {
   }
 
   private openState(workspace: WorkspaceTarget, id: string, daemonLifetime: boolean): WatchState | null {
+    if (this.abandoned) return null;
     if (this.states.size >= this.maxWatchedWorkspaces) {
       this.workspaceBudgetIds.add(id);
       if (!this.budgetWarned) {
@@ -469,6 +471,7 @@ export class ArtifactWatcherRegistry {
    * demoted state goes through the normal eviction path so pending reconcile/quiet timers cannot
    * fire after its slot has moved elsewhere. */
   async applyAllocation(selected: readonly WorkspaceTarget[], rejected: readonly WorkspaceTarget[]): Promise<void> {
+    if (this.abandoned) return;
     const selectedIds = new Set(selected.map((workspace) => workspaceRegistrationId(workspace)));
     this.workspaceBudgetIds.clear();
     for (const workspace of rejected) this.workspaceBudgetIds.add(workspaceRegistrationId(workspace));
@@ -497,7 +500,8 @@ export class ArtifactWatcherRegistry {
   /** Retires every watch state for a process that is about to exit, WITHOUT closing the
    * filesystem watches themselves: timers, listeners and pending paths are dropped and every
    * state stops reacting, but no `watcher.close()` runs. The kernel releases the handles when the
-   * process ends.
+   * process ends. Retirement is terminal: pending allocations and later callers cannot open new
+   * states after exit begins.
    *
    * Closing them is what made a daemon restart fail. Bun's per-file `fs.watch` on macOS closes
    * synchronously and its cost grows faster than the watch count (1,600 watches took 10.7 s to
@@ -507,6 +511,7 @@ export class ArtifactWatcherRegistry {
    * and the client replacing it gave up after 5 s. Only for exit: a live daemon that stops
    * watching one workspace still closes it, or it would leak the handles. */
   abandonAll(): void {
+    this.abandoned = true;
     for (const state of [...this.states.values()]) this.detachState(state);
     this.workspaceBudgetIds.clear();
   }
