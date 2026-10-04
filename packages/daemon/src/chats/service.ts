@@ -378,6 +378,8 @@ export class ManagedChatService {
   private mcpOrigin?: string;
   setMcpOrigin(origin: string): void {
     this.mcpOrigin = origin;
+    // The daemon is serving: messages recovered from before the restart may go now.
+    this.pump();
   }
   async managedMcp(req: Request): Promise<Response> {
     const grant = req.headers.get("Authorization")?.replace(/^Bearer /, "");
@@ -457,17 +459,14 @@ export class ManagedChatService {
       const cached = this.store.savedCapabilities(profile.id);
       if (cached) this.modelCatalog.set(profile.id, cached);
     }
-    // Recovery never starts a native process, probes an account, or replays executable input.
+    // Recovery never starts a native process, probes an account, or replays executable input here.
+    // A message that never reached an agent is still the person's standing instruction: it stays
+    // queued and goes once the daemon is serving (`setMcpOrigin` pumps). A turn that was already
+    // with the agent is uncertain and is never resent.
     for (const state of this.store.all()) {
       const log = this.store.chat(state.id);
       for (const turn of state.turns) {
-        if (["accepted", "queued"].includes(turn.status))
-          log.append({
-            type: "turn_status",
-            turnId: turn.id,
-            status: "held",
-            error: "Waiting for explicit resume after restart.",
-          });
+        if (["accepted", "queued"].includes(turn.status)) this.ready.add(state.id);
         else if (["dispatching", "running", "waiting", "stopping"].includes(turn.status))
           log.append({
             type: "turn_status",
@@ -535,8 +534,9 @@ export class ManagedChatService {
     const target = runtimeTarget();
     const runtimeId = this.options.runtimeIdentity?.(provider) ?? this.options.manifest(provider)?.id;
     const grant = this.store.experimental(provider);
+    // Acceptance is per provider and host, not per runtime version: a pinned runtime that moves on
+    // keeps the person's acceptance (2026-10-04). The disclosure version still has to match.
     const current =
-      grant?.runtimeId === runtimeId &&
       grant?.platform === target.platform &&
       grant?.architecture === target.architecture &&
       grant?.libc === target.libc &&
@@ -638,8 +638,10 @@ export class ManagedChatService {
     )
       return false;
     if (cleanup) return this.store.previouslyAccepted(scope);
-    const acceptance = this.experimentalStatus(provider);
-    return acceptance.enabled && acceptance.runtimeId === manifest.id;
+    // The installed runtime must be the pinned one (its bytes were integrity-verified at install);
+    // the acceptance itself is per provider and host, not per version.
+    const pinned = this.options.runtimeIdentity?.(provider) ?? manifest.id;
+    return manifest.id === pinned && this.experimentalStatus(provider).enabled;
   }
   private available(provider: string): void {
     if (this.closed || this.quiescing)
@@ -1028,13 +1030,7 @@ export class ManagedChatService {
         this.validateWorkspace(operation.workspace);
         if (
           this.fencedWorkspaces.has(`${operation.workspace.id}:${operation.workspace.epoch}`) ||
-          this.mcpDigest(operation.profileId, operation.workspace) !== operation.mcpDigest ||
-          !this.store.consent(
-            operation.profileId,
-            operation.workspace.id,
-            operation.workspace.epoch,
-            operation.mcpDigest,
-          )
+          this.mcpDigest(operation.profileId, operation.workspace) !== operation.mcpDigest
         )
           throw new ManagedAgentError("login-cancelled", "Workspace tool access changed.");
       }
@@ -1211,11 +1207,6 @@ export class ManagedChatService {
       const policy = this.store.mcpPolicy(profileId, mcpWorkspace.id, mcpWorkspace.epoch);
       if (!adapter.mcpLoginArgs)
         throw new ManagedAgentError("provider-unavailable", "Use this agent's in-chat MCP sign-in.");
-      if (!this.store.consent(profileId, mcpWorkspace.id, mcpWorkspace.epoch, this.mcpDigest(profileId, mcpWorkspace)))
-        throw new ManagedAgentError(
-          "consent-required",
-          "Approve this account's workspace tools before opening their native manager.",
-        );
       nativeArgs = adapter.mcpLoginArgs(policy.servers, serverId);
     }
     if ([...this.runs.values()].some((run) => run.profileId === profileId))
@@ -1540,12 +1531,9 @@ export class ManagedChatService {
       throw new ManagedAgentError("account-unavailable", "Connect an enabled account before sending.");
     if (profile.provider !== state.provider)
       throw new ManagedAgentError("wrong-provider", "The chat and account use different agents.");
+    // Experimental acceptance (or release qualification) is the one consent: an enabled account
+    // works in every registered directory workspace without a further grant (2026-10-04).
     const mcpDigest = this.mcpDigest(profile.id, { id: state.workspaceId, epoch: state.workspaceEpoch });
-    if (!this.store.consent(profile.id, state.workspaceId, state.workspaceEpoch, mcpDigest))
-      throw new ManagedAgentError(
-        "consent-required",
-        "Review and approve this account's access to the workspace first.",
-      );
     if (turn && (turn.mcpDigest ?? "") !== mcpDigest)
       throw new ManagedAgentError(
         "account-changed",
@@ -1883,6 +1871,21 @@ export class ManagedChatService {
     this.store.saveCapabilities(profileId, spec.profile.epoch, spec.manifest.id, capabilities);
     this.modelCatalog.set(profileId, { epoch: spec.profile.epoch, manifestId: spec.manifest.id, capabilities });
   }
+  /** The account's slash commands, learned from the run that is already connected when the
+   * composer has no current list: no separate Load commands step and no second process. */
+  private rememberCommands(log: ChatLog, run: LiveRun): void {
+    if (!run.connection?.commands) return;
+    const state = log.state;
+    let workspace: ChatWorkspace;
+    try {
+      workspace = this.options.workspace(state.workspaceId, state.workspaceEpoch);
+    } catch {
+      return;
+    }
+    const catalog = this.commandCatalog(workspace, state.id);
+    if (catalog.loaded && !catalog.stale) return;
+    void this.refreshCommands(workspace, state.id).catch(() => {});
+  }
   /** The chat's journal as written, oldest first within the page, newest page by default. Read
    * only: nothing here starts a process or replays input. `before` is a sequence number. */
   journalPage(workspace: ChatWorkspace, chatId: string, before?: number, limit = 200) {
@@ -1962,6 +1965,7 @@ export class ManagedChatService {
     }
     this.admit(log, turn, run);
     this.rememberCapabilities(run.profileId, spec, connection.capabilities);
+    this.rememberCommands(log, run);
     const binding = Promise.resolve(this.options.bindSession?.(log.state)).then((release) => {
       run.releaseSession = release;
     });
@@ -2293,8 +2297,10 @@ export class ManagedChatService {
         ...(stopped ? {} : { error: "The run could not be confirmed stopped. New execution remains blocked." }),
       });
     // A reply stopped by Send now was ended by the person to let their own queue move on, so the
-    // queue is not held. A stop that could not be confirmed still blocks everything behind it.
-    if (finished?.status !== "completed" && !(run.sendNow && stopped))
+    // queue is not held; nor is it after a reply that failed on its own, since the next message is
+    // still the person's instruction (2026-10-04). A stop by the person, an uncertain outcome, or a
+    // stop that could not be confirmed still holds everything behind it for review.
+    if (finished?.status !== "completed" && !((finished?.status === "failed" || run.sendNow) && stopped))
       for (const queued of log.state.turns) {
         if (["accepted", "queued"].includes(queued.status))
           log.append({

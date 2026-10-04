@@ -481,6 +481,14 @@ The new APIs require a Bun minimum that actually supports native Terminal and te
 
 ### 10.2 Consent records
 
+**Amendment (2026-10-04).** The experimental acceptance per provider (Account settings) is the one
+consent. Its text names what an enabled account receives in every workspace. There is no
+per-workspace grant, no renewed acceptance for a changed runtime version, no Continue after a reply
+that failed on its own, and no Continue for a message that never reached an agent before a daemon
+restart: it stays queued and goes once the daemon is serving. A stop by the person, an uncertain
+outcome and an account change still hold what waits. The paragraphs below describe the original
+per-workspace model and remain as the record of what the acceptance text must cover.
+
 Versioned consent names provider/profile, workspace root/scope, transmitted prompt/attachments/instructions, tool execution policy, MCP endpoints, runtime version policy and action purpose. Connect permits native authentication, not automatic model inference. First Send permits the stated run and explicit queue; browsing history permits neither. Expanding scope or changing effective billing route requires a new consent revision before dispatch.
 
 Revocation closes admission synchronously and stops affected work; it cannot retract bytes already sent. Child process egress is distinct from the SPA's CSP: class-F frames remain network-blocked, while the chosen native runtime may contact disclosed provider/tool endpoints during authorized execution. If native telemetry cannot be disabled through supported configuration, the provider cannot meet Glosa's zero-telemetry contract and stays unsupported. Do not describe OS-wide network enforcement that Glosa does not implement.

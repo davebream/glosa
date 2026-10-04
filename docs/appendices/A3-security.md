@@ -468,8 +468,10 @@ escape/daemonization is a qualification risk and must not be advertised as conta
 Chat Markdown disables raw HTML and remote images; links allow only HTTP(S)/mailto. Text/image uploads
 are bounded, text is validated as UTF-8, and PNG/JPEG/WebP headers must declare bounded dimensions.
 This checks format/size rather than certifying that every image byte is valid. Native decoders can
-still reject a malformed attachment. Scope/digest changes require fresh consent; no automatic account
-rotation, quota evasion, API fallback, MCP OAuth token proxy or credential import is supported.
+still reject a malformed attachment. The experimental acceptance per provider is the one consent for
+every workspace (2026-10-04); an MCP scope change fences the running chat and the next send carries
+the new servers. No automatic account rotation, quota evasion, API fallback, MCP OAuth token proxy
+or credential import is supported.
 
 Managed Codex uses neutral-cwd startup and audits the native effective configuration before
 account management and each thread start/resume. Project configuration (including the root

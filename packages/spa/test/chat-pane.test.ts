@@ -887,9 +887,8 @@ test("after a draft conflict, Retry sends the waiting messages on the draft as i
   f.pane.destroy();
 });
 
-test("tools and access open as a dialog from the line under the composer, and revoking asks first", async () => {
+test("tools and access open as a dialog from the line under the composer, with nothing to revoke per workspace", async () => {
   const f = fixture();
-  const consents: boolean[] = [];
   f.dataAccess.getMcpPolicy = async () => ({
     revision: 1,
     servers: [
@@ -897,9 +896,6 @@ test("tools and access open as a dialog from the line under the composer, and re
       { id: "b", label: "Off", enabled: false, transport: "stdio", command: "/bin/x", args: [] },
     ],
   });
-  f.dataAccess.setAgentConsent = async (_profile: string, _slug: string, allowed: boolean) => {
-    consents.push(allowed);
-  };
   await f.pane.ready;
   await flush();
   // Nothing about tools sits under the composer but one line, and no dialog exists until asked for.
@@ -913,22 +909,11 @@ test("tools and access open as a dialog from the line under the composer, and re
   expect(tools.open).toBe(true);
   expect(tools.querySelector("h2")!.textContent).toBe("Tools and workspace access");
   expect(tools.textContent).not.toMatch(/MCP|native/i);
-  const press = (scope: ParentNode, label: string) =>
-    [...scope.querySelectorAll("button")].find((b) => b.textContent === label)!.click();
-  const confirm = () =>
-    [...document.querySelectorAll("dialog")].find((d) => d.textContent!.includes("Revoke workspace access?"))!;
-  press(tools, "Revoke access");
+  // Access is the account's, granted once with experimental chat: no per-workspace revoke here.
+  expect([...tools.querySelectorAll("button")].map((b) => b.textContent)).not.toContain("Revoke access");
+  expect(tools.textContent).toContain("Agents & accounts");
+  [...tools.querySelectorAll("button")].find((b) => b.textContent === "Close")!.click();
   await flush();
-  expect(consents).toEqual([]);
-  press(confirm(), "Cancel");
-  await flush();
-  expect(consents).toEqual([]);
-  expect(tools.open).toBe(true);
-  press(tools, "Revoke access");
-  await flush();
-  press(confirm(), "Revoke access");
-  await flush();
-  expect(consents).toEqual([false]);
   expect(document.querySelector("dialog.glosa-chat-tools")).toBeNull();
   f.pane.destroy();
 });

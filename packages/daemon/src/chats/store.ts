@@ -16,7 +16,9 @@ import { IntentJournal, privateDirectory, putBlob, readBlob } from "./journal.ts
  * text of web pages the agent reads in desk browser tabs, including pages the person is signed in
  * to. The SPA says which text it showed when it records a grant. */
 export const CONSENT_DISCLOSURE = 2;
-export const EXPERIMENTAL_DISCLOSURE = 1;
+// 2: the acceptance now also covers what a per-workspace grant used to say (workspace files,
+// messages, attachments and web pages the agent reads go to its provider), for every workspace.
+export const EXPERIMENTAL_DISCLOSURE = 2;
 
 const experimentalSchema = z
   .object({
@@ -686,7 +688,8 @@ export class AgentStore {
   experimental(provider: string): ExperimentalAcceptance | undefined {
     return structuredClone(this.experimentalGrants.get(provider));
   }
-  /** Revocation cannot prevent explicit cleanup through bytes the person previously accepted. */
+  /** Revocation cannot prevent explicit cleanup through a provider the person previously accepted
+   * on this host; acceptance is per provider and host, so the runtime version is not part of it. */
   previouslyAccepted(
     scope: Pick<ExperimentalAcceptance, "provider" | "runtimeId" | "platform" | "architecture" | "libc">,
   ): boolean {
@@ -695,7 +698,6 @@ export class AgentStore {
         data.type === "experimental" &&
         data.enabled &&
         data.provider === scope.provider &&
-        data.runtimeId === scope.runtimeId &&
         data.platform === scope.platform &&
         data.architecture === scope.architecture &&
         data.libc === scope.libc,

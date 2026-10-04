@@ -162,10 +162,12 @@ test("experimental admission is journaled per provider and pinned runtime, then 
   expect(h.service.status().providers[0]?.experimental.renewalRequired).toBe(false);
   await h.service.changeExperimental(input(true, 2));
   expect(h.service.status().providers[0]?.qualified).toBe(false);
+  // A pinned runtime that moves on and is installed keeps the acceptance: it is per provider and
+  // host, not per version.
   runtimeId = "fixture-v3";
-  expect(h.service.status().available).toBe(false);
-  expect(h.service.status().providers[0]?.experimental.renewalRequired).toBe(true);
-  await expect(h.service.login(h.profile.id)).rejects.toMatchObject({ code: "managed-unavailable" });
+  manifestId = runtimeId;
+  expect(h.service.status().available).toBe(true);
+  expect(h.service.status().providers[0]?.experimental.renewalRequired).toBe(false);
   h.store.setExperimental(
     {
       type: "experimental",
@@ -742,8 +744,7 @@ test("subscription switches persist on one chat, keep turn provenance and start 
   expect(replayed.profileId).toBe(other.id);
   expect(replayed.handoffHash).toBe(log.state.handoffHash);
   expect(replayed.turns[0]!.profileId).toBe(h.profile.id);
-  expect(() => h.send(chat.id, "Continue")).toThrow("approve this account");
-  await h.service.consent(h.workspace, other.id, true);
+  // The other subscription needs no workspace grant of its own: the provider's acceptance covers it.
   h.send(chat.id, "What is the manuscript called?");
   await eventually(() => h.inputs.length === 2);
   expect(h.specs.at(-1)!.profile.id).toBe(other.id);
@@ -1301,7 +1302,7 @@ test("pending feedback stays idle until Send feedback freezes its references wit
   expect(prepared.drained.map((entry) => entry.id)).toEqual(["feedback-1"]);
 });
 
-test("MCP scope changes fence the running chat and revoke earlier endpoint consent", async () => {
+test("MCP scope changes fence the running chat, and the next send carries the new servers without a grant", async () => {
   const h = setup(),
     chat = h.chat();
   h.send(chat.id);
@@ -1311,13 +1312,57 @@ test("MCP scope changes fence the running chat and revoke earlier endpoint conse
   ];
   await h.service.changeMcpPolicy(h.workspace, h.profile.id, { revision: 0, servers });
   expect(h.store.chat(chat.id).state.runtime?.state).toBe("stopped");
-  expect(() => h.send(chat.id)).toThrow("approve this account");
-  await h.service.consent(h.workspace, h.profile.id, true);
   h.send(chat.id);
   await eventually(() => h.writes.length === 2);
   expect(h.specs[1]?.servers).toEqual(servers);
+});
+
+test("an enabled account works in a workspace with no per-workspace grant, and a revoked grant changes nothing", async () => {
+  const h = setup(),
+    chat = h.chat();
   await h.service.consent(h.workspace, h.profile.id, false);
-  expect(() => h.send(chat.id)).toThrow("approve this account");
+  expect(h.store.consent(h.profile.id, h.workspace.id, h.workspace.epoch)).toBe(false);
+  h.send(chat.id, "no grant needed");
+  await eventually(() => h.inputs.length === 1);
+  expect(h.inputs[0]!.text).toBe("no grant needed");
+});
+
+test("after a restart, a message that never reached the agent goes once the daemon is serving", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.hold(new Promise(() => {}));
+  h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  const waiting = h.send(chat.id, "queued before the restart");
+  expect(h.store.chat(chat.id).state.turns.at(-1)?.status).toBe("queued");
+  const recoveryRoot = realpathSync(mkdtempSync(join(tmpdir(), "glosa-chat-restart-")));
+  cleanup.push(async () => rmSync(recoveryRoot, { recursive: true, force: true }));
+  cpSync(h.root, recoveryRoot, { recursive: true });
+  const recoveredStore = new AgentStore(recoveryRoot);
+  const recovered = new ManagedChatService({
+    store: recoveredStore,
+    registry: h.registry,
+    launcher: h.launcher,
+    workspace: () => h.workspace,
+    manifest: () => ({
+      ...runtimeTarget(),
+      id: "fixture",
+      provider: "fixture",
+      version: "1",
+      executable: "/fixture",
+      executableSha256: "0".repeat(64),
+      qualified: true,
+    }),
+    releaseEnabled: true,
+  });
+  cleanup.push(() => recovered.close());
+  const statuses = () => recoveredStore.chat(chat.id).state.turns.map((turn) => turn.status);
+  // The turn that was with the agent is uncertain and stays so; the queued one is still queued, not held.
+  expect(statuses()).toEqual(["outcome_unknown", "queued"]);
+  expect(h.inputs).toHaveLength(1);
+  recovered.setMcpOrigin("http://127.0.0.1:1");
+  await eventually(() => h.inputs.length === 2);
+  expect(h.inputs[1]!.turnId).toBe(waiting.turnId);
 });
 
 test("multi-part answers are validated before reservation and withdrawn questions cannot be answered", async () => {
@@ -1410,20 +1455,16 @@ test("attachment MIME spoofing, oversized image dimensions and invalid UTF-8 are
   expect(h.spawns()).toBe(0);
 });
 
-test("failed turns hold the queued message until the user explicitly continues", async () => {
+test("a reply that fails on its own does not hold the queue: the next message goes", async () => {
   const h = setup(),
     chat = h.chat();
   h.send(chat.id);
   await eventually(() => h.inputs.length === 1);
   h.send(chat.id, "next message");
   h.events.get(chat.sessionId)!({ type: "failed", code: "native-error", message: "Needs review" });
-  await eventually(() => !h.service.busy);
-  expect(h.inputs).toHaveLength(1);
-  const queued = h.store.chat(chat.id).state.turns.at(-1)!;
-  expect(queued.status).toBe("held");
-  h.service.resume(h.workspace, chat.id, queued.id);
   await eventually(() => h.inputs.length === 2);
   expect(h.inputs[1]!.text).toBe("next message");
+  expect(h.store.chat(chat.id).state.turns.map((turn) => turn.status)).toEqual(["failed", "running"]);
 });
 
 test("Stop admits the native interrupt while rejecting a delayed prompt from the fenced run", async () => {

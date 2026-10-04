@@ -645,30 +645,8 @@ export function createChatPane(
       el("h3", { textContent: "Workspace access" }),
       el("p", {
         textContent:
-          "This account may read this folder and receive your messages. Revoking stops its running chats here, and you are asked again before the next message.",
+          "This account may read this folder and receive your messages wherever experimental chat is on. To stop it everywhere, disable the account or experimental chat under Agents & accounts.",
       }),
-      el("div", { className: "glosa-chat-tools-actions" }, [
-        el("button", {
-          type: "button",
-          className: "glosa-chat-danger",
-          textContent: "Revoke access",
-          onClick: () =>
-            void act(async () => {
-              if (
-                !(await confirmDialog({
-                  title: "Revoke workspace access?",
-                  body: "This account's running chats in this folder will stop. You will be asked to allow access again before the next message.",
-                  confirmLabel: "Revoke access",
-                  danger: true,
-                }))
-              )
-                return;
-              await dataAccess.setAgentConsent(state.profileId, slug, false);
-              mcp.close();
-              status.textContent = "Workspace access revoked. Its runs have stopped.";
-            }),
-        }),
-      ]),
     ]),
     el("div", { className: "glosa-dialog-actions" }, [
       el("button", { type: "button", textContent: "Close", onClick: () => mcp.close() }),
@@ -685,29 +663,6 @@ export function createChatPane(
     status.textContent = result.servers.length
       ? result.servers.map((server) => `${server.name}: ${server.status}`).join(" · ")
       : "No agent is running. Connections will be listed while a chat is active.";
-  }
-  async function allowWorkspace(confirmLabel) {
-    const policy = await dataAccess.getMcpPolicy?.(slug, state.profileId);
-    const profile = catalog.profiles.find((item) => item.id === state.profileId);
-    const servers = (policy?.servers ?? [])
-      .filter((server) => server.enabled)
-      .map((server) => `${server.label}: ${server.transport === "http" ? server.url : server.command}`)
-      .join("\n");
-    const accepted = await confirmDialog({
-      title: "Allow this account to work in this workspace?",
-      body:
-        "The coding agent can read workspace files and receive your messages and attachments through its configured provider. File changes and commands follow its approval mode." +
-        // Browser tools (#440): existing permissions are asked once more for this sentence
-        // (CONSENT_DISCLOSURE in packages/daemon/src/chats/store.ts).
-        " In the glosa desktop app it can also open web pages in this window's browser tabs and read them while it answers you. The text of those pages, including pages you are signed in to, goes to its provider." +
-        (profile?.configuration
-          ? " Its native settings, permission rules, plugins, hooks and MCP servers will also run, including startup hooks before a message is sent. Configuration changes require renewed permission."
-          : " This permission lasts until revoked in this workspace.") +
-        (servers ? `\nEnabled MCP servers may receive this content:\n${servers}` : ""),
-      confirmLabel,
-    });
-    if (accepted) await dataAccess.setAgentConsent(state.profileId, slug, true);
-    return accepted;
   }
   controls.append(picker.element, effortField);
   // Usage is the chat's own bookkeeping, not part of the conversation: it opens from the chat's menu.
@@ -801,16 +756,7 @@ export function createChatPane(
     getFiles,
     enabled: () => !changingAccount && !changingSettings,
     getCatalog: () => dataAccess.getChatCommands?.(slug, chatId) ?? Promise.resolve({ commands: [], loaded: false }),
-    loadCatalog: async () => {
-      try {
-        return await dataAccess.refreshChatCommands(slug, chatId);
-      } catch (error) {
-        if (!error.problem?.type?.endsWith("/consent-required")) throw error;
-        if (!(await allowWorkspace("Allow and load commands")))
-          throw new Error("Command loading was cancelled. Your draft has been kept.");
-        return dataAccess.refreshChatCommands(slug, chatId);
-      }
-    },
+    loadCatalog: () => dataAccess.refreshChatCommands(slug, chatId),
     onAction: async (action) => {
       if (attachments.length)
         throw new Error("Remove attachments before using a workspace action. Your draft has been kept.");
@@ -1868,16 +1814,7 @@ export function createChatPane(
             references: entry.references,
             attachments: entry.attachments,
           };
-          try {
-            await dataAccess.sendChatTurn(slug, chatId, entry.intent);
-          } catch (error) {
-            if (!error.problem?.type?.endsWith("/consent-required")) throw error;
-            if (!(await allowWorkspace("Allow and send")))
-              throw Object.assign(new Error("This account is not allowed to work in this workspace yet."), {
-                refused: true,
-              });
-            await dataAccess.sendChatTurn(slug, chatId, entry.intent);
-          }
+          await dataAccess.sendChatTurn(slug, chatId, entry.intent);
         } catch (error) {
           if (disposed) return;
           const refusal = error.problem?.type?.split("/").pop();
