@@ -1,11 +1,104 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, realpathSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ManagedAgentError } from "../../src/agents/interface.ts";
 import { RuntimeSupervisor } from "../../src/agents/supervisor.ts";
 import { activateInstallGuard, captureInstallSnapshot, InstallGuard } from "../../src/lifecycle/install-guard.ts";
+import { prepareOwnership } from "../../src/agents/ownership.ts";
+
+test("guardian stays alive until its pending exit receipt is written after control EOF", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "glosa-guardian-finalization-")));
+  const release = join(dir, "release-finalizer");
+  const nonce = randomUUID();
+  const receiptDir = prepareOwnership(dir, nonce);
+  const source = readFileSync(new URL("../../src/agents/guardian.ts", import.meta.url), "utf8");
+  const anchor = "finalizing = child.exited.then(async (code) => {";
+  expect(source.split(anchor)).toHaveLength(2);
+  // Execute the real guardian with imports rebased to their actual modules. This one injected
+  // barrier simulates an asynchronous output/receipt drain whose own handles are unreferenced.
+  // It contacts no provider and changes no ownership predicate or receipt-writing code.
+  const injected = `${anchor}
+    child?.terminal?.unref();
+    await new Promise<void>((resolve) => {
+      const waiting = setInterval(() => {
+        if (require("node:fs").existsSync(${JSON.stringify(release)})) {
+          clearInterval(waiting);
+          resolve();
+        }
+      }, 10);
+      waiting.unref();
+      emit({op:"finalizer-ready"});
+    });`;
+  const program = source
+    .replace('"zod"', JSON.stringify(require.resolve("zod")))
+    .replace('"../bus/io.ts"', JSON.stringify(fileURLToPath(new URL("../../src/bus/io.ts", import.meta.url))))
+    .replace(
+      'new URL("./execution-host.ts", import.meta.url)',
+      `new URL(${JSON.stringify(new URL("../../src/agents/execution-host.ts", import.meta.url).href)})`,
+    )
+    .replace(anchor, injected);
+  const executable = join(dir, "guardian.ts");
+  writeFileSync(executable, program);
+  const guardian = Bun.spawn([process.execPath, executable], {
+    cwd: dir,
+    env: { PATH: "/usr/bin:/bin", HOME: dir },
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let ready!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const draining = (async () => {
+    let output = "";
+    for await (const bytes of guardian.stdout) {
+      output += Buffer.from(bytes).toString();
+      if (output.includes('"op":"finalizer-ready"')) ready();
+    }
+  })();
+  const stderr = new Response(guardian.stderr).text();
+  try {
+    guardian.stdin.write(
+      `${JSON.stringify({
+        op: "start",
+        id: randomUUID(),
+        nonce,
+        receiptDir,
+        command: "/usr/bin/true",
+        args: [],
+        cwd: dir,
+        env: { PATH: "/usr/bin:/bin", HOME: dir },
+        terminal: true,
+      })}\n`,
+    );
+    guardian.stdin.end();
+    const reached = await Promise.race([pending.then(() => true), guardian.exited.then(() => false)]);
+    if (!reached) throw new Error(`guardian did not reach finalization: ${await stderr}`);
+    expect(reached).toBe(true);
+    // One real lifetime witness: outlast stop()'s two one-second group waits while deliberately
+    // withholding the finalizer's release. An unreferenced barrier cannot keep this process alive.
+    expect(await Promise.race([guardian.exited.then(() => "early-exit"), Bun.sleep(2200).then(() => "pending")])).toBe(
+      "pending",
+    );
+    writeFileSync(release, "complete");
+    expect(await guardian.exited).toBe(0);
+    const receipt = JSON.parse(readFileSync(join(receiptDir, "exit.json"), "utf8"));
+    expect(receipt.nonce).toBe(nonce);
+    expect(receipt.groupEmpty).toBe(true);
+  } finally {
+    writeFileSync(release, "complete");
+    if (guardian.exitCode === null) guardian.kill("SIGKILL");
+    await guardian.exited;
+    await draining;
+    await stderr;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 10_000);
 
 test("an acknowledged guardian fence rejects subsequent native input and stop confirms ownership", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "glosa-supervisor-")));

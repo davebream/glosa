@@ -38,6 +38,7 @@ let child: Child | undefined;
 let specification: z.infer<typeof startSchema> | undefined;
 let fenced = false;
 let stopping: Promise<void> | undefined;
+let finalizing: Promise<void> | undefined;
 let group: number | undefined;
 let lastHeartbeat = Date.now();
 let outputBytes = 0;
@@ -182,7 +183,7 @@ async function start(spec: z.infer<typeof startSchema>): Promise<void> {
   for (const pumping of pumps) void pumping.catch(() => stop());
   emit({ op: "started", id: spec.id, pid: child.pid, pgid: group, nonce: spec.nonce });
   child.send({ command: spec.command, args: spec.args, cwd: spec.cwd, env: spec.env });
-  void child.exited.then(async (code) => {
+  finalizing = child.exited.then(async (code) => {
     fenced = true;
     // A normally exiting agent must not leave ordinary children in its owned group either.
     if (groupAlive()) await stop();
@@ -247,8 +248,11 @@ try {
 } catch {
   emit({ op: "fatal", code: "guardian-failed" });
 } finally {
-  clearInterval(watchdog);
   await stop();
+  // Child exit does not mean the async drain/receipt writer has completed. Keep the guardian's
+  // lifetime guard until that pipeline finishes, even after control EOF removes its pipe handle.
+  if (finalizing) await finalizing;
+  clearInterval(watchdog);
   if (!child) {
     // A failed host spawn cannot leave native children: launch happens only after `started`.
     if (specification) receipt(null, null);
