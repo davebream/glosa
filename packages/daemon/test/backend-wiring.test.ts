@@ -403,28 +403,53 @@ describe("daemon exit does not wait on closing filesystem watches", () => {
   test("warm-up stops opening watches once exit has begun", async () => {
     const extraRoots = [0, 1].map(() => canonicalize(mkdtempSync(join(tmpdir(), "glosa-exit-ws-"))));
     try {
-      const seeding = buildBackend(home, { artifactWatchFactory: () => new HangingWatcher() });
+      const seeding = new WorkspaceIndex({ home });
       for (const r of [root, ...extraRoots]) {
         writeFileSync(join(r, "note.md"), "# note\n");
-        await seeding.workspaceIndex.upsertWorkspace(r, "glosa-open");
+        await seeding.upsertWorkspace(r, "glosa-open");
       }
-      seeding.artifactWatcherRegistry.abandonAll();
-
       let opened = 0;
+      let scans = 0;
+      let finishScan!: () => void;
+      const scanGate = new Promise<void>((resolve) => {
+        finishScan = resolve;
+      });
       const backend = buildBackend(home, {
+        resolveTrackedFilesAsync: async () => {
+          scans += 1;
+          await scanGate;
+          return { tracked: [], oversize: [], directories: [], skippedSymlinks: [], truncated: false };
+        },
         artifactWatchFactory: () => {
           opened += 1;
           return new HangingWatcher();
         },
       });
-      // Warm-up schedules the first workspace scan off-thread; exit can retire it before a native
-      // watch opens, and must prevent every later workspace from opening one too.
+      // Hold the real registry's initial scan at a barrier. Complete it only after exit starts:
+      // no filesystem timing assumption decides whether shutdown won the race.
       const warming = backend.warmArtifactWatchers();
-      await backend.releaseWorkspaceResourcesForExit();
-      await warming;
+      const exiting = backend.releaseWorkspaceResourcesForExit();
+      try {
+        expect(scans).toBe(1);
+        expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(0);
+        finishScan();
+        await Promise.all([warming, exiting]);
+        expect(opened).toBe(0);
+        expect(scans).toBe(1);
 
-      expect(opened).toBeLessThanOrEqual(1);
-      expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(0);
+        // Retirement also fences an allocation already in flight and any later direct caller.
+        await backend.warmArtifactWatchers();
+        backend.artifactWatcherRegistry.ensureWatched(root);
+        const unsubscribe = backend.artifactWatcherRegistry.subscribe(root, () => {});
+        await backend.artifactWatcherRegistry.applyAllocation([root, ...extraRoots], []);
+        unsubscribe();
+        expect(scans).toBe(1);
+        expect(opened).toBe(0);
+        expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(0);
+      } finally {
+        finishScan();
+        await Promise.all([warming, exiting]);
+      }
     } finally {
       for (const r of extraRoots) rmSync(r, { recursive: true, force: true });
     }

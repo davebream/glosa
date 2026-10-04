@@ -441,15 +441,17 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     await Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]);
   };
   const releaseWorkspaceResourcesForExit = async (): Promise<void> => {
+    // Fence allocations and retire scans before the first await: managed chat/supervisor cleanup
+    // may yield while a matcher Worker finishes. Exit retirement is terminal, so an allocation
+    // already inside applyAllocation cannot reopen a state when it resumes either.
+    const allocationStopped = artifactWatcherAllocation.stop();
+    const claimsStopped = claimSweeper.stop();
+    artifactWatcherRegistry.abandonAll();
     await managedChats?.close();
     await supervisor.close();
     sessionRegistry.close();
-    // Watchers first and synchronously, so no quiet-window capture can start against a bus that
-    // is closing, and no warm-up step opens a new watch that nothing will ever use. The claim
-    // sweeper stops first for the same reason: no expiry may start against a closing bus.
-    await claimSweeper.stop();
-    await artifactWatcherAllocation.stop();
-    artifactWatcherRegistry.abandonAll();
+    await claimsStopped;
+    await allocationStopped;
     await busRegistry.closeAll();
   };
   adapterRegistry.register(metadataRegistry.adapter());
