@@ -1727,7 +1727,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.activeElement).toBe(heading);
   });
 
-  test("new chat stays local without a model catalog and Chats collapses independently", async () => {
+  test("a new chat without a model catalog is created with no model and checks the account's models as it opens; Chats collapses independently", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const created: { settings: { model: string } }[] = [];
@@ -1780,7 +1780,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       for (let i = 0; i < 40; i++) await Promise.resolve();
       expect(created).toHaveLength(1);
       expect(created[0]!.settings.model).toBe("");
-      expect(discoveries).toBe(0);
+      // The chat is created at once with no model; the pane that opens for it asks the agent for
+      // the account's models, since starting the chat was the person's own action (2026-10-04).
+      expect(discoveries).toBe(1);
       const toggle = root.querySelector(".glosa-chat-list-toggle") as unknown as HTMLButtonElement;
       toggle.click();
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
