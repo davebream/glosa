@@ -647,6 +647,8 @@ export function createDataAccess(deps = {}) {
     moveChatDraft: (slug, id, input) => postJson(chatPath(slug, id, "move-draft"), input),
     /** @param {string} slug @param {unknown} input */
     createChat: (slug, input) => postJson(chatPath(slug), input),
+    /** The chat's journal as written, for the protocol log. @param {string} slug @param {string} id @param {number} [before] */
+    getChatLog: (slug, id, before) => requestJson(chatPath(slug, id, "log") + (before ? `?before=${before}` : "")),
     /** @param {string} slug @param {string} id */
     getChat: (slug, id, before = "") =>
       requestJson(chatPath(slug, id) + (before ? `?before=${encodeURIComponent(before)}` : "")),

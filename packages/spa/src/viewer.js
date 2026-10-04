@@ -14,6 +14,7 @@
 
 import { addressProblem, parseAddress } from "./browser-address.js";
 import { createBrowserPane } from "./browser-pane.js";
+import { createChatLogPane } from "./chat-log-pane.js";
 import { createReadOnlyPane } from "./read-only-pane.js";
 import { createFileViewControls } from "./file-view.js";
 import { createImagePane } from "./image-pane.js";
@@ -39,6 +40,7 @@ import { createCommandPalette } from "./palette.js";
 import {
   artifactPanelId,
   browserPanelId,
+  chatLogPanelId,
   chatPanelId,
   decodePanelId,
   externalPanelId,
@@ -506,6 +508,26 @@ export function mountApp(
       title: "Chat",
       params: { kind: "chat", chatId, sourceChatId },
       ...(group && dock.api.groups.includes(group) ? { position: { referenceGroup: group } } : {}),
+    });
+  }
+
+  /** A chat's protocol log opens once, beside the chat that asked for it. */
+  function openChatLog(chatId) {
+    if (!dock) return;
+    const id = chatLogPanelId(chatId),
+      panel = dock.api.getPanel(id);
+    if (panel) {
+      panel.api.setActive();
+      return;
+    }
+    const beside = dock.api.getPanel(chatPanelId(chatId))?.group;
+    dock.api.addPanel({
+      id,
+      component: "pane",
+      tabComponent: "pane",
+      title: "Protocol log",
+      params: { kind: "chat-log", chatId },
+      ...(beside ? { position: { referenceGroup: beside, direction: "right" } } : {}),
     });
   }
 
@@ -1236,6 +1258,7 @@ export function mountApp(
         // A chat agent at work on the tab (brief C2), as a chat tab shows its own activity.
         activityLabel: pane.agentActivity,
       };
+    if (pane.kind === "chat-log") return { kind: "chat-log", label: pane.title, tooltip: pane.title };
     if (["chat", "external-chat", "agent-settings"].includes(pane.kind))
       return {
         kind: pane.kind,
@@ -1464,6 +1487,16 @@ export function mountApp(
       panes.set(id, pane);
       return pane;
     }
+    if (params.kind === "chat-log") {
+      const pane = createChatLogPane(host, {
+        dataAccess,
+        slug: currentSlug,
+        chatId: params.chatId,
+        title: chatList.find((chat) => chat.id === params.chatId)?.title ?? "Chat",
+      });
+      panes.set(id, pane);
+      return pane;
+    }
     if (params.kind === "chat") {
       const pane = createChatPane(host, {
         dataAccess,
@@ -1477,6 +1510,7 @@ export function mountApp(
           scheduleChatsRefresh();
         },
         onSettings: openAgentSettings,
+        onOpenLog: () => openChatLog(params.chatId),
         onNewChat: (profile, settings) =>
           newChat(profile, settings, params.chatId).catch(chatFailed("Couldn't start a chat")),
         onChange: () => {
@@ -2222,6 +2256,7 @@ export function mountApp(
           (params.kind === "external-chat" &&
             externalSessions.some((session) => session.session_id === params.sessionId)) ||
           (params.kind === "chat" && chatList.some((chat) => chat.id === params.chatId)) ||
+          (params.kind === "chat-log" && chatList.some((chat) => chat.id === params.chatId)) ||
           ((params.kind === "diff" || params.kind === "artifact") && knownArtifacts.has(params.path)),
       );
 

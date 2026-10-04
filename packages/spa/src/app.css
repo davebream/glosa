@@ -8027,11 +8027,21 @@ nav.glosa-chat-actions[hidden] {
   color: var(--muted);
   font: inherit;
   text-decoration: underline;
+  text-decoration-color: transparent;
   text-underline-offset: 2px;
+  transition:
+    color 150ms ease-out,
+    text-decoration-color 150ms ease-out;
 }
 .glosa-chat-pane button.glosa-chat-verb:hover:not(:disabled) {
   background: none;
-  color: var(--hand);
+  color: var(--ink);
+  text-decoration-color: currentColor;
+}
+@media (prefers-reduced-motion: reduce) {
+  .glosa-chat-pane button.glosa-chat-verb {
+    transition: none;
+  }
 }
 .glosa-chat-pane button.glosa-chat-verb[data-verb="remove"]:hover:not(:disabled) {
   color: var(--danger);
@@ -8231,10 +8241,22 @@ nav.glosa-chat-actions[hidden] {
   display: none;
 }
 .glosa-chat-tray li {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: var(--space-3);
+  column-gap: var(--space-3);
   min-height: 28px;
+}
+/* Why a message is held or was not sent: one line of Muted sans under its words, in their column. */
+.glosa-chat-tray-why {
+  grid-column: 2 / -1;
+  margin-bottom: 4px;
+  font: var(--text-xs) / 1.5 var(--font-sans);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.glosa-chat-tray-why[hidden] {
+  display: none;
 }
 .glosa-chat-tray-state {
   flex: none;
@@ -8522,6 +8544,11 @@ nav.glosa-chat-actions[hidden] {
 }
 .glosa-chat-pane .glosa-chat-send {
   font-size: var(--text-base);
+}
+/* Behind a reply at work the same button says what it will do: queue, in a word, not an arrow. */
+.glosa-chat-pane .glosa-chat-send[data-mode="queue"] {
+  font-size: var(--text-sm);
+  padding-inline: 12px;
 }
 .glosa-chat-attachments {
   display: flex;
@@ -9897,6 +9924,148 @@ button:is(
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+/* The protocol log: a chat's journal, one record a row in tabular sans, newest last. Dense on
+   purpose; it is read to find a moment, not for its prose. */
+.glosa-chat-log-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.glosa-chat-log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font: var(--text-sm) / 1.4 var(--font-sans);
+}
+.glosa-chat-log-title {
+  margin: 0;
+  font: 600 var(--text-sm) / 1.4 var(--font-sans);
+  color: var(--ink);
+}
+.glosa-chat-log-subject {
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 24em;
+}
+.glosa-chat-log-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+.glosa-chat-log-pane select.glosa-chat-log-filter {
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font: var(--text-sm) var(--font-sans);
+}
+.glosa-chat-log-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 6px 12px 12px;
+}
+.glosa-chat-log-scroll > button {
+  margin: 4px 0 8px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: var(--text-sm) var(--font-sans);
+}
+.glosa-chat-log-status {
+  margin: 8px 0;
+  color: var(--muted);
+  font: var(--text-sm) var(--font-sans);
+}
+.glosa-chat-log-status:empty {
+  display: none;
+}
+.glosa-chat-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.glosa-chat-log-record > summary {
+  display: grid;
+  grid-template-columns: 3.5em 7.5em 9em minmax(0, 1fr) 4.5em;
+  column-gap: 10px;
+  align-items: baseline;
+  padding: 3px 4px;
+  border-radius: 3px;
+  cursor: default;
+  font: var(--text-xs) / 1.6 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  list-style: none;
+}
+.glosa-chat-log-record > summary::-webkit-details-marker {
+  display: none;
+}
+.glosa-chat-log-record > summary:hover {
+  background: var(--surface);
+}
+.glosa-chat-log-record[open] > summary {
+  background: var(--surface);
+  border-radius: 3px 3px 0 0;
+}
+.glosa-chat-log-seq,
+.glosa-chat-log-size {
+  color: var(--muted);
+}
+.glosa-chat-log-size {
+  text-align: right;
+}
+.glosa-chat-log-time {
+  color: var(--muted);
+}
+.glosa-chat-log-kind {
+  color: var(--ink);
+}
+.glosa-chat-log-record[data-type="turn_status"] .glosa-chat-log-kind,
+.glosa-chat-log-record[data-type="turn"] .glosa-chat-log-kind,
+.glosa-chat-log-record[data-type="decision"] .glosa-chat-log-kind {
+  font-weight: 600;
+}
+.glosa-chat-log-gist {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.glosa-chat-log-body {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  max-height: 24rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 3px 3px;
+  background: var(--surface);
+  font: var(--text-xs) / 1.5 var(--font-mono);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@container pane (max-width: 560px) {
+  .glosa-chat-log-record > summary {
+    grid-template-columns: 3.5em 7.5em minmax(0, 1fr) 4.5em;
+  }
+  .glosa-chat-log-gist {
+    display: none;
+  }
 }
 .glosa-file-view {
   margin: 4px 12px 8px;

@@ -1865,6 +1865,43 @@ export class ManagedChatService {
       },
     };
   }
+  /** A live run reports what its account offers as it connects. Kept, that report is the model
+   * catalog the composer shows: no separate discovery process is needed once the account has sent. */
+  private rememberCapabilities(profileId: string, spec: ProfileLaunchSpec, capabilities: AgentCapabilities): void {
+    const cached = this.modelCatalog.get(profileId);
+    if (
+      cached?.epoch === spec.profile.epoch &&
+      cached.manifestId === spec.manifest.id &&
+      digest(cached.capabilities) === digest(capabilities)
+    )
+      return;
+    try {
+      if (this.store.profile(profileId).epoch !== spec.profile.epoch) return;
+    } catch {
+      return;
+    }
+    this.store.saveCapabilities(profileId, spec.profile.epoch, spec.manifest.id, capabilities);
+    this.modelCatalog.set(profileId, { epoch: spec.profile.epoch, manifestId: spec.manifest.id, capabilities });
+  }
+  /** The chat's journal as written, oldest first within the page, newest page by default. Read
+   * only: nothing here starts a process or replays input. `before` is a sequence number. */
+  journalPage(workspace: ChatWorkspace, chatId: string, before?: number, limit = 200) {
+    const records = this.chat(workspace, chatId).journal.records;
+    const end = before === undefined ? records.length : Math.min(Math.max(before - 1, 0), records.length);
+    const start = Math.max(0, end - Math.min(Math.max(limit, 1), 500));
+    return {
+      total: records.length,
+      hasEarlier: start > 0,
+      records: records.slice(start, end).map((record) => ({
+        seq: record.seq,
+        at: record.at,
+        type: (record.data as { type?: string }).type ?? "unknown",
+        ...(record.requestId ? { requestId: record.requestId } : {}),
+        bytes: Buffer.byteLength(JSON.stringify(record)),
+        data: record.data,
+      })),
+    };
+  }
   private admit(log: ChatLog, turn: ChatTurn, run: LiveRun): void {
     if (run.fenced || this.runs.get(run.chatId) !== run)
       throw new ManagedAgentError("run-fenced", "This run was stopped.");
@@ -1924,6 +1961,7 @@ export class ManagedChatService {
       return;
     }
     this.admit(log, turn, run);
+    this.rememberCapabilities(run.profileId, spec, connection.capabilities);
     const binding = Promise.resolve(this.options.bindSession?.(log.state)).then((release) => {
       run.releaseSession = release;
     });

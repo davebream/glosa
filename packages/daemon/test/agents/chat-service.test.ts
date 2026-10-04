@@ -1843,6 +1843,40 @@ test("five messages can wait behind the one at work, a sixth is refused, and the
   expect(h.inputs[1]!.text).toBe("message 2");
 });
 
+test("a live run's own capability report becomes the account's model catalog, with no discovery process", async () => {
+  const h = setup(),
+    chat = h.chat();
+  expect(h.service.status().capabilities[h.profile.id]).toBeUndefined();
+  h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  // One connection: the turn's own. Nothing was launched to ask about models separately.
+  expect(h.specs).toHaveLength(1);
+  expect(h.service.status().capabilities[h.profile.id]?.models.map((model) => model.id)).toEqual(["model-a"]);
+  // Journaled, so the catalog is there before any process on the next start.
+  expect(h.store.savedCapabilities(h.profile.id)?.capabilities.models[0]?.id).toBe("model-a");
+});
+
+test("the protocol log pages the chat's journal as written, newest last, without starting anything", async () => {
+  const h = setup(),
+    chat = h.chat();
+  const empty = h.service.journalPage(h.workspace, chat.id);
+  expect(empty.records.map((record) => record.type)).toEqual(["created"]);
+  expect(empty.total).toBe(1);
+  h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  const page = h.service.journalPage(h.workspace, chat.id);
+  expect(page.records[0]!.seq).toBe(1);
+  expect(page.records.map((record) => record.seq)).toEqual(page.records.map((_, i) => i + 1));
+  expect(page.records.map((record) => record.type)).toContain("turn");
+  expect(page.records.map((record) => record.type)).toContain("runtime");
+  expect(page.records.every((record) => record.bytes > 0 && typeof record.at === "string")).toBe(true);
+  const last = page.records.at(-1)!;
+  const older = h.service.journalPage(h.workspace, chat.id, last.seq, 2);
+  expect(older.records.map((record) => record.seq)).toEqual([last.seq - 2, last.seq - 1]);
+  expect(older.hasEarlier).toBe(last.seq > 3);
+  expect(h.specs).toHaveLength(1);
+});
+
 test("Send now stops the reply at work and sends the chosen message, with the rest still queued behind it", async () => {
   const h = setup(),
     chat = h.chat();

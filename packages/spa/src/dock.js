@@ -194,6 +194,9 @@ export function createDock(host, deps) {
         else if (state.kind === "browser")
           glyph.innerHTML =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c-2.2 2.4-2.2 9.6 0 12M8 2c2.2 2.4 2.2 9.6 0 12"/></svg>';
+        else if (state.kind === "chat-log")
+          glyph.innerHTML =
+            '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3h10M3 6.5h7M3 10h10M3 13.5h5"/></svg>';
         else if (state.kind === "agent-settings")
           glyph.innerHTML =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12M5 2v4M11 6v4M6 10v4"/></svg>';

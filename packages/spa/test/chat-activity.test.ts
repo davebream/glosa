@@ -65,7 +65,7 @@ test("chatQueue: the message at work or starting is in the thread, the rest wait
   const busy = chatQueue([turn("a", "running"), turn("b", "queued"), turn("c", "held"), turn("d", "queued")]);
   expect(busy.active!.id).toBe("a");
   expect(busy.head).toBeNull();
-  expect(busy.tray.map((row) => `${row.id}:${row.label}`)).toEqual(["b:Next", "c:Held", "d:Queued · 2"]);
+  expect(busy.tray.map((row) => `${row.id}:${row.label}`)).toEqual(["b:Next", "c:Held", "d:2nd"]);
   expect([...busy.hidden]).toEqual(["b", "c", "d"]);
   // Nothing at work: the first message free to go is starting, so it is in the thread, not the tray.
   const idle = chatQueue([turn("a", "completed"), turn("b", "held"), turn("c", "queued"), turn("d", "queued")]);

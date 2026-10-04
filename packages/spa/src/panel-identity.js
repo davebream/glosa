@@ -12,6 +12,10 @@ export function chatPanelId(id) {
 export function externalPanelId(id) {
   return JSON.stringify(["external-chat", id]);
 }
+/** A chat's protocol log, beside the chat: one per chat, like the chat itself. */
+export function chatLogPanelId(id) {
+  return JSON.stringify(["chat-log", id]);
+}
 export function settingsPanelId() {
   return JSON.stringify(["agent-settings"]);
 }
@@ -30,6 +34,8 @@ export function panelIdentity(id, params = {}) {
     return { id: imagePanelId(params.path), params: { ...params, kind: "image" } };
   if (params.kind === "chat" && typeof params.chatId === "string")
     return { id: chatPanelId(params.chatId), params: { ...params, kind: "chat" } };
+  if (params.kind === "chat-log" && typeof params.chatId === "string")
+    return { id: chatLogPanelId(params.chatId), params: { kind: "chat-log", chatId: params.chatId } };
   if (params.kind === "external-chat" && typeof params.sessionId === "string")
     return { id: externalPanelId(params.sessionId), params: { ...params, kind: "external-chat" } };
   if (params.kind === "agent-settings") return { id: settingsPanelId(), params: { kind: "agent-settings" } };
@@ -58,9 +64,17 @@ export function decodePanelId(id) {
     const value = JSON.parse(id);
     if (
       Array.isArray(value) &&
-      ["artifact", "image", "read-only", "diff", "chat", "external-chat", "agent-settings", "browser"].includes(
-        value[0],
-      )
+      [
+        "artifact",
+        "image",
+        "read-only",
+        "diff",
+        "chat",
+        "chat-log",
+        "external-chat",
+        "agent-settings",
+        "browser",
+      ].includes(value[0])
     )
       return value;
   } catch {
