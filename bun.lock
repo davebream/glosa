@@ -15,7 +15,7 @@
         "ignore": "7.0.10",
         "image-size": "2.0.4",
         "markdown-it": "^14.3.1",
-        "openai": "7.26.0",
+        "openai": "7.27.0",
         "picomatch": "^4.0.7",
         "zod": "^4.6.5",
       },
@@ -537,7 +537,7 @@
 
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 
-    "openai": ["openai@7.26.0", "", { "peerDependencies": { "@aws-sdk/credential-provider-node": ">=3.972.0 <4", "@smithy/hash-node": ">=4.3.0 <5", "@smithy/signature-v4": ">=5.4.0 <6", "undici": ">=5 <9", "ws": "^8.21.0", "zod": "^3.25 || ^4.0" }, "optionalPeers": ["@aws-sdk/credential-provider-node", "@smithy/hash-node", "@smithy/signature-v4", "undici", "ws", "zod"] }, "sha512-MjrHaTAmKPWbxtXWNcfOtURqpwJ/tnqMq2JgudRzx5OFHeMz0qrOaMH8JWotAL/08qd0OI/Hi1MEtgE9eyOAyw=="],
+    "openai": ["openai@7.27.0", "", { "peerDependencies": { "@aws-sdk/credential-provider-node": ">=3.972.0 <4", "@smithy/hash-node": ">=4.3.0 <5", "@smithy/signature-v4": ">=5.4.0 <6", "undici": ">=5 <9", "ws": "^8.21.0", "zod": "^3.25 || ^4.0" }, "optionalPeers": ["@aws-sdk/credential-provider-node", "@smithy/hash-node", "@smithy/signature-v4", "undici", "ws", "zod"] }, "sha512-QDo1FvnRDZn15YwGVOhT9vpyypDiLphkd/7a4mcURWf5upMoEetgA6o4DJeII+ZZkC6m6DvlilCwii3+ynDcTw=="],
 
     "p-map": ["p-map@7.0.6", "", {}, "sha512-I4Prw6ivkd6p8PiYR1tXASOAOBzIJwu0TB7fqaX0c/8c3QAehNYmX57EijyGGGBt3c/BIowGwV03RVBtXvHEVg=="],
 
