@@ -1041,6 +1041,93 @@ test("decision reservation admits exactly one response across competing browser 
   expect(h.writes.filter((item) => item.startsWith("answer:"))).toEqual(["answer:native-permission:allow"]);
 });
 
+test.each(["denied tool", "decision receipt"])(
+  "a %s journal failure still fences and stops the owned runtime without dispatching its queue",
+  async (failureSource) => {
+    let fences = 0,
+      stops = 0;
+    const h = setup({
+      launcher: {
+        async spawn() {
+          return {
+            pid: 123,
+            exited: new Promise<Awaited<OwnedProcess["exited"]>>(() => {}),
+            async write() {},
+            async fence() {
+              fences++;
+            },
+            async stop() {
+              stops++;
+            },
+            resize() {},
+          };
+        },
+      },
+    });
+    const connect = h.adapter.connect.bind(h.adapter);
+    let rejectWrites = false;
+    h.adapter.connect = async (...args) => ({
+      ...(await connect(...args)),
+      async answer() {
+        rejectWrites = true;
+        if (failureSource === "denied tool")
+          args[2]({ type: "tool", id: "denied-tool", name: "Bash", detail: "Denied", status: "denied" });
+      },
+    });
+    const chat = h.chat();
+    h.send(chat.id);
+    await eventually(() => h.inputs.length === 1);
+    h.send(chat.id, "wait for me");
+    const emit = h.events.get(chat.sessionId)!;
+    emit({
+      type: "decision",
+      decision: {
+        id: "denied-tool",
+        kind: "permission",
+        title: "Run?",
+        detail: "",
+        choices: [{ id: "deny", label: "Deny" }],
+      },
+    });
+    const log = h.store.chat(chat.id),
+      decision = log.view.decisions[0]!,
+      revision = log.journal.revision,
+      append = log.journal.append.bind(log.journal),
+      appendMany = log.journal.appendMany.bind(log.journal);
+    // Fail every commit after the durable reservation, as a poisoned journal does. The primary
+    // managed-state fsync test owns actual disk-failure/poisoning behavior; this owns cleanup.
+    const journal = spyOn(log.journal, "append").mockImplementation((...args) => {
+      if (rejectWrites) throw new ManagedAgentError("journal-unavailable", "fixture journal failure", 503);
+      return append(...args);
+    });
+    const batch = spyOn(log.journal, "appendMany").mockImplementation((...args) => {
+      if (rejectWrites) throw new ManagedAgentError("journal-unavailable", "fixture journal failure", 503);
+      return appendMany(...args);
+    });
+    try {
+      await expect(
+        h.service.answer(h.workspace, chat.id, {
+          requestId: randomUUID(),
+          decisionId: decision.id,
+          generation: decision.generation,
+          choice: "deny",
+        }),
+      ).rejects.toThrow("fixture journal failure");
+      expect(fences).toBeGreaterThan(0);
+      expect(stops).toBeGreaterThan(0);
+      expect(h.service.busy).toBe(true);
+      expect(h.inputs).toHaveLength(1);
+      expect(log.view.decisions[0]?.status).toBe("reserved");
+      expect(log.journal.revision).toBe(revision + 1);
+      emit({ type: "text", id: "late", text: "must remain fenced" });
+      expect(log.view.content).toEqual([]);
+    } finally {
+      journal.mockRestore();
+      batch.mockRestore();
+    }
+  },
+);
+
 test("per-profile admission holds a third chat until a running turn completes", async () => {
   const h = setup(),
     first = h.chat(),
@@ -1533,8 +1620,22 @@ test("history pages logical messages without truncating exports or starting a ru
   await eventually(() => h.inputs.length === 1);
   const emit = h.events.get(chat.sessionId)!;
   for (let i = 0; i < 135; i++) emit({ type: "text", id: i === 0 ? "user" : `message-${i}`, text: `Text ${i}` });
-  emit({ type: "completed" });
-  await eventually(() => !h.service.busy);
+  const log = h.store.chat(chat.id);
+  // Finishing must use the borrowed policy view, not materialize a detached transcript before
+  // the durable terminal update can reach the browser. Public history reads below remain detached.
+  Object.defineProperty(log, "state", {
+    configurable: true,
+    get() {
+      throw new Error("terminal cleanup copied the complete conversation");
+    },
+  });
+  try {
+    emit({ type: "completed" });
+    await eventually(() => !h.service.busy);
+    expect(log.view.runtime?.state).toBe("stopped");
+  } finally {
+    Reflect.deleteProperty(log, "state");
+  }
   const count = h.spawns(),
     latest = h.service.snapshot(h.workspace, chat.id);
   expect(latest.content).toHaveLength(100);

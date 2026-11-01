@@ -2616,9 +2616,14 @@ export class ManagedChatService {
     try {
       await run.connection.answer(decision.nativeId, input.choice, input.text);
       log.append({ type: "decision_status", id: decision.id, status: "answered" });
-    } catch {
-      log.append({ type: "decision_status", id: decision.id, status: "unknown" });
-      await this.failedRun(log, run);
+    } catch (error) {
+      try {
+        log.append({ type: "decision_status", id: decision.id, status: "unknown" });
+      } finally {
+        // Recording a failed response may fail too. Native authority and owned descendants
+        // must still be fenced and stopped when the journal is unavailable.
+        await this.failedRun(log, run, error);
+      }
       throw new ManagedAgentError("answer-unknown", "The response outcome is unknown. It was not resent.", 503);
     }
     if (
@@ -2687,7 +2692,7 @@ export class ManagedChatService {
     }
     const exits = await Promise.allSettled([...run.processes].map((child) => child.stop()));
     const stopped = drained && exits.every((result) => result.status === "fulfilled");
-    for (const decision of log.state.decisions)
+    for (const decision of log.view.decisions)
       if (decision.generation === run.generation && ["pending", "reserved"].includes(decision.status))
         log.append({ type: "decision_status", id: decision.id, status: "unknown" });
     log.append({
@@ -2696,7 +2701,7 @@ export class ManagedChatService {
       generation: run.generation,
       state: stopped ? "stopped" : "unknown",
     });
-    const finished = log.state.turns.find((turn) => turn.id === run.turnId);
+    const finished = log.turn(run.turnId);
     if (finished?.status === "stopping")
       log.append({
         type: "turn_status",
@@ -2742,7 +2747,7 @@ export class ManagedChatService {
       needsAuthentication ||
       (finished?.status !== "completed" && !((finished?.status === "failed" || run.sendNow) && stopped))
     )
-      for (const queued of log.state.turns) {
+      for (const queued of log.view.turns) {
         if (["accepted", "queued"].includes(queued.status))
           log.append({
             type: "turn_status",
@@ -2756,7 +2761,7 @@ export class ManagedChatService {
     if (stopped) {
       await run.releaseSession?.();
       this.runs.delete(run.chatId);
-      if (log.state.turns.some((turn) => turn.status === "queued")) this.ready.add(run.chatId);
+      if (log.view.turns.some((turn) => turn.status === "queued")) this.ready.add(run.chatId);
     }
     this.pump();
   }

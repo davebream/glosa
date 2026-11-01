@@ -98,7 +98,13 @@ export type AgentEvent =
   | { type: "effective_settings"; model?: string; effort?: string; permissionMode?: TurnSettings["permissionMode"] }
   | { type: "session"; nativeId: string }
   | { type: "text"; id: string; text: string; reasoning?: boolean }
-  | { type: "tool"; id: string; name: string; detail: string; status: "running" | "completed" | "failed" }
+  | {
+      type: "tool";
+      id: string;
+      name: string;
+      detail: string;
+      status: "running" | "completed" | "failed" | "denied" | "cancelled";
+    }
   | { type: "decision"; decision: NativeDecision }
   | { type: "decision_closed"; id: string }
   | { type: "usage"; value: Record<string, number | string | null> }

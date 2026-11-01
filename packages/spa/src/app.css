@@ -8116,6 +8116,9 @@ nav.glosa-chat-actions[hidden] {
 .glosa-chat-step-list li[data-state="failed"] .glosa-chat-step-mark {
   color: var(--danger);
 }
+.glosa-chat-step-list li[data-state="denied"] .glosa-chat-step-mark {
+  color: var(--warn);
+}
 .glosa-chat-step-detail {
   margin: 2px 0 8px calc(12px + var(--space-2));
   padding: 10px 12px;

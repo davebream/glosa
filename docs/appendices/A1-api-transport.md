@@ -1671,3 +1671,10 @@ before awaiting draft persistence. A later account or configuration change canno
 the client retains the payload and requires explicit recovery. An uncertain HTTP retry retains the
 exact original request ID and payload. Clearing the composer after local recovery persistence compares
 the complete captured draft, including attachments, references and retry linkage, so newer edits remain editable.
+
+Tool parts retain their stable identity as their status changes among `running`, `completed`,
+`failed`, `denied` and `cancelled`. Providers translate explicit native outcomes or a permission
+response tied to the same tool identity; generic error text never establishes denial or cancellation.
+An ended turn with no observed tool outcome remains visibly stopped with an unknown outcome.
+Legacy three-status records remain readable. A reader that does not recognize a newer durable
+status refuses the journal before writing, rather than dropping that record or changing its meaning.

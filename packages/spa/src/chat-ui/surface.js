@@ -18,7 +18,13 @@ import { createChatChrome } from "./chrome.js";
 
 const h = React.createElement;
 const ACTIVE = new Set(["dispatching", "running", "waiting", "stopping", "sending"]);
-const MARKS = { completed: "M2.5 6.4l2.3 2.3 4.7-5.2", failed: "M3 3l6 6M9 3l-6 6", stopped: "M3 6h6" };
+const MARKS = {
+  completed: "M2.5 6.4l2.3 2.3 4.7-5.2",
+  failed: "M3 3l6 6M9 3l-6 6",
+  denied: "M2.5 2.5l7 7M6 1a5 5 0 1 0 0 10a5 5 0 0 0 0-10",
+  cancelled: "M3 3h6v6H3z",
+  stopped: "M3 6h6",
+};
 
 function Slot({ element, className }) {
   const host = React.useRef(null);
@@ -112,7 +118,7 @@ function Steps({ work }) {
                 { className: "glosa-chat-step-mark", "aria-hidden": "true" },
                 MARKS[step.state] ? h("svg", { viewBox: "0 0 12 12" }, h("path", { d: MARKS[step.state] })) : null,
               ),
-              h("span", null, `${step.label}${["failed", "stopped"].includes(step.state) ? ` · ${step.state}` : ""}`),
+              h("span", null, step.label),
             ),
             h("pre", { className: "glosa-chat-step-detail" }, step.detail),
           ),

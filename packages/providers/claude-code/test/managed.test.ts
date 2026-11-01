@@ -249,6 +249,45 @@ test("Claude tool lifecycle and usage remain structured and subscription cost is
   expect(events.at(-1)).toEqual({ type: "completed" });
 });
 
+test("Claude ties human denial to its native tool ID and never guesses denial from an error", () => {
+  const events: AgentEvent[] = [],
+    normalizer = new ClaudeEventNormalizer((event) => events.push(event));
+  normalizer.declineTool("denied-tool", "Write", { file_path: "outline.md" });
+  normalizer.declineTool("cancelled-question", "AskUserQuestion", { questions: [] });
+  // Native completion envelopes may arrive after the permission callback. Neither the later
+  // start envelope nor an is_error result may erase the explicit human choice for that ID.
+  normalizer.accept({
+    type: "assistant",
+    message: {
+      id: "m",
+      content: [
+        { type: "tool_use", id: "denied-tool", name: "Write", input: { file_path: "outline.md" } },
+        { type: "tool_use", id: "unresolved", name: "Bash", input: {} },
+      ],
+    },
+  });
+  normalizer.accept({
+    type: "user",
+    message: {
+      content: [
+        { type: "tool_result", tool_use_id: "denied-tool", is_error: true, content: "Request declined" },
+        { type: "tool_result", tool_use_id: "cancelled-question", is_error: true, content: "Cancelled" },
+        { type: "tool_result", tool_use_id: "different-tool", is_error: true, content: "Permission denied" },
+      ],
+    },
+  });
+  normalizer.accept({ type: "result", subtype: "success", is_error: false });
+  expect(events.filter((event) => event.type === "tool").map(({ id, status }) => [id, status])).toEqual([
+    ["denied-tool", "denied"],
+    ["cancelled-question", "cancelled"],
+    ["denied-tool", "denied"],
+    ["unresolved", "running"],
+    ["denied-tool", "denied"],
+    ["cancelled-question", "cancelled"],
+    ["different-tool", "failed"],
+  ]);
+});
+
 test("Claude empty stream blocks do not shift later text and non-streamed messages preserve all blocks", () => {
   const events: AgentEvent[] = [];
   const normalizer = new ClaudeEventNormalizer((event) => events.push(event));
@@ -641,6 +680,7 @@ test("Claude workspace scope auto-approves confined file operations and asks a h
   symlinkSync(outside, join(cwd, "escape"));
   symlinkSync(join(outside, "absent"), join(cwd, "dangling"));
   const events: AgentEvent[] = [];
+  let failToolObserver = false;
   let configured!: Parameters<ClaudeSdk["query"]>[0];
   let finish!: () => void;
   const adapter = new ClaudeManagedAdapter(async () => ({
@@ -698,7 +738,10 @@ test("Claude workspace scope auto-approves confined file operations and asks a h
         settings: { model: "model", effort: "high", permissionMode: "workspace" },
       } as SessionLaunchSpec,
       launcher,
-      (event) => events.push(event),
+      (event) => {
+        if (failToolObserver && event.type === "tool") throw new Error("fixture journal failure");
+        events.push(event);
+      },
     );
     expect(configured.options.permissionMode).toBe("default");
     expect(await waitUntil(() => events.some((event) => event.type === "effective_settings"))).toBe(true);
@@ -732,7 +775,34 @@ test("Claude workspace scope auto-approves confined file operations and asks a h
       expect(events.some((event) => event.type === "decision" && event.decision.id === id)).toBe(true);
       await connection.answer(id, "deny");
       expect(await result).toMatchObject({ behavior: "deny" });
+      expect(events.find((event) => event.type === "tool" && event.id === id)).toMatchObject({
+        name,
+        status: "denied",
+      });
     }
+    // A generated decision ID identifies a prompt, not necessarily a native tool. Do not
+    // manufacture a tool outcome when the SDK omitted the tool-use identity.
+    const withoutId = configured.options.canUseTool("Bash", {}, { signal, toolUseID: "" });
+    const decision = events.findLast((event) => event.type === "decision");
+    if (decision?.type !== "decision") throw new Error("permission request missing");
+    await connection.answer(decision.decision.id, "deny");
+    expect(await withoutId).toMatchObject({ behavior: "deny" });
+    expect(events.filter((event) => event.type === "tool")).toHaveLength(requests.length);
+    const cancelled = new AbortController();
+    const aborted = configured.options.canUseTool("Bash", {}, { signal: cancelled.signal, toolUseID: "aborted" });
+    cancelled.abort();
+    expect(await aborted).toMatchObject({ behavior: "deny" });
+    expect(events.some((event) => event.type === "tool" && event.id === "aborted")).toBe(false);
+    const observerFailure = configured.options.canUseTool("Bash", {}, { signal, toolUseID: "observer-failure" });
+    let resolved: unknown;
+    void observerFailure.then((result: unknown) => {
+      resolved = result;
+    });
+    failToolObserver = true;
+    await expect(connection.answer("observer-failure", "deny")).rejects.toThrow("fixture journal failure");
+    await Promise.resolve();
+    expect(resolved).toMatchObject({ behavior: "deny" });
+    failToolObserver = false;
   } finally {
     await connection?.close();
     rmSync(root, { recursive: true, force: true });

@@ -251,6 +251,11 @@ Repeating the original request returns its existing receipt and never duplicates
 Retrying runtime cleanup targets the ended attempt and preserves held messages on both successful
 and refused cleanup. It is not a request to cancel the waiting queue.
 
+Terminal cleanup reads the borrowed policy projection and indexed turn identity. It must not
+materialize detached copies of the complete conversation for read-only decisions, since that work
+delays delivery of the already-durable completion. Journal transition validation and public detached
+snapshots retain their existing persistence and isolation boundaries.
+
 A refused process-group signal is not proof of exit and must not abort the exit-receipt pipeline.
 The guardian retains its bounded termination/escalation waits and reports an empty group only when
 the operating system confirms it no longer exists. Persistent signal refusal or uncertain ownership

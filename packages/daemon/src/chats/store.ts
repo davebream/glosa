@@ -324,7 +324,7 @@ const content = z
     kind: z.enum(["text", "reasoning", "tool", "status"]),
     text,
     name: z.string().max(200).optional(),
-    status: z.enum(["running", "completed", "failed"]).optional(),
+    status: z.enum(["running", "completed", "failed", "denied", "cancelled"]).optional(),
   })
   .strict();
 export type ChatContent = z.infer<typeof content>;

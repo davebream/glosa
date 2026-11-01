@@ -2285,6 +2285,82 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       mkdirSync(".context/test-results", { recursive: true });
       writeFileSync(".context/test-results/reliable-chat-timings.json", `${JSON.stringify(timings, null, 2)}\n`);
 
+      // Representative normalized tool and decision content is composed through the production
+      // surface. Provider seam tests own native translation; these offline fixtures prove actual
+      // visible labels, literal file/diff text and readable question/quota states in both themes.
+      await tab.evaluate(String.raw`(async()=>{
+        const f=chatFixture;f.reviewBaseline=structuredClone(f.state);f.pane.destroy();
+        f.state.turns=[{id:'tool-review',text:'Review the outline changes.',status:'completed'}];
+        f.state.content=[
+          {id:'file-read',turnId:'tool-review',kind:'tool',name:'Read',status:'completed',text:'File: outline.md\n\n# Opening\nBegin with one concrete detail.'},
+          {id:'file-diff',turnId:'tool-review',kind:'tool',name:'fileChange',status:'completed',text:'File: outline.md\nChange: update\n\n@@ -1 +1 @@\n-Start with an abstract claim.\n+<script>Begin with one concrete detail.</script>'},
+          {id:'denied',turnId:'tool-review',kind:'tool',name:'Bash',status:'denied',text:'The user denied this command request.'},
+          {id:'cancelled',turnId:'tool-review',kind:'tool',name:'WebFetch',status:'cancelled',text:'The native tool reported cancellation.'},
+          {id:'failed',turnId:'tool-review',kind:'tool',name:'Bash',status:'failed',text:'The command exited with code 1.'},
+          {id:'unfinished',turnId:'tool-review',kind:'tool',name:'Write',status:'running',text:'No terminal tool outcome was received.'},
+        ];f.state.decisions=[];f.state.page={hasEarlier:false};f.state.revision++;await f.mount();
+        const steps=document.querySelector('.glosa-chat-steps');steps.open=true;
+        const details=steps.querySelectorAll('li details');details[0].open=true;details[1].open=true;await f.frame();
+      })()`);
+      const toolReview = await tab.evaluate<{
+        labels: string[];
+        states: string[];
+        visible: boolean;
+        detail: string;
+        activeContent: number;
+      }>(`(()=>{const list=document.querySelector('.glosa-chat-step-list'),history=document.querySelector('.glosa-chat-history').getBoundingClientRect();
+        const rows=[...list.querySelectorAll('li')];return {labels:rows.map(row=>row.querySelector('summary').textContent),states:rows.map(row=>row.dataset.state),
+          visible:rows.every(row=>{const b=row.querySelector('summary').getBoundingClientRect();return b.width>0&&b.height>0&&b.top>=history.top&&b.bottom<=history.bottom;}),
+          detail:list.querySelectorAll('pre')[1].textContent,activeContent:list.querySelectorAll('script,img,iframe').length};})()`);
+      expect(toolReview.labels).toEqual([
+        "Read a file",
+        "Edited files",
+        "Denied: Running a command",
+        "Cancelled: Reading a web page",
+        "Failed: Running a command",
+        "Stopped: Writing a file · outcome unknown",
+      ]);
+      expect(toolReview.states).toEqual(["completed", "completed", "denied", "cancelled", "failed", "stopped"]);
+      expect(toolReview.visible, "the tool outcomes must be visible after opening their steps").toBe(true);
+      expect(toolReview.detail).toContain(
+        "@@ -1 +1 @@\n-Start with an abstract claim.\n+<script>Begin with one concrete detail.</script>",
+      );
+      expect(toolReview.activeContent, "file/diff text must remain literal rather than become active HTML").toBe(0);
+      for (const scheme of ["light", "dark"] as const) {
+        await setScheme(scheme);
+        const receipt = await tab.send("Page.captureScreenshot", { format: "png" });
+        writeFileSync(
+          `.context/test-results/reliable-chat-tools-${scheme}.png`,
+          Buffer.from(receipt.result.data, "base64"),
+        );
+      }
+      await tab.evaluate(`(async()=>{
+        const f=chatFixture;f.pane.destroy();
+        f.state.turns=[
+          {id:'quota-review',text:'Continue reviewing the opening.',status:'failed',failure:{category:'quota',title:'Usage limit reached',detail:'This account has reached its usage limit. Your message remains available as a draft.',dispatchCertainty:'known',recoveryAction:'use_draft'}},
+          {id:'question-review',text:'Choose the opening focus.',status:'waiting'},
+        ];f.state.content=[];f.state.decisions=[{id:'review-question',kind:'question',generation:2,status:'pending',title:'Which opening should I develop?',detail:'Choose the direction before I revise the outline.',expiresAt:new Date(Date.now()+60000).toISOString(),allowText:true,
+          questions:[{id:'focus',question:'What should the reader notice first?',multiple:false,options:[{label:'The setting',description:'Begin with a concrete place.'},{label:'The action',description:'Begin with what changed.'}]}],choices:[{id:'answer',label:'Send answer'},{id:'deny',label:'Cancel'}]}];
+        f.state.revision++;await f.mount();await f.frame();
+      })()`);
+      expect(
+        await tab.evaluate<boolean>(`(()=>{const quota=document.querySelector('.glosa-chat-turn-failure'),question=document.querySelector('[data-decision-id=review-question]');
+        return quota.textContent.includes('Usage limit reached')&&quota.getBoundingClientRect().height>0&&question.querySelector('legend').textContent==='What should the reader notice first?'&&
+          question.querySelectorAll('input[type=radio]').length===2&&[...question.querySelectorAll('button')].every(button=>!button.disabled)&&question.getBoundingClientRect().height>0;})()`),
+      ).toBe(true);
+      for (const scheme of ["light", "dark"] as const) {
+        await setScheme(scheme);
+        const receipt = await tab.send("Page.captureScreenshot", { format: "png" });
+        writeFileSync(
+          `.context/test-results/reliable-chat-question-quota-${scheme}.png`,
+          Buffer.from(receipt.result.data, "base64"),
+        );
+      }
+      writeFileSync(".context/test-results/reliable-chat-tool-review.json", `${JSON.stringify(toolReview, null, 2)}\n`);
+      await tab.evaluate(
+        `(async()=>{const f=chatFixture;f.pane.destroy();f.state=f.reviewBaseline;delete f.reviewBaseline;await f.mount();})()`,
+      );
+
       // Document zoom exercises actual enlarged layout in the installed engine. This does not
       // qualify native browser chrome or an installed desktop shell's zoom controls.
       await tab.evaluate("document.documentElement.style.zoom='2'");
@@ -2582,6 +2658,245 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
     },
     TEST_TIMEOUT_MS,
   );
+  test(
+    "ChatGPT sign-in recovery preserves a newer draft and unacknowledged intent until an explicit retry",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "before OAuth recovery");
+      const outsideRequests: string[] = [];
+      const stopRequests = tab.on((event) => {
+        if (event.method !== "Network.requestWillBeSent") return;
+        const url = event.params?.request?.url;
+        if (url && /^https?:/.test(url) && !url.startsWith(origin())) outsideRequests.push(url);
+      });
+      try {
+        await tab.evaluate(String.raw`(async()=>{
+          const {createDataAccess}=await import('/app/data-access.js');
+          const {createChatPane}=await import('/app/chat-pane.js');
+          const {mountAgentSettings}=await import('/app/agent-settings.js');
+          const f=window.oauthRecovery={requests:[],sends:[],opened:[],begins:[],cancels:[],adoptions:0,mode:'pending',attempt:0};
+          const host=document.createElement('main');host.style.cssText='height:100vh;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;padding:16px;box-sizing:border-box';
+          f.chatHost=document.createElement('div');f.chatHost.style.cssText='min-height:0;min-width:0';
+          f.settingsHost=document.createElement('div');f.settingsHost.style.cssText='min-height:0;overflow:auto';
+          host.append(f.chatHost,f.settingsHost);document.body.replaceChildren(host);
+          f.frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          f.wait=async(predicate,label)=>{const deadline=performance.now()+5000;while(!predicate()){if(performance.now()>deadline)throw Error(label);await f.frame();}};
+          f.profile={id:'oauth-profile',provider:'codex',label:'Writing account',enabled:true,isDefault:true,revision:1,epoch:1,
+            authentication:{mode:'oauth',credentialRef:'saved-browser-account',planNoticeSeen:true},
+            auth:{state:'authenticated',identity:'oauth:saved-browser-account',label:'writer@example.test',method:'OAuth',observedAt:new Date().toISOString()}};
+          f.state={id:'oauth-chat',workspaceId:'offline-oauth-workspace',workspaceEpoch:'offline-oauth-epoch',profileId:f.profile.id,provider:'codex',title:'Preserve the argument',origin:'managed',revision:1,
+            configRevision:1,draftRevision:0,draft:'',draftAttachments:[],archived:false,page:{hasEarlier:false},runtime:{state:'stopped',generation:1},
+            settings:{model:'offline-model',effort:'high',permissionMode:'default'},turns:[],content:[],decisions:[]};
+          const json=value=>new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
+          const storage={getItem:key=>key==='glosa_token'?'offline-oauth-browser-token':localStorage.getItem(key),setItem:(key,value)=>localStorage.setItem(key,value),removeItem:key=>localStorage.removeItem(key)};
+          f.access=createDataAccess({storage,expectedInstallId:'offline-oauth-browser-install',fetchFn:async(path,init={})=>{
+            const method=init.method??'GET',input=init.body?JSON.parse(init.body):undefined;
+            f.requests.push({path,method,authorization:new Headers(init.headers).get('Authorization')});
+            if(path==='/api/agents/status')return json({available:true,providers:[{id:'codex',name:'Codex',installed:true,qualified:true,available:true,oauth:true}],profiles:[f.profile],
+              capabilities:{[f.profile.id]:{models:[{id:'offline-model',name:'Offline model',efforts:['high']}]}},
+              oauthAccounts:{codex:[{accountId:'saved-browser-account',status:f.profile.auth.state==='authenticated'?'signed-in':'signed-out',planEnabled:true}]}});
+            if(path.startsWith('/api/dictation/'))return json({enabled:false,context:true,cleanup:false,credential_present:false,revision:0});
+            if(path.includes('/mcp'))return json({servers:[],revision:0});
+            if(path==='/w/oauth-browser/stream')return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('event: chat_stream_ready\ndata: {"streamId":"offline-oauth-stream"}\n\n'));}}),{headers:{'Content-Type':'text/event-stream'}});
+            if(path==='/w/oauth-browser/chats/watch')return json({revision:input.revision});
+            if(path==='/w/oauth-browser/chats/oauth-chat')return json(f.state);
+            if(path.endsWith('/feedback'))return json({entryIds:[],hasMore:false});
+            if(path.endsWith('/draft')){f.state.draft=input.text;f.state.draftAttachments=input.attachments;f.state.draftRevision++;return json(f.state);}
+            if(path.endsWith('/turns')){f.sends.push(structuredClone(input));if(f.sends.length===1)throw new TypeError('The acknowledgement was lost.');
+              f.state.turns.push({id:input.turnId,text:input.text,status:'completed',revision:1});f.state.revision++;return json({turnId:input.turnId});}
+            if(path==='/api/agents/providers/codex/oauth/begin'){f.begins.push(input);return json({attemptId:'attempt-'+(++f.attempt),authorizationUrl:'https://auth.openai.com/authorize?state=offline-browser-'+f.attempt});}
+            if(path.endsWith('/cancel')){f.cancels.push(path);return json({status:'cancelled'});}
+            if(path==='/api/agents/providers/codex/oauth/adopt'){f.adoptions++;f.profile.auth.state='authenticated';return json(f.profile);}
+            if(path.startsWith('/api/agents/providers/codex/oauth/'))return json(f.mode==='pending'?{status:'pending'}:f.mode==='succeeded'?{status:'succeeded',account:{planEnabled:true}}:f.mode==='expired'?{status:'expired'}:{status:'failed',error:f.mode});
+            throw Error('Unexpected OAuth browser fixture request: '+path);
+          }});
+          f.mountChat=async()=>{f.chat=createChatPane(f.chatHost,{dataAccess:f.access,slug:'oauth-browser',chatId:'oauth-chat',onChange(){},onSettings(){}});await f.chat.ready;await f.frame();};
+          f.mountSettings=async()=>{f.settings=mountAgentSettings(f.settingsHost,{dataAccess:f.access,openOutside:async url=>f.opened.push(url),onChange(){f.changed=(f.changed??0)+1;}});await f.settings.ready;await f.frame();};
+          f.button=(label,scope=f.settingsHost)=>{const button=[...scope.querySelectorAll('button')].find(el=>el.textContent===label&&!el.disabled&&el.getClientRects().length);if(!button)throw Error('Missing visible action: '+label);button.focus();return document.activeElement===button;};
+          f.recovery=()=>f.access.readChatRecovery('oauth-browser','oauth-chat');
+          await f.mountChat();
+        })()`);
+        const enter = async () => {
+          for (const type of ["keyDown", "keyUp"]) {
+            await tab.send("Input.dispatchKeyEvent", {
+              type,
+              key: "Enter",
+              code: "Enter",
+              windowsVirtualKeyCode: 13,
+              ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
+            });
+          }
+        };
+        const activate = async (label: string, scope = "oauthRecovery.settingsHost") => {
+          expect(await tab.evaluate<boolean>(`oauthRecovery.button(${JSON.stringify(label)},${scope})`)).toBe(true);
+          await enter();
+        };
+        const returnToDraft = async () => {
+          for (let attempt = 0; attempt < 40; attempt++) {
+            if (
+              await tab.evaluate<boolean>(
+                `document.activeElement===oauthRecovery.chat.element.querySelector('[aria-label=Message]')`,
+              )
+            )
+              return;
+            for (const type of ["keyDown", "keyUp"]) {
+              await tab.send("Input.dispatchKeyEvent", { type, key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+            }
+          }
+          throw new Error("keyboard could not return from sign-in to the preserved draft");
+        };
+        await tab.evaluate("oauthRecovery.chat.focus()");
+        await tab.send("Input.insertText", { text: "Keep the quoted paragraph." });
+        await activate("↑", "oauthRecovery.chat.element");
+        await tab.evaluate(
+          `oauthRecovery.wait(()=>oauthRecovery.sends.length===1&&oauthRecovery.chat.element.querySelector('[aria-label="Retry sending message"]'),'unacknowledged intent did not remain available for review')`,
+        );
+        const intent = await tab.evaluate<Record<string, unknown>>("oauthRecovery.sends[0]");
+        await tab.evaluate("oauthRecovery.chat.focus()");
+        await tab.send("Input.insertText", { text: "A newer draft stays separate." });
+        await tab.evaluate(
+          `(async()=>{oauthRecovery.profile.auth.state='expired';await oauthRecovery.mountSettings();})()`,
+        );
+        expect(
+          await tab.evaluate<string>("oauthRecovery.settingsHost.querySelector('.glosa-agent-state').textContent"),
+        ).toBe("Sign-in expired");
+        for (const [mode, message] of [
+          ["pending", "Finish sign-in in your browser. Your drafts are safe here."],
+          ["access-denied", "ChatGPT sign-in was declined. Your drafts are unchanged."],
+          ["expired", "Sign-in expired. Continue with ChatGPT to start again."],
+          ["reauth-required", "Sign in to ChatGPT again before continuing."],
+        ]) {
+          await tab.evaluate(`oauthRecovery.mode=${JSON.stringify(mode)}`);
+          await activate("Continue with ChatGPT");
+          await tab.evaluate(
+            `oauthRecovery.wait(()=>oauthRecovery.settingsHost.querySelector('.glosa-agent-oauth [role]')?.textContent===${JSON.stringify(message)},'OAuth recovery status did not explain the local outcome')`,
+          );
+          expect(
+            await tab.evaluate<string>("oauthRecovery.chat.element.querySelector('[aria-label=Message]').value"),
+          ).toBe("A newer draft stays separate.");
+          expect(await tab.evaluate<number>("oauthRecovery.sends.length")).toBe(1);
+          await activate(mode === "pending" ? "Cancel sign-in" : "Close");
+          await tab.evaluate(
+            `oauthRecovery.wait(()=>oauthRecovery.settingsHost.querySelector('.glosa-agent-oauth [role]')?.textContent==='Sign-in closed. Your drafts are unchanged.','cancel did not leave a visible draft-preservation result')`,
+          );
+          await returnToDraft();
+          expect(
+            await tab.evaluate<boolean>(
+              "document.activeElement===oauthRecovery.chat.element.querySelector('[aria-label=Message]')",
+            ),
+          ).toBe(true);
+        }
+        const preserved = await tab.evaluate<{
+          draft: { text: string };
+          outbox: { intent: Record<string, unknown> }[];
+        }>("oauthRecovery.recovery()");
+        expect(preserved.draft.text).toBe("A newer draft stays separate.");
+        expect(preserved.outbox).toHaveLength(1);
+        expect(preserved.outbox[0]?.intent).toEqual(intent);
+        expect(await tab.evaluate<number>("oauthRecovery.adoptions")).toBe(0);
+        expect(await tab.evaluate<boolean>("oauthRecovery.cancels.length>=4")).toBe(true);
+        await tab.evaluate("oauthRecovery.mode='succeeded'");
+        await activate("Sign in");
+        await tab.evaluate(
+          `oauthRecovery.wait(()=>oauthRecovery.settingsHost.querySelector('.glosa-agent-state')?.textContent==='Connected'&&oauthRecovery.settingsHost.querySelector('.glosa-agent-oauth [role]')?.textContent==='Using ChatGPT plan. No message has been sent.','simulated reauthentication did not show the connected account')`,
+        );
+        expect(await tab.evaluate<Record<string, unknown>>("oauthRecovery.begins.at(-1)")).toEqual({
+          accountId: "saved-browser-account",
+          requestPlanConsent: false,
+        });
+        expect(await tab.evaluate<number>("oauthRecovery.sends.length")).toBe(1);
+        await tab.evaluate(
+          `(async()=>{oauthRecovery.chat.destroy();await oauthRecovery.frame();await oauthRecovery.mountChat();})()`,
+        );
+        await returnToDraft();
+        expect(
+          await tab.evaluate<string>("oauthRecovery.chat.element.querySelector('[aria-label=Message]').value"),
+        ).toBe("A newer draft stays separate.");
+        expect(
+          await tab.evaluate<number>("oauthRecovery.sends.length"),
+          "reopening after sign-in automatically resent an ambiguous intent",
+        ).toBe(1);
+        expect(
+          (await tab.evaluate<{ outbox: { intent: Record<string, unknown> }[] }>("oauthRecovery.recovery()")).outbox[0]
+            ?.intent,
+        ).toEqual(intent);
+        const screenshot = await tab.send("Page.captureScreenshot", { format: "png" });
+        mkdirSync(".context/test-results", { recursive: true });
+        writeFileSync(
+          ".context/test-results/chat-pipeline-oauth-recovery.png",
+          Buffer.from(screenshot.result.data, "base64"),
+        );
+        await tab.evaluate(
+          `(()=>{const button=oauthRecovery.chat.element.querySelector('[aria-label="Retry sending message"]');button.focus();})()`,
+        );
+        await enter();
+        await tab.evaluate(
+          `oauthRecovery.wait(()=>oauthRecovery.sends.length===2&&!oauthRecovery.chat.element.querySelector('[aria-label="Retry sending message"]'),'explicit retry did not acknowledge the preserved intent')`,
+        );
+        expect(await tab.evaluate<Record<string, unknown>>("oauthRecovery.sends[1]")).toEqual(intent);
+        expect(
+          await tab.evaluate<string>("oauthRecovery.chat.element.querySelector('[aria-label=Message]').value"),
+        ).toBe("A newer draft stays separate.");
+        expect(
+          await tab.evaluate<boolean>(
+            "oauthRecovery.requests.every(request=>request.authorization==='Bearer offline-oauth-browser-token')",
+          ),
+        ).toBe(true);
+        expect(
+          await tab.evaluate<boolean>(
+            "oauthRecovery.opened.length===5&&oauthRecovery.opened.every(url=>url.startsWith('https://auth.openai.com/authorize?state=offline-browser-'))",
+          ),
+        ).toBe(true);
+        expect(outsideRequests).toEqual([]);
+        const observations = await tab.evaluate(
+          `(async()=>({sends:oauthRecovery.sends,begins:oauthRecovery.begins,cancels:oauthRecovery.cancels,opened:oauthRecovery.opened,adoptions:oauthRecovery.adoptions,recovery:await oauthRecovery.recovery(),status:oauthRecovery.settingsHost.querySelector('.glosa-agent-state').textContent,draft:oauthRecovery.chat.element.querySelector('[aria-label=Message]').value}))()`,
+        );
+        writeFileSync(
+          ".context/chat-pipeline-oauth-browser-receipt.json",
+          JSON.stringify(
+            {
+              selectedCase:
+                "ChatGPT sign-in recovery preserves a newer draft and unacknowledged intent until an explicit retry",
+              browserVersion: (await browser.send("Browser.getVersion")).result,
+              daemonPid: daemon?.pid,
+              browserPid: chrome?.pid,
+              port,
+              home,
+              workspaceRoot,
+              chromeProfile,
+              observations,
+            },
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        const diagnostic = await tab
+          .evaluate(
+            `(async()=>({sends:oauthRecovery.sends,requests:oauthRecovery.requests,body:document.body.innerText,recovery:await oauthRecovery.recovery()}))()`,
+          )
+          .catch(() => null);
+        writeFileSync(
+          ".context/chat-pipeline-oauth-failure.json",
+          JSON.stringify({ error: String(error), diagnostic }, null, 2),
+        );
+        const failure = await tab.send("Page.captureScreenshot", { format: "png" }).catch(() => null);
+        if (failure)
+          writeFileSync(".context/chat-pipeline-oauth-failure.png", Buffer.from(failure.result.data, "base64"));
+        throw error;
+      } finally {
+        stopRequests();
+        await tab
+          .evaluate(
+            `(async()=>{oauthRecovery.chat?.destroy();oauthRecovery.settings?.destroy();await oauthRecovery.frame();})()`,
+          )
+          .catch(() => {});
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   test(
     "#405: the five raised components paint the same colours from tokens in light and dark, and a light History diff sits on glosa's paper",
     async () => {

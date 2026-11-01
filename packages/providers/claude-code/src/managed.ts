@@ -411,7 +411,13 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
       input = new InputQueue();
     const pending = new Map<
       string,
-      { resolve: (result: PermissionResult) => void; name: string; input: Record<string, unknown>; cleanup(): void }
+      {
+        resolve: (result: PermissionResult) => void;
+        name: string;
+        input: Record<string, unknown>;
+        toolUseId?: string;
+        cleanup(): void;
+      }
     >();
     let active = false,
       closed = false;
@@ -419,6 +425,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
       ...spec,
       env: { ...spec.env, ...(spec.mcp ? { GLOSA_MANAGED_MCP_GRANT: spec.mcp.grant } : {}) },
     };
+    const normalize = new ClaudeEventNormalizer(onEvent, providerEnvironmentSecrets(nativeSpec.env));
     const query = sdk.query({
       prompt: input,
       options: {
@@ -514,7 +521,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
               clearTimeout(timeout);
               permission.signal.removeEventListener("abort", deny);
             };
-            pending.set(id, { resolve, name, input: toolInput, cleanup });
+            pending.set(id, { resolve, name, input: toolInput, toolUseId: permission.toolUseID || undefined, cleanup });
             permission.signal.addEventListener("abort", deny, { once: true });
             onEvent({
               type: "decision",
@@ -571,7 +578,6 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
           "Claude did not report the selected subscription account. Reconnect the account.",
         );
       }
-      const normalize = new ClaudeEventNormalizer(onEvent, providerEnvironmentSecrets(nativeSpec.env));
       let commandList: ClaudeCommand[] | undefined;
       const commands = async (forceReload = false) => {
         if (forceReload || !commandList) commandList = (await query.supportedCommands?.()) ?? [];
@@ -731,11 +737,18 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
           }
           pending.delete(id);
           decision.cleanup();
-          decision.resolve(
-            choice === "allow"
-              ? { behavior: "allow", updatedInput }
-              : { behavior: "deny", message: "The user declined this tool request." },
-          );
+          try {
+            if (choice !== "allow" && decision.toolUseId)
+              normalize.declineTool(decision.toolUseId, decision.name, decision.input);
+          } finally {
+            // A failed observer must still release the SDK permission promise. Its pending
+            // entry and timeout are already removed, so close() cannot settle it later.
+            decision.resolve(
+              choice === "allow"
+                ? { behavior: "allow", updatedInput }
+                : { behavior: "deny", message: "The user declined this tool request." },
+            );
+          }
         },
         interrupt: () => query.interrupt(),
         async mcpStatus() {
@@ -776,6 +789,7 @@ export class ClaudeEventNormalizer {
   private readonly completedBlocks = new Map<string, number>();
   private readonly activeBlocks = new Map<string, number>();
   private readonly tools = new Map<string, string>();
+  private readonly declinedTools = new Map<string, "denied" | "cancelled">();
   private readonly emit: (event: AgentEvent) => void;
   constructor(
     emit: (event: AgentEvent) => void,
@@ -785,6 +799,13 @@ export class ClaudeEventNormalizer {
       if (event.type === "text" && !event.reasoning && event.text) this.emittedText = true;
       emit(event);
     };
+  }
+  /** The SDK permission callback proves tool identity; generic error text never does. */
+  declineTool(id: string, name: string, input: Record<string, unknown>): void {
+    const status = name === "AskUserQuestion" ? "cancelled" : "denied";
+    this.tools.set(id, name);
+    this.declinedTools.set(id, status);
+    this.emit({ type: "tool", id, name, detail: JSON.stringify(input), status });
   }
   accept(raw: unknown): void {
     if (!raw || typeof raw !== "object") return;
@@ -843,7 +864,7 @@ export class ClaudeEventNormalizer {
             id: block.id,
             name: block.name,
             detail: JSON.stringify(block.input ?? {}),
-            status: "running",
+            status: this.declinedTools.get(block.id) ?? "running",
           });
         }
       }
@@ -889,7 +910,7 @@ export class ClaudeEventNormalizer {
             id: block.id,
             name: block.name,
             detail: JSON.stringify(block.input ?? {}),
-            status: "running",
+            status: this.declinedTools.get(block.id) ?? "running",
           });
         }
       }
@@ -906,7 +927,7 @@ export class ClaudeEventNormalizer {
               id: block.tool_use_id,
               name: this.tools.get(block.tool_use_id) ?? "Tool",
               detail: typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? ""),
-              status: block.is_error ? "failed" : "completed",
+              status: this.declinedTools.get(block.tool_use_id) ?? (block.is_error ? "failed" : "completed"),
             });
     }
     if (value.type === "result") {

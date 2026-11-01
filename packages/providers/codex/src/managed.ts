@@ -28,6 +28,33 @@ import { waitForManagedTools } from "../../../daemon/src/agents/managed-bootstra
 // Keep the managed grant bridge separate from the native companion integration.
 const MANAGED_MCP_NAME = "glosa-managed";
 
+const fileChangesSchema = z.array(
+  z.object({
+    path: z.string(),
+    kind: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("add") }),
+      z.object({ type: z.literal("delete") }),
+      z.object({ type: z.literal("update"), move_path: z.string().nullable() }),
+    ]),
+    diff: z.string(),
+  }),
+);
+
+/** Native file-change vocabulary stays here; the generic surface receives readable plain text. */
+function toolDetail(item: Record<string, unknown>): string {
+  const changes = item.type === "fileChange" ? fileChangesSchema.safeParse(item.changes).data : undefined;
+  const text = changes?.length
+    ? changes
+        .map(
+          ({ path, kind, diff }) =>
+            `File: ${path}\nChange: ${kind.type}${kind.type === "update" && kind.move_path ? `\nMove to: ${kind.move_path}` : ""}\n\n${diff}`,
+        )
+        .join("\n\n")
+    : JSON.stringify(item);
+  const marker = "\n[Tool detail truncated]";
+  return text.length > 16_000 ? text.slice(0, 16_000 - marker.length) + marker : text;
+}
+
 const accountSchema = z.object({
   account: z
     .object({ type: z.literal("chatgpt"), email: z.string().email(), planType: z.string() })
@@ -804,13 +831,16 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
               type: "tool",
               id: item.id,
               name: item.type,
-              detail: JSON.stringify(item).slice(0, 16000),
-              status:
-                frame.method === "item/started"
-                  ? "running"
-                  : ["failed", "declined"].includes(String(item.status))
+              detail: toolDetail(item),
+              status: ["declined", "denied"].includes(String(item.status))
+                ? "denied"
+                : ["cancelled", "canceled", "interrupted"].includes(String(item.status))
+                  ? "cancelled"
+                  : item.status === "failed"
                     ? "failed"
-                    : "completed",
+                    : frame.method === "item/started"
+                      ? "running"
+                      : "completed",
             });
         } else if (frame.method === "turn/completed") {
           const turn = params.turn as { status?: string; error?: unknown } | undefined;

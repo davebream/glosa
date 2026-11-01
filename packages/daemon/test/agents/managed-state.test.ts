@@ -249,6 +249,11 @@ test("chat/profile replay preserves model resolution, logical identity, frozen t
     },
   });
   chat.append({ type: "content", content: { id: "answer", turnId, role: "assistant", kind: "text", text: "Hello" } });
+  for (const status of ["completed", "failed", "denied", "cancelled"] as const) {
+    const tool = { id: `tool-${status}`, turnId, role: "tool" as const, kind: "tool" as const, text: status };
+    chat.append({ type: "content", content: { ...tool, status: "running" } });
+    chat.append({ type: "content", content: { ...tool, status } });
+  }
   expect(chat.state.draftRevision).toBe(1);
   expect(() => chat.append({ type: "changed", profileId: randomUUID() })).toThrow(
     "active chat subscription cannot change",
@@ -259,6 +264,14 @@ test("chat/profile replay preserves model resolution, logical identity, frozen t
   expect(replay.savedCommands("workspace-account")?.commands[0]?.id).toBe("review");
   expect(replay.savedCapabilities(profile.id)?.capabilities).toEqual(refreshedCapabilities);
   expect(replay.chat(chatId).state.sessionId).toBe(sessionId);
+  expect(
+    replay
+      .chat(chatId)
+      .state.content.filter((part) => part.kind === "tool")
+      .map(({ id, status }) => ({ id, status })),
+  ).toEqual(
+    (["completed", "failed", "denied", "cancelled"] as const).map((status) => ({ id: `tool-${status}`, status })),
+  );
   expect(replay.chat(chatId).text(replay.chat(chatId).state.turns[0]?.textHash)).toBe("first prompt");
   expect(replay.list(workspaceId, "new-registration")).toEqual([]);
   expect(replay.list(workspaceId, "registration-1")).toHaveLength(1);

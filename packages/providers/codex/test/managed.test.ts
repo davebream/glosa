@@ -362,6 +362,86 @@ test("Codex streams one copy, scopes decisions to the active thread, and writes 
   expect(f.stopped()).toBe(true);
 });
 
+test("Codex preserves explicit native tool denial and cancellation without completing an unfinished tool", async () => {
+  const f = fixture(),
+    events: AgentEvent[] = [];
+  const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, (event) => events.push(event));
+  try {
+    await connection.startTurn({
+      turnId: "logical",
+      text: "Review",
+      settings: { model: "model", effort: "high", permissionMode: "plan" },
+      attachments: [],
+    });
+    const report = (method: string, id: string, status?: string) =>
+      f.output({
+        method,
+        params: { threadId: "thread-a", turnId: "turn-a", item: { id, type: "commandExecution", status } },
+      });
+    report("item/started", "unfinished", "inProgress");
+    for (const status of ["completed", "failed", "declined", "denied", "cancelled", "canceled", "interrupted"])
+      report("item/completed", status, status);
+    f.output({ method: "turn/completed", params: { threadId: "thread-a", turn: { status: "interrupted" } } });
+    expect(events.filter((event) => event.type === "tool").map(({ id, status }) => [id, status])).toEqual([
+      ["unfinished", "running"],
+      ["completed", "completed"],
+      ["failed", "failed"],
+      ["declined", "denied"],
+      ["denied", "denied"],
+      ["cancelled", "cancelled"],
+      ["canceled", "cancelled"],
+      ["interrupted", "cancelled"],
+    ]);
+  } finally {
+    await connection.close();
+  }
+});
+
+test("Codex file changes expose readable file names and diffs while unknown shapes stay literal and bounded", async () => {
+  const f = fixture(),
+    events: AgentEvent[] = [];
+  const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, (event) => events.push(event));
+  try {
+    await connection.startTurn({
+      turnId: "logical",
+      text: "Review",
+      settings: { model: "model", effort: "high", permissionMode: "plan" },
+      attachments: [],
+    });
+    const report = (id: string, changes: unknown[]) =>
+      f.output({
+        method: "item/completed",
+        params: {
+          threadId: "thread-a",
+          turnId: "turn-a",
+          item: { id, type: "fileChange", status: "completed", changes },
+        },
+      });
+    report("files", [
+      {
+        path: "outline.md",
+        kind: { type: "update", move_path: "opening.md" },
+        diff: "@@ -1 +1 @@\n-Old opening\n+<script>literal text</script>",
+      },
+      { path: "new.md", kind: { type: "add" }, diff: "A new paragraph." },
+      { path: "old.md", kind: { type: "delete" }, diff: "The removed paragraph." },
+    ]);
+    report("unknown", [{ path: "other.md", kind: { type: "future-kind" }, diff: "Exact native content" }]);
+    report("long", [{ path: "large.md", kind: { type: "add" }, diff: "a".repeat(17_000) }]);
+    const tools = events.filter((event) => event.type === "tool");
+    expect(tools[0]?.detail).toBe(
+      "File: outline.md\nChange: update\nMove to: opening.md\n\n@@ -1 +1 @@\n-Old opening\n+<script>literal text</script>\n\nFile: new.md\nChange: add\n\nA new paragraph.\n\nFile: old.md\nChange: delete\n\nThe removed paragraph.",
+    );
+    expect(JSON.parse(tools[1]!.detail!)).toMatchObject({
+      changes: [{ kind: { type: "future-kind" }, diff: "Exact native content" }],
+    });
+    expect(tools[2]?.detail?.length).toBe(16_000);
+    expect(tools[2]?.detail).toEndWith("\n[Tool detail truncated]");
+  } finally {
+    await connection.close();
+  }
+});
+
 test("Codex refuses inherited endpoints or policy overrides before sending a prompt, including resume", async () => {
   const f = fixture(),
     adapter = new CodexManagedAdapter();

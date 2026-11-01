@@ -792,7 +792,21 @@ test("a turn at work shows a live line under its last row and it goes when the t
   expect(history.getAttribute("aria-busy")).toBe("false");
   expect(steps.querySelector(":scope > summary")!.textContent).toBe("1 step · 1 failed");
   // The file's name was learned while the step ran, and its failure is said in words.
-  expect(steps.querySelector("li")!.textContent).toBe("Read outline.md · failedNo such file");
+  expect(steps.querySelector("li")!.textContent).toBe("Failed: Reading outline.mdNo such file");
+  const original = steps.querySelector("li");
+  for (const [state, label] of [
+    ["denied", "Denied: Reading outline.md"],
+    ["cancelled", "Cancelled: Reading outline.md"],
+    ["running", "Stopped: Reading outline.md · outcome unknown"],
+  ] as const) {
+    (f.state.content as { status: string }[])[0]!.status = state;
+    f.state.revision++;
+    await f.snapshot();
+    expect(steps.querySelector("li")).toBe(original);
+    expect(steps.querySelector("li")!.dataset.state).toBe(state === "running" ? "stopped" : state);
+    expect(steps.querySelector("li summary")!.textContent).toBe(label);
+    expect(steps.querySelector("li svg path")).not.toBeNull();
+  }
   f.pane.destroy();
 });
 
