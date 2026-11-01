@@ -15,8 +15,8 @@
   "dependencies": {
     "@glosa/daemon": "workspace:*",
     "@gunshi/plugin-completion": "0.37.3",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "gunshi": "0.37.3",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   }
 }
