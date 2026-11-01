@@ -103,15 +103,24 @@ describe("package-app: Bun checksums", () => {
 });
 
 describe("package-app: the staged tree", () => {
-  test("the isolated production install receives the committed Bun patch with its manifests", () => {
-    const source = join(import.meta.dir, "../../..");
+  test("the isolated production install receives current manifests and every declared Bun patch", () => {
+    const repository = join(import.meta.dir, "../../..");
+    const source = temp();
+    stageDependencyManifests(repository, source);
+    for (const file of ["package.json", "bun.lock"])
+      expect(readFileSync(join(source, file))).toEqual(readFileSync(join(repository, file)));
+    // Exercise patch staging independently of whether today's dependencies need a backport.
+    const patch = "patches/fixture-dependency-1.0.0.patch";
+    const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8"));
+    manifest.patchedDependencies = { "fixture-dependency@1.0.0": patch };
+    write(source, "package.json", JSON.stringify(manifest));
+    write(source, patch, "Reviewed fixture patch bytes\n");
     const destination = temp();
     stageDependencyManifests(source, destination);
-    const patch = "patches/http-cache-semantics-4.2.0.patch";
     expect(readFileSync(join(destination, patch))).toEqual(readFileSync(join(source, patch)));
     expect(
       JSON.parse(readFileSync(join(destination, "package.json"), "utf8")).patchedDependencies[
-        "http-cache-semantics@4.2.0"
+        "fixture-dependency@1.0.0"
       ],
     ).toBe(patch);
   });

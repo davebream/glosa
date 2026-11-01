@@ -265,6 +265,8 @@ test("Linux core selection includes real process ownership, CLI and MCP boundari
     "packages/cli/test/mcp-lifetime-real-subprocess.test.ts",
     "packages/daemon/test/lifecycle.test.ts",
     "packages/daemon/test/agents/supervisor.test.ts",
+    "packages/providers/codex/test/oauth.test.ts",
+    "packages/providers/shared-acp/test/transport.test.ts",
   ])
     expect(files).toContain(file);
   expect(expectedJobs("full", false).linux).toBe("success");

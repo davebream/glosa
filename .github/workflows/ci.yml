@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 5
     outputs:
       profile: ${{ steps.plan.outputs.profile }}
@@ -60,7 +60,7 @@ jobs:
 
   quality:
     needs: prepare
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -88,7 +88,7 @@ jobs:
   docs:
     needs: prepare
     if: needs.prepare.outputs.profile == 'docs'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -214,7 +214,7 @@ jobs:
             ~/.cache/electron
             ~/.cache/electron-builder
             ~/.cache/glosa-package-app
-          key: pacman-electron-44.4.5-bun-1.4.2-x64
+          key: pacman-electron-44.9.1-bun-1.4.2-x64
       - name: Build the pacman package and smoke it in Arch containers
         if: needs.prepare.outputs.app == 'true'
         run: bun run --cwd packages/shell package -- --arch x64 --smoke
@@ -239,7 +239,7 @@ jobs:
   tests:
     needs: prepare
     if: needs.prepare.outputs.profile == 'full'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -271,7 +271,7 @@ jobs:
   stability:
     needs: prepare
     if: needs.prepare.outputs.profile == 'full'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -299,7 +299,7 @@ jobs:
   full:
     needs: prepare
     if: needs.prepare.outputs.whole == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     # The full profile has taken 7 to 9 minutes on main and hit a 10-minute cap on f2ca4bd; a cap is
     # a hang guard, not a latency budget (docs/testing.md), so it keeps real headroom.
     timeout-minutes: 20
@@ -361,7 +361,7 @@ jobs:
             ~/Library/Caches/electron
             ~/Library/Caches/electron-builder
             ~/Library/Caches/glosa-package-app
-          key: app-electron-44.4.5-bun-1.4.2-all
+          key: app-electron-44.9.1-bun-1.4.2-all
       - name: Build the unsigned app and smoke it
         if: needs.prepare.outputs.app == 'true'
         run: bun run --cwd packages/shell package -- --arch all --unsigned --smoke
@@ -434,8 +434,8 @@ jobs:
           bun-version: 1.4.2
       - name: Install locked dependencies without lifecycle scripts
         run: bun install --frozen-lockfile --ignore-scripts && bun install --cwd packages/shell --frozen-lockfile --ignore-scripts
-      - name: Verify the installed security backport before recording its fixed advisory
-        run: bun run scripts/cache-security-backport.ts
+      - name: Verify installed dependency policy before recording scoped advisory exclusions
+        run: bun run scripts/security-dependency-policy.ts
       - name: Scan bun.lock for known vulnerabilities
         uses: google/osv-scanner-action/osv-scanner-action@8ac9e5ce44cc7178e0e04229a91bdcc003166e57 # v2.3.8
         with:

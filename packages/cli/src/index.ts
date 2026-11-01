@@ -963,12 +963,19 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
     const { CodexManagedAdapter } = await import("../../providers/codex/src/managed.ts");
     const { codexRuntimeCandidate } = await import("../../providers/codex/src/runtime.ts");
+    const { CodexChatGptOAuthBroker } = await import("../../providers/codex/src/oauth/index.ts");
     const { ClaudeManagedAdapter } = await import("../../providers/claude-code/src/managed.ts");
     const { claudeRuntimeCandidate } = await import("../../providers/claude-code/src/runtime.ts");
     const { CodexProvider } = await import("../../providers/codex/src/index.ts");
     const { OpenAITranscriptionProvider } = await import("../../providers/openai-transcription/src/index.ts");
     await bootDaemon({
-      managedAgentFactories: [() => new ClaudeManagedAdapter(), () => new CodexManagedAdapter()],
+      managedAgentFactories: [
+        () => new ClaudeManagedAdapter(),
+        ({ stateRoot }) =>
+          new CodexManagedAdapter({
+            oauth: new CodexChatGptOAuthBroker({ metadataPath: join(stateRoot, "oauth", "codex.json") }),
+          }),
+      ],
       // Experimental execution requires the person's versioned, per-runtime acceptance in
       // Account settings. It never changes the release-owned qualification flags.
       managedRuntime: {

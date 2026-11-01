@@ -90,7 +90,7 @@ export function stepLabel(item, subjectHint = "") {
  * What one turn shows about its own work.
  *   live   the line at the thread's tail while the turn is active, or null once it has ended.
  *   steps  its tool steps in order, each with a label for its state.
- *   summary  the closed steps row: a count, and how many failed.
+ *   summary  the closed steps row: a count, and the reported unsuccessful outcomes.
  * @param {{status: string}} turn
  * @param {{id: string, kind: string, name?: string, text?: string, status?: string}[]} items
  * @param {Map<string, string>} [subjects] step id to remembered subject; filled as steps are seen.
@@ -101,13 +101,30 @@ export function turnActivity(turn, items, subjects = new Map()) {
     .map((item) => {
       const label = stepLabel(item, subjects.get(item.id));
       if (label.subject) subjects.set(item.id, label.subject);
-      // A turn that has ended leaves no step running, whatever its last report said.
-      const state = item.status === "running" && !ACTIVE.has(turn.status) ? "stopped" : (item.status ?? "completed");
-      return { id: item.id, state, label: state === "running" ? label.doing : label.done, detail: item.text ?? "" };
+      // An ended turn cannot prove how an unfinished tool ended. Missing legacy outcomes are
+      // unknown too; only an explicit completed report earns the past-tense success label.
+      const state =
+        item.status === "running" && ACTIVE.has(turn.status)
+          ? "running"
+          : ["completed", "failed", "denied", "cancelled"].includes(item.status)
+            ? item.status
+            : "stopped";
+      const description =
+        state === "completed"
+          ? label.done
+          : state === "running"
+            ? label.doing
+            : state === "stopped"
+              ? `Stopped: ${label.doing} · outcome unknown`
+              : `${state[0].toUpperCase()}${state.slice(1)}: ${label.doing}`;
+      return { id: item.id, state, label: description, detail: item.text ?? "" };
     });
-  const failed = steps.filter((step) => step.state === "failed").length;
   const count = `${steps.length} ${steps.length === 1 ? "step" : "steps"}`;
-  const summary = steps.length ? (failed ? `${count} · ${failed} failed` : count) : "";
+  const outcomes = ["failed", "denied", "cancelled", "stopped"].flatMap((state) => {
+    const total = steps.filter((step) => step.state === state).length;
+    return total ? [`${total} ${state === "stopped" ? `${total === 1 ? "outcome" : "outcomes"} unknown` : state}`] : [];
+  });
+  const summary = steps.length ? [count, ...outcomes].join(" · ") : "";
   if (!ACTIVE.has(turn.status)) return { live: null, steps, summary };
   const running = steps.findLast((step) => step.state === "running");
   const last = items.at(-1);

@@ -3,7 +3,7 @@
 import { homedir } from "node:os";
 import { configurationRevision } from "../../../daemon/src/agents/configuration.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import {
@@ -19,10 +19,41 @@ import {
   type TurnSettings,
 } from "../../../daemon/src/agents/interface.ts";
 
+import type { ManagedOAuthBroker, ManagedOAuthTokenLease } from "../../../daemon/src/agents/oauth-interface.ts";
+import { providerEnvironmentSecrets, providerFailureDetails } from "../../shared-acp/src/failures.ts";
+import { ACP_QUALIFICATIONS } from "../../shared-acp/src/qualification.ts";
+
 import { waitForManagedTools } from "../../../daemon/src/agents/managed-bootstrap.ts";
 
 // Keep the managed grant bridge separate from the native companion integration.
 const MANAGED_MCP_NAME = "glosa-managed";
+
+const fileChangesSchema = z.array(
+  z.object({
+    path: z.string(),
+    kind: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("add") }),
+      z.object({ type: z.literal("delete") }),
+      z.object({ type: z.literal("update"), move_path: z.string().nullable() }),
+    ]),
+    diff: z.string(),
+  }),
+);
+
+/** Native file-change vocabulary stays here; the generic surface receives readable plain text. */
+function toolDetail(item: Record<string, unknown>): string {
+  const changes = item.type === "fileChange" ? fileChangesSchema.safeParse(item.changes).data : undefined;
+  const text = changes?.length
+    ? changes
+        .map(
+          ({ path, kind, diff }) =>
+            `File: ${path}\nChange: ${kind.type}${kind.type === "update" && kind.move_path ? `\nMove to: ${kind.move_path}` : ""}\n\n${diff}`,
+        )
+        .join("\n\n")
+    : JSON.stringify(item);
+  const marker = "\n[Tool detail truncated]";
+  return text.length > 16_000 ? text.slice(0, 16_000 - marker.length) + marker : text;
+}
 
 const accountSchema = z.object({
   account: z
@@ -47,6 +78,22 @@ const threadSchema = z.object({
   thread: z.object({ id: z.string().min(1) }),
   model: z.string().optional(),
   reasoningEffort: z.string().nullable().optional(),
+  cwd: z.string().optional(),
+  approvalPolicy: z.string().optional(),
+  approvalsReviewer: z.string().optional(),
+  activePermissionProfile: z
+    .object({ id: z.string(), extends: z.string().nullable().optional() })
+    .nullable()
+    .optional(),
+  sandbox: z
+    .object({
+      type: z.string(),
+      writableRoots: z.array(z.string()).optional(),
+      networkAccess: z.boolean().optional(),
+      excludeTmpdirEnvVar: z.boolean().optional(),
+      excludeSlashTmp: z.boolean().optional(),
+    })
+    .optional(),
 });
 const envelope = z.object({
   id: z.union([z.string(), z.number()]).optional(),
@@ -56,6 +103,28 @@ const envelope = z.object({
   error: z.unknown().optional(),
 });
 type Frame = z.infer<typeof envelope>;
+
+/** Codes from the pinned app-server's generated CodexErrorInfo schema, never title matching. */
+function codexFailureCode(error: unknown): "account-auth" | "quota" | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as { codexErrorInfo?: unknown; data?: { codexErrorInfo?: unknown } };
+  const info = value.codexErrorInfo ?? value.data?.codexErrorInfo;
+  if (info === "unauthorized") return "account-auth";
+  if (["sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded"].includes(String(info))) return "quota";
+  if (info && typeof info === "object") {
+    for (const key of [
+      "httpConnectionFailed",
+      "responseStreamConnectionFailed",
+      "responseStreamDisconnected",
+      "responseTooManyFailedAttempts",
+    ]) {
+      const status = (info as Record<string, { httpStatusCode?: number }>)[key]?.httpStatusCode;
+      if (status === 401) return "account-auth";
+      if (status === 429) return "quota";
+    }
+  }
+  return undefined;
+}
 
 const nativePolicy = {
   cli_auth_credentials_store: "file",
@@ -95,12 +164,83 @@ const linkedPolicy = {
   feedback: nativePolicy.feedback,
   check_for_update_on_startup: false,
 };
-const configArgs = (policy: object) =>
-  Object.entries(policy).flatMap(([key, value]) =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? Object.entries(value).flatMap(([child, item]) => ["-c", `${key}.${child}=${JSON.stringify(item)}`])
-      : ["-c", `${key}=${JSON.stringify(value)}`],
-  );
+// Nested startup tables must become TOML scalar assignments, never JSON object strings.
+const configArgs = (policy: object, prefix = ""): string[] =>
+  Object.entries(policy).flatMap(([key, value]) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    // CLI dotted paths do not unquote path segments. Encode the permissions table
+    // as real inline TOML so absolute filesystem keys stay exact data.
+    if (!prefix && key === "permissions") return ["-c", `${path}=${inlineToml(value)}`];
+    return value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length
+      ? configArgs(value, path)
+      : ["-c", `${path}=${value && typeof value === "object" && !Array.isArray(value) ? "{}" : JSON.stringify(value)}`];
+  });
+function inlineToml(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value))
+    return `{${Object.entries(value)
+      .map(([key, item]) => `${JSON.stringify(key)}=${inlineToml(item)}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
+export const CODEX_WORKSPACE_PERMISSION = "glosa-workspace";
+/** :minimal supplies native system/runtime files, never a broad HOME read grant. */
+export function codexWorkspacePermissionConfig(cwd: string) {
+  return {
+    default_permissions: ":read-only",
+    permissions: {
+      [CODEX_WORKSPACE_PERMISSION]: {
+        filesystem: { ":minimal": "read", ":slash_tmp": "deny", ":tmpdir": "deny", [realpathSync(cwd)]: "write" },
+        network: { enabled: false },
+      },
+    },
+  };
+}
+/** Shared with the explicit native qualification; contains public policy only. */
+export function codexWorkspacePermissionArgs(cwd: string): string[] {
+  return configArgs(codexWorkspacePermissionConfig(cwd));
+}
+const PLAN_PROVIDER = "openai_chatgpt_plan";
+const oauthPolicy = {
+  ...nativePolicy,
+  model_provider: PLAN_PROVIDER,
+  shell_environment_policy: {
+    inherit: "core",
+    ignore_default_excludes: false,
+    exclude: ["ACCESS_TOKEN", "GLOSA_MANAGED_MCP_GRANT"],
+    include_only: ["PATH", "HOME", "SHELL", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "USER"],
+    set: {},
+  },
+  model_providers: {
+    [PLAN_PROVIDER]: {
+      name: "ChatGPT plan",
+      base_url: "https://api.openai.com/v1",
+      env_key: "ACCESS_TOKEN",
+      wire_api: "responses",
+      requires_openai_auth: false,
+      supports_websockets: false,
+      supports_standalone_web_search: false,
+    },
+  },
+};
+// These bytes are public policy only. The access token is supplied after this file exists.
+const oauthStartupConfig = `${configArgs(oauthPolicy)
+  .filter((_, index) => index % 2)
+  .join("\n")}\n`;
+function prepareOAuthProfile(spec: ProfileLaunchSpec): void {
+  if (spec.profile.configuration) policyConflict();
+  const path = join(spec.configRoot, "config.toml"),
+    stat = metadata(path);
+  if (stat) {
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.nlink !== 1 ||
+      stat.size > 64 * 1024 ||
+      readFileSync(path, "utf8") !== oauthStartupConfig
+    )
+      policyConflict();
+  } else writeFileSync(path, oauthStartupConfig, { flag: "wx", mode: 0o600 });
+}
 const nativeConfig = configArgs(nativePolicy);
 function policyConflict(): never {
   throw new ManagedAgentError(
@@ -156,7 +296,7 @@ function checkProjectConfiguration(cwd: string): void {
   }
 }
 /** Validate effective security values and raw layers; typed config/read also inserts defaults. */
-function auditConfiguration(raw: unknown): void {
+function auditConfiguration(raw: unknown, policy: object = nativePolicy): void {
   const result = z
     .object({
       config: z.record(z.string(), z.unknown()),
@@ -164,14 +304,6 @@ function auditConfiguration(raw: unknown): void {
     })
     .safeParse(raw);
   if (!result.success) policyConflict();
-  const withoutNulls = (value: unknown): unknown => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([, item]) => item != null)
-        .map(([key, item]) => [key, withoutNulls(item)]),
-    );
-  };
   const config = withoutNulls(result.data.config) as Record<string, unknown>;
   // Pinned typed serialization adds this local log bound; it enables no exporter.
   const otel = config.otel as Record<string, unknown> | undefined;
@@ -181,19 +313,8 @@ function auditConfiguration(raw: unknown): void {
   for (const layer of result.data.layers) {
     if (layer.name.type === "project" && Object.keys(layer.config).length) policyConflict();
   }
-  const equivalent = (actual: unknown, expected: unknown): boolean => {
-    if (Array.isArray(expected)) return JSON.stringify(actual) === JSON.stringify(expected);
-    if (expected && typeof expected === "object") {
-      if (!actual || typeof actual !== "object" || Array.isArray(actual)) return false;
-      const record = actual as Record<string, unknown>;
-      return (
-        Object.keys(record).length === Object.keys(expected).length &&
-        Object.entries(expected).every(([key, value]) => equivalent(record[key], value))
-      );
-    }
-    return actual === expected;
-  };
-  for (const [key, value] of Object.entries(nativePolicy)) if (!equivalent(config[key], value)) policyConflict();
+  const equivalent = policyEquivalent;
+  for (const [key, value] of Object.entries(policy)) if (!equivalent(config[key], value)) policyConflict();
   const harmless = new Set([
     "model",
     "model_reasoning_effort",
@@ -228,9 +349,9 @@ function auditConfiguration(raw: unknown): void {
   const checkKeys = (values: Record<string, unknown>, rawLayer: boolean) => {
     for (const [key, value] of Object.entries(values)) {
       if (value == null || harmless.has(key)) continue;
-      if (key in nativePolicy) {
+      if (key in policy) {
         if (rawLayer) {
-          const expected = nativePolicy[key as keyof typeof nativePolicy];
+          const expected = (policy as Record<string, unknown>)[key];
           if (
             value &&
             typeof value === "object" &&
@@ -254,6 +375,26 @@ function auditConfiguration(raw: unknown): void {
   checkKeys(config, false);
   for (const layer of result.data.layers) checkKeys(layer.config, true);
 }
+function withoutNulls(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item != null)
+      .map(([key, item]) => [key, withoutNulls(item)]),
+  );
+}
+function policyEquivalent(actual: unknown, expected: unknown): boolean {
+  if (Array.isArray(expected)) return JSON.stringify(actual) === JSON.stringify(expected);
+  if (expected && typeof expected === "object") {
+    if (!actual || typeof actual !== "object" || Array.isArray(actual)) return false;
+    const record = actual as Record<string, unknown>;
+    return (
+      Object.keys(record).length === Object.keys(expected).length &&
+      Object.entries(expected).every(([key, value]) => policyEquivalent(record[key], value))
+    );
+  }
+  return actual === expected;
+}
 
 /** One connection, one owned native process; bounded frames and requests, no reconnect/replay. */
 export class ManagedCodexRpc {
@@ -267,18 +408,30 @@ export class ManagedCodexRpc {
   private closed = false;
   private sequence = 0;
   private linked = false;
+  private oauth = false;
+  private policy: object = nativePolicy;
+  private workspaceRoot?: string;
+  private secrets: string[] = [];
   constructor(
     private readonly receive: (frame: Frame) => void,
     private readonly failed: () => void,
   ) {}
   async open(spec: ProfileLaunchSpec, launcher: ProcessLauncher): Promise<void> {
+    this.secrets = providerEnvironmentSecrets(spec.env);
+    this.oauth = spec.profile.authentication?.mode === "oauth";
+    if (this.oauth) prepareOAuthProfile(spec);
     this.linked = !!spec.profile.configuration;
+    this.workspaceRoot = realpathSync(spec.cwd);
+    this.policy = {
+      ...(this.linked ? linkedPolicy : this.oauth ? oauthPolicy : nativePolicy),
+      ...codexWorkspacePermissionConfig(this.workspaceRoot),
+    };
     if (!this.linked) checkProjectConfiguration(spec.cwd);
     const launchCwd = spec.probeCwd ?? spec.configRoot;
     if (!this.linked) checkProjectConfiguration(launchCwd);
     this.process = await launcher.spawn({
       command: spec.manifest.executable,
-      args: [...(this.linked ? configArgs(linkedPolicy) : nativeConfig), "app-server", "--listen", "stdio://"],
+      args: [...configArgs(this.policy), "app-server", "--listen", "stdio://"],
       cwd: launchCwd,
       env: spec.env,
       onData: (channel, bytes) => {
@@ -303,10 +456,18 @@ export class ManagedCodexRpc {
     await this.audit(spec.cwd);
   }
   async audit(cwd: string): Promise<void> {
+    if (realpathSync(cwd) !== this.workspaceRoot) policyConflict();
     if (!this.linked) checkProjectConfiguration(cwd);
     const result = await this.request("config/read", { includeLayers: true, cwd });
     if (this.linked) {
       const { config } = z.object({ config: z.record(z.string(), z.unknown()) }).parse(result);
+      const expected = codexWorkspacePermissionConfig(cwd);
+      const permissions = withoutNulls(config.permissions) as Record<string, unknown> | undefined;
+      if (
+        config.default_permissions !== expected.default_permissions ||
+        !policyEquivalent(permissions?.[CODEX_WORKSPACE_PERMISSION], expected.permissions[CODEX_WORKSPACE_PERMISSION])
+      )
+        policyConflict();
       if (
         (config.otel as Record<string, unknown> | undefined)?.exporter !== "none" ||
         (config.analytics as Record<string, unknown> | undefined)?.enabled !== false ||
@@ -322,7 +483,7 @@ export class ManagedCodexRpc {
           "provider-unavailable",
           "Native routing or the reserved glosa-managed MCP name conflicts with this account.",
         );
-    } else auditConfiguration(result);
+    } else auditConfiguration(result, this.policy);
   }
   private accept(bytes: Uint8Array): void {
     if (this.closed) return;
@@ -345,7 +506,16 @@ export class ManagedCodexRpc {
           if (!pending) continue;
           this.pending.delete(key);
           clearTimeout(pending.timer);
-          if (value.error) pending.reject(new ManagedAgentError("runtime-closed", "Codex rejected the operation."));
+          if (value.error)
+            pending.reject(
+              Object.assign(
+                new ManagedAgentError(
+                  codexFailureCode(value.error) === "account-auth" ? "auth-required" : "runtime-closed",
+                  "Codex rejected the operation.",
+                ),
+                { details: providerFailureDetails(value.error, this.secrets) },
+              ),
+            );
           else pending.resolve(value.result);
         } else this.receive(value);
       } catch {
@@ -385,8 +555,11 @@ export class ManagedCodexRpc {
   }
   async close(): Promise<void> {
     this.fail();
-    await this.process?.fence();
-    await this.process?.stop();
+    try {
+      await this.process?.fence();
+    } finally {
+      await this.process?.stop();
+    }
   }
 }
 
@@ -411,6 +584,26 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
   readonly id = "codex";
   readonly name = "Codex";
   readonly authHosts = ["auth.openai.com", "chatgpt.com"];
+  readonly transportQualification = ACP_QUALIFICATIONS.codex;
+  readonly oauth?: ManagedOAuthBroker;
+  constructor(options: { oauth?: ManagedOAuthBroker } = {}) {
+    this.oauth = options.oauth;
+  }
+  private oauthObservation(spec: ProfileLaunchSpec): AccountObservation {
+    if (spec.profile.configuration) policyConflict();
+    const account = this.oauth?.getAccount(spec.profile.authentication!.credentialRef);
+    const observedAt = new Date().toISOString();
+    if (!account || account.status === "signed-out") return { state: "needs_login", observedAt };
+    if (account.status !== "signed-in") return { state: "expired", observedAt };
+    return {
+      state: "authenticated",
+      identity: `oauth:${account.accountId}`,
+      label: account.label,
+      ...(account.planEnabled ? { plan: "ChatGPT plan" } : {}),
+      method: "Sign in with ChatGPT",
+      observedAt,
+    };
+  }
   loginArgs() {
     return [...nativeConfig, "login"];
   }
@@ -456,6 +649,7 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
     }
   }
   async probe(spec: ProfileLaunchSpec, launcher: ProcessLauncher): Promise<AccountObservation> {
+    if (spec.profile.authentication?.mode === "oauth") return this.oauthObservation(spec);
     const rpc = new ManagedCodexRpc(
       () => {},
       () => {},
@@ -474,6 +668,33 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
     launcher: ProcessLauncher,
     emit: (event: AgentEvent) => void,
   ): Promise<ManagedConnection> {
+    const isOAuth = spec.profile.authentication?.mode === "oauth";
+    let lease: ManagedOAuthTokenLease | undefined;
+    if (isOAuth) {
+      const account = this.oauthObservation(spec);
+      if (account.state !== "authenticated")
+        throw new ManagedAgentError("auth-required", "Sign in again with ChatGPT.");
+      if (account.identity !== spec.profile.auth.identity)
+        throw new ManagedAgentError(
+          "account-mismatch",
+          "Sign in to the original ChatGPT account before continuing this chat.",
+        );
+      if (!account.plan)
+        throw new ManagedAgentError(
+          "auth-required",
+          "This sign-in does not include ChatGPT plan access. Sign in again and allow plan access.",
+        );
+      prepareOAuthProfile(spec);
+      // connect is admitted only for a foreground request. Listing/probing accounts never leases.
+      lease = await this.oauth!.lease(spec.profile.authentication!.credentialRef);
+      if (
+        !lease.accessToken ||
+        !Number.isFinite(Date.parse(lease.expiresAt)) ||
+        Date.parse(lease.expiresAt) <= Date.now()
+      )
+        throw new ManagedAgentError("auth-required", "The ChatGPT sign-in expired. Sign in again before sending.");
+    }
+    let expiration: ReturnType<typeof setTimeout> | undefined;
     let threadId = spec.nativeId,
       turnId: string | undefined,
       starting = false,
@@ -610,16 +831,19 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
               type: "tool",
               id: item.id,
               name: item.type,
-              detail: JSON.stringify(item).slice(0, 16000),
-              status:
-                frame.method === "item/started"
-                  ? "running"
-                  : ["failed", "declined"].includes(String(item.status))
+              detail: toolDetail(item),
+              status: ["declined", "denied"].includes(String(item.status))
+                ? "denied"
+                : ["cancelled", "canceled", "interrupted"].includes(String(item.status))
+                  ? "cancelled"
+                  : item.status === "failed"
                     ? "failed"
-                    : "completed",
+                    : frame.method === "item/started"
+                      ? "running"
+                      : "completed",
             });
         } else if (frame.method === "turn/completed") {
-          const turn = params.turn as { status?: string } | undefined;
+          const turn = params.turn as { status?: string; error?: unknown } | undefined;
           ended = true;
           decisions.clear();
           emit(
@@ -627,7 +851,11 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
               ? { type: "completed" }
               : {
                   type: "failed",
-                  code: "native-turn-failed",
+                  code: codexFailureCode(turn?.error) ?? "native-turn-failed",
+                  details: providerFailureDetails(turn?.error, [
+                    ...providerEnvironmentSecrets(spec.env),
+                    ...(lease ? [lease.accessToken] : []),
+                  ]),
                   message: "Codex did not complete this turn. Review its output before starting another message.",
                 },
           );
@@ -665,10 +893,49 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
     );
     try {
       await rpc.open(
-        { ...spec, env: { ...spec.env, ...(spec.mcp ? { GLOSA_MANAGED_MCP_GRANT: spec.mcp.grant } : {}) } },
+        {
+          ...spec,
+          env: {
+            ...spec.env,
+            ...(lease ? { ACCESS_TOKEN: lease.accessToken } : {}),
+            ...(spec.mcp ? { GLOSA_MANAGED_MCP_GRANT: spec.mcp.grant } : {}),
+          },
+        },
         launcher,
       );
-      const account = observation(await rpc.request("account/read", { refreshToken: true }));
+      if (lease) {
+        expiration = setTimeout(
+          () => {
+            if (ended) return;
+            ended = true;
+            decisions.clear();
+            // A token is immutable in an already running process. Fence it; the next foreground
+            // attempt leases afresh and resumes the recorded native thread without replaying input.
+            void rpc.close().then(
+              () =>
+                emit({
+                  type: "failed",
+                  code: "auth-required",
+                  outcomeUnknown: !!turnId || starting,
+                  message:
+                    "ChatGPT credentials expired. The runtime stopped. Review this turn before continuing; its input was not resent.",
+                }),
+              () =>
+                emit({
+                  type: "failed",
+                  code: "ownership-unknown",
+                  outcomeUnknown: !!turnId || starting,
+                  message:
+                    "ChatGPT credentials expired and runtime cleanup could not be confirmed. Recover the stopped runtime before continuing.",
+                }),
+            );
+          },
+          Math.min(2_147_483_647, Date.parse(lease.expiresAt) - Date.now()),
+        );
+      }
+      const account = isOAuth
+        ? this.oauthObservation(spec)
+        : observation(await rpc.request("account/read", { refreshToken: true }));
       if (account.state !== "authenticated")
         throw new ManagedAgentError("auth-required", "Sign in again to this ChatGPT account.");
       if (account.identity !== spec.profile.auth.identity)
@@ -693,7 +960,9 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
         ...Object.fromEntries(
           (spec.servers ?? []).map((server) => [
             `mcp_servers.glosa-user-${server.id}`,
-            server.transport === "http" ? { url: server.url } : { command: server.command, args: server.args },
+            server.transport === "http"
+              ? { url: server.url }
+              : { command: server.command, args: server.args, ...(isOAuth ? { env: {}, env_vars: [] } : {}) },
           ]),
         ),
         ...(spec.mcp
@@ -799,13 +1068,16 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
         if (!threadId) {
           const result = threadSchema.parse(
             await rpc.request("thread/start", {
-              config,
+              config: { ...config, ...(settings.permissionMode !== "default" ? { web_search: "disabled" } : {}) },
               ...(spec.mcp ? { developerInstructions: spec.mcp.instructions } : {}),
               cwd: spec.cwd,
               model: settings.model,
-              modelProvider: "openai",
-              approvalPolicy: "untrusted",
-              sandbox: planning ? "read-only" : "workspace-write",
+              modelProvider: isOAuth ? PLAN_PROVIDER : "openai",
+              approvalPolicy: settings.permissionMode === "workspace" ? "on-request" : "untrusted",
+              approvalsReviewer: "user",
+              ...(settings.permissionMode === "workspace"
+                ? { permissions: CODEX_WORKSPACE_PERMISSION }
+                : { sandbox: planning ? "read-only" : "workspace-write" }),
               experimentalRawEvents: false,
               persistExtendedHistory: true,
             }),
@@ -815,20 +1087,44 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
         } else {
           const result = threadSchema.parse(
             await rpc.request("thread/resume", {
-              config,
+              config: { ...config, ...(settings.permissionMode !== "default" ? { web_search: "disabled" } : {}) },
               ...(spec.mcp ? { developerInstructions: spec.mcp.instructions } : {}),
               threadId,
               cwd: spec.cwd,
               model: settings.model,
-              modelProvider: "openai",
-              approvalPolicy: "untrusted",
-              sandbox: planning ? "read-only" : "workspace-write",
+              modelProvider: isOAuth ? PLAN_PROVIDER : "openai",
+              approvalPolicy: settings.permissionMode === "workspace" ? "on-request" : "untrusted",
+              approvalsReviewer: "user",
+              ...(settings.permissionMode === "workspace"
+                ? { permissions: CODEX_WORKSPACE_PERMISSION }
+                : { sandbox: planning ? "read-only" : "workspace-write" }),
             }),
           );
           if (result.thread.id !== threadId) throw new Error("resumed a different thread");
           effective = result;
         }
-        emit({ type: "effective_settings", model: effective.model });
+        if (settings.permissionMode === "workspace") {
+          const sandbox = effective.sandbox;
+          if (
+            effective.activePermissionProfile?.id !== CODEX_WORKSPACE_PERMISSION ||
+            effective.activePermissionProfile.extends != null ||
+            effective.approvalPolicy !== "on-request" ||
+            effective.approvalsReviewer !== "user" ||
+            !effective.cwd ||
+            realpathSync(effective.cwd) !== realpathSync(spec.cwd) ||
+            sandbox?.type !== "workspaceWrite" ||
+            sandbox.networkAccess !== false ||
+            sandbox.excludeTmpdirEnvVar !== true ||
+            sandbox.excludeSlashTmp !== true ||
+            !Array.isArray(sandbox.writableRoots) ||
+            sandbox.writableRoots.some((root) => realpathSync(root) !== realpathSync(spec.cwd))
+          )
+            throw new ManagedAgentError(
+              "provider-unavailable",
+              "Codex did not confirm confined workspace access. No message was sent.",
+            );
+        }
+        emit({ type: "effective_settings", model: effective.model, permissionMode: settings.permissionMode });
         if (effective.model && effective.model !== settings.model)
           throw new ManagedAgentError(
             "unsupported-model",
@@ -927,10 +1223,15 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
               model: input.settings.model,
               effort: input.settings.effort,
               cwd: spec.cwd,
-              approvalPolicy: "untrusted",
-              sandboxPolicy: planning
-                ? { type: "readOnly" }
-                : { type: "workspaceWrite", writableRoots: [spec.cwd], networkAccess: false },
+              approvalPolicy: input.settings.permissionMode === "workspace" ? "on-request" : "untrusted",
+              approvalsReviewer: "user",
+              ...(input.settings.permissionMode === "workspace"
+                ? { permissions: CODEX_WORKSPACE_PERMISSION }
+                : {
+                    sandboxPolicy: planning
+                      ? { type: "readOnly" }
+                      : { type: "workspaceWrite", writableRoots: [spec.cwd], networkAccess: false },
+                  }),
               summary: "concise",
             }),
           );
@@ -968,12 +1269,14 @@ export class CodexManagedAdapter implements ManagedAgentAdapter {
           if (threadId && turnId && !ended) await rpc.request("turn/interrupt", { threadId, turnId });
         },
         async close() {
+          clearTimeout(expiration);
           ended = true;
           decisions.clear();
           await rpc.close();
         },
       };
     } catch (error) {
+      clearTimeout(expiration);
       await rpc.close();
       throw error;
     }

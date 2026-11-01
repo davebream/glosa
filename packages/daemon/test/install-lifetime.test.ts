@@ -54,13 +54,11 @@ function stage(options: { sourceCheckout?: boolean } = {}): Stage {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "glosa-lifetime-")));
   scratch.push(base);
   const root = join(base, "install");
-  for (const dir of ["packages/cli/src", "packages/daemon/src", "packages/spa/src"]) {
+  // Follow the published source allowlist so newly shared provider modules are present in the
+  // installed fixture too. A hand-maintained provider list can fail before the lifetime guard.
+  const manifest = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { files: string[] };
+  for (const dir of manifest.files.filter((entry) => entry.startsWith("packages/") && entry.endsWith("/src"))) {
     cpSync(join(REPO, dir), join(root, dir), { recursive: true });
-  }
-  for (const provider of ["claude-code", "codex", "openai-transcription"]) {
-    cpSync(join(REPO, "packages/providers", provider, "src"), join(root, "packages/providers", provider, "src"), {
-      recursive: true,
-    });
   }
   cpSync(join(REPO, "package.json"), join(root, "package.json"));
   symlinkSync(join(REPO, "node_modules"), join(root, "node_modules"));
@@ -96,7 +94,10 @@ function stage(options: { sourceCheckout?: boolean } = {}): Stage {
 /** Opens the workspace through the staged CLI, which spawns a detached daemon from the copy. */
 function openWorkspace(s: Stage): { pid: number; instanceId: string; buildId: string } {
   const opened = s.cli(["open", s.workspace, "--url", "--json"]);
-  expect(opened.code, opened.stderr + opened.stdout).toBe(0);
+  const log = join(s.home, "daemon.log");
+  const diagnostics =
+    opened.stderr + opened.stdout + (opened.code !== 0 && existsSync(log) ? readFileSync(log, "utf8") : "");
+  expect(opened.code, diagnostics).toBe(0);
   const lock = lockOf(s.home);
   if (!lock) throw new Error("no daemon lock after glosa open");
   const daemon = { home: s.home, pid: lock.pid, instanceId: lock.instance_id };

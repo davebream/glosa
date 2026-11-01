@@ -1781,10 +1781,11 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
           "getComputedStyle(document.querySelector('.glosa-chat-effort-field [role=tooltip]')).visibility",
         ),
       ).toBe("hidden");
-      const selected = await tab.evaluate<string>(`(() => {
+      const selected = await tab.evaluate<string>(`(async () => {
       const text = document.querySelector('.glosa-chat-history strong').firstChild;
       const range=document.createRange(); range.selectNodeContents(text); const selection=getSelection(); selection.removeAllRanges(); selection.addRange(range);
       chatFixture.stream.onEvent({event:'chat_event',data:{seq:2,data:{type:'content',content:{id:'reply',turnId:'first',kind:'text',role:'assistant',text:' More context.'}}}});
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       return selection.toString();
     })()`);
       expect(selected).toBe("clear opening");
@@ -1968,6 +1969,560 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
         `.context/test-results/managed-chat-browser-${Date.now()}.png`,
         Buffer.from(screenshot.result.data, "base64"),
       );
+      // A representative bounded page, with an offline transport, drives the production island.
+      // No account, model request or private manuscript participates in these browser witnesses.
+      await tab.send("Emulation.setDeviceMetricsOverride", {
+        width: 1440,
+        height: 1000,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await tab.evaluate(String.raw`(async()=>{
+        chatFixture.pane.destroy();
+        const {createChatPane,applyChatEvent}=await import('/app/chat-pane.js');
+        const f=window.chatFixture;
+        f.wait=async(predicate,label)=>{const deadline=performance.now()+3000;
+          while(!predicate()){if(performance.now()>deadline)throw Error(label);await new Promise(requestAnimationFrame);}};
+        f.frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        f.state={id:'fixture',profileId:'a',provider:'claude-code',title:'A clearer opening',revision:1,
+          configRevision:1,draftRevision:0,draft:'',draftAttachments:[],archived:false,
+          runtime:{state:'connected',generation:2},page:{first:'past-0',hasEarlier:true},
+          settings:{model:'model',effort:'high',permissionMode:'default'},
+          turns:Array.from({length:24},(_,i)=>({id:'past-'+i,text:'Review section '+(i+1),status:'completed'})),
+          content:Array.from({length:24},(_,i)=>({id:'reply-'+i,turnId:'past-'+i,kind:'text',role:'assistant',
+            text:'### Give the reader a place to begin\n\nStart with the concrete moment: a person reaches the end of the path and notices what has changed. Let that observation carry the question.\n\nThe next paragraph can widen the frame. Keep the language direct, leave room for the reader, and make each sentence earn its place.'})),decisions:[]};
+        f.state.turns.push({id:'active',text:'Help me make the opening more concrete.',status:'running',at:new Date().toISOString()});
+        f.state.content.push({id:'live',turnId:'active',kind:'text',role:'assistant',text:'### A clearer opening\n\nBegin with a detail the reader can see. The argument will have more weight when it grows from something particular.\n\n> The gate was still open when she returned.\n\nThat sentence gives us a place, an action, and a small unanswered question.'});
+        f.sends=[];f.answers=[];f.uploads=[];f.edits=[];f.timings={events:[],send:[],queue:[],decision:[]};
+        f.emit=(data)=>{const frame={seq:f.state.revision+1,data};applyChatEvent(f.state,frame);f.stream.onEvent({event:'chat_event',data:frame});};
+        f.snapshot=()=>{f.state.revision++;f.stream.onEvent({event:'chat_snapshot',data:structuredClone(f.state)});};
+        f.access={
+          getAgentStatus:async()=>({available:true,profiles:[{id:'a',provider:'claude-code',label:'Personal',enabled:true}],
+            capabilities:{a:{models:[{id:'model',name:'Sonnet',resolvedModel:'claude-sonnet-5',efforts:['high']}]}}}),
+          getChat:async(_s,_i,before)=>structuredClone(before?{...f.state,page:{first:'earlier',hasEarlier:false},
+            turns:[{id:'earlier',text:'An earlier question',status:'completed'}],
+            content:[{id:'earlier-answer',turnId:'earlier',kind:'text',role:'assistant',text:'An earlier answer. '.repeat(80)}]}:f.state),
+          openChatStream:(_s,_i,callbacks)=>{f.stream=callbacks;return()=>{};},
+          writeChatRecovery:async()=>{},
+          saveChatDraft:async(_s,_i,input)=>{f.state.draft=input.text;f.state.draftAttachments=input.attachments;f.state.draftRevision++;return structuredClone(f.state);},
+          sendChatTurn:async(_s,_i,input)=>{f.sends.push(input);if(f.refuseSend){f.refuseSend=false;throw Object.assign(Error('Account needs attention.'),{refused:true});}
+            f.state.turns.push({id:input.turnId,text:input.text,status:f.state.turns.some(t=>t.status==='running')?'queued':'completed',revision:1});
+            f.state.draft='';f.state.draftRevision++;f.state.revision++;},
+          editQueuedChatTurn:async(_s,_i,input)=>{f.edits.push(input);Object.assign(f.state.turns.find(t=>t.id===input.turnId),{text:input.text,revision:input.expectedRevision+1});f.state.revision++;},
+          answerChatDecision:async(_s,_i,input)=>{f.answers.push(input);f.state.decisions.find(d=>d.id===input.decisionId).status='answered';f.state.revision++;},
+          uploadChatAttachment:async(_s,_i,file)=>{if(f.failUpload){f.failUpload=false;throw Error('Attachment could not be uploaded. Try again.');}
+            f.uploads.push(file.name);return {name:file.name,mime:file.type,size:file.size,hash:'b'.repeat(64)};},
+        };
+        f.mount=async()=>{f.pane=createChatPane(document.querySelector('main'),{dataAccess:f.access,slug:'fixture',chatId:'fixture',onChange(){},onSettings(){}});
+          await f.pane.ready;await f.frame();};
+        await f.mount();
+        document.querySelector('.glosa-chat-history').scrollTop=1e9;
+        await f.frame();
+      })()`);
+      expect(await tab.evaluate<boolean>("document.querySelector('.glosa-chat-send').disabled")).toBe(true);
+      const representative = await tab.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(".context/reliable-chat.png", Buffer.from(representative.result.data, "base64"));
+
+      // A real wheel input pauses following. Token paint must not move the passage being read.
+      const historyBox = await tab.evaluate<{ x: number; y: number }>(
+        `(()=>{const b=document.querySelector('.glosa-chat-history').getBoundingClientRect();return {x:b.left+b.width/2,y:b.top+b.height/2};})()`,
+      );
+      await tab.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...historyBox, deltaY: -700, deltaX: 0 });
+      const scrollWitness = await tab.evaluate<{ before: number; after: number; jump: boolean }>(String.raw`(async()=>{
+        const f=chatFixture,node=document.querySelector('.glosa-chat-history');
+        await f.wait(()=>!document.querySelector('.glosa-chat-jump').hidden,'manual scroll did not pause following');
+        const before=node.scrollTop;f.emit({type:'content',content:{id:'live',turnId:'active',kind:'text',role:'assistant',text:'\n\nA further paragraph. '.repeat(20)}});
+        await f.frame();return {before,after:node.scrollTop,jump:!document.querySelector('.glosa-chat-jump').hidden};
+      })()`);
+      expect(scrollWitness.jump).toBe(true);
+      expect(
+        Math.abs(scrollWitness.after - scrollWitness.before),
+        "streaming moved the manual reading position",
+      ).toBeLessThan(2);
+      const following = await tab.evaluate<number>(String.raw`(async()=>{
+        document.querySelector('.glosa-chat-jump').click();await chatFixture.frame();
+        chatFixture.emit({type:'content',content:{id:'live',turnId:'active',kind:'text',role:'assistant',text:'\n\nAnd the reply continues.'}});
+        await chatFixture.frame();const node=document.querySelector('.glosa-chat-history');return node.scrollHeight-node.scrollTop-node.clientHeight;
+      })()`);
+      expect(following, "Jump to latest did not resume following").toBeLessThan(2);
+      const expanded = await tab.evaluate<{ before: number; after: number; open: boolean }>(String.raw`(async()=>{
+        const f=chatFixture,node=document.querySelector('.glosa-chat-history');
+        f.emit({type:'content',content:{id:'read-step',turnId:'active',kind:'tool',name:'Read',status:'completed',text:'A public outline detail. '.repeat(100)}});
+        await f.wait(()=>node.querySelector('.glosa-chat-steps'),'tool steps did not render');
+        node.querySelector('.glosa-chat-steps > summary').click();
+        node.querySelector('.glosa-chat-step-list summary').click();await f.frame();
+        const before=node.scrollTop;f.emit({type:'content',content:{id:'live',turnId:'active',kind:'text',role:'assistant',text:'\n\nNew writing while a tool detail is being read. '.repeat(20)}});
+        await f.frame();return {before,after:node.scrollTop,open:node.querySelector('.glosa-chat-step-list details').open};
+      })()`);
+      expect(expanded.open).toBe(true);
+      expect(Math.abs(expanded.after - expanded.before), "streaming moved an expanded tool detail").toBeLessThan(2);
+      const prepend = await tab.evaluate<{ before: number; after: number; earlier: boolean }>(`(async()=>{
+        const f=chatFixture,node=document.querySelector('.glosa-chat-history');node.scrollTop=0;await f.frame();
+        const row=[...node.querySelectorAll('[data-kind=human]')].find(r=>r.textContent.includes('Review section 1'));
+        const before=row.getBoundingClientRect().top;node.querySelector('.glosa-chat-earlier').click();
+        await f.wait(()=>node.textContent.includes('An earlier answer.'),'earlier page did not render');await f.frame();
+        return {before,after:row.getBoundingClientRect().top,earlier:node.textContent.includes('An earlier question')};
+      })()`);
+      expect(prepend.earlier).toBe(true);
+      expect(Math.abs(prepend.after - prepend.before), "prepending history moved the current row").toBeLessThan(2);
+      const hiddenAnchor = await tab.evaluate<{ before: number; after: number }>(String.raw`(async()=>{
+        const f=chatFixture,node=document.querySelector('.glosa-chat-history'),host=document.querySelector('main');
+        const before=node.scrollTop;host.hidden=true;
+        f.emit({type:'content',content:{id:'live',turnId:'active',kind:'text',role:'assistant',text:'\n\nA paragraph received while another desk tab is visible.'}});
+        await f.frame();host.hidden=false;await f.frame();return {before,after:node.scrollTop};
+      })()`);
+      expect(
+        Math.abs(hiddenAnchor.after - hiddenAnchor.before),
+        "hiding a desk tab lost its reading anchor",
+      ).toBeLessThan(2);
+
+      // Composition passes through the real engine's IME input path. Enter confirms composition;
+      // it must not submit the message. An explicit Queue action follows afterwards.
+      await tab.evaluate("document.querySelector('[aria-label=Message]').focus()");
+      await tab.send("Input.imeSetComposition", { text: "日本語", selectionStart: 3, selectionEnd: 3 });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 229,
+      });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 229,
+      });
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(0);
+      await tab.send("Input.insertText", { text: "日本語" });
+      await tab.evaluate("document.querySelector('.glosa-chat-send').click()");
+      await tab.evaluate(
+        "chatFixture.wait(()=>document.querySelector('.glosa-chat-tray').textContent.includes('日本語'),'composed message did not queue')",
+      );
+      expect(await tab.evaluate<string>("chatFixture.sends[0].text")).toBe("日本語");
+      await tab.evaluate("document.querySelector('[aria-label=Message]').focus()");
+      await tab.send("Input.insertText", { text: "Keep this separate main draft" });
+      await tab.evaluate("document.querySelector('button[aria-label=\"Edit waiting message\"]').click()");
+      expect(await tab.evaluate<string>("document.activeElement.getAttribute('aria-label')")).toBe(
+        "Edit waiting message",
+      );
+      await tab.send("Input.insertText", { text: "Revised queue note" });
+      await tab.evaluate(`(async()=>{[...document.querySelectorAll('.glosa-chat-queue-editor button')].find(b=>b.textContent==='Save message').click();
+        await chatFixture.wait(()=>chatFixture.edits.length===1&&!document.querySelector('.glosa-chat-queue-editor'),'queue edit did not settle');})()`);
+      expect(await tab.evaluate<string>("document.querySelector('[aria-label=Message]').value")).toBe(
+        "Keep this separate main draft",
+      );
+      expect(await tab.evaluate<string>("chatFixture.edits[0].text")).toContain("Revised queue note");
+
+      const approvalArrival = await tab.evaluate<{
+        focus: boolean;
+        before: number;
+        after: number;
+      }>(`(async()=>{
+        const f=chatFixture,node=document.querySelector('.glosa-chat-history');node.scrollTop=300;await f.frame();
+        const draft=document.querySelector('[aria-label=Message]');draft.focus();const before=node.scrollTop;
+        for(const [id,generation,expiresAt] of [['permission',2,new Date(Date.now()+60000).toISOString()],['stale',1,new Date(Date.now()+60000).toISOString()],['expired',2,new Date(Date.now()-1000).toISOString()]])
+          f.emit({type:'decision',decision:{id,generation,title:'Review '+id,detail:'Read only the selected outline file.',status:'pending',expiresAt,choices:[{id:'allow',label:'Allow once'},{id:'deny',label:'Deny'}]}});
+        await f.wait(()=>document.querySelector('.glosa-chat-attention button'),'offscreen request summary absent');await f.frame();
+        return {focus:document.activeElement===draft,before,after:node.scrollTop};
+      })()`);
+      expect(approvalArrival.focus, "an arriving approval stole composer focus").toBe(true);
+      expect(
+        Math.abs(approvalArrival.after - approvalArrival.before),
+        "an arriving approval moved the reader",
+      ).toBeLessThan(2);
+      expect(
+        await tab.evaluate<number>(
+          "document.querySelectorAll('[data-decision-id=stale] button,[data-decision-id=expired] button').length",
+        ),
+      ).toBe(4);
+      expect(
+        await tab.evaluate<boolean>(
+          "[...document.querySelectorAll('[data-decision-id=stale] button,[data-decision-id=expired] button')].every(b=>b.disabled)",
+        ),
+      ).toBe(true);
+      await tab.evaluate("document.querySelector('.glosa-chat-attention button').focus()");
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+        text: "\r",
+        unmodifiedText: "\r",
+      });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      expect(await tab.evaluate<string>("document.activeElement.textContent")).toBe("Review permission");
+      await tab.evaluate(
+        "document.querySelector('[data-decision-id=permission] button').focus(); chatFixture.decisionStarted=performance.now()",
+      );
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+        text: "\r",
+        unmodifiedText: "\r",
+      });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await tab.evaluate(`(async()=>{await chatFixture.wait(()=>!document.querySelector('[data-decision-id=permission]'),'answered decision did not leave pending UI');
+        chatFixture.timings.decision.push(performance.now()-chatFixture.decisionStarted);})()`);
+      expect(await tab.evaluate<string>("chatFixture.answers[0].choice")).toBe("allow");
+      expect(
+        await tab.evaluate<boolean>("document.activeElement===document.querySelector('[aria-label=Message]')"),
+      ).toBe(true);
+      expect(await tab.evaluate<string>("document.querySelector('[aria-label=Message]').value")).toBe(
+        "Keep this separate main draft",
+      );
+      await tab.evaluate(`(async()=>{await chatFixture.pane.confirmClose();chatFixture.emit({type:'decision',decision:{id:'deadline',generation:2,title:'Short request',detail:'A deliberately short offline deadline.',status:'pending',expiresAt:new Date(Date.now()+1000).toISOString(),choices:[{id:'allow',label:'Allow once'}]}});
+        await chatFixture.wait(()=>document.querySelector('[data-decision-id=deadline] button')&&!document.querySelector('[data-decision-id=deadline] button').disabled,'deadline was never answerable');
+        await chatFixture.wait(()=>document.querySelector('[data-decision-id=deadline] button')?.disabled,'expiry did not disable the request');})()`);
+
+      // The installed engine supplies a real File from this test's public artifact. A failed
+      // upload keeps the draft, and selecting the same file again can recover.
+      await tab.evaluate("chatFixture.failUpload=true");
+      const documentNode = await tab.send("DOM.getDocument");
+      const fileInput = await tab.send("DOM.querySelector", {
+        nodeId: documentNode.result.root.nodeId,
+        selector: 'input[aria-label="Attach files"]',
+      });
+      await tab.send("DOM.setFileInputFiles", { nodeId: fileInput.result.nodeId, files: [join(workspaceRoot, ALPHA)] });
+      await tab.evaluate(
+        "chatFixture.wait(()=>document.querySelector('.glosa-chat-status').textContent.includes('could not be uploaded'),'failed upload was not explained')",
+      );
+      expect(await tab.evaluate<string>("document.querySelector('[aria-label=Message]').value")).toBe(
+        "Keep this separate main draft",
+      );
+      await tab.send("DOM.setFileInputFiles", { nodeId: fileInput.result.nodeId, files: [join(workspaceRoot, ALPHA)] });
+      await tab.evaluate(
+        "chatFixture.wait(()=>document.querySelector('[aria-label=\"Remove alpha.md\"]'),'upload retry did not attach file')",
+      );
+      expect(await tab.evaluate<string>("chatFixture.uploads[0]")).toBe(ALPHA);
+      expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-status').textContent")).not.toContain(
+        "could not be uploaded",
+      );
+      await tab.evaluate(`(async()=>{chatFixture.stream.onStatus('down');await chatFixture.frame();})()`);
+      expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-status').textContent")).toContain(
+        "Reconnecting",
+      );
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(1);
+      await tab.evaluate(`(async()=>{
+        chatFixture.stream.onStatus('up');chatFixture.emit({type:'turn_status',turnId:'active',status:'failed',error:'The runtime exited after its partial reply.',
+          failure:{category:'runtime',title:'Reply interrupted',detail:'The connection ended after the text below was received.',dispatchCertainty:'known',recoveryAction:'use_draft'}});
+        await chatFixture.wait(()=>document.querySelector('.glosa-chat-turn-failure'),'runtime failure was not rendered');
+      })()`);
+      expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-turn-failure').textContent")).toContain(
+        "Reply interrupted",
+      );
+      expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-history').textContent")).toContain(
+        "The gate was still open",
+      );
+      expect(await tab.evaluate<string>("document.querySelector('[aria-label=Message]').value")).toBe(
+        "Keep this separate main draft",
+      );
+      await tab.evaluate(
+        `(async()=>{chatFixture.stream.onEvent({event:'chat_unavailable',data:{chatId:'fixture'}});chatFixture.stream.onStatus('up');await chatFixture.frame();})()`,
+      );
+      expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-status').textContent")).toContain(
+        "This chat is unavailable",
+      );
+      expect(await tab.evaluate<boolean>("document.querySelector('.glosa-chat-send').disabled")).toBe(true);
+      expect(await tab.evaluate<string>("document.querySelector('[aria-label=Message]').value")).toBe(
+        "Keep this separate main draft",
+      );
+      await tab.evaluate(
+        `(async()=>{document.querySelector('.glosa-chat-connection-recovery button').click();await chatFixture.wait(()=>!document.querySelector('.glosa-chat-send').disabled,'explicit refresh did not restore the available chat');})()`,
+      );
+      await tab.evaluate(`(async()=>{
+        [...document.querySelectorAll('.glosa-chat-turn-failure button')].find(b=>b.textContent==='Use as draft').click();
+        await chatFixture.wait(()=>document.querySelector('[aria-label=Message]').value==='Help me make the opening more concrete.','failed turn did not restore a reviewable draft');
+      })()`);
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(1);
+      await tab.evaluate(`(async()=>{chatFixture.refuseSend=true;document.querySelector('.glosa-chat-send').click();
+        await chatFixture.wait(()=>document.querySelector('.glosa-chat-status').textContent.includes('Account needs attention.'),'send refusal was not explained');})()`);
+      expect(await tab.evaluate<string>("document.querySelector('[aria-label=Message]').value")).toBe(
+        "Help me make the opening more concrete.",
+      );
+      expect(await tab.evaluate<number>("chatFixture.sends.length")).toBe(2);
+      expect(await tab.evaluate<string>("chatFixture.sends[1].retryOfTurnId")).toBe("active");
+
+      // Controlled local measurements use browser timestamps and observable DOM paint. They are
+      // review evidence, not thresholds on shared CI hosts. Historical metadata is deliberately
+      // unhydrated, matching the API's bounded history-page contract.
+      const timings = await tab.evaluate<Record<string, unknown>>(`(async()=>{
+        const f=chatFixture;
+        const baseline=structuredClone(f.state);baseline.turns=baseline.turns.filter(turn=>!['accepted','queued','held'].includes(turn.status));
+        for(const historySize of [0,5000]) {
+          f.pane.destroy();f.state=structuredClone(baseline);
+          f.state.turns.unshift(...Array.from({length:historySize},(_,i)=>({id:'unhydrated-'+i,status:'completed'})));
+          f.state.decisions=[];f.state.page={hasEarlier:false};f.state.revision++;await f.mount();
+          document.querySelector('.glosa-chat-history').scrollTop=1e9;await f.frame();const samples=[];
+          for(let i=0;i<20;i++) {const marker=' Visible token '+historySize+':'+i;const start=performance.now();
+            f.emit({type:'content',content:{id:'live',turnId:'active',kind:'text',role:'assistant',text:marker}});
+            await f.wait(()=>document.querySelector('.glosa-chat-history').textContent.includes(marker),'provider token did not become visible');
+            samples.push(performance.now()-start);}
+          f.timings.events.push({historySize,hydratedTurns:document.querySelectorAll('[data-kind=human]').length,samples});
+          const field=document.querySelector('[aria-label=Message]'),marker='Measured local message '+historySize;field.value=marker;field.dispatchEvent(new Event('input',{bubbles:true}));
+          f.state.turns.find(t=>t.id==='active').status=historySize?'running':'completed';f.snapshot();await f.frame();
+          await f.wait(()=>document.querySelector('.glosa-chat-send').dataset.mode===(historySize?'queue':'send'),'benchmark action mode did not match its label');
+          const start=performance.now();document.querySelector('.glosa-chat-send').click();
+          await f.wait(()=>field.value===''&&[...document.querySelectorAll('.glosa-chat-history,.glosa-chat-tray')].some(node=>node.textContent.includes(marker)),'local send feedback absent');
+          f.timings[historySize?'queue':'send'].push(performance.now()-start);
+          await f.wait(()=>f.state.turns.some(turn=>turn.text===marker),'measured send did not settle');await f.frame();
+        }
+        return f.timings;
+      })()`);
+      mkdirSync(".context/test-results", { recursive: true });
+      writeFileSync(".context/test-results/reliable-chat-timings.json", `${JSON.stringify(timings, null, 2)}\n`);
+
+      // Representative normalized tool and decision content is composed through the production
+      // surface. Provider seam tests own native translation; these offline fixtures prove actual
+      // visible labels, literal file/diff text and readable question/quota states in both themes.
+      await tab.evaluate(String.raw`(async()=>{
+        const f=chatFixture;f.reviewBaseline=structuredClone(f.state);f.pane.destroy();
+        f.state.turns=[{id:'tool-review',text:'Review the outline changes.',status:'completed'}];
+        f.state.content=[
+          {id:'file-read',turnId:'tool-review',kind:'tool',name:'Read',status:'completed',text:'File: outline.md\n\n# Opening\nBegin with one concrete detail.'},
+          {id:'file-diff',turnId:'tool-review',kind:'tool',name:'fileChange',status:'completed',text:'File: outline.md\nChange: update\n\n@@ -1 +1 @@\n-Start with an abstract claim.\n+<script>Begin with one concrete detail.</script>'},
+          {id:'denied',turnId:'tool-review',kind:'tool',name:'Bash',status:'denied',text:'The user denied this command request.'},
+          {id:'cancelled',turnId:'tool-review',kind:'tool',name:'WebFetch',status:'cancelled',text:'The native tool reported cancellation.'},
+          {id:'failed',turnId:'tool-review',kind:'tool',name:'Bash',status:'failed',text:'The command exited with code 1.'},
+          {id:'unfinished',turnId:'tool-review',kind:'tool',name:'Write',status:'running',text:'No terminal tool outcome was received.'},
+        ];f.state.decisions=[];f.state.page={hasEarlier:false};f.state.revision++;await f.mount();
+        const steps=document.querySelector('.glosa-chat-steps');steps.open=true;
+        const details=steps.querySelectorAll('li details');details[0].open=true;details[1].open=true;await f.frame();
+      })()`);
+      const toolReview = await tab.evaluate<{
+        labels: string[];
+        states: string[];
+        visible: boolean;
+        detail: string;
+        activeContent: number;
+      }>(`(()=>{const list=document.querySelector('.glosa-chat-step-list'),history=document.querySelector('.glosa-chat-history').getBoundingClientRect();
+        const rows=[...list.querySelectorAll('li')];return {labels:rows.map(row=>row.querySelector('summary').textContent),states:rows.map(row=>row.dataset.state),
+          visible:rows.every(row=>{const b=row.querySelector('summary').getBoundingClientRect();return b.width>0&&b.height>0&&b.top>=history.top&&b.bottom<=history.bottom;}),
+          detail:list.querySelectorAll('pre')[1].textContent,activeContent:list.querySelectorAll('script,img,iframe').length};})()`);
+      expect(toolReview.labels).toEqual([
+        "Read a file",
+        "Edited files",
+        "Denied: Running a command",
+        "Cancelled: Reading a web page",
+        "Failed: Running a command",
+        "Stopped: Writing a file · outcome unknown",
+      ]);
+      expect(toolReview.states).toEqual(["completed", "completed", "denied", "cancelled", "failed", "stopped"]);
+      expect(toolReview.visible, "the tool outcomes must be visible after opening their steps").toBe(true);
+      expect(toolReview.detail).toContain(
+        "@@ -1 +1 @@\n-Start with an abstract claim.\n+<script>Begin with one concrete detail.</script>",
+      );
+      expect(toolReview.activeContent, "file/diff text must remain literal rather than become active HTML").toBe(0);
+      for (const scheme of ["light", "dark"] as const) {
+        await setScheme(scheme);
+        const receipt = await tab.send("Page.captureScreenshot", { format: "png" });
+        writeFileSync(
+          `.context/test-results/reliable-chat-tools-${scheme}.png`,
+          Buffer.from(receipt.result.data, "base64"),
+        );
+      }
+      await tab.evaluate(`(async()=>{
+        const f=chatFixture;f.pane.destroy();
+        f.state.turns=[
+          {id:'quota-review',text:'Continue reviewing the opening.',status:'failed',failure:{category:'quota',title:'Usage limit reached',detail:'This account has reached its usage limit. Your message remains available as a draft.',dispatchCertainty:'known',recoveryAction:'use_draft'}},
+          {id:'question-review',text:'Choose the opening focus.',status:'waiting'},
+        ];f.state.content=[];f.state.decisions=[{id:'review-question',kind:'question',generation:2,status:'pending',title:'Which opening should I develop?',detail:'Choose the direction before I revise the outline.',expiresAt:new Date(Date.now()+60000).toISOString(),allowText:true,
+          questions:[{id:'focus',question:'What should the reader notice first?',multiple:false,options:[{label:'The setting',description:'Begin with a concrete place.'},{label:'The action',description:'Begin with what changed.'}]}],choices:[{id:'answer',label:'Send answer'},{id:'deny',label:'Cancel'}]}];
+        f.state.revision++;await f.mount();await f.frame();
+      })()`);
+      expect(
+        await tab.evaluate<boolean>(`(()=>{const quota=document.querySelector('.glosa-chat-turn-failure'),question=document.querySelector('[data-decision-id=review-question]');
+        return quota.textContent.includes('Usage limit reached')&&quota.getBoundingClientRect().height>0&&question.querySelector('legend').textContent==='What should the reader notice first?'&&
+          question.querySelectorAll('input[type=radio]').length===2&&[...question.querySelectorAll('button')].every(button=>!button.disabled)&&question.getBoundingClientRect().height>0;})()`),
+      ).toBe(true);
+      for (const scheme of ["light", "dark"] as const) {
+        await setScheme(scheme);
+        const receipt = await tab.send("Page.captureScreenshot", { format: "png" });
+        writeFileSync(
+          `.context/test-results/reliable-chat-question-quota-${scheme}.png`,
+          Buffer.from(receipt.result.data, "base64"),
+        );
+      }
+      writeFileSync(".context/test-results/reliable-chat-tool-review.json", `${JSON.stringify(toolReview, null, 2)}\n`);
+      await tab.evaluate(
+        `(async()=>{const f=chatFixture;f.pane.destroy();f.state=f.reviewBaseline;delete f.reviewBaseline;await f.mount();})()`,
+      );
+
+      // Document zoom exercises actual enlarged layout in the installed engine. This does not
+      // qualify native browser chrome or an installed desktop shell's zoom controls.
+      await tab.evaluate("document.documentElement.style.zoom='2'");
+      await tab.evaluate("chatFixture.frame()");
+      const zoomed = await tab.evaluate<{ page: number; viewport: number; composer: number; history: number }>(
+        `(()=>{const node=document.querySelector('.glosa-chat-history');return {page:document.documentElement.scrollWidth,viewport:innerWidth,composer:document.querySelector('.glosa-chat-composer').getBoundingClientRect().right,history:node.clientHeight};})()`,
+      );
+      expect(zoomed.page, "200% document zoom caused horizontal page overflow").toBeLessThanOrEqual(zoomed.viewport);
+      expect(zoomed.composer).toBeLessThanOrEqual(zoomed.viewport);
+      expect(zoomed.history).toBeGreaterThan(80);
+      await tab.evaluate("document.documentElement.style.zoom=''");
+      await tab.send("Emulation.setDeviceMetricsOverride", {
+        width: 360,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await tab.evaluate("chatFixture.frame()");
+      expect(await tab.evaluate<number>("document.documentElement.scrollWidth")).toBeLessThanOrEqual(360);
+      expect(
+        await tab.evaluate<number>("document.querySelector('.glosa-chat-composer').getBoundingClientRect().right"),
+      ).toBeLessThanOrEqual(360);
+      // Chromium's own settings API changes the disposable profile's browser zoom. It is a
+      // capability witness: document zoom above remains the layout check when this API is absent.
+      const zoomSettings = await openTab(browser, cdpPort, "chrome://settings/appearance");
+      const nativeZoomSupported = await zoomSettings.evaluate<boolean>(
+        "typeof chrome.settingsPrivate?.setDefaultZoom==='function'",
+      );
+      let nativeZoom: Record<string, unknown> = { supported: nativeZoomSupported };
+      if (nativeZoomSupported) {
+        await tab.send("Emulation.clearDeviceMetricsOverride");
+        const beforeZoom = await tab.evaluate<{ width: number; ratio: number }>(
+          "({width:innerWidth,ratio:devicePixelRatio})",
+        );
+        try {
+          await zoomSettings.evaluate("new Promise(resolve=>chrome.settingsPrivate.setDefaultZoom(2,resolve))");
+          await tab.send("Page.bringToFront");
+          await tab.evaluate(
+            `chatFixture.wait(()=>devicePixelRatio>=${beforeZoom.ratio * 1.9},'browser 200% zoom did not apply')`,
+          );
+          nativeZoom = await tab.evaluate<
+            Record<string, unknown>
+          >(`({supported:true,width:innerWidth,ratio:devicePixelRatio,cssZoom:getComputedStyle(document.documentElement).zoom,
+            overflow:document.documentElement.scrollWidth-innerWidth,composerRight:document.querySelector('.glosa-chat-composer').getBoundingClientRect().right,
+            history:document.querySelector('.glosa-chat-history').clientHeight})`);
+          expect(Number(nativeZoom.width), "browser zoom must reduce the CSS viewport").toBeLessThanOrEqual(
+            beforeZoom.width * 0.55,
+          );
+          expect(nativeZoom.cssZoom).toBe("1");
+          expect(Number(nativeZoom.overflow), "native browser zoom caused page overflow").toBeLessThanOrEqual(0);
+          expect(Number(nativeZoom.composerRight)).toBeLessThanOrEqual(Number(nativeZoom.width));
+          expect(Number(nativeZoom.history)).toBeGreaterThan(40);
+          const nativeZoomScreenshot = await tab.send("Page.captureScreenshot", { format: "png" });
+          writeFileSync(
+            ".context/reliable-chat-browser-zoom.png",
+            Buffer.from(nativeZoomScreenshot.result.data, "base64"),
+          );
+        } finally {
+          await zoomSettings.evaluate("new Promise(resolve=>chrome.settingsPrivate.setDefaultZoom(1,resolve))");
+          await tab.send("Page.bringToFront");
+        }
+      }
+      writeFileSync(
+        ".context/test-results/reliable-chat-browser-zoom.json",
+        `${JSON.stringify(nativeZoom, null, 2)}\n`,
+      );
+      await tab.send("Emulation.setDeviceMetricsOverride", {
+        width: 1600,
+        height: 1000,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      // Eight real React panes, four identities, two mirrors of each. Production data access owns
+      // the shared SSE connection, parser, watch requests, recovery and authenticated mutations.
+      // Only fetch's byte transport is synthetic; no provider or daemon processing is measured.
+      const eightPanes = await tab.evaluate<Record<string, unknown>>(String.raw`(async()=>{
+        chatFixture.pane.destroy();
+        const {createChatPane}=await import('/app/chat-pane.js'),{createDataAccess}=await import('/app/data-access.js');
+        const m=window.multiChatFixture={panes:[],states:new Map(),requests:[],watches:[],streamOpens:0,streamCloses:0,sends:[],timings:[]};
+        const host=document.querySelector('main');host.replaceChildren();
+        const grid=document.createElement('div');grid.style.cssText='height:100%;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:8px';host.append(grid);
+        const json=(value)=>new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
+        const encoder=new TextEncoder(),storage=new Map([['glosa_token','offline-eight-pane-token']]);
+        m.emit=(event,data)=>m.controller.enqueue(encoder.encode('event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n'));
+        for(let i=0;i<4;i++)m.states.set('chat-'+i,{...structuredClone(chatFixture.state),id:'chat-'+i,workspaceId:'offline-workspace',workspaceEpoch:'offline-epoch',
+          title:'Outline '+(i+1),revision:1,draftRevision:0,draft:'',draftAttachments:[],page:{hasEarlier:false},decisions:[],
+          turns:[{id:'active',text:'Review this opening.',status:'running',at:new Date().toISOString()}],
+          content:[{id:'reply',turnId:'active',kind:'text',role:'assistant',text:'Begin with a concrete detail. Keep the question close to the reader.'}]});
+        m.access=createDataAccess({expectedInstallId:'offline-eight-pane-install',storage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
+          fetchFn:async(path,init={})=>{
+            m.requests.push({path,method:init.method??'GET',authorization:new Headers(init.headers).get('Authorization')});
+            if(path==='/api/agents/status')return json(await chatFixture.access.getAgentStatus());
+            if(path==='/w/eight-pane/stream'){m.streamOpens++;return new Response(new ReadableStream({start(controller){m.controller=controller;m.emit('chat_stream_ready',{streamId:'offline-stream'});},cancel(){m.streamCloses++;}}),{headers:{'Content-Type':'text/event-stream'}});}
+            if(path==='/w/eight-pane/chats/watch'){const input=JSON.parse(init.body);m.watches.push(input);return json({revision:input.revision});}
+            const match=path.match(new RegExp('^/w/eight-pane/chats/(chat-[0-3])(?:/(draft|turns|feedback))?$'));
+            if(!match)throw Error('Unexpected eight-pane request: '+path);
+            const state=m.states.get(match[1]);
+            if(!match[2])return json(state);
+            if(match[2]==='feedback')return json({entryIds:[],hasMore:false});
+            const input=JSON.parse(init.body);
+            if(match[2]==='draft'){state.draft=input.text;state.draftAttachments=input.attachments;state.draftRevision++;return json(state);}
+            m.sends.push({chatId:state.id,...input});
+            const turn={id:input.turnId,text:input.text,status:'queued',revision:1};state.turns.push(turn);state.draft='';state.draftRevision++;
+            const record={seq:++state.revision,data:{type:'turn',turn,consumedDraftRevision:input.draftRevision}};
+            m.emit('chat_event',{chatId:state.id,record});return json({turnId:turn.id});
+          }});
+        for(let i=0;i<8;i++){const cell=document.createElement('div');cell.style.cssText='min-width:0;min-height:0';grid.append(cell);
+          m.panes.push(createChatPane(cell,{dataAccess:m.access,slug:'eight-pane',chatId:'chat-'+(i%4),onChange(){},onSettings(){}}));}
+        await Promise.all(m.panes.map(pane=>pane.ready));await chatFixture.frame();
+        await chatFixture.wait(()=>m.watches.at(-1)?.chats.length===4,'four distinct chat watches did not settle');
+        for(let sample=0;sample<20;sample++){const marker=' Eight-pane update '+sample;const start=performance.now();
+          for(const state of m.states.values()){state.content[0].text+=marker;m.emit('chat_event',{chatId:state.id,record:{seq:++state.revision,data:{type:'content',content:{id:'reply',turnId:'active',kind:'text',role:'assistant',text:marker}}}});}
+          await chatFixture.wait(()=>m.panes.every(pane=>pane.element.querySelector('.glosa-chat-history').textContent.includes(marker)),'eight-pane SSE update did not reach every pane');
+          m.timings.push(performance.now()-start);}
+        const geometry=m.panes.map(pane=>{const history=pane.element.querySelector('.glosa-chat-history'),box=pane.element.getBoundingClientRect();return {width:box.width,height:box.height,history:history.clientHeight,visible:box.top>=0&&box.bottom<=innerHeight};});
+        return {panes:m.panes.length,distinctChats:m.states.size,streamOpens:m.streamOpens,watches:m.watches.at(-1).chats.map(chat=>chat.id),
+          authenticated:m.requests.every(request=>request.authorization==='Bearer offline-eight-pane-token'),geometry,samples:m.timings};
+      })()`);
+      expect(eightPanes.panes).toBe(8);
+      expect(eightPanes.distinctChats).toBe(4);
+      expect(eightPanes.streamOpens).toBe(1);
+      expect(eightPanes.watches).toEqual(["chat-0", "chat-1", "chat-2", "chat-3"]);
+      expect(eightPanes.authenticated).toBe(true);
+      expect(
+        await tab.evaluate<boolean>(
+          "multiChatFixture.panes.every(pane=>!pane.element.querySelector('.glosa-chat-status').dataset.error||pane.element.querySelector('.glosa-chat-status').dataset.error==='false')",
+        ),
+      ).toBe(true);
+      expect(
+        (eightPanes.geometry as Array<{ width: number; history: number; visible: boolean }>).every(
+          (pane) => pane.width > 350 && pane.history > 40 && pane.visible,
+        ),
+      ).toBe(true);
+      await tab.evaluate("multiChatFixture.panes[7].element.querySelector('[aria-label=Message]').focus()");
+      await tab.send("Input.insertText", { text: "Keep this draft on both mirrors" });
+      await tab.evaluate(
+        `chatFixture.wait(()=>[3,7].every(index=>multiChatFixture.panes[index].element.querySelector('[aria-label=Message]').value==='Keep this draft on both mirrors'),'mirror draft did not synchronize')`,
+      );
+      expect(
+        await tab.evaluate<boolean>(
+          "[0,1,2,4,5,6].every(index=>multiChatFixture.panes[index].element.querySelector('[aria-label=Message]').value==='')",
+        ),
+      ).toBe(true);
+      await tab.evaluate("multiChatFixture.panes[7].element.querySelector('.glosa-chat-send').click()");
+      await tab.evaluate(
+        `chatFixture.wait(()=>multiChatFixture.sends.length===1&&[3,7].every(index=>multiChatFixture.panes[index].element.querySelector('.glosa-chat-tray').textContent.includes('Keep this draft on both mirrors')),'one queued send did not reach both mirrors')`,
+      );
+      expect(await tab.evaluate<number>("multiChatFixture.sends.length")).toBe(1);
+      expect(await tab.evaluate<string>("multiChatFixture.sends[0].chatId")).toBe("chat-3");
+      expect(await tab.evaluate<number>("multiChatFixture.streamOpens")).toBe(1);
+      const eightScreenshot = await tab.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(".context/reliable-chat-eight-panes.png", Buffer.from(eightScreenshot.result.data, "base64"));
+      await tab.evaluate(
+        `(async()=>{multiChatFixture.panes.forEach(pane=>pane.destroy());await chatFixture.wait(()=>multiChatFixture.streamCloses===1,'last mirror did not close its owned SSE reader');document.querySelector('main').replaceChildren();})()`,
+      );
+      writeFileSync(".context/test-results/reliable-chat-eight-panes.json", `${JSON.stringify(eightPanes, null, 2)}\n`);
+      await tab.send("Emulation.setDeviceMetricsOverride", {
+        width: 480,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
       // Account controls use the same real browser: test the low-on-screen menu, not a DOM shim.
       await tab.evaluate(`(async () => {
         chatFixture.pane.destroy();
@@ -2103,6 +2658,245 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
     },
     TEST_TIMEOUT_MS,
   );
+  test(
+    "ChatGPT sign-in recovery preserves a newer draft and unacknowledged intent until an explicit retry",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "before OAuth recovery");
+      const outsideRequests: string[] = [];
+      const stopRequests = tab.on((event) => {
+        if (event.method !== "Network.requestWillBeSent") return;
+        const url = event.params?.request?.url;
+        if (url && /^https?:/.test(url) && !url.startsWith(origin())) outsideRequests.push(url);
+      });
+      try {
+        await tab.evaluate(String.raw`(async()=>{
+          const {createDataAccess}=await import('/app/data-access.js');
+          const {createChatPane}=await import('/app/chat-pane.js');
+          const {mountAgentSettings}=await import('/app/agent-settings.js');
+          const f=window.oauthRecovery={requests:[],sends:[],opened:[],begins:[],cancels:[],adoptions:0,mode:'pending',attempt:0};
+          const host=document.createElement('main');host.style.cssText='height:100vh;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;padding:16px;box-sizing:border-box';
+          f.chatHost=document.createElement('div');f.chatHost.style.cssText='min-height:0;min-width:0';
+          f.settingsHost=document.createElement('div');f.settingsHost.style.cssText='min-height:0;overflow:auto';
+          host.append(f.chatHost,f.settingsHost);document.body.replaceChildren(host);
+          f.frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          f.wait=async(predicate,label)=>{const deadline=performance.now()+5000;while(!predicate()){if(performance.now()>deadline)throw Error(label);await f.frame();}};
+          f.profile={id:'oauth-profile',provider:'codex',label:'Writing account',enabled:true,isDefault:true,revision:1,epoch:1,
+            authentication:{mode:'oauth',credentialRef:'saved-browser-account',planNoticeSeen:true},
+            auth:{state:'authenticated',identity:'oauth:saved-browser-account',label:'writer@example.test',method:'OAuth',observedAt:new Date().toISOString()}};
+          f.state={id:'oauth-chat',workspaceId:'offline-oauth-workspace',workspaceEpoch:'offline-oauth-epoch',profileId:f.profile.id,provider:'codex',title:'Preserve the argument',origin:'managed',revision:1,
+            configRevision:1,draftRevision:0,draft:'',draftAttachments:[],archived:false,page:{hasEarlier:false},runtime:{state:'stopped',generation:1},
+            settings:{model:'offline-model',effort:'high',permissionMode:'default'},turns:[],content:[],decisions:[]};
+          const json=value=>new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
+          const storage={getItem:key=>key==='glosa_token'?'offline-oauth-browser-token':localStorage.getItem(key),setItem:(key,value)=>localStorage.setItem(key,value),removeItem:key=>localStorage.removeItem(key)};
+          f.access=createDataAccess({storage,expectedInstallId:'offline-oauth-browser-install',fetchFn:async(path,init={})=>{
+            const method=init.method??'GET',input=init.body?JSON.parse(init.body):undefined;
+            f.requests.push({path,method,authorization:new Headers(init.headers).get('Authorization')});
+            if(path==='/api/agents/status')return json({available:true,providers:[{id:'codex',name:'Codex',installed:true,qualified:true,available:true,oauth:true}],profiles:[f.profile],
+              capabilities:{[f.profile.id]:{models:[{id:'offline-model',name:'Offline model',efforts:['high']}]}},
+              oauthAccounts:{codex:[{accountId:'saved-browser-account',status:f.profile.auth.state==='authenticated'?'signed-in':'signed-out',planEnabled:true}]}});
+            if(path.startsWith('/api/dictation/'))return json({enabled:false,context:true,cleanup:false,credential_present:false,revision:0});
+            if(path.includes('/mcp'))return json({servers:[],revision:0});
+            if(path==='/w/oauth-browser/stream')return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('event: chat_stream_ready\ndata: {"streamId":"offline-oauth-stream"}\n\n'));}}),{headers:{'Content-Type':'text/event-stream'}});
+            if(path==='/w/oauth-browser/chats/watch')return json({revision:input.revision});
+            if(path==='/w/oauth-browser/chats/oauth-chat')return json(f.state);
+            if(path.endsWith('/feedback'))return json({entryIds:[],hasMore:false});
+            if(path.endsWith('/draft')){f.state.draft=input.text;f.state.draftAttachments=input.attachments;f.state.draftRevision++;return json(f.state);}
+            if(path.endsWith('/turns')){f.sends.push(structuredClone(input));if(f.sends.length===1)throw new TypeError('The acknowledgement was lost.');
+              f.state.turns.push({id:input.turnId,text:input.text,status:'completed',revision:1});f.state.revision++;return json({turnId:input.turnId});}
+            if(path==='/api/agents/providers/codex/oauth/begin'){f.begins.push(input);return json({attemptId:'attempt-'+(++f.attempt),authorizationUrl:'https://auth.openai.com/authorize?state=offline-browser-'+f.attempt});}
+            if(path.endsWith('/cancel')){f.cancels.push(path);return json({status:'cancelled'});}
+            if(path==='/api/agents/providers/codex/oauth/adopt'){f.adoptions++;f.profile.auth.state='authenticated';return json(f.profile);}
+            if(path.startsWith('/api/agents/providers/codex/oauth/'))return json(f.mode==='pending'?{status:'pending'}:f.mode==='succeeded'?{status:'succeeded',account:{planEnabled:true}}:f.mode==='expired'?{status:'expired'}:{status:'failed',error:f.mode});
+            throw Error('Unexpected OAuth browser fixture request: '+path);
+          }});
+          f.mountChat=async()=>{f.chat=createChatPane(f.chatHost,{dataAccess:f.access,slug:'oauth-browser',chatId:'oauth-chat',onChange(){},onSettings(){}});await f.chat.ready;await f.frame();};
+          f.mountSettings=async()=>{f.settings=mountAgentSettings(f.settingsHost,{dataAccess:f.access,openOutside:async url=>f.opened.push(url),onChange(){f.changed=(f.changed??0)+1;}});await f.settings.ready;await f.frame();};
+          f.button=(label,scope=f.settingsHost)=>{const button=[...scope.querySelectorAll('button')].find(el=>el.textContent===label&&!el.disabled&&el.getClientRects().length);if(!button)throw Error('Missing visible action: '+label);button.focus();return document.activeElement===button;};
+          f.recovery=()=>f.access.readChatRecovery('oauth-browser','oauth-chat');
+          await f.mountChat();
+        })()`);
+        const enter = async () => {
+          for (const type of ["keyDown", "keyUp"]) {
+            await tab.send("Input.dispatchKeyEvent", {
+              type,
+              key: "Enter",
+              code: "Enter",
+              windowsVirtualKeyCode: 13,
+              ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
+            });
+          }
+        };
+        const activate = async (label: string, scope = "oauthRecovery.settingsHost") => {
+          expect(await tab.evaluate<boolean>(`oauthRecovery.button(${JSON.stringify(label)},${scope})`)).toBe(true);
+          await enter();
+        };
+        const returnToDraft = async () => {
+          for (let attempt = 0; attempt < 40; attempt++) {
+            if (
+              await tab.evaluate<boolean>(
+                `document.activeElement===oauthRecovery.chat.element.querySelector('[aria-label=Message]')`,
+              )
+            )
+              return;
+            for (const type of ["keyDown", "keyUp"]) {
+              await tab.send("Input.dispatchKeyEvent", { type, key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+            }
+          }
+          throw new Error("keyboard could not return from sign-in to the preserved draft");
+        };
+        await tab.evaluate("oauthRecovery.chat.focus()");
+        await tab.send("Input.insertText", { text: "Keep the quoted paragraph." });
+        await activate("↑", "oauthRecovery.chat.element");
+        await tab.evaluate(
+          `oauthRecovery.wait(()=>oauthRecovery.sends.length===1&&oauthRecovery.chat.element.querySelector('[aria-label="Retry sending message"]'),'unacknowledged intent did not remain available for review')`,
+        );
+        const intent = await tab.evaluate<Record<string, unknown>>("oauthRecovery.sends[0]");
+        await tab.evaluate("oauthRecovery.chat.focus()");
+        await tab.send("Input.insertText", { text: "A newer draft stays separate." });
+        await tab.evaluate(
+          `(async()=>{oauthRecovery.profile.auth.state='expired';await oauthRecovery.mountSettings();})()`,
+        );
+        expect(
+          await tab.evaluate<string>("oauthRecovery.settingsHost.querySelector('.glosa-agent-state').textContent"),
+        ).toBe("Sign-in expired");
+        for (const [mode, message] of [
+          ["pending", "Finish sign-in in your browser. Your drafts are safe here."],
+          ["access-denied", "ChatGPT sign-in was declined. Your drafts are unchanged."],
+          ["expired", "Sign-in expired. Continue with ChatGPT to start again."],
+          ["reauth-required", "Sign in to ChatGPT again before continuing."],
+        ]) {
+          await tab.evaluate(`oauthRecovery.mode=${JSON.stringify(mode)}`);
+          await activate("Continue with ChatGPT");
+          await tab.evaluate(
+            `oauthRecovery.wait(()=>oauthRecovery.settingsHost.querySelector('.glosa-agent-oauth [role]')?.textContent===${JSON.stringify(message)},'OAuth recovery status did not explain the local outcome')`,
+          );
+          expect(
+            await tab.evaluate<string>("oauthRecovery.chat.element.querySelector('[aria-label=Message]').value"),
+          ).toBe("A newer draft stays separate.");
+          expect(await tab.evaluate<number>("oauthRecovery.sends.length")).toBe(1);
+          await activate(mode === "pending" ? "Cancel sign-in" : "Close");
+          await tab.evaluate(
+            `oauthRecovery.wait(()=>oauthRecovery.settingsHost.querySelector('.glosa-agent-oauth [role]')?.textContent==='Sign-in closed. Your drafts are unchanged.','cancel did not leave a visible draft-preservation result')`,
+          );
+          await returnToDraft();
+          expect(
+            await tab.evaluate<boolean>(
+              "document.activeElement===oauthRecovery.chat.element.querySelector('[aria-label=Message]')",
+            ),
+          ).toBe(true);
+        }
+        const preserved = await tab.evaluate<{
+          draft: { text: string };
+          outbox: { intent: Record<string, unknown> }[];
+        }>("oauthRecovery.recovery()");
+        expect(preserved.draft.text).toBe("A newer draft stays separate.");
+        expect(preserved.outbox).toHaveLength(1);
+        expect(preserved.outbox[0]?.intent).toEqual(intent);
+        expect(await tab.evaluate<number>("oauthRecovery.adoptions")).toBe(0);
+        expect(await tab.evaluate<boolean>("oauthRecovery.cancels.length>=4")).toBe(true);
+        await tab.evaluate("oauthRecovery.mode='succeeded'");
+        await activate("Sign in");
+        await tab.evaluate(
+          `oauthRecovery.wait(()=>oauthRecovery.settingsHost.querySelector('.glosa-agent-state')?.textContent==='Connected'&&oauthRecovery.settingsHost.querySelector('.glosa-agent-oauth [role]')?.textContent==='Using ChatGPT plan. No message has been sent.','simulated reauthentication did not show the connected account')`,
+        );
+        expect(await tab.evaluate<Record<string, unknown>>("oauthRecovery.begins.at(-1)")).toEqual({
+          accountId: "saved-browser-account",
+          requestPlanConsent: false,
+        });
+        expect(await tab.evaluate<number>("oauthRecovery.sends.length")).toBe(1);
+        await tab.evaluate(
+          `(async()=>{oauthRecovery.chat.destroy();await oauthRecovery.frame();await oauthRecovery.mountChat();})()`,
+        );
+        await returnToDraft();
+        expect(
+          await tab.evaluate<string>("oauthRecovery.chat.element.querySelector('[aria-label=Message]').value"),
+        ).toBe("A newer draft stays separate.");
+        expect(
+          await tab.evaluate<number>("oauthRecovery.sends.length"),
+          "reopening after sign-in automatically resent an ambiguous intent",
+        ).toBe(1);
+        expect(
+          (await tab.evaluate<{ outbox: { intent: Record<string, unknown> }[] }>("oauthRecovery.recovery()")).outbox[0]
+            ?.intent,
+        ).toEqual(intent);
+        const screenshot = await tab.send("Page.captureScreenshot", { format: "png" });
+        mkdirSync(".context/test-results", { recursive: true });
+        writeFileSync(
+          ".context/test-results/chat-pipeline-oauth-recovery.png",
+          Buffer.from(screenshot.result.data, "base64"),
+        );
+        await tab.evaluate(
+          `(()=>{const button=oauthRecovery.chat.element.querySelector('[aria-label="Retry sending message"]');button.focus();})()`,
+        );
+        await enter();
+        await tab.evaluate(
+          `oauthRecovery.wait(()=>oauthRecovery.sends.length===2&&!oauthRecovery.chat.element.querySelector('[aria-label="Retry sending message"]'),'explicit retry did not acknowledge the preserved intent')`,
+        );
+        expect(await tab.evaluate<Record<string, unknown>>("oauthRecovery.sends[1]")).toEqual(intent);
+        expect(
+          await tab.evaluate<string>("oauthRecovery.chat.element.querySelector('[aria-label=Message]').value"),
+        ).toBe("A newer draft stays separate.");
+        expect(
+          await tab.evaluate<boolean>(
+            "oauthRecovery.requests.every(request=>request.authorization==='Bearer offline-oauth-browser-token')",
+          ),
+        ).toBe(true);
+        expect(
+          await tab.evaluate<boolean>(
+            "oauthRecovery.opened.length===5&&oauthRecovery.opened.every(url=>url.startsWith('https://auth.openai.com/authorize?state=offline-browser-'))",
+          ),
+        ).toBe(true);
+        expect(outsideRequests).toEqual([]);
+        const observations = await tab.evaluate(
+          `(async()=>({sends:oauthRecovery.sends,begins:oauthRecovery.begins,cancels:oauthRecovery.cancels,opened:oauthRecovery.opened,adoptions:oauthRecovery.adoptions,recovery:await oauthRecovery.recovery(),status:oauthRecovery.settingsHost.querySelector('.glosa-agent-state').textContent,draft:oauthRecovery.chat.element.querySelector('[aria-label=Message]').value}))()`,
+        );
+        writeFileSync(
+          ".context/chat-pipeline-oauth-browser-receipt.json",
+          JSON.stringify(
+            {
+              selectedCase:
+                "ChatGPT sign-in recovery preserves a newer draft and unacknowledged intent until an explicit retry",
+              browserVersion: (await browser.send("Browser.getVersion")).result,
+              daemonPid: daemon?.pid,
+              browserPid: chrome?.pid,
+              port,
+              home,
+              workspaceRoot,
+              chromeProfile,
+              observations,
+            },
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        const diagnostic = await tab
+          .evaluate(
+            `(async()=>({sends:oauthRecovery.sends,requests:oauthRecovery.requests,body:document.body.innerText,recovery:await oauthRecovery.recovery()}))()`,
+          )
+          .catch(() => null);
+        writeFileSync(
+          ".context/chat-pipeline-oauth-failure.json",
+          JSON.stringify({ error: String(error), diagnostic }, null, 2),
+        );
+        const failure = await tab.send("Page.captureScreenshot", { format: "png" }).catch(() => null);
+        if (failure)
+          writeFileSync(".context/chat-pipeline-oauth-failure.png", Buffer.from(failure.result.data, "base64"));
+        throw error;
+      } finally {
+        stopRequests();
+        await tab
+          .evaluate(
+            `(async()=>{oauthRecovery.chat?.destroy();oauthRecovery.settings?.destroy();await oauthRecovery.frame();})()`,
+          )
+          .catch(() => {});
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   test(
     "#405: the five raised components paint the same colours from tokens in light and dark, and a light History diff sits on glosa's paper",
     async () => {

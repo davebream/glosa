@@ -71,7 +71,7 @@ plugin/SDK surface; telemetry; Windows, Linux ARM/musl, and released Linux app/n
 ```
 Fixed stack: **Bun + TypeScript**; one process serves SPA + API; **no heavy frontend framework**
 (server-rendered HTML + small vanilla ES modules, with the owner-approved React exception only
-inside image tabs, decisions.md 2026-09-28); **markdown-it** (+ `data-line` stamping),
+inside image tabs and managed-chat panes, decisions.md 2026-09-28 and 2026-11-01); **markdown-it** (+ `data-line` stamping),
 **idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), Bun's native
 recursive **`fs.watch`** (artifact watch; **chokidar v5** only for transcript tailing), system **git** (shadow repo), a vendored **transcript-event normalizer** (do NOT
 parse raw transcript JSONL directly — A2). Monorepo: `packages/{daemon, spa, providers/claude-code,
@@ -376,7 +376,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v2.1: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v2.2: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -798,3 +798,34 @@ Direct rename/trash, annotation, history and edit controls are unavailable for t
 parent-directory operations retain their existing semantics. Open read-only tabs survive filtering,
 reload and parent renames; missing/excluded files show a recoverable unavailable state. Content
 refreshes on disk invalidations through a separate desk watcher, outside document capture.
+
+
+### Managed chat reliability amendment, 2026-11-01
+
+The maintainer approved a lazy, prebuilt React/assistant-ui island for managed chat only.
+The daemon journal remains conversation authority; assistant-ui provides interaction primitives,
+not persistence or execution. The vanilla pane façade, shared workspace connection, safe markdown,
+local assets, existing typography and themes remain authoritative. External-session mirrors stay
+outside this island. There is no runtime build, hosted history, telemetry or CDN dependency.
+
+A chat, its native session and each execution attempt have distinct identities. Durable failures
+include dispatch certainty and supported recovery; ambiguous submission never becomes an automatic
+retry. Queued messages are FIFO by default, capped at five, and may be revised append-only with a
+compare-and-swap revision. Existing account and permission choices survive migration. New chats
+select workspace access explicitly: workspace writes are allowed, outside access and network need
+human approval. Full access and automatic approval review are excluded.
+
+Provider-neutral ACP integration is allowed behind the existing managed-provider interface. Its
+cutover requires verified effective configuration/tool inventory, per-attempt tool authority,
+observable native replacements, verified descendant cleanup, suppressed helper inference and native
+compatibility. Released adapters that cannot prove those properties stay disabled; safe existing
+executors remain. No private fork or weaker authority is an acceptable substitute. Warm session
+reuse is not enabled before the authority and generation gates pass. Companion integrations and
+transcript readers must not be removed as managed-chat cleanup.
+
+Optional ChatGPT OAuth uses public-client registration and signature-validated OAuth/OIDC through
+maintained libraries. Explicit foreground sign-in, refresh, revocation and configured model use are
+the only new external calls. Tokens remain in the platform credential vault and an owned provider
+process; never browser storage, journals, command arguments, diagnostics, shell or MCP children.
+There is no API-billing fallback. Dictation keeps its separate credential route. Authentication,
+provider and live-runtime qualification remain separate from T8 maintainer acceptance.

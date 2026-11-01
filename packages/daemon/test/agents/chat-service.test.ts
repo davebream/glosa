@@ -25,7 +25,7 @@ import {
 import { createManagedTools } from "../../src/agents/managed-tools.ts";
 import type { DeliverableEntry } from "../../src/agent-provider/interface.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { AgentStore, EXPERIMENTAL_DISCLOSURE } from "../../src/chats/store.ts";
+import { AgentStore, EXPERIMENTAL_DISCLOSURE, type TurnStatus } from "../../src/chats/store.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
 import { runtimeTarget } from "../../src/agents/runtimes.ts";
 import { RuntimeSupervisor } from "../../src/agents/supervisor.ts";
@@ -33,6 +33,8 @@ import { waitUntil } from "../helpers.ts";
 import { ClaudeManagedAdapter } from "../../../providers/claude-code/src/managed.ts";
 import { CodexManagedAdapter } from "../../../providers/codex/src/managed.ts";
 import { chatRoutes } from "../../src/routes/chats.ts";
+import { ChatWatchStreams } from "../../src/chats/watch-stream.ts";
+import { createJournalStreamResponse } from "../../src/transport/stream.ts";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -783,34 +785,91 @@ test("subscription switches persist on one chat, keep turn provenance and start 
   expect(() => h.service.change(h.workspace, chat.id, switchTo(other.id))).toThrow("Finish or stop pending work");
 });
 
-test("Retry stop after restart requires independent recovered-ownership proof", async () => {
-  const h = setup(),
-    chat = h.chat();
-  h.store.chat(chat.id).append({ type: "runtime", runId: randomUUID(), generation: 1, state: "connected" });
-  await h.service.close();
-  let unknown = true;
-  const recoveredStore = new AgentStore(h.root);
-  const restarted = new ManagedChatService({
-    store: recoveredStore,
-    registry: new ManagedAgentRegistry(),
-    launcher: {
-      async spawn() {
-        throw new Error("Recovery must not launch or signal a process");
+test.each(["bound", "legacy", "runtime-attempt-conflict", "turn-attempt-conflict", "runtime-turn-conflict"] as const)(
+  "Retry stop after restart requires independent recovered-ownership proof (%s)",
+  async (binding) => {
+    const h = setup(),
+      chat = h.chat(),
+      first = h.send(chat.id, "uncertain reply");
+    await waitUntil(() => h.store.chat(chat.id).turn(first.turnId)?.status === "running");
+    const waiting = [h.send(chat.id, "held second"), h.send(chat.id, "held third")];
+    const removable = h.send(chat.id, "explicit queue removal");
+    const recoveryRoot = realpathSync(mkdtempSync(join(tmpdir(), "glosa-chat-stop-restart-")));
+    cleanup.push(async () => rmSync(recoveryRoot, { recursive: true, force: true }));
+    cpSync(h.root, recoveryRoot, { recursive: true });
+    if (binding !== "bound") {
+      // Preserve the real crash prefix while representing older journals that predate the additive
+      // attempt bindings. Conflict controls retain one newer binding so migration cannot override it.
+      const source = h.store.chat(chat.id);
+      const records = structuredClone(source.journal.records);
+      const conflict = randomUUID();
+      for (const record of records) {
+        if (record.data.type === "runtime") {
+          delete record.data.turnId;
+          delete record.data.attemptId;
+          if (binding === "runtime-attempt-conflict") record.data.attemptId = conflict;
+          if (binding === "runtime-turn-conflict") record.data.turnId = conflict;
+        } else if (record.data.type === "turn_status") {
+          delete record.data.attemptId;
+          if (binding === "turn-attempt-conflict" && record.data.turnId === first.turnId)
+            record.data.attemptId = conflict;
+        }
+      }
+      writeFileSync(
+        source.journal.path.replace(h.root, recoveryRoot),
+        `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      );
+    }
+    await h.service.close();
+    let unknown = true;
+    const recoveredStore = new AgentStore(recoveryRoot);
+    const restarted = new ManagedChatService({
+      store: recoveredStore,
+      registry: new ManagedAgentRegistry(),
+      launcher: {
+        async spawn() {
+          throw new Error("Recovery must not launch or signal a process");
+        },
       },
-    },
-    workspace: () => h.workspace,
-    manifest: () => undefined,
-    ownershipUnknown: () => unknown,
-  });
-  h.replace(restarted);
-  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("unknown");
-  await expect(restarted.stop(h.workspace, chat.id)).rejects.toThrow("exit is still unconfirmed");
-  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("unknown");
-  unknown = false;
-  await restarted.stop(h.workspace, chat.id);
-  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("stopped");
-  expect(h.spawns()).toBe(0);
-});
+      workspace: () => h.workspace,
+      manifest: () => undefined,
+      ownershipUnknown: () => unknown,
+    });
+    h.replace(restarted);
+    const log = recoveredStore.chat(chat.id),
+      held = () => log.state.turns.filter((turn) => waiting.some((item) => item.turnId === turn.id));
+    expect(log.state.runtime?.state).toBe("unknown");
+    if (binding === "bound") expect(log.state.runtime?.turnId).toBe(first.turnId);
+    if (binding === "legacy") {
+      expect(log.state.runtime?.turnId).toBeUndefined();
+      expect(log.state.runtime?.attemptId).toBeUndefined();
+      expect(log.turn(first.turnId)?.attemptId).toBeUndefined();
+    }
+    const targetMatches = binding === "bound" || binding === "legacy";
+    const heldBefore = held();
+    expect(heldBefore.map((turn) => turn.status)).toEqual(["held", "held"]);
+    if (targetMatches)
+      await expect(restarted.stop(h.workspace, chat.id, first.turnId)).rejects.toThrow("exit is still unconfirmed");
+    else await restarted.stop(h.workspace, chat.id, first.turnId);
+    expect(log.state.runtime?.state).toBe("unknown");
+    expect(held()).toEqual(heldBefore);
+    await expect(restarted.stop(h.workspace, chat.id)).rejects.toThrow("exit is still unconfirmed");
+    expect(held()).toEqual(heldBefore);
+    unknown = false;
+    await restarted.stop(h.workspace, chat.id, removable.turnId);
+    expect(log.turn(removable.turnId)?.status).toBe("cancelled");
+    expect(log.state.runtime?.state).toBe("unknown");
+    await restarted.stop(h.workspace, chat.id, randomUUID());
+    expect(log.state.runtime?.state).toBe("unknown");
+    await restarted.stop(h.workspace, chat.id, first.turnId);
+    expect(log.state.runtime?.state).toBe(targetMatches ? "stopped" : "unknown");
+    if (!targetMatches) await restarted.stop(h.workspace, chat.id);
+    expect(log.state.runtime?.state).toBe("stopped");
+    expect(held()).toEqual(heldBefore);
+    expect(new AgentStore(recoveryRoot).chat(chat.id).state.turns).toEqual(log.state.turns);
+    expect(h.spawns()).toBe(1);
+  },
+);
 
 test("durable duplicate Send never calls the native adapter twice and freezes turn settings", async () => {
   const h = setup(),
@@ -981,6 +1040,93 @@ test("decision reservation admits exactly one response across competing browser 
   await h.service.answer(h.workspace, chat.id, answer);
   expect(h.writes.filter((item) => item.startsWith("answer:"))).toEqual(["answer:native-permission:allow"]);
 });
+
+test.each(["denied tool", "decision receipt"])(
+  "a %s journal failure still fences and stops the owned runtime without dispatching its queue",
+  async (failureSource) => {
+    let fences = 0,
+      stops = 0;
+    const h = setup({
+      launcher: {
+        async spawn() {
+          return {
+            pid: 123,
+            exited: new Promise<Awaited<OwnedProcess["exited"]>>(() => {}),
+            async write() {},
+            async fence() {
+              fences++;
+            },
+            async stop() {
+              stops++;
+            },
+            resize() {},
+          };
+        },
+      },
+    });
+    const connect = h.adapter.connect.bind(h.adapter);
+    let rejectWrites = false;
+    h.adapter.connect = async (...args) => ({
+      ...(await connect(...args)),
+      async answer() {
+        rejectWrites = true;
+        if (failureSource === "denied tool")
+          args[2]({ type: "tool", id: "denied-tool", name: "Bash", detail: "Denied", status: "denied" });
+      },
+    });
+    const chat = h.chat();
+    h.send(chat.id);
+    await eventually(() => h.inputs.length === 1);
+    h.send(chat.id, "wait for me");
+    const emit = h.events.get(chat.sessionId)!;
+    emit({
+      type: "decision",
+      decision: {
+        id: "denied-tool",
+        kind: "permission",
+        title: "Run?",
+        detail: "",
+        choices: [{ id: "deny", label: "Deny" }],
+      },
+    });
+    const log = h.store.chat(chat.id),
+      decision = log.view.decisions[0]!,
+      revision = log.journal.revision,
+      append = log.journal.append.bind(log.journal),
+      appendMany = log.journal.appendMany.bind(log.journal);
+    // Fail every commit after the durable reservation, as a poisoned journal does. The primary
+    // managed-state fsync test owns actual disk-failure/poisoning behavior; this owns cleanup.
+    const journal = spyOn(log.journal, "append").mockImplementation((...args) => {
+      if (rejectWrites) throw new ManagedAgentError("journal-unavailable", "fixture journal failure", 503);
+      return append(...args);
+    });
+    const batch = spyOn(log.journal, "appendMany").mockImplementation((...args) => {
+      if (rejectWrites) throw new ManagedAgentError("journal-unavailable", "fixture journal failure", 503);
+      return appendMany(...args);
+    });
+    try {
+      await expect(
+        h.service.answer(h.workspace, chat.id, {
+          requestId: randomUUID(),
+          decisionId: decision.id,
+          generation: decision.generation,
+          choice: "deny",
+        }),
+      ).rejects.toThrow("fixture journal failure");
+      expect(fences).toBeGreaterThan(0);
+      expect(stops).toBeGreaterThan(0);
+      expect(h.service.busy).toBe(true);
+      expect(h.inputs).toHaveLength(1);
+      expect(log.view.decisions[0]?.status).toBe("reserved");
+      expect(log.journal.revision).toBe(revision + 1);
+      emit({ type: "text", id: "late", text: "must remain fenced" });
+      expect(log.view.content).toEqual([]);
+    } finally {
+      journal.mockRestore();
+      batch.mockRestore();
+    }
+  },
+);
 
 test("per-profile admission holds a third chat until a running turn completes", async () => {
   const h = setup(),
@@ -1327,42 +1473,93 @@ test("an enabled account works in a workspace with no per-workspace grant, and a
   expect(h.inputs[0]!.text).toBe("no grant needed");
 });
 
-test("after a restart, a message that never reached the agent goes once the daemon is serving", async () => {
+test.each([
+  ["none", "queued"],
+  ["none", "accepted"],
+  ["uncertain", "queued"],
+  ["uncertain", "accepted"],
+  ["held", "queued"],
+] as const)("restart with %s predecessor and %s receipt preserves dispatch authority", async (predecessor, prefix) => {
   const h = setup(),
-    chat = h.chat();
-  h.hold(new Promise(() => {}));
-  h.send(chat.id, "first");
-  await eventually(() => h.inputs.length === 1);
+    chat = h.chat(),
+    source = h.store.chat(chat.id);
+  if (predecessor !== "none") {
+    const first = h.send(chat.id, "first");
+    if (predecessor === "uncertain") await waitUntil(() => source.turn(first.turnId)?.status === "running");
+    else source.append({ type: "turn_status", turnId: first.turnId, status: "held" });
+  }
   const waiting = h.send(chat.id, "queued before the restart");
-  expect(h.store.chat(chat.id).state.turns.at(-1)?.status).toBe("queued");
+  expect(source.state.turns.at(-1)?.status).toBe("queued");
   const recoveryRoot = realpathSync(mkdtempSync(join(tmpdir(), "glosa-chat-restart-")));
   cleanup.push(async () => rmSync(recoveryRoot, { recursive: true, force: true }));
+  // Copy committed bytes before shutdown changes the original journal. The accepted crash image
+  // ends at the real receipt, retaining its envelope, digest and consumed draft revision.
   cpSync(h.root, recoveryRoot, { recursive: true });
-  const recoveredStore = new AgentStore(recoveryRoot);
-  const recovered = new ManagedChatService({
-    store: recoveredStore,
-    registry: h.registry,
-    launcher: h.launcher,
-    workspace: () => h.workspace,
-    manifest: () => ({
-      ...runtimeTarget(),
-      id: "fixture",
-      provider: "fixture",
-      version: "1",
-      executable: "/fixture",
-      executableSha256: "0".repeat(64),
-      qualified: true,
-    }),
-    releaseEnabled: true,
-  });
-  cleanup.push(() => recovered.close());
-  const statuses = () => recoveredStore.chat(chat.id).state.turns.map((turn) => turn.status);
-  // The turn that was with the agent is uncertain and stays so; the queued one is still queued, not held.
-  expect(statuses()).toEqual(["outcome_unknown", "queued"]);
-  expect(h.inputs).toHaveLength(1);
+  if (prefix === "accepted") {
+    const receipt = source.journal.records.findIndex((record) => record.requestId === waiting.requestId);
+    expect(source.journal.records[receipt]!.data.type).toBe("turn");
+    const bytes = readFileSync(source.journal.path, "utf8").split("\n");
+    writeFileSync(source.journal.path.replace(h.root, recoveryRoot), `${bytes.slice(0, receipt + 1).join("\n")}\n`);
+  }
+  await h.service.close();
+  const inputsBefore = h.inputs.length;
+  function reopen(root: string) {
+    const store = new AgentStore(root);
+    const service = new ManagedChatService({
+      store,
+      registry: h.registry,
+      launcher: h.launcher,
+      workspace: () => h.workspace,
+      manifest: () => ({
+        ...runtimeTarget(),
+        id: "fixture",
+        provider: "fixture",
+        version: "1",
+        executable: "/fixture",
+        executableSha256: "0".repeat(64),
+        qualified: true,
+      }),
+      releaseEnabled: true,
+      ownershipUnknown: () => false,
+    });
+    cleanup.push(() => service.close());
+    return { store, service };
+  }
+  let { store: recoveredStore, service: recovered } = reopen(recoveryRoot);
+  const needsReview = predecessor !== "none";
+  const expectedStatuses: TurnStatus[] = [];
+  if (predecessor !== "none") expectedStatuses.push(predecessor === "uncertain" ? "outcome_unknown" : "held");
+  expectedStatuses.push(needsReview ? "held" : "queued");
+  expect(recoveredStore.chat(chat.id).state.turns.map((turn) => turn.status)).toEqual(expectedStatuses);
+  expect(new AgentStore(recoveryRoot).chat(chat.id).state.turns).toEqual(recoveredStore.chat(chat.id).state.turns);
+  expect(h.inputs).toHaveLength(inputsBefore);
+  const recoveredRevision = recoveredStore.chat(chat.id).state.revision;
+  expect(recovered.send(h.workspace, chat.id, waiting)).toEqual({ turnId: waiting.turnId });
+  expect(recoveredStore.chat(chat.id).state.revision).toBe(recoveredRevision);
   recovered.setMcpOrigin("http://127.0.0.1:1");
-  await eventually(() => h.inputs.length === 2);
-  expect(h.inputs[1]!.turnId).toBe(waiting.turnId);
+  if (needsReview) {
+    // The pump has had its scheduled turn; a held message cannot start even with ownership proved.
+    await new Promise<void>(queueMicrotask);
+    expect(h.inputs).toHaveLength(inputsBefore);
+    expect(h.spawns()).toBe(inputsBefore);
+    recovered.resume(h.workspace, chat.id, waiting.turnId);
+    // A second crash after explicit continuation must retain that authority despite older
+    // uncertain/held history. Capture before the newly queued pump can dispatch.
+    const continuedRoot = realpathSync(mkdtempSync(join(tmpdir(), "glosa-chat-continued-")));
+    cleanup.push(async () => rmSync(continuedRoot, { recursive: true, force: true }));
+    cpSync(recoveryRoot, continuedRoot, { recursive: true });
+    await recovered.close();
+    ({ store: recoveredStore, service: recovered } = reopen(continuedRoot));
+    expect(recoveredStore.chat(chat.id).turn(waiting.turnId)?.status).toBe("queued");
+    recovered.setMcpOrigin("http://127.0.0.1:1");
+  }
+  await waitUntil(() => recoveredStore.chat(chat.id).turn(waiting.turnId)?.status === "running");
+  expect(h.inputs).toHaveLength(inputsBefore + 1);
+  expect(h.inputs.at(-1)!.turnId).toBe(waiting.turnId);
+  const revision = recoveredStore.chat(chat.id).state.revision;
+  expect(recovered.send(h.workspace, chat.id, waiting)).toEqual({ turnId: waiting.turnId });
+  expect(recoveredStore.chat(chat.id).state.revision).toBe(revision);
+  expect(h.inputs).toHaveLength(inputsBefore + 1);
 });
 
 test("multi-part answers are validated before reservation and withdrawn questions cannot be answered", async () => {
@@ -1423,8 +1620,22 @@ test("history pages logical messages without truncating exports or starting a ru
   await eventually(() => h.inputs.length === 1);
   const emit = h.events.get(chat.sessionId)!;
   for (let i = 0; i < 135; i++) emit({ type: "text", id: i === 0 ? "user" : `message-${i}`, text: `Text ${i}` });
-  emit({ type: "completed" });
-  await eventually(() => !h.service.busy);
+  const log = h.store.chat(chat.id);
+  // Finishing must use the borrowed policy view, not materialize a detached transcript before
+  // the durable terminal update can reach the browser. Public history reads below remain detached.
+  Object.defineProperty(log, "state", {
+    configurable: true,
+    get() {
+      throw new Error("terminal cleanup copied the complete conversation");
+    },
+  });
+  try {
+    emit({ type: "completed" });
+    await eventually(() => !h.service.busy);
+    expect(log.view.runtime?.state).toBe("stopped");
+  } finally {
+    Reflect.deleteProperty(log, "state");
+  }
   const count = h.spawns(),
     latest = h.service.snapshot(h.workspace, chat.id);
   expect(latest.content).toHaveLength(100);
@@ -1990,4 +2201,634 @@ test("a Send now choice survives the account's run limit and goes first when a s
   h.events.get(y.sessionId)!({ type: "completed" });
   await eventually(() => h.inputs.length === 4);
   expect(h.inputs[3]!.text).toBe("x third");
+});
+
+test("editing a waiting message is CAS-protected, durable and preserves its accepted settings", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id, "first");
+  await eventually(() => h.inputs.length === 1);
+  const queued = h.send(chat.id, "original");
+  const frozen = h.store.chat(chat.id).state.turns[1]!;
+  h.service.change(h.workspace, chat.id, {
+    requestId: randomUUID(),
+    revision: 1,
+    settings: { model: "model-a", effort: "low", permissionMode: "default" },
+  });
+  const input = { requestId: randomUUID(), turnId: queued.turnId, expectedRevision: 1, text: "edited in place" };
+  expect(h.service.editQueuedTurn(h.workspace, chat.id, input)).toEqual({ turnId: queued.turnId, revision: 2 });
+  expect(h.service.editQueuedTurn(h.workspace, chat.id, input)).toEqual({ turnId: queued.turnId, revision: 2 });
+  expect(() => h.service.editQueuedTurn(h.workspace, chat.id, { ...input, text: "changed receipt" })).toThrow(
+    "different input",
+  );
+  let conflict: unknown;
+  try {
+    h.service.editQueuedTurn(h.workspace, chat.id, { ...input, requestId: randomUUID(), text: "stale" });
+  } catch (error) {
+    conflict = error;
+  }
+  expect(conflict).toMatchObject({ code: "stale-turn" });
+  const replay = new AgentStore(h.root);
+  try {
+    const edited = replay.chat(chat.id).state.turns[1]!;
+    expect(replay.chat(chat.id).text(edited.textHash)).toBe("edited in place");
+    expect(edited).toMatchObject({
+      id: frozen.id,
+      revision: 2,
+      settings: frozen.settings,
+      profileId: frozen.profileId,
+      sessionId: frozen.sessionId,
+      status: "queued",
+    });
+  } finally {
+    replay.close();
+  }
+  expect(h.inputs).toHaveLength(1);
+  h.events.get(chat.sessionId)!({ type: "completed" });
+  await eventually(() => h.inputs.length === 2);
+  expect(h.inputs[1]).toMatchObject({ text: "edited in place", settings: frozen.settings });
+  expect(() =>
+    h.service.editQueuedTurn(h.workspace, chat.id, { ...input, requestId: randomUUID(), expectedRevision: 2 }),
+  ).toThrow("Only a waiting message");
+});
+
+test("an edit racing asynchronous command validation dispatches the latest waiting revision once", async () => {
+  const h = setup(),
+    chat = h.chat();
+  const connect = h.adapter.connect.bind(h.adapter);
+  const command = { id: "review", name: "review", description: "Review", kind: "skill" as const };
+  const barrier = Promise.withResolvers<void>();
+  let preparing = false,
+    entered = false;
+  h.adapter.connect = async (...args) => {
+    const connection = await connect(...args);
+    connection.prepareTurn = async () => {
+      preparing = true;
+    };
+    connection.commands = async () => {
+      if (preparing && !entered) {
+        entered = true;
+        await barrier.promise;
+      }
+      return [command];
+    };
+    return connection;
+  };
+  const state = h.store.chat(chat.id).state;
+  const turnId = randomUUID();
+  const references = [{ kind: "command", id: "review", text: "/review", start: 0, end: 7 }];
+  h.service.send(h.workspace, chat.id, {
+    requestId: randomUUID(),
+    turnId,
+    configRevision: state.configRevision,
+    draftRevision: 0,
+    text: "/review original",
+    references,
+  });
+  await eventually(() => entered);
+  h.service.editQueuedTurn(h.workspace, chat.id, {
+    requestId: randomUUID(),
+    turnId,
+    expectedRevision: 1,
+    text: "/review latest",
+    references,
+  });
+  barrier.resolve();
+  await eventually(() => h.inputs.length === 1);
+  expect(h.inputs[0]!.text).toBe("/review latest");
+  expect(h.store.chat(chat.id).state.turns[0]!.revision).toBe(2);
+});
+
+test("ordinary startup errors and native details survive as a sanitized unsent failure with stable attempt identity", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.adapter.connect = async () => {
+    throw Object.assign(new Error("Internal error"), {
+      data: { details: "Model unavailable. access_token=private-canary" },
+    });
+  };
+  h.send(chat.id);
+  await eventually(() => !h.service.busy && h.store.chat(chat.id).state.turns[0]?.status === "failed");
+  const state = h.store.chat(chat.id).state,
+    turn = state.turns[0]!;
+  expect(turn.error).toBe("Internal error");
+  expect(turn.failure).toMatchObject({ phase: "connecting", dispatchCertainty: "unsent", title: "Internal error" });
+  expect(turn.failure?.detail).toContain("Model unavailable.");
+  expect(turn.failure?.detail).not.toContain("private-canary");
+  expect(turn.attemptId).toBe(state.runtime!.runId);
+  expect(h.inputs).toHaveLength(0);
+  const replay = new AgentStore(h.root);
+  try {
+    expect(replay.chat(chat.id).state.turns[0]).toEqual(turn);
+  } finally {
+    replay.close();
+  }
+});
+
+test("tool preparation retains nested native error details under its unsent recovery message", async () => {
+  const h = setup(),
+    chat = h.chat(),
+    connect = h.adapter.connect.bind(h.adapter);
+  h.adapter.connect = async (...args) => {
+    const connection = await connect(...args);
+    connection.prepareTurn = async () => {
+      throw Object.assign(new Error("Internal error"), {
+        data: { details: "Native configuration refused. refresh_token=private-preparation" },
+      });
+    };
+    return connection;
+  };
+  h.send(chat.id);
+  await eventually(() => !h.service.busy && h.store.chat(chat.id).view.turns[0]?.status === "failed");
+  const turn = h.store.chat(chat.id).view.turns[0]!;
+  expect(turn.error).toContain("Your message was not sent");
+  expect(turn.failure).toMatchObject({ phase: "preparing", dispatchCertainty: "unsent" });
+  expect(turn.failure?.detail).toContain("Native configuration refused.");
+  expect(turn.failure?.detail).not.toContain("private-preparation");
+  expect(h.inputs).toHaveLength(0);
+});
+
+test("an ordinary transport exception after submission preserves its cause and holds the queue without resending", async () => {
+  const h = setup(),
+    chat = h.chat(),
+    connect = h.adapter.connect.bind(h.adapter);
+  h.adapter.connect = async (...args) => {
+    const connection = await connect(...args),
+      start = connection.startTurn.bind(connection);
+    connection.startTurn = async (input) => {
+      await start(input);
+      throw new Error("The native transport closed before its terminal reply.");
+    };
+    return connection;
+  };
+  h.send(chat.id, "possibly submitted");
+  h.send(chat.id, "must wait");
+  await eventually(() => !h.service.busy && h.store.chat(chat.id).view.turns[0]?.status === "outcome_unknown");
+  const turns = h.store.chat(chat.id).view.turns;
+  expect(turns.map((turn) => turn.status)).toEqual(["outcome_unknown", "held"]);
+  expect(turns[0]!.failure).toMatchObject({
+    dispatchCertainty: "unknown",
+    title: "The native transport closed before its terminal reply.",
+  });
+  expect(h.inputs).toHaveLength(1);
+});
+
+test("display deltas flush on their deadline and before a decision or terminal event", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id);
+  await eventually(() => h.inputs.length === 1);
+  const event = h.events.get(chat.sessionId)!;
+  const log = h.store.chat(chat.id),
+    revision = log.journal.revision;
+  event({ type: "text", id: "reply", text: "first " });
+  event({ type: "text", id: "reply", text: "words" });
+  expect(log.journal.revision).toBe(revision);
+  expect(log.view.content).toEqual([]);
+  // A real elapsed-time witness owns the 20ms flush boundary; no further native event arrives.
+  await eventually(() => log.view.content[0]?.text === "first words");
+  expect(log.journal.records.slice(revision).map((record) => record.data.type)).toEqual(["content"]);
+  event({ type: "text", id: "reply", text: " before permission" });
+  event({
+    type: "decision",
+    decision: {
+      id: "permission",
+      kind: "permission",
+      title: "Read file",
+      detail: "notes.md",
+      choices: [{ id: "deny", label: "Deny" }],
+    },
+  });
+  const barrierTypes = log.journal.records.slice(-3).map((record) => record.data.type);
+  expect(barrierTypes).toEqual(["content", "decision", "turn_status"]);
+  event({ type: "text", id: "reply", text: " done" });
+  event({ type: "completed" });
+  await eventually(() => !h.service.busy);
+  expect(log.view.content[0]!.text).toBe("first words before permission done");
+  const finalContent = log.journal.records.findLastIndex((record) => record.data.type === "content");
+  const completed = log.journal.records.findIndex(
+    (record) => record.data.type === "turn_status" && record.data.status === "completed",
+  );
+  expect(finalContent).toBeLessThan(completed);
+});
+
+test("the display byte budget flushes before a quiet stream exceeds sixteen KiB", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id);
+  await eventually(() => h.inputs.length === 1);
+  const event = h.events.get(chat.sessionId)!,
+    log = h.store.chat(chat.id);
+  const revision = log.journal.revision;
+  for (let index = 0; index < 4; index++) event({ type: "text", id: "reply", text: "x".repeat(4096) });
+  expect(log.journal.revision).toBe(revision + 1);
+  expect(log.view.content[0]!.text.length).toBe(16 * 1024);
+});
+
+test("a historical chat page retains the active response and queued prompt bytes", async () => {
+  const h = setup(),
+    chat = h.chat();
+  h.send(chat.id, "past");
+  await eventually(() => h.inputs.length === 1);
+  h.events.get(chat.sessionId)!({ type: "text", id: "past-reply", text: "past reply" });
+  h.events.get(chat.sessionId)!({ type: "completed" });
+  await eventually(() => !h.service.busy);
+  const active = h.send(chat.id, "active");
+  await eventually(() => h.inputs.length === 2);
+  h.events.get(chat.sessionId)!({ type: "text", id: "active-reply", text: "active reply" });
+  const queued = h.send(chat.id, "waiting");
+  await eventually(() => h.store.chat(chat.id).view.content.length === 2);
+  const page = h.service.snapshot(h.workspace, chat.id, `user:${active.turnId}`);
+  expect(page.page.hasLater).toBe(true);
+  expect(page.content.map((content) => content.text)).toEqual(["past reply", "active reply"]);
+  expect(page.turns.find((turn) => turn.id === queued.turnId)?.text).toBe("waiting");
+});
+
+test("chat snapshots page historical turn rows as well as content, with complete export retained", () => {
+  const h = setup(),
+    chat = h.chat(),
+    log = h.store.chat(chat.id);
+  const textHash = log.blob(Buffer.from("old prompt"));
+  for (let index = 0; index < 120; index++)
+    log.append({
+      type: "turn",
+      turn: {
+        id: randomUUID(),
+        textHash,
+        attachments: [],
+        settings: chat.settings,
+        profileEpoch: 0,
+        identityRevision: 0,
+        at: new Date().toISOString(),
+        origin: "user",
+        status: "completed",
+      },
+    });
+  const latest = h.service.snapshot(h.workspace, chat.id);
+  expect(latest.turns).toHaveLength(100);
+  expect(latest.page.total).toBe(120);
+  const earlier = h.service.snapshot(h.workspace, chat.id, latest.page.first);
+  expect(earlier.turns).toHaveLength(20);
+  expect(earlier.page.hasLater).toBe(true);
+  expect(h.service.snapshot(h.workspace, chat.id, undefined, true).turns).toHaveLength(120);
+  expect(h.spawns()).toBe(0);
+});
+
+test("workspace chat watches hydrate live records, replay missing cursors and reject foreign streams", async () => {
+  const h = setup(),
+    chat = h.chat(),
+    other = h.chat();
+  const watches = new ChatWatchStreams(h.service);
+  type WatchData = {
+    streamId?: string;
+    chatId?: string;
+    record?: {
+      seq: number;
+      data: { type: string; turn?: { text?: string }; content?: { text?: string } };
+    };
+  };
+  const frames: { event: string; data: WatchData }[] = [];
+  const stop = watches.register(h.workspace, (event, data) => frames.push({ event, data: data as WatchData }));
+  const streamId = frames[0]!.data.streamId as string;
+  try {
+    watches.watch(h.workspace, { streamId, revision: 1, chats: [{ id: chat.id }] });
+    expect(frames.at(-1)).toMatchObject({
+      event: "chat_snapshot",
+      data: { chatId: chat.id, snapshot: { id: chat.id } },
+    });
+    const cursor = h.store.chat(chat.id).journal.revision;
+    h.send(chat.id, "streamed prompt");
+    await eventually(() =>
+      frames.some((frame) => frame.event === "chat_event" && frame.data.record?.data.type === "turn"),
+    );
+    expect(frames.find((frame) => frame.data.record?.data.type === "turn")?.data.record?.data.turn?.text).toBe(
+      "streamed prompt",
+    );
+    await eventually(() => h.inputs.length === 1);
+    const before = frames.length;
+    expect(watches.watch(h.workspace, { streamId, revision: 1, chats: [{ id: other.id }] })).toEqual({ revision: 1 });
+    h.events.get(chat.sessionId)!({ type: "text", id: "reply", text: "live" });
+    h.events.get(chat.sessionId)!({ type: "completed" });
+    await eventually(() => frames.slice(before).some((frame) => frame.data.record?.data.type === "content"));
+    expect(frames.slice(before).some((frame) => frame.data.chatId === other.id)).toBe(false);
+    const reconnect: { event: string; data: WatchData }[] = [];
+    const close = watches.register(h.workspace, (event, data) => reconnect.push({ event, data: data as WatchData }));
+    try {
+      watches.watch(h.workspace, {
+        streamId: reconnect[0]!.data.streamId,
+        revision: 1,
+        chats: [{ id: chat.id, cursor }],
+      });
+      const records = reconnect.filter((frame) => frame.event === "chat_event").map((frame) => frame.data.record!);
+      expect(records.map((record) => record.seq)).toEqual(
+        Array.from({ length: records.length }, (_, index) => cursor + index + 1),
+      );
+      expect(records.find((record) => record.data.type === "content")?.data.content?.text).toBe("live");
+      expect(reconnect.some((frame) => frame.event === "chat_snapshot")).toBe(false);
+      expect(h.inputs).toHaveLength(1);
+    } finally {
+      close();
+    }
+    expect(() => watches.watch({ ...h.workspace, epoch: "foreign" }, { streamId, revision: 2, chats: [] })).toThrow(
+      "workspace connection changed",
+    );
+  } finally {
+    stop();
+  }
+});
+
+test("oversized chat watch bootstrap uses affected snapshot references and retains a gap-free cursor", async () => {
+  const h = setup(),
+    large = h.chat(),
+    first = h.chat(),
+    second = h.chat();
+  function seed(chat: ReturnType<typeof h.chat>, parts: number) {
+    const log = h.store.chat(chat.id),
+      turnId = randomUUID();
+    log.append({
+      type: "turn",
+      turn: {
+        id: turnId,
+        textHash: log.blob(Buffer.from("old prompt")),
+        attachments: [],
+        settings: chat.settings,
+        profileEpoch: 0,
+        identityRevision: 0,
+        at: new Date().toISOString(),
+        origin: "user",
+        status: "completed",
+      },
+    });
+    log.appendMany(
+      Array.from({ length: parts }, (_, index) => ({
+        type: "content" as const,
+        content: {
+          id: `tool-${index}`,
+          turnId,
+          role: "tool" as const,
+          kind: "tool" as const,
+          text: "x".repeat(16384),
+          status: "completed" as const,
+        },
+      })),
+    );
+    return { log, turnId };
+  }
+  const { log, turnId } = seed(large, 100);
+  seed(first, 25);
+  seed(second, 25);
+  expect(Buffer.byteLength(JSON.stringify(h.service.snapshot(h.workspace, large.id)))).toBeGreaterThan(1_048_576);
+  const watches = new ChatWatchStreams(h.service),
+    abort = new AbortController();
+  let streamId = "";
+  const response = createJournalStreamResponse(
+    h.root,
+    {
+      subscribe: () => () => {},
+    } as unknown as WorkspaceBus,
+    new Request("http://127.0.0.1/w/fixture/stream", {
+      headers: { "Last-Event-ID": "-1" },
+      signal: abort.signal,
+    }),
+    undefined,
+    {
+      subscribeChatStream: (send) =>
+        watches.register(h.workspace, (event, data) => {
+          if (event === "chat_stream_ready") streamId = (data as { streamId: string }).streamId;
+          send(event, data);
+        }),
+    },
+  );
+  const reader = response.body!.getReader(),
+    decoder = new TextDecoder();
+  async function frame() {
+    const { value, done } = await reader.read();
+    expect(done).toBe(false);
+    const text = decoder.decode(value);
+    return { event: /^event: (.*)$/m.exec(text)?.[1], data: JSON.parse(/^data: (.*)$/m.exec(text)?.[1] ?? "null") };
+  }
+  try {
+    expect((await frame()).event).toBe("chat_stream_ready");
+    // The empty workspace reconnect emits an immediate heartbeat without a data payload.
+    await reader.read();
+    watches.watch(h.workspace, { streamId, revision: 1, chats: [{ id: large.id }] });
+    expect(await frame()).toMatchObject({
+      event: "chat_snapshot_ref",
+      data: { chatId: large.id, revision: log.journal.revision },
+    });
+    // A retained replay can be larger than the snapshot budget too, even below the event count cap.
+    watches.watch(h.workspace, { streamId, revision: 2, chats: [{ id: large.id, cursor: 0 }] });
+    expect((await frame()).event).toBe("chat_snapshot_ref");
+    const captured = h.service.snapshot(h.workspace, large.id);
+    log.append({
+      type: "content",
+      content: { id: "after-reference", turnId, role: "assistant", kind: "text", text: "after reference" },
+    });
+    const live = await frame();
+    expect(live).toMatchObject({
+      event: "chat_event",
+      data: { chatId: large.id, record: { seq: captured.revision + 1 } },
+    });
+    // If this event arrived during the HTTP snapshot read, registering its captured watermark
+    // replays it once. No provider operation or unrelated snapshot is needed.
+    watches.watch(h.workspace, { streamId, revision: 3, chats: [{ id: large.id, cursor: captured.revision }] });
+    expect(await frame()).toEqual(live);
+    watches.watch(h.workspace, { streamId, revision: 4, chats: [{ id: first.id }, { id: second.id }] });
+    expect(await frame()).toMatchObject({ event: "chat_snapshot", data: { chatId: first.id } });
+    expect(await frame()).toMatchObject({ event: "chat_snapshot_ref", data: { chatId: second.id } });
+    expect(h.spawns()).toBe(0);
+  } finally {
+    abort.abort();
+    await reader.cancel().catch(() => {});
+  }
+});
+
+function oauthFixture(h: ReturnType<typeof setup>) {
+  const account = {
+    accountId: randomUUID(),
+    clientId: "issued-client",
+    issuer: "https://issuer.invalid",
+    subject: "subject-a",
+    email: "same@example.invalid",
+    label: "Personal",
+    status: "signed-in" as "signed-in" | "signed-out",
+    planEnabled: true,
+  };
+  const attempt = {
+    attemptId: randomUUID(),
+    accountId: account.accountId,
+    status: "succeeded" as "succeeded" | "cancelled",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    account,
+  };
+  let leases = 0,
+    begins = 0,
+    localCleared = true,
+    closed = 0;
+  const broker: import("../../src/agents/oauth-interface.ts").ManagedOAuthBroker = {
+    async begin() {
+      begins++;
+      return { ...attempt, authorizationUrl: "https://issuer.invalid/authorize" };
+    },
+    status() {
+      return structuredClone(attempt);
+    },
+    async cancel() {
+      attempt.status = "cancelled";
+      return structuredClone(attempt);
+    },
+    listAccounts() {
+      return [structuredClone(account)];
+    },
+    getAccount(id) {
+      return id === account.accountId ? structuredClone(account) : undefined;
+    },
+    async lease() {
+      leases++;
+      throw new Error("Metadata operation must not request a token");
+    },
+    async signOut() {
+      account.status = "signed-out";
+      return { localCleared, revocation: "unconfirmed" };
+    },
+    async close() {
+      closed++;
+    },
+  };
+  Object.defineProperty(h.adapter, "oauth", { value: broker });
+  return {
+    account,
+    attempt,
+    leases: () => leases,
+    begins: () => begins,
+    closed: () => closed,
+    setLocalCleared(value: boolean) {
+      localCleared = value;
+    },
+  };
+}
+
+test("OAuth sign-in requires experimental admission before any registration or account mutation", async () => {
+  const h = setup({ releaseEnabled: false }),
+    oauth = oauthFixture(h);
+  const profile = h.service.adoptOAuth("fixture", { requestId: randomUUID(), attemptId: oauth.attempt.attemptId });
+  await expect(h.service.beginOAuth("fixture", {})).rejects.toMatchObject({ code: "managed-unavailable" });
+  await expect(h.service.beginOAuth("fixture", { accountId: oauth.account.accountId })).rejects.toMatchObject({
+    code: "managed-unavailable",
+  });
+  expect(oauth.begins()).toBe(0);
+  expect(h.store.profile(profile.id).revision).toBe(profile.revision);
+  expect(h.store.profile(profile.id).auth.state).toBe("authenticated");
+  // Account cleanup remains possible while execution is disabled.
+  expect((await h.service.cancelOAuth("fixture", oauth.attempt.attemptId)).status).toBe("cancelled");
+});
+
+test("OAuth adoption keeps registration and native profile identities separate and does not dispatch or lease", async () => {
+  const h = setup(),
+    oauth = oauthFixture(h);
+  const input = { requestId: randomUUID(), attemptId: oauth.attempt.attemptId };
+  const profile = h.service.adoptOAuth("fixture", input);
+  expect(profile.id).not.toBe(oauth.account.accountId);
+  expect(profile.id).not.toBe(h.profile.id);
+  expect(profile.authentication).toEqual({ mode: "oauth", credentialRef: oauth.account.accountId });
+  expect(profile.auth.identity).toBe(`oauth:${oauth.account.accountId}`);
+  expect(h.service.adoptOAuth("fixture", input).id).toBe(profile.id);
+  expect(h.store.profile(h.profile.id).auth.identity).toBe("account-a");
+  expect(h.service.status().oauthAccounts.fixture?.[0]?.planEnabled).toBe(true);
+  expect(h.spawns()).toBe(0);
+  expect(oauth.leases()).toBe(0);
+  expect(h.inputs).toHaveLength(0);
+  const ack = { requestId: randomUUID() };
+  const acknowledged = h.service.acknowledgeOAuthPlan(profile.id, ack);
+  expect(acknowledged.authentication?.planNoticeSeen).toBe(true);
+  expect(h.service.acknowledgeOAuthPlan(profile.id, ack).revision).toBe(acknowledged.revision);
+  await expect(h.service.login(profile.id)).rejects.toMatchObject({ code: "account-auth" });
+});
+
+test("OAuth signout blocks account use before vault cleanup and reports unconfirmed remote revocation", async () => {
+  const h = setup(),
+    oauth = oauthFixture(h);
+  const profile = h.service.adoptOAuth("fixture", { requestId: randomUUID(), attemptId: oauth.attempt.attemptId });
+  oauth.setLocalCleared(false);
+  const input = { requestId: randomUUID(), revision: profile.revision };
+  await expect(h.service.signOut(profile.id, input)).rejects.toThrow("secure credentials could not be removed");
+  expect(h.store.profile(profile.id)).toMatchObject({
+    enabled: false,
+    cleanup: "signout",
+    auth: { state: "needs_login", revocation: "unconfirmed" },
+  });
+  oauth.setLocalCleared(true);
+  const done = await h.service.signOut(profile.id, input);
+  expect(done.cleanup).toBeUndefined();
+  expect(done.auth.revocation).toBe("unconfirmed");
+  expect(h.spawns()).toBe(0);
+  expect(oauth.leases()).toBe(0);
+});
+
+test("OAuth signup without inference scope remains a separate signed-in account and never enables plan use", () => {
+  const h = setup(),
+    oauth = oauthFixture(h);
+  oauth.account.planEnabled = false;
+  const profile = h.service.adoptOAuth("fixture", { requestId: randomUUID(), attemptId: oauth.attempt.attemptId });
+  expect(profile.auth.state).toBe("authenticated");
+  expect(profile.auth.plan).toBeUndefined();
+  expect(h.service.status().oauthAccounts.fixture?.[0]?.planEnabled).toBe(false);
+  expect(oauth.leases()).toBe(0);
+  oauth.account.status = "signed-out";
+  expect(() =>
+    h.service.adoptOAuth("fixture", { requestId: randomUUID(), attemptId: oauth.attempt.attemptId }),
+  ).toThrow("Complete sign-in");
+});
+
+test("retry creates a linked turn and cannot duplicate an unresolved or foreign attempt", async () => {
+  const h = setup(),
+    chat = h.chat(),
+    first = h.send(chat.id);
+  await eventually(() => h.inputs.length === 1);
+  const retry = (source = first.turnId) => ({
+    requestId: randomUUID(),
+    turnId: randomUUID(),
+    configRevision: h.store.chat(chat.id).state.configRevision,
+    draftRevision: h.store.chat(chat.id).state.draftRevision,
+    text: "Try again",
+    retryOfTurnId: source,
+  });
+  expect(() => h.service.send(h.workspace, chat.id, retry())).toThrow("Only a resolved turn");
+  expect(() => h.service.send(h.workspace, chat.id, retry(randomUUID()))).toThrow("Only a resolved turn");
+  h.events.get(chat.sessionId)!({ type: "failed", code: "runtime-failed", message: "Native failure" });
+  await eventually(() => !h.service.busy);
+  const request = retry(),
+    attemptId = h.store.chat(chat.id).turn(first.turnId)!.attemptId;
+  expect(attemptId).toBeString();
+  h.service.send(h.workspace, chat.id, request);
+  h.service.send(h.workspace, chat.id, request);
+  expect(h.store.chat(chat.id).state.turns).toHaveLength(2);
+  expect(new AgentStore(h.root).chat(chat.id).turn(request.turnId)?.retryOf).toEqual({
+    turnId: first.turnId,
+    attemptId,
+  });
+});
+
+test("authentication failure retains partial output and holds queued work until explicit reauthentication", async () => {
+  const h = setup(),
+    chat = h.chat();
+  const first = h.send(chat.id),
+    second = h.send(chat.id, "waiting for sign-in");
+  await eventually(() => h.inputs.length === 1);
+  const emit = h.events.get(chat.sessionId)!;
+  emit({ type: "text", id: "partial", text: "Partial answer" });
+  emit({ type: "failed", code: "account-auth", message: "Sign in again to continue." });
+  await eventually(() => h.service.status().activeTurns === 0);
+  const state = h.store.chat(chat.id).state;
+  expect(state.turns.find((turn) => turn.id === first.turnId)).toMatchObject({
+    status: "failed",
+    failure: { category: "authentication", dispatchCertainty: "confirmed_terminal" },
+  });
+  expect(state.turns.find((turn) => turn.id === second.turnId)).toMatchObject({
+    status: "held",
+    error: "Sign in again, then continue this queued message explicitly.",
+  });
+  expect(state.content[0]?.text).toBe("Partial answer");
+  expect(h.inputs).toHaveLength(1);
+  expect(h.store.profile(h.profile.id).auth.state).toBe("needs_login");
 });

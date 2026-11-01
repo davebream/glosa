@@ -230,3 +230,39 @@ PID 1 triggers immediate shutdown. On Linux, a host dying before the first basel
 leave the shim adopted by a non-PID1 subreaper. That startup case cannot be distinguished by this
 poll; EOF/SIGHUP still work. Such a host needs an explicit lifetime channel for a stronger guarantee.
 A container run with init proves PID1 adoption, not every subreaper arrangement.
+
+
+### Managed-chat lifetime and cutover gates, 2026-11-01
+
+A disconnected browser does not cancel execution. A quiet provider is not proof of a stalled turn.
+The UI shows elapsed time and last observed activity separately from connection and account state.
+A confirmed failure retains partial output and its cause. Possible submission followed by process or
+connection loss is outcome-unknown and holds queued work. Explicit Stop fences immediately and
+verifies owned descendant cleanup. Successful completion with uncertain cleanup stays completed,
+but runtime ownership uncertainty blocks replacement independently.
+
+Restart recovery preserves that queue hold after a possibly submitted attempt. Never-dispatched
+durable work resumes automatically only when no preceding uncertain attempt or explicit hold
+blocks its chat. A durable explicit continuation can release that earlier hold; a later possibly
+submitted attempt that loses its process establishes a new hold. A durable acceptance receipt without
+its later queued transition is recoverable work, not a permanent starting state; recovery schedules
+it once or holds it behind the same gate.
+Repeating the original request returns its existing receipt and never duplicates execution.
+Retrying runtime cleanup targets the ended attempt and preserves held messages on both successful
+and refused cleanup. It is not a request to cancel the waiting queue.
+
+Terminal cleanup reads the borrowed policy projection and indexed turn identity. It must not
+materialize detached copies of the complete conversation for read-only decisions, since that work
+delays delivery of the already-durable completion. Journal transition validation and public detached
+snapshots retain their existing persistence and isolation boundaries.
+
+A refused process-group signal is not proof of exit and must not abort the exit-receipt pipeline.
+The guardian retains its bounded termination/escalation waits and reports an empty group only when
+the operating system confirms it no longer exists. Persistent signal refusal or uncertain ownership
+keeps execution blocked; a transient refusal followed by verified exit can complete cleanup normally.
+
+Warm reuse requires tested per-turn grants and observable native generations. Until then, retain the
+cold owned executor. If qualified, retain at most two idle native sessions, expire them after five
+minutes and evict idle sessions before consuming execution capacity. Never share across accounts,
+prewarm, infer titles/suggestions or silently replace a session whose resume failed. Such history
+remains readable; a replacement requires an explicit bounded context handoff.

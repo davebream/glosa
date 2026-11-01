@@ -45,14 +45,32 @@ test("a turn at work says what it is doing now; a finished one keeps only its st
   const writing = turnActivity({ status: "running" }, written, subjects);
   expect(writing.live).toBe("Writing");
   expect(writing.summary).toBe("2 steps · 1 failed");
-  expect(writing.steps.map((step) => step.label)).toEqual(["Read outline.md", "Ran a command"]);
+  expect(writing.steps.map((step) => step.label)).toEqual(["Read outline.md", "Failed: Running a command"]);
   expect(turnActivity({ status: "waiting" }, written, subjects).live).toBe("Waiting for your reply");
   expect(turnActivity({ status: "stopping" }, written, subjects).live).toBe("Stopping");
   // An ended turn has nothing live, and a step it left running is shown as stopped, not at work.
   const ended = turnActivity({ status: "cancelled" }, [tool("t3", "Bash", "running")]);
   expect(ended.live).toBeNull();
-  expect(ended.steps[0]).toMatchObject({ state: "stopped", label: "Ran a command" });
+  expect(ended.steps[0]).toMatchObject({ state: "stopped", label: "Stopped: Running a command · outcome unknown" });
   expect(turnActivity({ status: "completed" }, []).summary).toBe("");
+});
+
+test("only a confirmed tool completion earns a success label, while denied and cancelled remain distinct", () => {
+  const items = ["completed", "failed", "denied", "cancelled", "running"].map((state) => tool(state, "Bash", state));
+  items.push({ id: "legacy", kind: "tool", name: "Bash", text: "" } as (typeof items)[number]);
+  const activity = turnActivity({ status: "completed" }, items);
+  expect(activity.steps.map(({ id, state, label }) => [id, state, label])).toEqual([
+    ["completed", "completed", "Ran a command"],
+    ["failed", "failed", "Failed: Running a command"],
+    ["denied", "denied", "Denied: Running a command"],
+    ["cancelled", "cancelled", "Cancelled: Running a command"],
+    ["running", "stopped", "Stopped: Running a command · outcome unknown"],
+    ["legacy", "stopped", "Stopped: Running a command · outcome unknown"],
+  ]);
+  expect(activity.summary).toBe("6 steps · 1 failed · 1 denied · 1 cancelled · 2 outcomes unknown");
+  expect(
+    turnActivity({ status: "running" }, [tool("t", "Read", "denied", '{"file_path":"outline.md"}')]).steps[0],
+  ).toMatchObject({ state: "denied", label: "Denied: Reading outline.md" });
 });
 
 test("elapsed time reads as a person counts it", () => {

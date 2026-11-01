@@ -515,3 +515,37 @@ test("managed-chat invalidations share the workspace stream without changing its
   }
   expect(released).toBe(1);
 });
+
+for (const [name, count, payload] of [
+  ["record", 1001, "x"],
+  ["byte", 20, "x".repeat(65536)],
+] as const) {
+  test(`a slow workspace reader exhausts the ${name} budget without blocking commits or leaking listeners`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "glosa-stream-overflow-"));
+    const bus = new WorkspaceBus(root, {});
+    await bus.reconcile();
+    let send: ((event: "chat_event", data: unknown) => void) | undefined;
+    let disposed = 0;
+    const response = createJournalStreamResponse(root, bus, new Request("http://127.0.0.1:1/w/x/stream"), undefined, {
+      subscribeChatStream(push) {
+        send = push;
+        return () => {
+          disposed++;
+        };
+      },
+    });
+    const reader = response.body!.getReader();
+    try {
+      await reader.read();
+      // Deliberately do not consume the output while committed events continue to publish.
+      for (let index = 0; index < count; index++) send!("chat_event", { index, payload });
+      expect(disposed).toBe(1);
+      expect(bus.listenerCount()).toBe(0);
+      await expect(reader.read()).rejects.toThrow("overflow");
+    } finally {
+      await reader.cancel().catch(() => {});
+      await bus.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

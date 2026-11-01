@@ -101,27 +101,29 @@ tag with a missing secret fails instead of falling back to an ad-hoc build.
 
 ## Rehearsing locally
 
-### Temporary cache security backport
+### Dependency security policy
 
-Both Bun manifests apply `patches/http-cache-semantics-4.2.0.patch` to the development-only cache
-dependency used by the license checker and Electron packaging tools. The backport starts from
-[upstream PR #58](https://github.com/kornelski/http-cache-semantics/pull/58) and also enforces reuse
-restrictions in stale-if-error, stale-while-revalidate and cache lifetime decisions. It preserves
-explicit public/immutable cookie caching and private-cache behavior. The package retains its
-published 4.2.0 identity; this is a local patch, not an upstream release.
+CI and release scan both complete Bun lockfiles. Before scanning, they install both dependency
+trees without lifecycle scripts and run `bun run scripts/security-dependency-policy.ts`.
+The command generates `.context/security/osv-scanner.toml` only after every locked minimatch
+identity and every installed copy's package metadata and JavaScript bytes match reviewed npm
+releases. It includes aliases, nested installs and Bun's isolated store. Missing, changed or
+unreviewed copies remove any stale scanner record and block the job.
 
-CI and release install both locked dependency trees without lifecycle scripts, then execute
-`scripts/cache-security-backport.ts`. That guard verifies the committed patch digest, declarations
-in both manifests and locks, every installed copy's exact source digest, and cache reuse decisions
-before generating a scanner record for GHSA-ch52-4w7c-c8xp. Failure removes any stale record and
-blocks the job. The scanner still checks both complete lockfiles and every other advisory.
+The generated record excludes only GHSA-g3hv-75wg-m249. Its database range includes minimatch
+3.1.5 and 5.1.9, which lack the affected `optimizationLevel` and `firstPhasePreProcess` mechanism;
+the [range correction request](https://github.com/github/advisory-database/issues/10811) documents
+the discrepancy. All modern matcher consumers use patched 11.0.1. Legacy packaging consumers retain
+their callable CommonJS API. Every other advisory remains blocking, including any future advisory
+against those exact legacy releases. A dependency change requires reviewing the source and integrity
+allowlist before regenerating the record; the guard makes no network requests.
 
-The generated record expires on **2026-11-03**, when the finding becomes blocking again. Replace
-the backport with a reviewed upstream patched version before then, and remove the patch, guard,
-scanner config argument and backport-specific digest checks together. Retain the cache reuse
-regression cases against the upstream replacement. npm includes the patch file;
-desktop staging copies it into the isolated production install, even though the patched dependency
-itself does not ship in the runtime.
+The old http-cache-semantics backport and expiring waiver have been removed. GitHub and OSV
+[withdrew GHSA-ch52-4w7c-c8xp on October 28, 2026](https://github.com/advisories/GHSA-ch52-4w7c-c8xp)
+as an invalid vulnerability. Both development tool trees now use unmodified upstream 4.3.0.
+Regression checks retain the library's real cache contract: reject prohibited storage with
+`storable()` before considering reuse, preserve valid public and stale caching, and retain those
+decisions after policy serialization. These dependencies do not ship in the application runtime.
 
 ### Local desktop build
 

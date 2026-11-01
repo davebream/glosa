@@ -4,14 +4,14 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "glosa singleton daemon — file bus (inbox/journal/shadow-git), HTTP API, session registry, provider delivery.",
+  "description": "glosa singleton daemon \u2014 file bus (inbox/journal/shadow-git), HTTP API, session registry, provider delivery.",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
     "chokidar": "^5",
-    "markdown-it": "^14.3.1",
+    "markdown-it": "^14.3.3",
     "picomatch": "^4.0.7"
   }
 }

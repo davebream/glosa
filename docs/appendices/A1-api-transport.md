@@ -129,7 +129,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "2.1", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "2.2", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true, "install_changed": false }
@@ -1641,3 +1641,40 @@ Transcript events are normalized by the selected provider. The additive
 `{type:"system", content, id}` event identifies harness notifications, never a person's message.
 The page consolidates quarantined records into one skipped-record notice rather than a row per line.
 A provider without a normalizer reports mirror unavailable while inbox delivery remains usable.
+
+
+### Managed-chat stream extension, contract 2.2
+
+`GET /w/:slug/stream` announces `chat_stream_ready {streamId, version:1}` when managed chats are
+available. An authenticated state-changing `POST /w/:slug/chats/watch` sets a replacement watch set:
+`{streamId, revision, chats:[{id,cursor?,before?}]}`. Revisions increase per connection; stale revisions
+are ignored. At most 32 distinct chats are watched. The connection is bound to workspace registration
+and epoch, and disconnect/auth revocation removes every watch.
+
+`chat_snapshot {chatId,snapshot}`, `chat_event {chatId,record}`, `chat_snapshot_ref {chatId,revision,before?}`
+and `chat_unavailable {chatId}` never carry an SSE ID. A bootstrap snapshot or retained replay that
+would exceed the remaining 512 KiB bootstrap budget uses a snapshot reference. The client fetches
+only that chat through its authenticated snapshot endpoint and resubscribes from the returned
+revision; durable replay closes the read-to-subscribe window. They cannot change the workspace journal cursor. Each chat uses its own durable
+sequence; duplicates are ignored, missing sequences resynchronize only that chat. Initial/history
+snapshots and affected-chat gaps are the only full refreshes. Chat records hydrate only their own
+text blob. The subscriber output is bounded by one MiB and 1,000 queued records; overflow disconnects
+without blocking journal commits and reconnect replays durable cursors.
+
+`POST /w/:slug/chats/:id/turns/edit` accepts `{requestId,turnId,expectedRevision,text,references?,attachments?}`.
+It edits only never-dispatched queued/held work. A revision or dispatch race returns a visible conflict;
+the client preserves the edited bytes locally. Browser draft recovery is installation, workspace
+registration/epoch and chat scoped, contains no credentials, and never submits on reopening.
+
+A local send captures the selected account and configuration revision when the person submits it,
+before awaiting draft persistence. A later account or configuration change cannot rebind that intent;
+the client retains the payload and requires explicit recovery. An uncertain HTTP retry retains the
+exact original request ID and payload. Clearing the composer after local recovery persistence compares
+the complete captured draft, including attachments, references and retry linkage, so newer edits remain editable.
+
+Tool parts retain their stable identity as their status changes among `running`, `completed`,
+`failed`, `denied` and `cancelled`. Providers translate explicit native outcomes or a permission
+response tied to the same tool identity; generic error text never establishes denial or cancellation.
+An ended turn with no observed tool outcome remains visibly stopped with an unknown outcome.
+Legacy three-status records remain readable. A reader that does not recognize a newer durable
+status refuses the journal before writing, rather than dropping that record or changing its meaning.

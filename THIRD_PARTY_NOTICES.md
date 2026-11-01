@@ -526,18 +526,52 @@ MIT/license-reference header from the checked-in bundle and copy the result to
 or runtime work. Verify no external imports or resource requests, then run the SPA import-boundary
 suite and the read-only source scenario in the real-engine workbench acceptance suite.
 
-## BSD-2-Clause security backport
 
-The distributed patch for http-cache-semantics 4.2.0 derives from the upstream
-cache policy implementation and [upstream PR #58](https://github.com/kornelski/http-cache-semantics/pull/58).
-The dependency itself is used only by development tools.
+## Managed chat: assistant-ui and React
 
-Copyright 2016-2018 Kornel Lesiński
+The managed chat surface uses a local, lazily loaded production bundle of assistant-ui/react
+0.15.32 and React/React DOM 19.3.0. The complete license notices for the 18 packages contributing
+bytes to this bundle are in `packages/spa/src/vendor/chat-ui-notices.txt`. Packages use MIT,
+BSD-3-Clause or 0BSD licenses as identified in that file. No cloud adapter, telemetry transport,
+external stylesheet or hosted history service is configured.
 
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+This is a scoped UI island. The desktop shell, document viewers and external-session conversation
+mirror remain independent. React is not a daemon dependency and no install or runtime build runs.
 
-1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+### Rebuilding the chat vendor bundle
 
-2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+The manifest and frozen npm lock in `scripts/chat-ui-vendor/` define the isolated maintainer build.
+Use the repository's pinned Bun and a disposable workspace. From the repository root:
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```sh
+mkdir -p .context/chat-ui-build
+cp scripts/chat-ui-vendor/package.json .context/chat-ui-build/package.json
+cp scripts/chat-ui-vendor/package-lock.json .context/chat-ui-build/package-lock.json
+npm ci --prefix .context/chat-ui-build --ignore-scripts --no-audit --no-fund
+bun run scripts/vendor-chat-ui.ts .context/chat-ui-build
+```
+
+The generator copies `scripts/vendor-chat-ui-entry.js` into that workspace, compiles a production
+browser ES module, derives bundled package notices from Bun's byte-contribution metadata and
+refuses an unexpected network transport. Its exact pinned dist entry points avoid including
+unused namespace members, such as cloud adapters or the library's generic attachment uploader.
+It writes only `packages/spa/src/vendor/chat-ui.js` and `chat-ui-notices.txt`. Review both diffs,
+verify a repeated frozen build produces identical bytes, and run managed-chat browser acceptance,
+SPA import boundaries and packaging checks. Static transport scanning is a guard, not proof of
+zero egress: the real browser's denied-network observations remain required.
+
+
+The frozen chat assets are identified by SHA-256:
+
+| Asset | SHA-256 |
+|---|---|
+| `packages/spa/src/vendor/chat-ui.js` | `83602d1d7401d1b3ff57bad05f3c0de719234558aa286d806368fcfb6451c59a` |
+| `packages/spa/src/vendor/chat-ui-notices.txt` | `57ab6dd28c10b77688b73073ae2fcd9c768b8c0e1d59191dcd9e85f73fc3dff6` |
+
+## Managed authentication and ACP dependencies
+
+`openid-client` 6.8.8 and its locked `oauth4webapi` dependency are MIT-licensed packages by
+Filip Skokan. `@agentclientprotocol/sdk` 2.2.0 is Apache-2.0 licensed. These are installed
+package dependencies, not browser vendor assets. Their full licenses accompany their packages;
+`bun.lock` pins the resolved dependency set. The ACP SDK alone does not qualify a native translator
+or enable external execution.

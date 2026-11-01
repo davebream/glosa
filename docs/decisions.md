@@ -1950,3 +1950,29 @@ there is nothing left for it to order, and the journal's event types are unchang
 **Rejected.** Keeping waiting messages in the thread with the new verbs: every waiting message
 pushed the reply being written out of view, and its verbs sat far from where the person types.
 No fixed cap: a runaway queue could spend an account's quota with nobody watching.
+
+
+## 2026-11-01: Managed chat adopts assistant-ui and qualified ACP boundaries
+
+The managed chat surface was slow and could stop without explaining the cause. The maintainer
+approved replacing its interaction layer with assistant-ui's external-store runtime in a lazy,
+prebuilt React island. A framework-independent glosa store projects durable events and preserves
+local drafts; the daemon remains the sole execution and persistence authority. This exception does
+not extend React to the rest of the SPA or change the existing image island.
+
+Maintained ACP translators are the intended native integration boundary, subject to qualification.
+A translator that hides process replacements or cannot rotate and fence tool authority cannot replace
+the safe executor. The migration therefore permits independently useful reliability and UI changes,
+while ACP cutover remains an explicit provider-by-provider release decision. Mastra and CopilotKit
+would add another execution/persistence authority without resolving those missing guarantees.
+
+Additional messages queue by default. Inline edits preserve queue position and use append-only
+revision checks. An uncertain outcome, explicit Stop or account change holds the queue. Native
+failure may advance eligible work only when execution and cleanup are known. No reconnect or login
+silently replays a prompt.
+
+The maintainer also approved optional Sign in with ChatGPT, preserving native Claude and Codex
+accounts. Registration identity is distinct from email and profile identity. Credential vault failure
+is visible and has no plaintext fallback; refresh happens only in foreground operations. The
+[official integration contract](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+and [UI guidance](https://developers.openai.com/siwc/ui-ux-guidelines) govern this optional route.

@@ -300,3 +300,24 @@ and never expands `resolveTrackedFiles`, `versionedInventory`, claimable paths, 
 invalidations only. Reading, filtering and externally changing a read-only file write no journal
 event or checkpoint. Directory rename/trash remains governed by the existing whole-directory
 contracts; the new tier adds no direct mutation authorization.
+
+
+### Additive managed-chat execution records, 2026-11-01
+
+Managed chat journals add optional attempt identities and structured failure metadata to existing
+records, plus append-only `turn_revised` records. Readers must be deployed before enabling these
+writers. Legacy records replay with revision one for queued turns and their original error text;
+opening history never launches a provider. Existing strict readers fail closed on unknown fields or
+event types. Downgrading after the first new event can make that chat unavailable; never discard,
+rewrite or ignore unsupported records to enable an older daemon.
+
+Queued edits compare the submitted revision and recheck dispatch admission after asynchronous
+preparation. They preserve position, account and frozen settings. Display events batch for at most
+20 ms or 16 KiB and publish only after the batch durability flush. Decisions and terminal transitions
+force an immediate display flush. Projection updates index changed parts rather than clone all
+history for each delta. A torn write must not create a receipt for uncommitted executable work.
+
+An explicit retry creates a new turn and request identity, recording `retryOf.turnId` and the
+previous `attemptId` when known. The source must be a resolved turn in the same chat. Retrying an
+unacknowledged HTTP request instead preserves its exact identity and payload; it does not create a
+second attempt. Uncertain execution outcomes cannot be retried through this shortcut.

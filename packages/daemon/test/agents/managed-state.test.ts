@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +9,8 @@ import { validateReferences } from "../../src/chats/references.ts";
 import { managedEnvironment } from "../../src/agents/environment.ts";
 import { IntentJournal } from "../../src/chats/journal.ts";
 import { AgentStore, newProfile } from "../../src/chats/store.ts";
+import { chatFailure } from "../../src/chats/types.ts";
+import * as fs from "node:fs";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -20,6 +22,134 @@ function root(): string {
   return path;
 }
 const workspaceId = "a".repeat(64);
+
+function storedChat() {
+  const store = new AgentStore(root());
+  const chat = store.create(
+    {
+      id: randomUUID(),
+      sessionId: randomUUID(),
+      workspaceId,
+      workspaceEpoch: "e",
+      workspacePath: store.root,
+      provider: "fixture",
+      title: "New chat",
+      settings: { model: "m", effort: "", permissionMode: "default" },
+      origin: "managed",
+    },
+    randomUUID(),
+  );
+  const turnId = randomUUID();
+  chat.append({
+    type: "turn",
+    turn: {
+      id: turnId,
+      textHash: chat.blob(Buffer.from("prompt")),
+      attachments: [],
+      settings: chat.state.settings,
+      profileEpoch: 0,
+      identityRevision: 0,
+      status: "accepted",
+      at: new Date().toISOString(),
+      origin: "user",
+    },
+  });
+  return { store, chat, turnId };
+}
+
+test("native error details remain actionable while credentials, URL secrets and stacks are excluded", () => {
+  const error = Object.assign(new Error("Internal error"), {
+    data: {
+      details:
+        "Model is unavailable. access_token=private-token https://user:pass@example.test/login?code=private-code#secret",
+    },
+    cause: new Error("Request denied. Bearer private-bearer grant=private-grant"),
+    details: "Native RPC detail. refresh_token=private-refresh",
+  });
+  const failure = chatFailure(error, { phase: "connecting", dispatchCertainty: "unsent", secrets: ["private-grant"] });
+  expect(failure.title).toBe("Internal error");
+  expect(failure.detail).toContain("Model is unavailable.");
+  expect(failure.detail).toContain("Native RPC detail.");
+  expect(failure.detail).toContain("https://example.test/login");
+  for (const secret of [
+    "private-token",
+    "private-code",
+    "private-bearer",
+    "private-grant",
+    "private-refresh",
+    "user:pass",
+    "at ",
+  ])
+    expect(JSON.stringify(failure)).not.toContain(secret);
+});
+
+test("a display batch is durable before notification, uses one fsync and does not clone prior history", async () => {
+  const { store, chat, turnId } = storedChat();
+  chat.append({
+    type: "content",
+    content: { id: "answer", turnId, role: "assistant", kind: "text", text: "old history" },
+  });
+  await Promise.resolve();
+  const notifications: number[] = [];
+  const before = chat.journal.revision;
+  chat.journal.listeners.add((record) => {
+    const replay = new IntentJournal(chat.journal.path, z.unknown());
+    try {
+      expect(replay.revision).toBe(before + 2);
+      notifications.push(record.seq);
+    } finally {
+      replay.close();
+    }
+  });
+  const sync = spyOn(fs, "fsyncSync"),
+    clone = spyOn(globalThis, "structuredClone");
+  try {
+    chat.appendMany([
+      { type: "content", content: { id: "answer", turnId, role: "assistant", kind: "text", text: " first" } },
+      { type: "content", content: { id: "reasoning", turnId, role: "assistant", kind: "reasoning", text: "thought" } },
+    ]);
+    // This is the explicit durability and copy budget, rather than timing on a shared runner.
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(clone).not.toHaveBeenCalled();
+    expect(notifications).toEqual([]);
+    expect(chat.view.content.map((content) => content.text)).toEqual(["old history first", "thought"]);
+    await Promise.resolve();
+    expect(notifications).toEqual([before + 1, before + 2]);
+  } finally {
+    sync.mockRestore();
+    clone.mockRestore();
+    store.close();
+  }
+});
+
+test("a failed display fsync leaves projection, receipts and subscribers at the previous durable prefix", async () => {
+  const { store, chat, turnId } = storedChat();
+  await Promise.resolve();
+  const before = readFileSync(chat.journal.path, "utf8"),
+    revision = chat.journal.revision;
+  let notified = false;
+  chat.journal.listeners.add(() => {
+    notified = true;
+  });
+  const sync = spyOn(fs, "fsyncSync").mockImplementationOnce(() => {
+    throw new Error("disk full");
+  });
+  try {
+    expect(() =>
+      chat.appendMany([
+        { type: "content", content: { id: "answer", turnId, role: "assistant", kind: "text", text: "not committed" } },
+      ]),
+    ).toThrow("Could not persist managed state");
+    expect(chat.view.content).toEqual([]);
+    expect(chat.journal.revision).toBe(revision);
+    expect(readFileSync(chat.journal.path, "utf8")).toBe(before);
+    await Promise.resolve();
+    expect(notified).toBe(false);
+  } finally {
+    sync.mockRestore();
+    store.close();
+  }
+});
 
 test("retry recovers the original durable receipt and rejects a changed payload", () => {
   const path = join(root(), "journal.jsonl");
@@ -119,6 +249,11 @@ test("chat/profile replay preserves model resolution, logical identity, frozen t
     },
   });
   chat.append({ type: "content", content: { id: "answer", turnId, role: "assistant", kind: "text", text: "Hello" } });
+  for (const status of ["completed", "failed", "denied", "cancelled"] as const) {
+    const tool = { id: `tool-${status}`, turnId, role: "tool" as const, kind: "tool" as const, text: status };
+    chat.append({ type: "content", content: { ...tool, status: "running" } });
+    chat.append({ type: "content", content: { ...tool, status } });
+  }
   expect(chat.state.draftRevision).toBe(1);
   expect(() => chat.append({ type: "changed", profileId: randomUUID() })).toThrow(
     "active chat subscription cannot change",
@@ -129,6 +264,14 @@ test("chat/profile replay preserves model resolution, logical identity, frozen t
   expect(replay.savedCommands("workspace-account")?.commands[0]?.id).toBe("review");
   expect(replay.savedCapabilities(profile.id)?.capabilities).toEqual(refreshedCapabilities);
   expect(replay.chat(chatId).state.sessionId).toBe(sessionId);
+  expect(
+    replay
+      .chat(chatId)
+      .state.content.filter((part) => part.kind === "tool")
+      .map(({ id, status }) => ({ id, status })),
+  ).toEqual(
+    (["completed", "failed", "denied", "cancelled"] as const).map((status) => ({ id: `tool-${status}`, status })),
+  );
   expect(replay.chat(chatId).text(replay.chat(chatId).state.turns[0]?.textHash)).toBe("first prompt");
   expect(replay.list(workspaceId, "new-registration")).toEqual([]);
   expect(replay.list(workspaceId, "registration-1")).toHaveLength(1);

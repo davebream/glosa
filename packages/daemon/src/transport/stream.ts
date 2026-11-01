@@ -14,7 +14,7 @@ import { isTerminal } from "../bus/lifecycle.ts";
 import { readJournalEventsSince } from "../bus/tail.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
 import type { WorkspaceTarget } from "../workspace.ts";
-import { byeReason, encodeSseFrame } from "./sse.ts";
+import { byeReason, encodeSseFrame, type SseEventType } from "./sse.ts";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -53,6 +53,7 @@ export interface StreamOptions {
   /** This folder's default style changed (#407). */
   subscribeFolderStyle?: (listener: () => void) => () => void;
   /** Chat changes daemon-wide. `slug` names the workspace when known (#389). */
+  subscribeChatStream?: (send: (event: SseEventType, data: unknown) => void) => () => void;
   subscribeChats?: (listener: (change?: { slug?: string }) => void) => () => void;
   /** Attention changes daemon-wide, one call per workspace affected (#389). */
   subscribeAttention?: (listener: (slug: string) => void) => () => void;
@@ -97,6 +98,7 @@ export function createJournalStreamResponse(
   let unsubscribeFileView: (() => void) | null = null;
   let unsubscribeFolderStyle: (() => void) | null = null;
   let unsubscribeChats: (() => void) | null = null;
+  let unsubscribeChatStream: (() => void) | null = null;
   let unsubscribeAttention: (() => void) | null = null;
   let unsubscribeBrowser: (() => void) | null = null;
   let chatTimer: ReturnType<typeof setTimeout> | undefined;
@@ -114,6 +116,7 @@ export function createJournalStreamResponse(
     unsubscribeReadOnly?.();
     unsubscribeFileView?.();
     unsubscribeChats?.();
+    unsubscribeChatStream?.();
     unsubscribeAttention?.();
     unsubscribeBrowser?.();
     clearTimeout(chatTimer);
@@ -122,165 +125,183 @@ export function createJournalStreamResponse(
     if (shutdownListener) opts.shutdownSignal?.removeEventListener("abort", shutdownListener);
   };
 
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const send = (frame: string) => {
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        const send = (frame: string) => {
+          if (closed) return;
+          try {
+            const bytes = encoder.encode(frame);
+            const cost = Math.max(bytes.byteLength / 1_048_576, 1 / 1000);
+            if ((controller.desiredSize ?? 0) < cost) {
+              teardown();
+              controller.error(new Error("Workspace stream overflow; reconnect to resynchronize."));
+              return;
+            }
+            controller.enqueue(bytes);
+          } catch {
+            // Controller already closed/errored — the client went away right as we tried to write.
+            // Real teardown happens via cancel()/the abort listener below; a lost enqueue here is
+            // harmless (no frame is silently "half sent" — SSE frames are written whole).
+          }
+        };
+
+        shutdownListener = () => {
+          send(encodeSseFrame({ event: "bye", data: { reason: byeReason(opts.shutdownSignal) } }));
+          teardown();
+          try {
+            controller.close();
+          } catch {
+            // already closed by the peer
+          }
+        };
+        opts.shutdownSignal?.addEventListener("abort", shutdownListener, { once: true });
+        if (opts.shutdownSignal?.aborted) shutdownListener();
         if (closed) return;
+
+        // LOAD-BEARING ORDERING: subscribe to live events BEFORE reading `currentCursor()` (first
+        // connect) or replaying the tail (reconnect) — and with NO `await` anywhere in this
+        // synchronous block. WorkspaceBus.subscribe()'s own docstring is the other half of this
+        // invariant: because JS is single-threaded, a write already "in flight" (awaiting its own
+        // checkpoint/mutex turn) cannot have its append+notify continuation run in the middle of
+        // this block, so there is no gap in which an event could land uncounted by either the
+        // snapshot/replay below OR the live subscription — every physical journal line is seen by
+        // exactly one of the two paths, never zero, never both.
+        unsubscribe = bus.subscribe(({ cursor, event }) => {
+          send(encodeSseFrame({ id: cursor, event: "journal", data: event }));
+        });
+        unsubscribeMetadata =
+          opts.subscribeMetadata?.(() => {
+            send(encodeSseFrame({ event: "metadata", data: { changed: true } }));
+          }) ?? null;
+        // Contract 1.21 (#407): an invalidation like `metadata`'s, with no cursor. The page reads the
+        // folder's default again through its data-access module; an N-1 page ignores the frame.
+        unsubscribeFolderStyle =
+          opts.subscribeFolderStyle?.(() => {
+            send(encodeSseFrame({ event: "folder_style", data: { changed: true } }));
+          }) ?? null;
+
+        // Defense-in-depth (review item #3): everything from here on is pure setup (no I/O that's
+        // expected to fail under normal operation) but a future change — or an edge case neither
+        // review caught — throwing here, AFTER `subscribe()` already registered a listener, must
+        // never leak that listener/the heartbeat timer/the watcher. `sinceSeq`'s own range is
+        // guarded above so this catch is belt-and-suspenders, not the primary defense against #1.
         try {
-          controller.enqueue(encoder.encode(frame));
-        } catch {
-          // Controller already closed/errored — the client went away right as we tried to write.
-          // Real teardown happens via cancel()/the abort listener below; a lost enqueue here is
-          // harmless (no frame is silently "half sent" — SSE frames are written whole).
-        }
-      };
-
-      shutdownListener = () => {
-        send(encodeSseFrame({ event: "bye", data: { reason: byeReason(opts.shutdownSignal) } }));
-        teardown();
-        try {
-          controller.close();
-        } catch {
-          // already closed by the peer
-        }
-      };
-      opts.shutdownSignal?.addEventListener("abort", shutdownListener, { once: true });
-      if (opts.shutdownSignal?.aborted) shutdownListener();
-      if (closed) return;
-
-      // LOAD-BEARING ORDERING: subscribe to live events BEFORE reading `currentCursor()` (first
-      // connect) or replaying the tail (reconnect) — and with NO `await` anywhere in this
-      // synchronous block. WorkspaceBus.subscribe()'s own docstring is the other half of this
-      // invariant: because JS is single-threaded, a write already "in flight" (awaiting its own
-      // checkpoint/mutex turn) cannot have its append+notify continuation run in the middle of
-      // this block, so there is no gap in which an event could land uncounted by either the
-      // snapshot/replay below OR the live subscription — every physical journal line is seen by
-      // exactly one of the two paths, never zero, never both.
-      unsubscribe = bus.subscribe(({ cursor, event }) => {
-        send(encodeSseFrame({ id: cursor, event: "journal", data: event }));
-      });
-      unsubscribeMetadata =
-        opts.subscribeMetadata?.(() => {
-          send(encodeSseFrame({ event: "metadata", data: { changed: true } }));
-        }) ?? null;
-      // Contract 1.21 (#407): an invalidation like `metadata`'s, with no cursor. The page reads the
-      // folder's default again through its data-access module; an N-1 page ignores the frame.
-      unsubscribeFolderStyle =
-        opts.subscribeFolderStyle?.(() => {
-          send(encodeSseFrame({ event: "folder_style", data: { changed: true } }));
-        }) ?? null;
-
-      // Defense-in-depth (review item #3): everything from here on is pure setup (no I/O that's
-      // expected to fail under normal operation) but a future change — or an edge case neither
-      // review caught — throwing here, AFTER `subscribe()` already registered a listener, must
-      // never leak that listener/the heartbeat timer/the watcher. `sinceSeq`'s own range is
-      // guarded above so this catch is belt-and-suspenders, not the primary defense against #1.
-      try {
-        unsubscribeReadOnly =
-          opts.subscribeReadOnly?.(() => send(encodeSseFrame({ event: "read_only_files", data: { changed: true } }))) ??
-          null;
-        unsubscribeFileView =
-          opts.subscribeFileView?.(() => send(encodeSseFrame({ event: "file_view", data: { changed: true } }))) ?? null;
-        unsubscribeChats =
-          opts.subscribeChats?.((change) => {
-            if (closed) return;
-            if (change?.slug !== undefined) chatSlugs.add(change.slug);
-            else chatUnknown = true;
-            if (chatTimer) return;
-            chatTimer = setTimeout(() => {
-              chatTimer = undefined;
+          unsubscribeChatStream =
+            opts.subscribeChatStream?.((event, data) => send(encodeSseFrame({ event, data }))) ?? null;
+          if (closed) {
+            unsubscribeChatStream?.();
+            return;
+          }
+          unsubscribeReadOnly =
+            opts.subscribeReadOnly?.(() =>
+              send(encodeSseFrame({ event: "read_only_files", data: { changed: true } })),
+            ) ?? null;
+          unsubscribeFileView =
+            opts.subscribeFileView?.(() => send(encodeSseFrame({ event: "file_view", data: { changed: true } }))) ??
+            null;
+          unsubscribeChats =
+            opts.subscribeChats?.((change) => {
               if (closed) return;
-              if ((controller.desiredSize ?? 0) < -4) {
-                shutdownListener?.();
-                return;
-              }
-              // Contract 1.19 (#389): `slugs` lists every workspace whose chats changed in this
-              // window, empty when one could not be told; `slug` repeats it when exactly one did.
-              // An N-1 client ignores both and refetches, exactly as before.
-              const slugs = chatUnknown ? [] : [...chatSlugs].sort();
-              chatSlugs.clear();
-              chatUnknown = false;
+              if (change?.slug !== undefined) chatSlugs.add(change.slug);
+              else chatUnknown = true;
+              if (chatTimer) return;
+              chatTimer = setTimeout(() => {
+                chatTimer = undefined;
+                if (closed) return;
+                // Contract 1.19 (#389): `slugs` lists every workspace whose chats changed in this
+                // window, empty when one could not be told; `slug` repeats it when exactly one did.
+                // An N-1 client ignores both and refetches, exactly as before.
+                const slugs = chatUnknown ? [] : [...chatSlugs].sort();
+                chatSlugs.clear();
+                chatUnknown = false;
+                send(
+                  encodeSseFrame({
+                    event: "chats_changed",
+                    data: slugs.length === 1 ? { slug: slugs[0], slugs } : { slugs },
+                  }),
+                );
+              }, 250);
+            }) ?? null;
+          // #440: a desk window's requests for its browser tabs, sent to this stream alone.
+          unsubscribeBrowser =
+            opts.subscribeBrowser?.((request) => {
+              if (closed) return;
+              send(encodeSseFrame({ event: "browser_request", data: request }));
+            }) ?? null;
+          // #389: attention is daemon-wide, so this stream forwards every workspace's changes, its
+          // own included; the page's own workspace also sees them as `journal` frames.
+          unsubscribeAttention =
+            opts.subscribeAttention?.((slug) => {
+              if (closed) return;
+              send(encodeSseFrame({ event: "attention_changed", data: { slug } }));
+            }) ?? null;
+          let replayedAny = false;
+          if (sinceSeq === null) {
+            // First connect (A1 §8.2 case 1): one snapshot at the current cursor, then live from
+            // the subscription above.
+            const cursor = bus.currentCursor();
+            send(encodeSseFrame({ id: cursor, event: "snapshot", data: buildSnapshotData(root, bus) }));
+            replayedAny = true;
+          } else {
+            // Reconnect (A1 §8.2 case 2/3): the journal never rotates in v1, so every cursor ever
+            // issued is always "retained" — a strict resume, replaying every event with sequence >
+            // sinceSeq straight from the journal file, no snapshot. (The `resync_required` escape
+            // hatch for a rotated journal is encodable via sse.ts but has no v1 trigger — see A1
+            // §8.2 case 3's own note that this is reserved for a mechanism v1 doesn't have.)
+            for (const { sequence, event } of readJournalEventsSince(root, sinceSeq)) {
+              send(encodeSseFrame({ id: sequence, event: "journal", data: event }));
+              replayedAny = true;
+            }
+          }
+
+          // Heartbeat (A1 §8.3) — belt-and-suspenders alongside the idle-timeout override below:
+          // covers any intermediary that isn't Bun's own idle timer. `.unref()` so a forgotten/
+          // never explicitly-cancelled stream (e.g. a test that only reads the first frame) never
+          // keeps the process alive on this timer alone — the real daemon stays up via its bound
+          // server socket regardless.
+          //
+          // A reconnect that had NOTHING to replay (client is already caught up, no live event has
+          // fired yet either) would otherwise send its first byte only at the FIRST periodic
+          // heartbeat, up to `heartbeatMs` away — Bun's own `fetch()` doesn't resolve its response
+          // promise until the first body byte arrives (headers alone aren't enough), so a silent
+          // response leaves every caller's `fetch()` hanging for that whole interval, not just this
+          // stream sitting quiet. Firing one heartbeat frame immediately (then the normal interval
+          // for every tick after) guarantees a byte is always in flight within moments of
+          // connecting, regardless of branch — also good SSE practice independent of the
+          // Bun-specific trigger (confirms liveness to the client/any intermediary immediately
+          // rather than after a wait).
+          if (!replayedAny) send(encodeSseFrame({ event: "heartbeat" }));
+          heartbeatTimer = setInterval(() => send(encodeSseFrame({ event: "heartbeat" })), heartbeatMs);
+          heartbeatTimer.unref?.();
+
+          unsubscribeArtifacts =
+            opts.subscribeArtifacts?.((event) => {
               send(
                 encodeSseFrame({
-                  event: "chats_changed",
-                  data: slugs.length === 1 ? { slug: slugs[0], slugs } : { slugs },
+                  event: event.type,
+                  // No `id` — best-effort/live-only, no durable log to replay from on reconnect
+                  // (unlike journal events); same "advisory, doesn't advance the cursor" posture as
+                  // heartbeat (sse.ts's SseFrame docstring).
+                  data: event.data,
                 }),
               );
-            }, 250);
-          }) ?? null;
-        // #440: a desk window's requests for its browser tabs, sent to this stream alone.
-        unsubscribeBrowser =
-          opts.subscribeBrowser?.((request) => {
-            if (closed) return;
-            send(encodeSseFrame({ event: "browser_request", data: request }));
-          }) ?? null;
-        // #389: attention is daemon-wide, so this stream forwards every workspace's changes, its
-        // own included; the page's own workspace also sees them as `journal` frames.
-        unsubscribeAttention =
-          opts.subscribeAttention?.((slug) => {
-            if (closed) return;
-            send(encodeSseFrame({ event: "attention_changed", data: { slug } }));
-          }) ?? null;
-        let replayedAny = false;
-        if (sinceSeq === null) {
-          // First connect (A1 §8.2 case 1): one snapshot at the current cursor, then live from
-          // the subscription above.
-          const cursor = bus.currentCursor();
-          send(encodeSseFrame({ id: cursor, event: "snapshot", data: buildSnapshotData(root, bus) }));
-          replayedAny = true;
-        } else {
-          // Reconnect (A1 §8.2 case 2/3): the journal never rotates in v1, so every cursor ever
-          // issued is always "retained" — a strict resume, replaying every event with sequence >
-          // sinceSeq straight from the journal file, no snapshot. (The `resync_required` escape
-          // hatch for a rotated journal is encodable via sse.ts but has no v1 trigger — see A1
-          // §8.2 case 3's own note that this is reserved for a mechanism v1 doesn't have.)
-          for (const { sequence, event } of readJournalEventsSince(root, sinceSeq)) {
-            send(encodeSseFrame({ id: sequence, event: "journal", data: event }));
-            replayedAny = true;
-          }
+            }) ?? null;
+        } catch (err) {
+          teardown(); // unsubscribe + clear heartbeat — nothing leaks past this throw
+          controller.error(err);
         }
-
-        // Heartbeat (A1 §8.3) — belt-and-suspenders alongside the idle-timeout override below:
-        // covers any intermediary that isn't Bun's own idle timer. `.unref()` so a forgotten/
-        // never explicitly-cancelled stream (e.g. a test that only reads the first frame) never
-        // keeps the process alive on this timer alone — the real daemon stays up via its bound
-        // server socket regardless.
-        //
-        // A reconnect that had NOTHING to replay (client is already caught up, no live event has
-        // fired yet either) would otherwise send its first byte only at the FIRST periodic
-        // heartbeat, up to `heartbeatMs` away — Bun's own `fetch()` doesn't resolve its response
-        // promise until the first body byte arrives (headers alone aren't enough), so a silent
-        // response leaves every caller's `fetch()` hanging for that whole interval, not just this
-        // stream sitting quiet. Firing one heartbeat frame immediately (then the normal interval
-        // for every tick after) guarantees a byte is always in flight within moments of
-        // connecting, regardless of branch — also good SSE practice independent of the
-        // Bun-specific trigger (confirms liveness to the client/any intermediary immediately
-        // rather than after a wait).
-        if (!replayedAny) send(encodeSseFrame({ event: "heartbeat" }));
-        heartbeatTimer = setInterval(() => send(encodeSseFrame({ event: "heartbeat" })), heartbeatMs);
-        heartbeatTimer.unref?.();
-
-        unsubscribeArtifacts =
-          opts.subscribeArtifacts?.((event) => {
-            send(
-              encodeSseFrame({
-                event: event.type,
-                // No `id` — best-effort/live-only, no durable log to replay from on reconnect
-                // (unlike journal events); same "advisory, doesn't advance the cursor" posture as
-                // heartbeat (sse.ts's SseFrame docstring).
-                data: event.data,
-              }),
-            );
-          }) ?? null;
-      } catch (err) {
-        teardown(); // unsubscribe + clear heartbeat — nothing leaks past this throw
-        controller.error(err);
-      }
+      },
+      cancel() {
+        teardown();
+      },
     },
-    cancel() {
-      teardown();
+    {
+      highWaterMark: 1,
+      // A combined budget is conservatively bounded by BOTH one MiB and 1,000 records.
+      size: (chunk) => Math.max((chunk?.byteLength ?? 0) / 1_048_576, 1 / 1000),
     },
-  });
+  );
 
   req.signal?.addEventListener("abort", teardown);
   server?.timeout(req, 0); // A1 §8.3 — disable Bun's idle timeout for THIS response only

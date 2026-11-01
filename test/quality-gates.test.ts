@@ -10,17 +10,14 @@ import {
   cpSync,
   mkdirSync,
   existsSync,
+  realpathSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { MIN_JUNIT_BUN } from "../scripts/test-runner.ts";
 import rootPackage from "../package.json";
-import {
-  cacheReuseProblems,
-  writeVerifiedCacheConfig,
-  type PolicyConstructor,
-} from "../scripts/cache-security-backport.ts";
+import { writeVerifiedSecurityConfig } from "../scripts/security-dependency-policy.ts";
 
 const root = resolve(import.meta.dir, "..");
 const workflows = ["ci.yml", "release.yml"].map((name) => readFileSync(join(root, ".github/workflows", name), "utf8"));
@@ -32,104 +29,186 @@ function job(yaml: string, name: string): string {
 }
 
 describe("repository quality gates", () => {
-  test("cache backport refuses restricted reuse and preserves legitimate stale caching, including serialized policies", () => {
-    const directory = mkdtempSync(join(tmpdir(), "glosa-cache-ablation-"));
-    const packagePath = join(root, "node_modules/http-cache-semantics");
-    try {
-      cpSync(packagePath, directory, { recursive: true });
-      const load = createRequire(join(directory, "package.json"));
-      expect(cacheReuseProblems(load(join(directory, "index.js")) as PolicyConstructor)).toEqual([]);
-      const ablated = Bun.spawnSync(
-        ["patch", "-R", "--silent", "-p1", "-i", join(root, "patches/http-cache-semantics-4.2.0.patch")],
-        {
-          cwd: directory,
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
-      expect(ablated.exitCode, ablated.stderr.toString()).toBe(0);
-      const ablatedFile = join(directory, "ablated.cjs");
-      cpSync(join(directory, "index.js"), ablatedFile);
-      const problems = cacheReuseProblems(load(ablatedFile) as PolicyConstructor);
-      for (const path of ["max-stale", "stale-if-error", "stale-while-revalidate"]) {
-        expect(problems).toContain(`shared cookie: constructed ${path} must refuse reuse`);
+  test("upstream cache policies reject prohibited storage and preserve valid reuse after serialization", () => {
+    interface Policy {
+      storable(): boolean;
+      satisfiesWithoutRevalidation(request: { url: string; method: string; headers: Record<string, string> }): boolean;
+      toObject(): unknown;
+    }
+    interface PolicyConstructor {
+      new (
+        request: { url: string; method: string; headers: Record<string, string> },
+        response: { status: number; headers: Record<string, string> },
+      ): Policy;
+      fromObject(value: unknown): Policy;
+    }
+    // The library requires storable() before putting a response in a cache. The withdrawn
+    // GHSA-ch52-4w7c-c8xp corpus bypassed that admission rule and demanded stronger semantics.
+    function problems(CachePolicy: PolicyConstructor): string[] {
+      const failures: string[] = [];
+      const request = { url: "https://cache.invalid/document", method: "GET", headers: { host: "cache.invalid" } };
+      for (const fixture of [
+        { name: "no-store", directive: "no-store", stored: false, hit: false },
+        { name: "shared private", directive: "private", stored: false, hit: false },
+        { name: "shared authorization", authorization: "Bearer disposable", stored: false, hit: false },
+        { name: "fresh public cookie", directive: "public, max-age=600", cookie: true, stored: true, hit: true },
+        { name: "ordinary stale", directive: "max-age=0", stored: true, hit: true },
+        { name: "must-revalidate", directive: "max-age=0, must-revalidate", stored: true, hit: false },
+        { name: "vary wildcard", directive: "max-age=600", vary: "*", stored: true, hit: false },
+      ]) {
+        const req = {
+          ...request,
+          headers: { ...request.headers, ...(fixture.authorization ? { authorization: fixture.authorization } : {}) },
+        };
+        const original = new CachePolicy(req, {
+          status: 200,
+          headers: {
+            "cache-control": fixture.directive ?? "max-age=600",
+            age: "1",
+            ...(fixture.cookie ? { "set-cookie": "session=disposable" } : {}),
+            ...(fixture.vary ? { vary: fixture.vary } : {}),
+          },
+        });
+        for (const [form, policy] of [
+          ["constructed", original],
+          ["restored", CachePolicy.fromObject(original.toObject())],
+        ] as const) {
+          if (policy.storable() !== fixture.stored) failures.push(`${fixture.name}: ${form} cache admission`);
+          const hit =
+            policy.storable() &&
+            policy.satisfiesWithoutRevalidation({
+              ...req,
+              headers: { ...req.headers, "cache-control": "max-stale=600" },
+            });
+          if (hit !== fixture.hit) failures.push(`${fixture.name}: ${form} cache hit`);
+        }
       }
-      expect(problems.some((problem) => problem.includes("must allow reuse"))).toBe(false);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
+      return failures;
+    }
+    for (const project of [".", "packages/shell"]) {
+      const CachePolicy = createRequire(join(root, project, "package.json"))(
+        "http-cache-semantics",
+      ) as PolicyConstructor;
+      expect(problems(CachePolicy)).toEqual([]);
+      class UnsafePolicy extends CachePolicy {
+        override storable(): boolean {
+          return true;
+        }
+      }
+      expect(problems(UnsafePolicy)).toContain("no-store: constructed cache admission");
     }
   });
-  test("fixed-advisory record disappears when either installed patch or lock declaration is missing", () => {
-    const directory = mkdtempSync(join(tmpdir(), "glosa-cache-record-"));
+  test("minimatch exception disappears for changed bytes, vulnerable or unknown copies, and lock drift", () => {
+    const source = realpathSync(join(root, "node_modules/minimatch"));
+    const rootLock = Bun.JSON5.parse(readFileSync(join(root, "bun.lock"), "utf8")) as {
+      packages: Record<string, unknown>;
+    };
+    const fixtureLock = JSON.stringify({ packages: { minimatch: rootLock.packages.minimatch } });
+    const directory = mkdtempSync(join(tmpdir(), "glosa-minimatch-record-"));
     const output = join(directory, ".context/security/osv-scanner.toml");
+    const layouts = [
+      [".", ["minimatch"]],
+      ["packages/shell", ["minimatch", "@electron/asar/node_modules/minimatch", "filelist/node_modules/minimatch"]],
+    ] as const;
+    function install(project: string, path: string): void {
+      const target = join(directory, project, "node_modules", path);
+      mkdirSync(join(target, ".."), { recursive: true });
+      cpSync(source, target, { recursive: true });
+    }
     try {
-      const patch = "patches/http-cache-semantics-4.2.0.patch";
-      mkdirSync(join(directory, "patches"));
-      cpSync(join(root, patch), join(directory, patch));
-      for (const project of [".", "packages/shell"]) {
+      // Root test jobs do not install the desktop tree. Exercise its layout using the
+      // root's reviewed bytes; the security job verifies both complete real installations.
+      for (const [project, paths] of layouts) {
         const target = join(directory, project);
         mkdirSync(target, { recursive: true });
-        for (const file of ["package.json", "bun.lock"]) cpSync(join(root, project, file), join(target, file));
-        mkdirSync(join(target, "node_modules"));
-        cpSync(join(root, "node_modules/http-cache-semantics"), join(target, "node_modules/http-cache-semantics"), {
-          recursive: true,
-        });
+        writeFileSync(join(target, "bun.lock"), fixtureLock);
+        for (const path of paths) install(project, path);
       }
-      writeVerifiedCacheConfig(directory);
+      writeVerifiedSecurityConfig(directory);
       const record = Bun.TOML.parse(readFileSync(output, "utf8")) as { IgnoredVulns: Array<{ id: string }> };
       expect(record.IgnoredVulns).toHaveLength(1);
-      expect(record.IgnoredVulns[0]?.id).toBe("GHSA-ch52-4w7c-c8xp");
-      expect(readFileSync(output, "utf8")).toContain("ignoreUntil = 2026-11-03");
-      for (const project of [".", "packages/shell"]) {
-        for (const [file, replacement, message] of [
-          [
-            "node_modules/http-cache-semantics/index.js",
-            "module.exports = class {};",
-            "installed cache backport digest mismatch",
-          ],
-          ["bun.lock", "{}", "cache backport declaration missing"],
-          ["package.json", "{}", "cache backport declaration missing"],
+      expect(record.IgnoredVulns[0]?.id).toBe("GHSA-g3hv-75wg-m249");
+      for (const [project, paths] of layouts) {
+        for (const file of [
+          "node_modules/minimatch/dist/commonjs/index.js",
+          "node_modules/minimatch/dist/esm/index.js",
+          "node_modules/minimatch/dist/commonjs/package.json",
+          ...paths.slice(1).map((path) => `node_modules/${path}/dist/commonjs/index.js`),
         ]) {
-          const path = join(directory, project, file!);
+          const path = join(directory, project, file);
           const original = readFileSync(path);
-          writeFileSync(path, replacement!);
+          writeFileSync(path, "module.exports = {};\n");
           try {
-            expect(() => writeVerifiedCacheConfig(directory)).toThrow(message);
+            expect(() => writeVerifiedSecurityConfig(directory)).toThrow("installed minimatch source digest mismatch");
             expect(existsSync(output)).toBe(false);
           } finally {
             writeFileSync(path, original);
           }
-          writeVerifiedCacheConfig(directory);
+          writeVerifiedSecurityConfig(directory);
         }
-        // An alias or nested install must not escape verification just because its directory
-        // has another name, or because the ordinary hoisted copy is correctly patched.
-        for (const copy of ["cache-alias", "consumer/node_modules/cache-alias"]) {
-          const target = join(directory, project, "node_modules", copy);
-          mkdirSync(join(target, ".."), { recursive: true });
-          cpSync(join(root, "node_modules/http-cache-semantics"), target, { recursive: true });
-          writeFileSync(join(target, "index.js"), "module.exports = class {};");
+        const lockPath = join(directory, project, "bun.lock");
+        const originalLock = readFileSync(lockPath, "utf8");
+        for (const [replacement, message] of [
+          [originalLock.replace("minimatch@11.0.1", "minimatch@9.0.9"), "unreviewed locked minimatch 9.0.9"],
+          [originalLock.replace("sha512-t+Vn6DX4", "sha512-changed"), "lock integrity changed"],
+          ["{}", "lock packages missing"],
+        ]) {
+          writeFileSync(lockPath, replacement!);
           try {
-            expect(() => writeVerifiedCacheConfig(directory)).toThrow("installed cache backport digest mismatch");
+            expect(() => writeVerifiedSecurityConfig(directory)).toThrow(message);
             expect(existsSync(output)).toBe(false);
           } finally {
-            rmSync(target, { recursive: true, force: true });
+            writeFileSync(lockPath, originalLock);
           }
-          writeVerifiedCacheConfig(directory);
+          writeVerifiedSecurityConfig(directory);
         }
+        // Aliases and nested copies count, even when the ordinary hoisted copy is safe.
+        for (const copy of [
+          "minimatch-alias",
+          "consumer/node_modules/minimatch-alias",
+          ".bun/fixture/node_modules/minimatch",
+        ]) {
+          for (const version of ["9.0.9", "99.0.0"]) {
+            const target = join(directory, project, "node_modules", copy);
+            mkdirSync(join(target, ".."), { recursive: true });
+            cpSync(source, target, { recursive: true });
+            const manifestPath = join(target, "package.json");
+            const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+            manifest.version = version;
+            writeFileSync(manifestPath, JSON.stringify(manifest));
+            try {
+              expect(() => writeVerifiedSecurityConfig(directory)).toThrow(`unreviewed installed minimatch ${version}`);
+              expect(existsSync(output)).toBe(false);
+            } finally {
+              rmSync(target, { recursive: true, force: true });
+            }
+            writeVerifiedSecurityConfig(directory);
+          }
+        }
+        for (const path of paths) rmSync(join(directory, project, "node_modules", path), { recursive: true });
+        try {
+          expect(() => writeVerifiedSecurityConfig(directory)).toThrow(
+            "installed minimatch versions do not match lock",
+          );
+          expect(existsSync(output)).toBe(false);
+        } finally {
+          for (const path of paths) install(project, path);
+        }
+        writeVerifiedSecurityConfig(directory);
       }
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   });
-  test("CI and release require installed patch verification before using the fixed-advisory record", () => {
+  test("CI and release verify all installed matcher copies before using the narrow advisory exception", () => {
     for (const yaml of workflows) {
       const security = job(yaml, "security");
       expect(security).toContain(
         "bun install --frozen-lockfile --ignore-scripts && bun install --cwd packages/shell --frozen-lockfile --ignore-scripts",
       );
-      expect(security).toContain("bun run scripts/cache-security-backport.ts");
+      expect(security).toContain("bun run scripts/security-dependency-policy.ts");
       expect(security).toContain("--config=.context/security/osv-scanner.toml");
-      expect(security.indexOf("bun run scripts/cache-security-backport.ts")).toBeLessThan(
+      expect(security.indexOf("bun run scripts/security-dependency-policy.ts")).toBeLessThan(
         security.indexOf("--config="),
       );
       expect(security).not.toContain("continue-on-error");

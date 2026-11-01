@@ -485,6 +485,89 @@ export function createDataAccess(deps = {}) {
   /** @param {string} id @param {string} [action] */
   const loginPath = (id, action = "") => `/api/agents/logins/${encodeURIComponent(id)}${action ? `/${action}` : ""}`;
 
+  /** @type {Map<string, {workspaceId:string, workspaceEpoch:string}>} */
+  const recoveryScopes = new Map();
+  /** @param {string} slug @param {string} id @param {any} snapshot */
+  function rememberChatScope(slug, id, snapshot) {
+    if (typeof snapshot?.workspaceId === "string" && typeof snapshot?.workspaceEpoch === "string")
+      recoveryScopes.set(`${slug}:${id}`, {
+        workspaceId: snapshot.workspaceId,
+        workspaceEpoch: snapshot.workspaceEpoch,
+      });
+    const watch = chatWatches.get(slug)?.watches.get(id);
+    if (watch?.unavailable) {
+      watch.unavailable = false;
+      syncChatWatches(slug);
+    }
+    return snapshot;
+  }
+  /** @param {string} slug @param {string} id */
+  async function recoveryKey(slug, id) {
+    if (!storage) throw new Error("Local recovery storage is unavailable. Your draft has not been sent.");
+    if (!expectedInstallId) {
+      const handshake = await readHandshake();
+      if (typeof handshake?.install_id !== "string")
+        throw new Error("Cannot identify this installation for draft recovery.");
+      expectedInstallId = handshake.install_id;
+    }
+    let scope = recoveryScopes.get(`${slug}:${id}`);
+    if (!scope) {
+      rememberChatScope(slug, id, await requestJson(chatPath(slug, id)));
+      scope = recoveryScopes.get(`${slug}:${id}`);
+    }
+    if (!scope) throw new Error("Cannot identify this workspace for draft recovery.");
+    return `glosa_chat_recovery:${expectedInstallId}:${scope.workspaceId}:${scope.workspaceEpoch}:${id}`;
+  }
+  /** @type {Map<string, {streamId:string|null, revision:number, scheduled:boolean, retry?:ReturnType<typeof setTimeout>, attempts:number, watches:Map<string,{refs:number,cursor?:number,before:string,unavailable?:boolean}>}>} */
+  const chatWatches = new Map();
+  /** @param {string} slug */
+  function watchesFor(slug) {
+    let state = chatWatches.get(slug);
+    if (!state) {
+      state = { streamId: null, revision: 0, scheduled: false, attempts: 0, watches: new Map() };
+      chatWatches.set(slug, state);
+    }
+    return state;
+  }
+  /** @param {string} slug */
+  function syncChatWatches(slug) {
+    const state = watchesFor(slug);
+    if (state.scheduled || !state.streamId) return;
+    clearTimeout(state.retry);
+    state.scheduled = true;
+    queueMicrotask(() => {
+      state.scheduled = false;
+      if (!state.streamId) return;
+      const streamId = state.streamId;
+      const revision = ++state.revision;
+      void postJson(chatPath(slug, "watch"), {
+        streamId,
+        revision,
+        chats: [...state.watches]
+          .filter(([, watch]) => !watch.unavailable)
+          .map(([id, watch]) => ({
+            id,
+            ...(watch.cursor === undefined ? {} : { cursor: watch.cursor }),
+            ...(watch.before ? { before: watch.before } : {}),
+          })),
+      })
+        .then(() => {
+          if (state.streamId !== streamId || state.revision !== revision) return;
+          state.attempts = 0;
+          for (const listener of workspaceStreams.get(slug)?.listeners ?? []) listener.onStatus?.("up");
+        })
+        .catch((error) => {
+          // Connection replacement will announce its own ID and replay these cursors.
+          // Never turn a transport retry into a prompt submission.
+          if (state.streamId === streamId && state.revision === revision) {
+            for (const listener of workspaceStreams.get(slug)?.listeners ?? []) listener.onStatus?.("down");
+            if (!(error instanceof DataAccessError && [401, 403, 404, 409, 410, 422].includes(error.status)))
+              state.retry = setTimeout(() => syncChatWatches(slug), computeBackoffMs(state.attempts++));
+          }
+        });
+    });
+  }
+
   // One long-lived connection per workspace, regardless of dock/chat pane count.
   /** @type {Map<string, {listeners: Set<StreamOptions>, stop: () => void}>} */
   const workspaceStreams = new Map();
@@ -504,6 +587,13 @@ export function createDataAccess(deps = {}) {
         readOnly: deps.readOnlyFiles === true,
         onUnauthorized: handleUnauthorized,
         onEvent: (frame) => {
+          const data = /** @type {any} */ (frame.data);
+          if (frame.event === "chat_stream_ready" && typeof data?.streamId === "string") {
+            const state = watchesFor(slug);
+            state.streamId = data.streamId;
+            state.revision = 0;
+            syncChatWatches(slug);
+          }
           for (const listener of listeners) {
             try {
               listener.onEvent?.(frame);
@@ -513,6 +603,7 @@ export function createDataAccess(deps = {}) {
           }
         },
         onReconnect: () => {
+          watchesFor(slug).streamId = null;
           void checkDaemonBuild();
           for (const listener of listeners) {
             try {
@@ -526,6 +617,7 @@ export function createDataAccess(deps = {}) {
           if (reason === "install-changed") reportDaemonChanged("install-changed");
         },
         onStatus: (status) => {
+          if (status === "down") watchesFor(slug).streamId = null;
           for (const listener of listeners) {
             try {
               listener.onStatus?.(status);
@@ -542,6 +634,12 @@ export function createDataAccess(deps = {}) {
       owned.listeners.delete(callbacks);
       if (owned.listeners.size === 0 && workspaceStreams.get(slug) === owned) {
         workspaceStreams.delete(slug);
+        const watchState = chatWatches.get(slug);
+        if (watchState) {
+          watchState.streamId = null;
+          clearTimeout(watchState.retry);
+        }
+        chatWatches.delete(slug);
         owned.stop();
       }
     };
@@ -549,6 +647,20 @@ export function createDataAccess(deps = {}) {
 
   return {
     getAgentStatus: () => requestJson("/api/agents/status"),
+    /** @param {string} provider @param {unknown} input */
+    beginAgentOAuth: (provider, input) =>
+      postJson(`/api/agents/providers/${encodeURIComponent(provider)}/oauth/begin`, input),
+    /** @param {string} provider @param {string} attemptId */
+    getAgentOAuth: (provider, attemptId) =>
+      requestJson(`/api/agents/providers/${encodeURIComponent(provider)}/oauth/${encodeURIComponent(attemptId)}`),
+    /** @param {string} provider @param {string} attemptId */
+    cancelAgentOAuth: (provider, attemptId) =>
+      postJson(`/api/agents/providers/${encodeURIComponent(provider)}/oauth/${encodeURIComponent(attemptId)}/cancel`),
+    /** @param {string} provider @param {unknown} input */
+    adoptAgentOAuth: (provider, input) =>
+      postJson(`/api/agents/providers/${encodeURIComponent(provider)}/oauth/adopt`, input),
+    /** @param {string} profileId @param {unknown} input */
+    acknowledgeAgentOAuthPlan: (profileId, input) => postJson(profilePath(profileId, "oauth-notice"), input),
     /** @param {unknown} input */
     setAgentExperimental: (input) => postJson("/api/agents/experimental", input),
     /** @param {string} slug @param {string} profileId */
@@ -650,14 +762,56 @@ export function createDataAccess(deps = {}) {
     /** The chat's journal as written, for the protocol log. @param {string} slug @param {string} id @param {number} [before] */
     getChatLog: (slug, id, before) => requestJson(chatPath(slug, id, "log") + (before ? `?before=${before}` : "")),
     /** @param {string} slug @param {string} id */
-    getChat: (slug, id, before = "") =>
-      requestJson(chatPath(slug, id) + (before ? `?before=${encodeURIComponent(before)}` : "")),
+    getChat: async (slug, id, before = "") =>
+      rememberChatScope(
+        slug,
+        id,
+        await requestJson(chatPath(slug, id) + (before ? `?before=${encodeURIComponent(before)}` : "")),
+      ),
+    /** @param {string} slug @param {string} id */
+    async readChatRecovery(slug, id) {
+      const key = await recoveryKey(slug, id);
+      const raw = storage?.getItem(key);
+      if (!raw) return null;
+      let record;
+      try {
+        record = JSON.parse(raw);
+      } catch {
+        throw new Error("The local draft recovery record needs attention.");
+      }
+      if (record?.version !== 1 || !record.draft || !Array.isArray(record.outbox))
+        throw new Error("The local draft recovery version is unsupported.");
+      return record;
+    },
+    /** @param {string} slug @param {string} id @param {any} record */
+    async writeChatRecovery(slug, id, record) {
+      const key = await recoveryKey(slug, id);
+      if (record?.version !== 1 || !record.draft || !Array.isArray(record.outbox))
+        throw new Error("Cannot preserve this draft recovery record.");
+      const encoded = JSON.stringify({
+        version: 1,
+        draft: record.draft,
+        outbox: record.outbox,
+        decisions: record.decisions ?? [],
+      });
+      if (encoded.length > 2_000_000)
+        throw new Error("This draft exceeds local recovery capacity. Keep it open and reduce its size.");
+      storage?.setItem(key, encoded);
+      if (storage?.getItem(key) !== encoded)
+        throw new Error("Local draft recovery could not be verified. Your draft has not been sent.");
+    },
+    /** @param {string} slug @param {string} id */
+    async clearChatRecovery(slug, id) {
+      storage?.removeItem(await recoveryKey(slug, id));
+    },
     /** @param {string} slug @param {string} id @param {unknown} input */
     changeChat: (slug, id, input) => postJson(chatPath(slug, id), input),
     /** @param {string} slug @param {string} id @param {unknown} input */
     saveChatDraft: (slug, id, input) => postJson(chatPath(slug, id, "draft"), input),
     /** @param {string} slug @param {string} id @param {unknown} input */
     sendChatTurn: (slug, id, input) => postJson(chatPath(slug, id, "turns"), input),
+    /** @param {string} slug @param {string} id @param {unknown} input */
+    editQueuedChatTurn: (slug, id, input) => postJson(chatPath(slug, id, "turns/edit"), input),
     /** @param {string} slug @param {string} id @param {unknown} input */
     answerChatDecision: (slug, id, input) => postJson(chatPath(slug, id, "decisions"), input),
     /** @param {string} slug @param {string} id @param {string} [turnId] */
@@ -680,38 +834,48 @@ export function createDataAccess(deps = {}) {
     /** @param {string} slug @param {string} id @param {{ onEvent?: StreamEventHandler, onReconnect?: () => void, onStatus?: (status: "down" | "up") => unknown }} [callbacks] */
     openChatStream(slug, id, callbacks = {}, before = "") {
       const abort = new AbortController();
-      let stopped = false,
-        loading = false,
-        pending = false,
-        attempt = 0;
+      const watches = watchesFor(slug);
+      let watch = watches.watches.get(id);
+      if (!watch) {
+        watch = { refs: 0, before };
+        watches.watches.set(id, watch);
+      }
+      watch.refs++;
+      const ownedWatch = watch;
+      let stopped = false;
+      let cursor = 0;
+      let initialized = false;
+      let loading = false;
+      let retries = 0;
       /** @type {ReturnType<typeof setTimeout> | undefined} */
       let retry;
+      /** @param {any} snapshot */
+      const snapshot = (snapshot) => {
+        if (stopped || (initialized && snapshot.revision < cursor)) return;
+        rememberChatScope(slug, id, snapshot);
+        cursor = snapshot.revision;
+        ownedWatch.cursor = cursor;
+        initialized = true;
+        callbacks.onEvent?.({ event: "chat_snapshot", data: snapshot });
+        callbacks.onStatus?.("up");
+      };
       const refresh = async () => {
-        if (stopped) return;
-        if (loading) {
-          pending = true;
-          return;
-        }
-        clearTimeout(retry);
+        if (stopped || loading) return;
         loading = true;
+        clearTimeout(retry);
         try {
-          do {
-            pending = false;
-            const data = await requestJson(
-              chatPath(slug, id) + (before ? `?before=${encodeURIComponent(before)}` : ""),
-              { signal: abort.signal },
-            );
-            attempt = 0;
-            if (!stopped) {
-              callbacks.onStatus?.("up");
-              callbacks.onEvent?.({ event: "chat_snapshot", data });
-            }
-          } while (pending && !stopped);
+          snapshot(
+            await requestJson(chatPath(slug, id) + (before ? `?before=${encodeURIComponent(before)}` : ""), {
+              signal: abort.signal,
+            }),
+          );
+          retries = 0;
+          syncChatWatches(slug);
         } catch (error) {
           if (!stopped) {
             callbacks.onStatus?.("down");
             if (!(error instanceof DataAccessError && [401, 403, 404, 410].includes(error.status)))
-              retry = setTimeout(() => void refresh(), computeBackoffMs(attempt++));
+              retry = setTimeout(() => void refresh(), computeBackoffMs(retries++));
           }
         } finally {
           loading = false;
@@ -719,19 +883,43 @@ export function createDataAccess(deps = {}) {
       };
       const stop = subscribeWorkspace(slug, {
         onEvent: (frame) => {
-          if (frame.event === "chats_changed" || frame.event === "snapshot") void refresh();
+          const data = /** @type {any} */ (frame.data);
+          if (data?.chatId !== id) return;
+          if (frame.event === "chat_snapshot") snapshot(data.snapshot);
+          if (frame.event === "chat_snapshot_ref") void refresh();
+          if (frame.event === "chat_unavailable") {
+            ownedWatch.unavailable = true;
+            callbacks.onStatus?.("down");
+            callbacks.onEvent?.(frame);
+            syncChatWatches(slug);
+          }
+          if (frame.event === "chat_event") {
+            const record = data.record;
+            if (!initialized || record.seq <= cursor) return;
+            if (record.seq !== cursor + 1) {
+              ownedWatch.cursor = undefined;
+              syncChatWatches(slug);
+              return;
+            }
+            cursor = record.seq;
+            ownedWatch.cursor = cursor;
+            callbacks.onEvent?.({ event: "chat_event", data: record });
+          }
         },
         onReconnect: () => {
           callbacks.onReconnect?.();
-          void refresh();
         },
-        onStatus: callbacks.onStatus,
+        onStatus: (status) => {
+          if (!ownedWatch.unavailable) callbacks.onStatus?.(status);
+        },
       });
       void refresh();
       return () => {
         stopped = true;
         clearTimeout(retry);
         abort.abort();
+        if (--ownedWatch.refs === 0) watches.watches.delete(id);
+        syncChatWatches(slug);
         stop();
       };
     },

@@ -330,6 +330,23 @@ requires explicit experimental acceptance and remains unqualified.
 - `glosa open --document <file>` opens one document with no file navigator. Its link also works in an
   open workspace tab: unsaved edits need a discard confirmation first, and cancelling keeps the draft.
 
+### Managed chat (experimental)
+
+Enable a provider in **Agents & accounts** before starting a managed chat. New messages queue while
+the current reply runs; edit or remove waiting messages without replacing your draft. Stop holds the
+queue. A failed or uncertain reply keeps its partial output and explains the available recovery action.
+Reopening a pane restores unsent work without sending it automatically.
+
+For Codex, **Continue with ChatGPT** adds a separate account using the public sign-in flow. The account
+must grant ChatGPT plan use before it can run a reply. **Using ChatGPT plan** and **Manage usage** show
+which billing route is active. Existing native account sign-in remains available; dictation keeps its
+separate API credential. Tokens stay in macOS Keychain or Linux Secret Service, with no plaintext
+fallback. A locked wallet must be unlocked before sign-in or credential cleanup can finish.
+
+The chat interface uses assistant-ui over glosa's local journal. Native executors remain selected;
+ACP translators and warm process reuse are disabled until their permission and process-lifetime
+qualification passes. Experimental activation does not establish live-provider or release acceptance.
+
 ### Dictation (optional)
 
 - **Settings → Dictation** accepts your OpenAI API key and explicit consent. Dictation starts off;

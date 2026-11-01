@@ -101,7 +101,8 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 // Existing receipts and chats_changed frames retain their shapes; older pages render unknown events safely.
 // v2.0: replace dictation session grants with consent settings and bounded audio transcription.
 // v2.1 (#489): existing-workspace binding and canonical workspace identity in status.
-export const CONTRACT_VERSION = "2.1";
+// v2.2: multiplexed revisioned chat watches, queued revisions and optional foreground OAuth.
+export const CONTRACT_VERSION = "2.2";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };
