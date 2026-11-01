@@ -20,6 +20,13 @@ const REFUSED = new Set([
   "account-mismatch",
 ]);
 const copy = (value) => JSON.parse(JSON.stringify(value));
+const payloadSignature = (value) =>
+  JSON.stringify({
+    text: value?.text ?? "",
+    references: value?.references ?? [],
+    attachments: value?.attachments ?? [],
+    retryOfTurnId: value?.retryOfTurnId ?? null,
+  });
 
 /** Apply a contiguous journal frame. A gap or unsupported change requires an authoritative read. */
 export function applyChatEvent(state, record) {
@@ -336,7 +343,26 @@ export function createChatStore(dataAccess, slug, chatId) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => void serialize(saveDraftNow).catch(() => {}), 500);
   }
-  async function ensureModels() {
+  const authority = () => ({ provider: chat.provider, profileId: chat.profileId, configRevision: chat.configRevision });
+  const hasAuthority = (selected) =>
+    selected &&
+    selected.provider === chat.provider &&
+    selected.profileId === chat.profileId &&
+    selected.configRevision === chat.configRevision;
+  const requireAuthority = (selected) => {
+    if (!hasAuthority(selected))
+      throw Object.assign(
+        new Error("The account or settings changed. Review this message and the selected account, then send again."),
+        { refused: true, authorityChanged: true },
+      );
+  };
+  const draftPayload = () => ({
+    text,
+    references,
+    attachments,
+    ...(retryOfTurnId ? { retryOfTurnId } : {}),
+  });
+  async function ensureModels(selected = authority()) {
     if (catalog?.capabilities?.[chat.profileId]?.models?.length || !dataAccess.discoverAgentModels) return true;
     checking = true;
     tell("Checking which models this account offers…");
@@ -345,6 +371,7 @@ export function createChatStore(dataAccess, slug, chatId) {
       if (disposed) return false;
       catalog = await dataAccess.getAgentStatus();
       if (disposed) return false;
+      requireAuthority(selected);
       const model =
         catalog.capabilities?.[chat.profileId]?.models?.find((m) => m.id === chat.settings.model) ??
         catalog.capabilities?.[chat.profileId]?.models?.[0];
@@ -357,6 +384,9 @@ export function createChatStore(dataAccess, slug, chatId) {
           settings: { model: model.id, effort, permissionMode: chat.settings.permissionMode },
         });
         await refresh();
+        // Model discovery may fill in the first model, but cannot adopt another window's account or settings.
+        requireAuthority({ ...selected, configRevision: selected.configRevision + 1 });
+        selected.configRevision = chat.configRevision;
       }
       notice = "";
       return true;
@@ -397,7 +427,7 @@ export function createChatStore(dataAccess, slug, chatId) {
       // Save recovery immediately too. Failure remains visible and sending stays loss-safe.
       void persist().catch(fail);
     },
-    async replaceDraft(message, retrySource = null) {
+    async replaceDraft(message, retrySource = /** @type {string | null} */ (null)) {
       text = message.text ?? "";
       retryOfTurnId = retrySource;
       attachments = [...(message.attachments ?? [])];
@@ -414,13 +444,9 @@ export function createChatStore(dataAccess, slug, chatId) {
     async submit() {
       if (!chat || connection === "unavailable" || changing || uploading || checking || chat.archived || !text.trim())
         return;
-      const submitted = {
-        text,
-        references: [...references],
-        attachments: [...attachments],
-        ...(retryOfTurnId ? { retryOfTurnId } : {}),
-      };
-      const signature = JSON.stringify(submitted);
+      const selectedAuthority = authority();
+      const submitted = copy(draftPayload());
+      const signature = payloadSignature(submitted);
       if (preparing.has(signature)) return;
       const profile = catalog?.profiles?.find((p) => p.id === chat.profileId);
       const available = catalog?.providers?.find((p) => p.id === chat.provider)?.available ?? catalog?.available;
@@ -438,7 +464,10 @@ export function createChatStore(dataAccess, slug, chatId) {
         return;
       }
       preparing.add(signature);
-      if (!catalog?.capabilities?.[chat.profileId]?.models?.length && (!(await ensureModels()) || disposed)) {
+      if (
+        !catalog?.capabilities?.[chat.profileId]?.models?.length &&
+        (!(await ensureModels(selectedAuthority)) || disposed)
+      ) {
         preparing.delete(signature);
         return;
       }
@@ -452,6 +481,7 @@ export function createChatStore(dataAccess, slug, chatId) {
       const entry = {
         id: crypto.randomUUID(),
         ...submitted,
+        authority: selectedAuthority,
         state: "sending",
         intent: null,
         unsaved: true,
@@ -466,7 +496,7 @@ export function createChatStore(dataAccess, slug, chatId) {
         return;
       }
       // The recovery write above must finish before the composer gives up its bytes.
-      if (text === entry.text) {
+      if (payloadSignature(draftPayload()) === signature) {
         text = "";
         retryOfTurnId = null;
         references = [];
@@ -490,7 +520,9 @@ export function createChatStore(dataAccess, slug, chatId) {
           while (!disposed && outbox[0]?.state === "sending") {
             const entry = outbox[0];
             let saveFailed = true;
+            const retryingIntent = !!entry.intent;
             try {
+              if (!retryingIntent) requireAuthority(entry.authority);
               if (entry.unsaved) {
                 const saved = await dataAccess.saveChatDraft(slug, chatId, {
                   requestId: crypto.randomUUID(),
@@ -504,10 +536,11 @@ export function createChatStore(dataAccess, slug, chatId) {
                 entry.unsaved = false;
               }
               saveFailed = false;
+              if (!retryingIntent) requireAuthority(entry.authority);
               entry.intent ??= {
                 requestId: crypto.randomUUID(),
                 turnId: entry.id,
-                configRevision: chat.configRevision,
+                configRevision: entry.authority.configRevision,
                 draftRevision: baseRevision,
                 text: entry.text,
                 references: entry.references,
@@ -515,6 +548,7 @@ export function createChatStore(dataAccess, slug, chatId) {
                 ...(entry.retryOfTurnId ? { retryOfTurnId: entry.retryOfTurnId } : {}),
               };
               await persist(); // The exact receipt survives a crash after the daemon accepts it.
+              if (!retryingIntent) requireAuthority(entry.authority);
               await dataAccess.sendChatTurn(slug, chatId, entry.intent);
               baseRevision = entry.intent.draftRevision + 1;
               lastDraft = "";
@@ -538,8 +572,16 @@ export function createChatStore(dataAccess, slug, chatId) {
               const refused = !entry.intent || problem.refused || REFUSED.has(refusal);
               if (refused) entry.intent = null;
               entry.error = problem.message;
+              entry.authorityChanged = !!problem.authorityChanged;
               for (const queued of outbox) queued.state = "failed";
-              if (refused && outbox.length === 1 && !text.trim() && !attachments.length) {
+              if (
+                refused &&
+                outbox.length === 1 &&
+                !text.trim() &&
+                !attachments.length &&
+                !references.length &&
+                !retryOfTurnId
+              ) {
                 outbox.shift();
                 text = entry.text;
                 retryOfTurnId = entry.retryOfTurnId ?? null;
@@ -548,7 +590,10 @@ export function createChatStore(dataAccess, slug, chatId) {
                 dirty = true;
                 notice = `${problem.message} Your message has been kept.`;
               } else {
-                entry.conflict = !entry.intent && (saveFailed || ["stale-chat", "stale-draft"].includes(refusal));
+                entry.conflict =
+                  !entry.authorityChanged &&
+                  !entry.intent &&
+                  (saveFailed || ["stale-chat", "stale-draft"].includes(refusal));
                 notice = `${problem.message}${entry.conflict ? " Retry sends it as it is and replaces the draft saved elsewhere." : refused ? " Your message has been kept." : " Retry sends the same request; it will not create a duplicate."}`;
               }
               error = problem;
@@ -578,6 +623,17 @@ export function createChatStore(dataAccess, slug, chatId) {
       await persist();
       publish();
       return store.drain();
+    },
+    async restoreOutboxDraft(id) {
+      await refresh();
+      const entry = outbox.find((item) => item.id === id);
+      if (!entry) throw new Error("That message was sent after all. Check its status in the conversation.");
+      if (entry.intent) throw new Error("Check this message's send status before restoring its draft.");
+      await store.replaceDraft(entry, entry.retryOfTurnId ?? null);
+      const index = outbox.indexOf(entry);
+      if (index >= 0) outbox.splice(index, 1);
+      await persist();
+      tell("The message is in your draft. Review it and the selected account, then send to start a new attempt.");
     },
     async removeQueued(id) {
       const entry = outbox.find((item) => item.id === id);
@@ -630,14 +686,25 @@ export function createChatStore(dataAccess, slug, chatId) {
       await dataAccess.resumeChatTurn(slug, chatId, id);
       await refresh();
     },
-    async stop() {
+    async stop(turnId) {
       if (stopping) return;
+      const runtime = chat.runtime;
+      const runtimeTurnId =
+        runtime?.turnId ?? chat.turns.findLast((turn) => turn.attemptId && turn.attemptId === runtime?.runId)?.id;
+      const uncertain = chat.turns.findLast(
+        (turn) => turn.status === "outcome_unknown" || turn.failure?.dispatchCertainty === "unknown",
+      );
+      const targetId =
+        turnId ??
+        snapshot.queue.active?.id ??
+        (["unknown", "stopping"].includes(runtime?.state) ? (runtimeTurnId ?? uncertain?.id) : snapshot.queue.head?.id);
+      if (!targetId) throw new Error("Refresh status before retrying Stop: the running message is not identified.");
+      const target = chat.turns.find((turn) => turn.id === targetId);
+      if (target && WAITING.has(target.status) && !target.started) kept.add(target.id);
       stopping = true;
       publish();
-      const target = snapshot.queue.active ?? snapshot.queue.head;
-      if (target && !target.started) kept.add(target.id);
       try {
-        await dataAccess.stopChat(slug, chatId, target?.id);
+        await dataAccess.stopChat(slug, chatId, targetId);
         await refresh();
       } finally {
         stopping = false;
@@ -790,7 +857,8 @@ export function createChatStore(dataAccess, slug, chatId) {
     if (recovered?.version === 1) {
       const saved = recovered.draft;
       const consumed = recovered.outbox?.some(
-        (entry) => entry.text === saved?.text && chat.turns.some((turn) => turn.id === entry.id),
+        (entry) =>
+          payloadSignature(entry) === payloadSignature(saved) && chat.turns.some((turn) => turn.id === entry.id),
       );
       if (saved?.retryOfTurnId && !consumed && (saved.dirty || saved.text === chat.draft))
         retryOfTurnId = saved.retryOfTurnId;
@@ -806,7 +874,12 @@ export function createChatStore(dataAccess, slug, chatId) {
           outbox.push({
             ...entry,
             state: "failed",
-            error: entry.error ?? "Recovered after this window closed. Check status, then retry or remove.",
+            authorityChanged: !entry.intent && !hasAuthority(entry.authority),
+            error:
+              entry.error ??
+              (!entry.intent && !hasAuthority(entry.authority)
+                ? "Review this message in your draft and check the selected account before sending."
+                : "Recovered after this window closed. Check status, then retry or remove."),
           });
       for (const [id, intent] of recovered.decisions ?? []) decisions.set(id, intent);
       if (dirty || outbox.length) notice = "Your unsent work was restored. Nothing has been sent automatically.";

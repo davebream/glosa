@@ -32,7 +32,7 @@ export const ACP_QUALIFICATIONS: Readonly<Record<"claude-code" | "codex", AcpQua
     nativeSdk: "0.3.312",
     evidence: {},
     blockers: [
-      "No supported per-attempt MCP authority replacement and inventory acknowledgement.",
+      "The ACP wire does not acknowledge effective per-attempt MCP authority and exact tool inventory.",
       "Internal native replacement has no generation fence visible to the client.",
       "Helper inference and final native credential inheritance remain unqualified.",
     ],
@@ -44,7 +44,7 @@ export const ACP_QUALIFICATIONS: Readonly<Record<"claude-code" | "codex", AcpQua
     native: "0.165.0",
     evidence: {},
     blockers: [
-      "No supported per-attempt MCP authority replacement and inventory acknowledgement.",
+      "MCP startup waiting does not acknowledge effective per-attempt authority and exact tool inventory.",
       "Internal app-server replacement has no generation fence visible to the client.",
       "AIR failure negotiation, helper suppression and descendant cleanup need integrated qualification.",
     ],

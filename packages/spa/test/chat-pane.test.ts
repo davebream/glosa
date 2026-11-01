@@ -174,33 +174,138 @@ test("subscription choices stay on the chat, preserve its draft and recover from
   f.pane.destroy();
 });
 
-test("an unresolved send remains retryable after the selected account is disabled", async () => {
+test("an unresolved send retains its exact intent after the selected account is disabled or changed", async () => {
+  for (const changeAccount of [false, true]) {
+    const f = fixture();
+    await f.pane.ready;
+    const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+    draft.value = "Preserve this request";
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    await flush();
+    const send = f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement;
+    send.click();
+    await flush();
+    f.catalog.profiles[0]!.enabled = false;
+    if (changeAccount) {
+      f.state.profileId = "b";
+      f.state.provider = "codex";
+      f.state.configRevision++;
+      await f.event({ seq: ++f.state.revision, data: { type: "changed", provider: "codex", profileId: "b" } });
+    }
+    const refresh = [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!;
+    refresh.click();
+    await flush();
+    // Once submission is ambiguous, only the original receipt can be retried, even after an account change.
+    expect(draft.value).toBe("");
+    const row = f.host.querySelector(".glosa-chat-tray li")!;
+    expect(row.textContent).toBe("Not sentPreserve this requestRetryEditRemoveConnection lost");
+    expect(row.querySelector(".glosa-chat-tray-why")!.textContent).toBe("Connection lost");
+    (row.querySelector('[aria-label="Retry sending message"]') as HTMLButtonElement).click();
+    await flush();
+    expect(f.sends).toHaveLength(2);
+    expect(f.sends[1]).toEqual(f.sends[0]);
+    expect(f.sends[1].configRevision).toBe(1);
+    expect(f.host.querySelector(".glosa-chat-tray-words")!.textContent).toBe("Preserve this request");
+    f.pane.destroy();
+  }
+});
+
+test("an account change while a local send is persisting holds its original payload for explicit draft review", async () => {
+  for (const pauseAt of ["draft save", "intent recovery"]) {
+    const f = fixture();
+    const attachment = { name: "brief.md", mime: "text/markdown", hash: "a".repeat(64), size: 5 };
+    f.state.draft = "Keep the original account";
+    f.state.draftAttachments = [attachment];
+    let release!: () => void;
+    let paused = false;
+    let recovery: any;
+    const barrier = () =>
+      new Promise<void>((resolve) => {
+        paused = true;
+        release = resolve;
+      });
+    const save = f.dataAccess.saveChatDraft;
+    f.dataAccess.saveChatDraft = async (...args: any[]) => {
+      if (pauseAt === "draft save") await barrier();
+      return save(...args);
+    };
+    f.dataAccess.writeChatRecovery = async (_slug: string, _id: string, value: any) => {
+      recovery = structuredClone(value);
+      if (pauseAt === "intent recovery" && value.outbox[0]?.intent && !paused) await barrier();
+    };
+    await f.pane.ready;
+    (f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).click();
+    await flush();
+    expect(paused).toBe(true);
+    expect(recovery.outbox[0].authority).toEqual({ provider: "claude-code", profileId: "a", configRevision: 1 });
+    const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+    draft.value = "A newer draft";
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    Object.assign(f.state, { profileId: "b", provider: "codex", configRevision: 2 });
+    await f.event({ seq: ++f.state.revision, data: { type: "changed", provider: "codex", profileId: "b" } });
+    release();
+    await flush();
+    expect(f.sends).toHaveLength(0);
+    expect(draft.value).toBe("A newer draft");
+    expect(recovery.outbox[0]).toMatchObject({
+      text: "Keep the original account",
+      attachments: [attachment],
+      authority: { provider: "claude-code", profileId: "a", configRevision: 1 },
+      authorityChanged: true,
+      intent: null,
+    });
+    expect(f.host.querySelector('[aria-label="Retry sending message"]')).toBeNull();
+    expect(f.host.querySelector('[aria-label="Use waiting message as draft"]')).not.toBeNull();
+    // The authority survives a window close, and neither opening nor Retry can bind it to the new account.
+    f.pane.destroy();
+    f.dataAccess.readChatRecovery = async () => structuredClone(recovery);
+    f.dataAccess.saveChatDraft = save;
+    const store = createChatStore(f.dataAccess, "ws", "recovered-account-send");
+    try {
+      await store.ready;
+      await store.retryOutbox();
+      expect(f.sends).toHaveLength(0);
+      expect(store.getSnapshot().draft.text).toBe("A newer draft");
+      const entry = store.getSnapshot().outbox[0];
+      expect(entry.authority).toEqual({ provider: "claude-code", profileId: "a", configRevision: 1 });
+      await store.restoreOutboxDraft(entry.id);
+      expect(store.getSnapshot().draft.text).toBe("Keep the original account");
+      expect(store.getSnapshot().draft.attachments).toEqual([attachment]);
+      expect(f.sends).toHaveLength(0);
+      await store.submit();
+      expect(f.sends).toHaveLength(1);
+      expect(f.sends[0]).toMatchObject({
+        text: "Keep the original account",
+        attachments: [attachment],
+        configRevision: 2,
+      });
+    } finally {
+      await store.dispose();
+    }
+  }
+});
+
+test("a recovered local message without captured account authority requires draft review before a new send", async () => {
   const f = fixture();
+  f.dataAccess.readChatRecovery = async () => ({
+    version: 1,
+    draft: { text: "A newer draft", attachments: [], references: [], baseRevision: 0, dirty: true },
+    outbox: [
+      { id: "legacy", text: "Legacy unsent message", references: [], attachments: [], unsaved: true, intent: null },
+    ],
+  });
   await f.pane.ready;
-  const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
-  draft.value = "Preserve this request";
-  draft.dispatchEvent(new Event("input", { bubbles: true }));
   await flush();
-  const send = f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement;
-  send.click();
+  expect(f.sends).toHaveLength(0);
+  expect(f.saves).toHaveLength(0);
+  expect(f.host.querySelector('[aria-label="Retry sending message"]')).toBeNull();
+  (f.host.querySelector('[aria-label="Use waiting message as draft"]') as HTMLButtonElement).click();
   await flush();
-  f.catalog.profiles[0]!.enabled = false;
-  const refresh = [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Refresh accounts")!;
-  refresh.click();
+  expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("Legacy unsent message");
+  expect(f.sends).toHaveLength(0);
+  (f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).click();
   await flush();
-  // The message left the composer when it was sent. Its answer was lost, so it waits in the tray
-  // as not sent, and Retry repeats the same request whatever happened to the account since.
-  expect(draft.value).toBe("");
-  const row = f.host.querySelector(".glosa-chat-tray li")!;
-  // The row says why, under the words, instead of hiding the reason in a tooltip.
-  expect(row.textContent).toBe("Not sentPreserve this requestRetryEditRemoveConnection lost");
-  expect(row.querySelector(".glosa-chat-tray-why")!.textContent).toBe("Connection lost");
-  (row.querySelector('[aria-label="Retry sending message"]') as HTMLButtonElement).click();
-  await flush();
-  expect(f.sends).toHaveLength(2);
-  expect(f.sends[1]).toEqual(f.sends[0]);
-  expect(f.host.querySelector(".glosa-chat-tray-words")!.textContent).toBe("Preserve this request");
-  f.pane.destroy();
+  expect(f.sends[0]).toMatchObject({ text: "Legacy unsent message", configRevision: 1 });
 });
 
 test("with no model list yet, the first send asks the agent for its models and then goes", async () => {
@@ -338,7 +443,7 @@ function fixture({ models, ...options }: { sourceChatId?: string; models?: any[]
     draftRevision: 0,
     draft: "",
     draftAttachments: [] as { name: string; mime: string; hash: string; size: number }[],
-    runtime: undefined as { state: string } | undefined,
+    runtime: undefined as { state: string; runId?: string; turnId?: string; attemptId?: string } | undefined,
     usage: undefined as Record<string, string | number | null> | undefined,
     archived: false,
     settings: { model: "model", effort: "high", permissionMode: "default" },
@@ -1034,25 +1139,61 @@ test("a queued message can be cancelled without stopping the current turn", asyn
   f.pane.destroy();
 });
 
-test("uncertain native cleanup retains Retry stop after the turn has ended", async () => {
-  const f = fixture();
-  await f.pane.ready;
-  f.state.turns.push({ id: "ended", text: "First", status: "outcome_unknown" });
-  f.state.runtime = { state: "unknown" };
-  let stops = 0;
-  f.dataAccess.stopChat = () => {
-    stops++;
-    f.state.runtime = { state: "stopped" };
-  };
-  f.state.revision++;
-  await f.snapshot();
-  const stop = [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Retry stop")!;
-  expect(stop.hidden).toBe(false);
-  stop.click();
-  await flush();
-  expect(stops).toBe(1);
-  expect(stop.hidden).toBe(true);
-  f.pane.destroy();
+test("uncertain native cleanup retains Retry stop with an explicit ended turn while held messages survive", async () => {
+  for (const runtimeIdentity of [true, false]) {
+    const f = fixture();
+    await f.pane.ready;
+    f.state.turns.push(
+      { id: "ended", ...(runtimeIdentity ? { attemptId: "attempt" } : {}), text: "First", status: "outcome_unknown" },
+      { id: "held-b", text: "Second", status: "held" },
+      { id: "held-c", text: "Third", status: "held" },
+    );
+    f.state.runtime = { state: "unknown", runId: "attempt", ...(runtimeIdentity ? { turnId: "ended" } : {}) };
+    const stops: (string | undefined)[] = [];
+    f.dataAccess.stopChat = (_slug: string, _id: string, turnId?: string) => {
+      stops.push(turnId);
+      // The unscoped API cancels waiting messages: this fixture makes a missing identity observable.
+      if (!turnId) for (const turn of f.state.turns) if (turn.status === "held") turn.status = "cancelled";
+      if (stops.length === 1) throw new Error("The previous process has not been independently confirmed stopped");
+      f.state.runtime = { state: "stopped" };
+    };
+    f.state.revision++;
+    await f.snapshot();
+    const resultStop = [...f.host.querySelectorAll<HTMLButtonElement>(".glosa-chat-turn-result button")].find(
+      (button) => button.textContent === "Retry stop",
+    )!;
+    expect(resultStop.hidden).toBe(false);
+    resultStop.click();
+    await flush();
+    expect(stops).toEqual(["ended"]);
+    expect(resultStop.hidden).toBe(false);
+    expect(f.state.turns.slice(1).map((turn) => turn.status)).toEqual(["held", "held"]);
+    const composerStop = f.host.querySelector(".glosa-chat-stop") as HTMLButtonElement;
+    expect(composerStop.textContent).toBe("Retry stop");
+    composerStop.click();
+    await flush();
+    expect(stops).toEqual(["ended", "ended"]);
+    expect(resultStop.hidden).toBe(true);
+    expect(composerStop.hidden).toBe(true);
+    expect(f.state.turns.slice(1).map((turn) => turn.status)).toEqual(["held", "held"]);
+    expect(f.host.querySelectorAll(".glosa-chat-tray li")).toHaveLength(2);
+    // Continuing a newer attempt never rebinds the historical action to that attempt.
+    f.state.turns[1] = { id: "held-b", text: "Second", status: "running", attemptId: "new-attempt" };
+    for (const state of ["connected", "unknown"]) {
+      f.state.runtime = { state, turnId: "held-b", attemptId: "new-attempt", runId: "new-attempt" };
+      f.state.revision++;
+      await f.snapshot();
+      const oldStop = [...f.host.querySelectorAll<HTMLButtonElement>(".glosa-chat-turn-result button")].find(
+        (button) => button.textContent === "Retry stop",
+      )!;
+      expect(oldStop.hidden).toBe(true);
+      oldStop.click();
+      await flush();
+      expect(stops.at(-1)).toBe("ended");
+      expect(f.state.turns[1].status).toBe("running");
+    }
+    f.pane.destroy();
+  }
 });
 
 test("held messages require Continue and cancelled messages can restore a draft without sending", async () => {
@@ -1849,6 +1990,67 @@ test("recovery storage finishes before a submitted message leaves the composer o
   expect(f.sends[0].text).toBe("Keep these exact words");
 });
 
+test("complete newer attachment, reference and retry edits survive a paused send recovery write", async () => {
+  for (const edit of ["remove attachment", "add attachment", "reference", "retry"]) {
+    const f = fixture();
+    const attachment = { name: "brief.md", mime: "text/markdown", hash: "a".repeat(64), size: 5 };
+    const extra = { name: "next.md", mime: "text/markdown", hash: "b".repeat(64), size: 4 };
+    const originalReference = { kind: "file", id: "brief.md", text: "@brief.md", start: 5, end: 14 };
+    const nextReference = { ...originalReference, id: "replacement.md" };
+    f.state.draft = "Read @brief.md";
+    f.state.draftAttachments = [attachment];
+    Object.assign(f.state, { draftReferences: [originalReference] });
+    await f.pane.ready;
+    let release!: () => void;
+    let paused = false;
+    f.dataAccess.writeChatRecovery = async (_slug: string, _id: string, value: any) => {
+      if (value.outbox.length && !paused) {
+        paused = true;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+    };
+    f.dataAccess.uploadChatAttachment = async () => extra;
+    const store = createChatStore(f.dataAccess, "ws", `newer-${edit}`);
+    try {
+      await store.ready;
+      const sending = store.submit();
+      await flush();
+      expect(paused).toBe(true);
+      expect(f.sends).toHaveLength(0);
+      expect(f.saves).toHaveLength(0);
+      let editing: Promise<void> | undefined;
+      if (edit === "remove attachment") store.removeAttachment(attachment.hash);
+      else if (edit === "add attachment") editing = store.attach([new File(["next"], extra.name)]);
+      else if (edit === "reference") store.setDraft(f.state.draft, [nextReference]);
+      else
+        editing = store.replaceDraft(
+          { text: f.state.draft, attachments: [attachment], references: [originalReference] },
+          "previous-turn",
+        );
+      await flush();
+      release();
+      await sending;
+      await editing;
+      expect(f.sends[0]).toMatchObject({
+        text: "Read @brief.md",
+        attachments: [attachment],
+        references: [originalReference],
+      });
+      expect(f.sends[0].retryOfTurnId).toBeUndefined();
+      expect(store.getSnapshot().draft).toMatchObject({
+        text: "Read @brief.md",
+        attachments: edit === "remove attachment" ? [] : edit === "add attachment" ? [attachment, extra] : [attachment],
+        references: edit === "reference" ? [nextReference] : [originalReference],
+        retryOfTurnId: edit === "retry" ? "previous-turn" : null,
+      });
+    } finally {
+      await store.dispose();
+    }
+  }
+});
+
 test("a recovery storage refusal keeps text and attachments editable and does not send", async () => {
   const f = fixture();
   const attachment = { name: "brief.md", mime: "text/markdown", hash: "a".repeat(64), size: 5 };
@@ -1905,31 +2107,47 @@ test("reopening restores an ambiguous send and draft without posting until the p
   expect(f.sends).toEqual([intent]);
 });
 
-test("a recovered message already acknowledged by the journal is reconciled without restoring its consumed draft", async () => {
-  const f = fixture();
-  f.state.turns.push({ id: "known", text: "Already accepted", status: "completed" });
-  f.dataAccess.readChatRecovery = async () => ({
-    version: 1,
-    draft: { text: "Already accepted", attachments: [], references: [], baseRevision: 0, dirty: true },
-    outbox: [
-      {
-        id: "known",
+test("journal acknowledgement consumes only the exact recovered payload and preserves newer draft edits", async () => {
+  for (const newer of ["none", "attachment", "reference", "retry"]) {
+    const f = fixture();
+    const attachment = { name: "next.md", mime: "text/markdown", hash: "b".repeat(64), size: 4 };
+    const reference = { kind: "file", id: "next.md", text: "@next.md", start: 0, end: 8 };
+    f.state.turns.push({ id: "known", text: "Already accepted", status: "completed" });
+    f.dataAccess.readChatRecovery = async () => ({
+      version: 1,
+      draft: {
         text: "Already accepted",
-        references: [],
-        attachments: [],
-        state: "sending",
-        intent: { requestId: "known-request", turnId: "known" },
-        unsaved: false,
+        attachments: newer === "attachment" ? [attachment] : [],
+        references: newer === "reference" ? [reference] : [],
+        retryOfTurnId: newer === "retry" ? "earlier-turn" : null,
+        baseRevision: 0,
+        dirty: true,
       },
-    ],
-  });
-  await f.pane.ready;
-  await flush();
-  expect(f.sends).toHaveLength(0);
-  expect(f.saves).toHaveLength(0);
-  expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("");
-  expect(f.host.querySelectorAll(".glosa-chat-tray li")).toHaveLength(0);
-  expect(f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')).toHaveLength(1);
+      outbox: [
+        {
+          id: "known",
+          text: "Already accepted",
+          references: [],
+          attachments: [],
+          state: "sending",
+          intent: { requestId: "known-request", turnId: "known" },
+          unsaved: false,
+        },
+      ],
+    });
+    await f.pane.ready;
+    await flush();
+    expect(f.sends).toHaveLength(0);
+    expect(f.saves).toHaveLength(0);
+    expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe(
+      newer === "none" ? "" : "Already accepted",
+    );
+    expect(f.host.querySelectorAll(".glosa-chat-tray li")).toHaveLength(0);
+    expect(f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')).toHaveLength(1);
+    if (newer === "attachment") expect(f.host.querySelector('[aria-label="Remove next.md"]')).not.toBeNull();
+    if (newer === "retry") expect(f.host.querySelector(".glosa-chat-retry-source")).not.toBeNull();
+    f.pane.destroy();
+  }
 });
 
 test("a streamed acknowledgement before the HTTP response cannot remove the following local message", async () => {

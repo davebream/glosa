@@ -1665,3 +1665,9 @@ without blocking journal commits and reconnect replays durable cursors.
 It edits only never-dispatched queued/held work. A revision or dispatch race returns a visible conflict;
 the client preserves the edited bytes locally. Browser draft recovery is installation, workspace
 registration/epoch and chat scoped, contains no credentials, and never submits on reopening.
+
+A local send captures the selected account and configuration revision when the person submits it,
+before awaiting draft persistence. A later account or configuration change cannot rebind that intent;
+the client retains the payload and requires explicit recovery. An uncertain HTTP retry retains the
+exact original request ID and payload. Clearing the composer after local recovery persistence compares
+the complete captured draft, including attachments, references and retry linkage, so newer edits remain editable.

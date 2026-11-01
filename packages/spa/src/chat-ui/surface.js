@@ -152,6 +152,13 @@ function TurnEnd({ turn, parts, store, onSettings, runtime, oauth }) {
   const failure = turn.failure;
   const unknown = turn.status === "outcome_unknown" || failure?.dispatchCertainty === "unknown";
   const failed = turn.status === "failed" || unknown;
+  const ownsCleanup =
+    ["unknown", "stopping"].includes(runtime?.state) &&
+    (runtime.turnId
+      ? runtime.turnId === turn.id
+      : runtime.attemptId
+        ? runtime.attemptId === turn.attemptId
+        : !turn.attemptId || !runtime.runId || runtime.runId === turn.attemptId);
   const label = unknown
     ? "Outcome not confirmed"
     : turn.status === "cancelled"
@@ -192,8 +199,8 @@ function TurnEnd({ turn, parts, store, onSettings, runtime, oauth }) {
                   "button",
                   {
                     type: "button",
-                    hidden: runtime?.state === "stopped",
-                    onClick: () => void store.stop().catch(store.fail),
+                    hidden: !ownsCleanup,
+                    onClick: () => void store.stop(turn.id).catch(store.fail),
                   },
                   "Retry stop",
                 )
@@ -414,10 +421,14 @@ function QueueItem({ item, store }) {
               type: "button",
               className: "glosa-chat-verb",
               disabled: busy,
-              "aria-label": "Retry sending message",
-              onClick: () => void run(() => store.retryOutbox()),
+              "aria-label": item.entry?.authorityChanged ? "Use waiting message as draft" : "Retry sending message",
+              title: item.entry?.authorityChanged ? "Replaces your current draft for review before sending" : undefined,
+              onClick: () =>
+                void run(() =>
+                  item.entry?.authorityChanged ? store.restoreOutboxDraft(item.id) : store.retryOutbox(),
+                ),
             },
-            "Retry",
+            item.entry?.authorityChanged ? "Use as draft" : "Retry",
           )
         : null,
       item.kind === "held"

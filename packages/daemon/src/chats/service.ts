@@ -381,8 +381,8 @@ export class ManagedChatService {
   readonly store: AgentStore;
   private readonly runs = new Map<string, LiveRun>();
   private readonly ready = new Set<string>();
-  /** The waiting turn a person asked to send next, per chat. In memory only: waiting turns are held
-   * after a restart, so the choice has nothing left to order. */
+  /** The waiting turn a person asked to send next, per chat. In memory only: eligible recovered
+   * work resumes FIFO, while a queue held for review still needs explicit continuation. */
   private readonly sendNext = new Map<string, string>();
   private readonly fencedWorkspaces = new Set<string>();
   private management?: LoginOperation;
@@ -480,14 +480,12 @@ export class ManagedChatService {
       if (cached) this.modelCatalog.set(profile.id, cached);
     }
     // Recovery never starts a native process, probes an account, or replays executable input here.
-    // A message that never reached an agent is still the person's standing instruction: it stays
-    // queued and goes once the daemon is serving (`setMcpOrigin` pumps). A turn that was already
-    // with the agent is uncertain and is never resent.
+    // A never-dispatched message remains the person's instruction unless an uncertain outcome or
+    // explicit hold requires review. A turn that was with the agent is never resent.
     for (const state of this.store.all()) {
       const log = this.store.chat(state.id);
-      for (const turn of state.turns) {
-        if (["accepted", "queued"].includes(turn.status)) this.ready.add(state.id);
-        else if (["dispatching", "running", "waiting", "stopping"].includes(turn.status))
+      for (const turn of state.turns)
+        if (["dispatching", "running", "waiting", "stopping"].includes(turn.status))
           log.append({
             type: "turn_status",
             turnId: turn.id,
@@ -499,6 +497,39 @@ export class ManagedChatService {
               dispatchCertainty: "unknown",
             }),
           });
+      const unresolved = new Set(
+        log.view.turns.filter((turn) => ["held", "outcome_unknown"].includes(turn.status)).map((turn) => turn.id),
+      );
+      let reviewAt = 0,
+        continuedAt = 0;
+      for (const record of log.journal.records) {
+        const event = record.data;
+        if (event.type === "reauthorized") continuedAt = record.seq;
+        else if (
+          event.type === "turn_status" &&
+          unresolved.has(event.turnId) &&
+          ["held", "outcome_unknown"].includes(event.status)
+        )
+          reviewAt = record.seq;
+      }
+      // An explicit continuation after an older hold is durable authority. A freshly recovered
+      // uncertain attempt appends a later barrier, including when Send now reordered the queue.
+      const hold = reviewAt > continuedAt;
+      for (const turn of log.view.turns) {
+        if (!["accepted", "queued"].includes(turn.status)) continue;
+        if (hold)
+          log.append({
+            type: "turn_status",
+            turnId: turn.id,
+            status: "held",
+            error: "The previous turn did not complete. Continue explicitly after reviewing its outcome.",
+          });
+        else {
+          // The accepted turn and receipt share a commit; queue admission is a later append. A
+          // crash between them must recover the accepted intent without changing its receipt.
+          if (turn.status === "accepted") log.append({ type: "turn_status", turnId: turn.id, status: "queued" });
+          this.ready.add(state.id);
+        }
       }
       for (const decision of state.decisions)
         if (["pending", "reserved"].includes(decision.status))
@@ -2758,7 +2789,37 @@ export class ManagedChatService {
   }
   async stop(workspace: ChatWorkspace, chatId: string, turnId?: string): Promise<void> {
     const log = this.chat(workspace, chatId),
-      run = this.runs.get(chatId);
+      run = this.runs.get(chatId),
+      runtime = log.state.runtime,
+      target = turnId ? log.turn(turnId) : undefined;
+    // Older journals have no turn/attempt binding on either side. An ended same-chat turn may
+    // request reconciliation, but cannot override newer identities or turn queue removal into it.
+    const legacyCleanup =
+      !!runtime &&
+      !runtime.turnId &&
+      !runtime.attemptId &&
+      !!target &&
+      !target.attemptId &&
+      terminalStates.has(target.status);
+    if (
+      !run &&
+      runtime &&
+      ["unknown", "stopping"].includes(runtime.state) &&
+      (!turnId ||
+        runtime.turnId === turnId ||
+        (!runtime.turnId && target?.attemptId === (runtime.attemptId ?? runtime.runId)) ||
+        legacyCleanup)
+    ) {
+      if (this.options.ownershipUnknown?.() !== false)
+        throw new ManagedAgentError(
+          "ownership-unknown",
+          "The earlier process exit is still unconfirmed. Check Agents & accounts for recovery guidance. Glosa will not signal a saved process ID.",
+        );
+      // Retry stop only reconciles this runtime. It cannot cancel the held queue, even when the
+      // turn ended before restart. Only independent supervisor proof permits this transition.
+      log.append({ ...runtime, state: "stopped" });
+      return;
+    }
     if (run) {
       try {
         this.flushDisplay(log, run);
@@ -2793,15 +2854,6 @@ export class ManagedChatService {
         run.cancelling = false;
       }
       await this.finishRun(log, run);
-    } else if (!run && !turnId && log.state.runtime && ["unknown", "stopping"].includes(log.state.runtime.state)) {
-      if (this.options.ownershipUnknown?.() !== false)
-        throw new ManagedAgentError(
-          "ownership-unknown",
-          "The earlier process exit is still unconfirmed. Check Agents & accounts for recovery guidance. Glosa will not signal a saved process ID.",
-        );
-      // The supervisor has independently reconciled every recovered owner. Never infer this
-      // from an empty in-memory run map after restart, or signal a PID read from the journal.
-      log.append({ ...log.state.runtime, state: "stopped" });
     }
   }
   private async stopProfile(profileId: string, workspace?: ChatWorkspace): Promise<void> {

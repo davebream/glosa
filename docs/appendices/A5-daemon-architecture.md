@@ -241,6 +241,16 @@ connection loss is outcome-unknown and holds queued work. Explicit Stop fences i
 verifies owned descendant cleanup. Successful completion with uncertain cleanup stays completed,
 but runtime ownership uncertainty blocks replacement independently.
 
+Restart recovery preserves that queue hold after a possibly submitted attempt. Never-dispatched
+durable work resumes automatically only when no preceding uncertain attempt or explicit hold
+blocks its chat. A durable explicit continuation can release that earlier hold; a later possibly
+submitted attempt that loses its process establishes a new hold. A durable acceptance receipt without
+its later queued transition is recoverable work, not a permanent starting state; recovery schedules
+it once or holds it behind the same gate.
+Repeating the original request returns its existing receipt and never duplicates execution.
+Retrying runtime cleanup targets the ended attempt and preserves held messages on both successful
+and refused cleanup. It is not a request to cancel the waiting queue.
+
 A refused process-group signal is not proof of exit and must not abort the exit-receipt pipeline.
 The guardian retains its bounded termination/escalation waits and reports an empty group only when
 the operating system confirms it no longer exists. Persistent signal refusal or uncertain ownership

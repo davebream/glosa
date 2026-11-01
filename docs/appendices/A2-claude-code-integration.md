@@ -341,12 +341,23 @@ The candidate tuples are ACP SDK 2.2.0, Claude adapter 0.99.1 with Agent SDK 0.3
 adapter 2.5.0 with native runtime 0.165.0. These are qualification candidates, not installed or
 release-qualified runtime declarations. Existing native candidates remain independently pinned.
 
+Released mechanisms exist but do not yet prove these wire-level guarantees. Claude adapter 0.99.1
+[recreates its Query when load/resume MCP configuration changes](https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.99.1/src/acp-agent.ts#L11582).
+Its native SDK exposes MCP replacement and status APIs, but the supported ACP requests do not
+acknowledge exact effective tools, authority revision and native generation. Codex adapter 2.5.0
+[supports bounded MCP startup waiting](https://github.com/agentclientprotocol/codex-acp/blob/v2.5.0/src/mcp/McpSessionStartup.ts#L209)
+and fences internal app-server generations; neither mechanism exposes the complete positive
+readiness and generation acknowledgment to glosa. Requested settings are not proof of effective
+settings. A fresh adapter per attempt prevents cross-attempt reuse, but does not close these gaps
+or reveal replacements inside that attempt. Adapter package ranges must never silently advance
+the frozen native tuple.
+
 Upstream agreement is needed on the following observable semantics. The names below describe
 requirements, not existing ACP method names:
 
 | Capability | Required evidence before cutover |
 |---|---|
-| Attempt authority replacement | Replace the exact MCP configuration and grant, then acknowledge the effective inventory and native generation. Delayed old calls cannot acquire the replacement authority. |
+| Attempt authority | Acknowledge the exact effective MCP configuration, grant, tool inventory and native generation before input. Warm reuse additionally replaces authority and fences delayed old calls. |
 | Effective configuration | Report actual model, effort, human approval reviewer, filesystem/network policy and enabled tools before accepting a prompt. |
 | Native generation | Report every internal native replacement before accepting subsequent requests or decisions. Retired generations are fenced and ambiguous prompts are never replayed. |
 | Helper suppression | Disable titles, suggestions, follow-ups and other model-backed helpers before creating or recreating a session. Native traces contain only requested turns. |

@@ -25,7 +25,7 @@ import {
 import { createManagedTools } from "../../src/agents/managed-tools.ts";
 import type { DeliverableEntry } from "../../src/agent-provider/interface.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { AgentStore, EXPERIMENTAL_DISCLOSURE } from "../../src/chats/store.ts";
+import { AgentStore, EXPERIMENTAL_DISCLOSURE, type TurnStatus } from "../../src/chats/store.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
 import { runtimeTarget } from "../../src/agents/runtimes.ts";
 import { RuntimeSupervisor } from "../../src/agents/supervisor.ts";
@@ -785,34 +785,91 @@ test("subscription switches persist on one chat, keep turn provenance and start 
   expect(() => h.service.change(h.workspace, chat.id, switchTo(other.id))).toThrow("Finish or stop pending work");
 });
 
-test("Retry stop after restart requires independent recovered-ownership proof", async () => {
-  const h = setup(),
-    chat = h.chat();
-  h.store.chat(chat.id).append({ type: "runtime", runId: randomUUID(), generation: 1, state: "connected" });
-  await h.service.close();
-  let unknown = true;
-  const recoveredStore = new AgentStore(h.root);
-  const restarted = new ManagedChatService({
-    store: recoveredStore,
-    registry: new ManagedAgentRegistry(),
-    launcher: {
-      async spawn() {
-        throw new Error("Recovery must not launch or signal a process");
+test.each(["bound", "legacy", "runtime-attempt-conflict", "turn-attempt-conflict", "runtime-turn-conflict"] as const)(
+  "Retry stop after restart requires independent recovered-ownership proof (%s)",
+  async (binding) => {
+    const h = setup(),
+      chat = h.chat(),
+      first = h.send(chat.id, "uncertain reply");
+    await waitUntil(() => h.store.chat(chat.id).turn(first.turnId)?.status === "running");
+    const waiting = [h.send(chat.id, "held second"), h.send(chat.id, "held third")];
+    const removable = h.send(chat.id, "explicit queue removal");
+    const recoveryRoot = realpathSync(mkdtempSync(join(tmpdir(), "glosa-chat-stop-restart-")));
+    cleanup.push(async () => rmSync(recoveryRoot, { recursive: true, force: true }));
+    cpSync(h.root, recoveryRoot, { recursive: true });
+    if (binding !== "bound") {
+      // Preserve the real crash prefix while representing older journals that predate the additive
+      // attempt bindings. Conflict controls retain one newer binding so migration cannot override it.
+      const source = h.store.chat(chat.id);
+      const records = structuredClone(source.journal.records);
+      const conflict = randomUUID();
+      for (const record of records) {
+        if (record.data.type === "runtime") {
+          delete record.data.turnId;
+          delete record.data.attemptId;
+          if (binding === "runtime-attempt-conflict") record.data.attemptId = conflict;
+          if (binding === "runtime-turn-conflict") record.data.turnId = conflict;
+        } else if (record.data.type === "turn_status") {
+          delete record.data.attemptId;
+          if (binding === "turn-attempt-conflict" && record.data.turnId === first.turnId)
+            record.data.attemptId = conflict;
+        }
+      }
+      writeFileSync(
+        source.journal.path.replace(h.root, recoveryRoot),
+        `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      );
+    }
+    await h.service.close();
+    let unknown = true;
+    const recoveredStore = new AgentStore(recoveryRoot);
+    const restarted = new ManagedChatService({
+      store: recoveredStore,
+      registry: new ManagedAgentRegistry(),
+      launcher: {
+        async spawn() {
+          throw new Error("Recovery must not launch or signal a process");
+        },
       },
-    },
-    workspace: () => h.workspace,
-    manifest: () => undefined,
-    ownershipUnknown: () => unknown,
-  });
-  h.replace(restarted);
-  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("unknown");
-  await expect(restarted.stop(h.workspace, chat.id)).rejects.toThrow("exit is still unconfirmed");
-  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("unknown");
-  unknown = false;
-  await restarted.stop(h.workspace, chat.id);
-  expect(recoveredStore.chat(chat.id).state.runtime?.state).toBe("stopped");
-  expect(h.spawns()).toBe(0);
-});
+      workspace: () => h.workspace,
+      manifest: () => undefined,
+      ownershipUnknown: () => unknown,
+    });
+    h.replace(restarted);
+    const log = recoveredStore.chat(chat.id),
+      held = () => log.state.turns.filter((turn) => waiting.some((item) => item.turnId === turn.id));
+    expect(log.state.runtime?.state).toBe("unknown");
+    if (binding === "bound") expect(log.state.runtime?.turnId).toBe(first.turnId);
+    if (binding === "legacy") {
+      expect(log.state.runtime?.turnId).toBeUndefined();
+      expect(log.state.runtime?.attemptId).toBeUndefined();
+      expect(log.turn(first.turnId)?.attemptId).toBeUndefined();
+    }
+    const targetMatches = binding === "bound" || binding === "legacy";
+    const heldBefore = held();
+    expect(heldBefore.map((turn) => turn.status)).toEqual(["held", "held"]);
+    if (targetMatches)
+      await expect(restarted.stop(h.workspace, chat.id, first.turnId)).rejects.toThrow("exit is still unconfirmed");
+    else await restarted.stop(h.workspace, chat.id, first.turnId);
+    expect(log.state.runtime?.state).toBe("unknown");
+    expect(held()).toEqual(heldBefore);
+    await expect(restarted.stop(h.workspace, chat.id)).rejects.toThrow("exit is still unconfirmed");
+    expect(held()).toEqual(heldBefore);
+    unknown = false;
+    await restarted.stop(h.workspace, chat.id, removable.turnId);
+    expect(log.turn(removable.turnId)?.status).toBe("cancelled");
+    expect(log.state.runtime?.state).toBe("unknown");
+    await restarted.stop(h.workspace, chat.id, randomUUID());
+    expect(log.state.runtime?.state).toBe("unknown");
+    await restarted.stop(h.workspace, chat.id, first.turnId);
+    expect(log.state.runtime?.state).toBe(targetMatches ? "stopped" : "unknown");
+    if (!targetMatches) await restarted.stop(h.workspace, chat.id);
+    expect(log.state.runtime?.state).toBe("stopped");
+    expect(held()).toEqual(heldBefore);
+    expect(new AgentStore(recoveryRoot).chat(chat.id).state.turns).toEqual(log.state.turns);
+    expect(h.spawns()).toBe(1);
+  },
+);
 
 test("durable duplicate Send never calls the native adapter twice and freezes turn settings", async () => {
   const h = setup(),
@@ -1329,42 +1386,93 @@ test("an enabled account works in a workspace with no per-workspace grant, and a
   expect(h.inputs[0]!.text).toBe("no grant needed");
 });
 
-test("after a restart, a message that never reached the agent goes once the daemon is serving", async () => {
+test.each([
+  ["none", "queued"],
+  ["none", "accepted"],
+  ["uncertain", "queued"],
+  ["uncertain", "accepted"],
+  ["held", "queued"],
+] as const)("restart with %s predecessor and %s receipt preserves dispatch authority", async (predecessor, prefix) => {
   const h = setup(),
-    chat = h.chat();
-  h.hold(new Promise(() => {}));
-  h.send(chat.id, "first");
-  await eventually(() => h.inputs.length === 1);
+    chat = h.chat(),
+    source = h.store.chat(chat.id);
+  if (predecessor !== "none") {
+    const first = h.send(chat.id, "first");
+    if (predecessor === "uncertain") await waitUntil(() => source.turn(first.turnId)?.status === "running");
+    else source.append({ type: "turn_status", turnId: first.turnId, status: "held" });
+  }
   const waiting = h.send(chat.id, "queued before the restart");
-  expect(h.store.chat(chat.id).state.turns.at(-1)?.status).toBe("queued");
+  expect(source.state.turns.at(-1)?.status).toBe("queued");
   const recoveryRoot = realpathSync(mkdtempSync(join(tmpdir(), "glosa-chat-restart-")));
   cleanup.push(async () => rmSync(recoveryRoot, { recursive: true, force: true }));
+  // Copy committed bytes before shutdown changes the original journal. The accepted crash image
+  // ends at the real receipt, retaining its envelope, digest and consumed draft revision.
   cpSync(h.root, recoveryRoot, { recursive: true });
-  const recoveredStore = new AgentStore(recoveryRoot);
-  const recovered = new ManagedChatService({
-    store: recoveredStore,
-    registry: h.registry,
-    launcher: h.launcher,
-    workspace: () => h.workspace,
-    manifest: () => ({
-      ...runtimeTarget(),
-      id: "fixture",
-      provider: "fixture",
-      version: "1",
-      executable: "/fixture",
-      executableSha256: "0".repeat(64),
-      qualified: true,
-    }),
-    releaseEnabled: true,
-  });
-  cleanup.push(() => recovered.close());
-  const statuses = () => recoveredStore.chat(chat.id).state.turns.map((turn) => turn.status);
-  // The turn that was with the agent is uncertain and stays so; the queued one is still queued, not held.
-  expect(statuses()).toEqual(["outcome_unknown", "queued"]);
-  expect(h.inputs).toHaveLength(1);
+  if (prefix === "accepted") {
+    const receipt = source.journal.records.findIndex((record) => record.requestId === waiting.requestId);
+    expect(source.journal.records[receipt]!.data.type).toBe("turn");
+    const bytes = readFileSync(source.journal.path, "utf8").split("\n");
+    writeFileSync(source.journal.path.replace(h.root, recoveryRoot), `${bytes.slice(0, receipt + 1).join("\n")}\n`);
+  }
+  await h.service.close();
+  const inputsBefore = h.inputs.length;
+  function reopen(root: string) {
+    const store = new AgentStore(root);
+    const service = new ManagedChatService({
+      store,
+      registry: h.registry,
+      launcher: h.launcher,
+      workspace: () => h.workspace,
+      manifest: () => ({
+        ...runtimeTarget(),
+        id: "fixture",
+        provider: "fixture",
+        version: "1",
+        executable: "/fixture",
+        executableSha256: "0".repeat(64),
+        qualified: true,
+      }),
+      releaseEnabled: true,
+      ownershipUnknown: () => false,
+    });
+    cleanup.push(() => service.close());
+    return { store, service };
+  }
+  let { store: recoveredStore, service: recovered } = reopen(recoveryRoot);
+  const needsReview = predecessor !== "none";
+  const expectedStatuses: TurnStatus[] = [];
+  if (predecessor !== "none") expectedStatuses.push(predecessor === "uncertain" ? "outcome_unknown" : "held");
+  expectedStatuses.push(needsReview ? "held" : "queued");
+  expect(recoveredStore.chat(chat.id).state.turns.map((turn) => turn.status)).toEqual(expectedStatuses);
+  expect(new AgentStore(recoveryRoot).chat(chat.id).state.turns).toEqual(recoveredStore.chat(chat.id).state.turns);
+  expect(h.inputs).toHaveLength(inputsBefore);
+  const recoveredRevision = recoveredStore.chat(chat.id).state.revision;
+  expect(recovered.send(h.workspace, chat.id, waiting)).toEqual({ turnId: waiting.turnId });
+  expect(recoveredStore.chat(chat.id).state.revision).toBe(recoveredRevision);
   recovered.setMcpOrigin("http://127.0.0.1:1");
-  await eventually(() => h.inputs.length === 2);
-  expect(h.inputs[1]!.turnId).toBe(waiting.turnId);
+  if (needsReview) {
+    // The pump has had its scheduled turn; a held message cannot start even with ownership proved.
+    await new Promise<void>(queueMicrotask);
+    expect(h.inputs).toHaveLength(inputsBefore);
+    expect(h.spawns()).toBe(inputsBefore);
+    recovered.resume(h.workspace, chat.id, waiting.turnId);
+    // A second crash after explicit continuation must retain that authority despite older
+    // uncertain/held history. Capture before the newly queued pump can dispatch.
+    const continuedRoot = realpathSync(mkdtempSync(join(tmpdir(), "glosa-chat-continued-")));
+    cleanup.push(async () => rmSync(continuedRoot, { recursive: true, force: true }));
+    cpSync(recoveryRoot, continuedRoot, { recursive: true });
+    await recovered.close();
+    ({ store: recoveredStore, service: recovered } = reopen(continuedRoot));
+    expect(recoveredStore.chat(chat.id).turn(waiting.turnId)?.status).toBe("queued");
+    recovered.setMcpOrigin("http://127.0.0.1:1");
+  }
+  await waitUntil(() => recoveredStore.chat(chat.id).turn(waiting.turnId)?.status === "running");
+  expect(h.inputs).toHaveLength(inputsBefore + 1);
+  expect(h.inputs.at(-1)!.turnId).toBe(waiting.turnId);
+  const revision = recoveredStore.chat(chat.id).state.revision;
+  expect(recovered.send(h.workspace, chat.id, waiting)).toEqual({ turnId: waiting.turnId });
+  expect(recoveredStore.chat(chat.id).state.revision).toBe(revision);
+  expect(h.inputs).toHaveLength(inputsBefore + 1);
 });
 
 test("multi-part answers are validated before reservation and withdrawn questions cannot be answered", async () => {
