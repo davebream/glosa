@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,6 +26,56 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
+
+/** Control the real callback listener's graceful drain without delaying credential rollback.
+ * A terminal result can be observed while its HTTP connection is still draining on either OS. */
+function holdCallbackListenerDrain() {
+  const originalServe = Bun.serve.bind(Bun);
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const stopListeners: Array<(closeActiveConnections?: boolean) => Promise<void>> = [];
+  let stopping: Promise<void> | undefined;
+  const serve = spyOn(Bun, "serve").mockImplementation(((options: Parameters<typeof Bun.serve>[0]) => {
+    const server = originalServe(options);
+    stopListeners.push(server.stop.bind(server));
+    return new Proxy(server, {
+      get(target, property) {
+        if (property === "stop")
+          return (closeActiveConnections?: boolean) => {
+            entered.resolve();
+            stopping ??= gate.promise.then(() => target.stop(closeActiveConnections));
+            return stopping;
+          };
+        return Reflect.get(target, property, target);
+      },
+    });
+  }) as typeof Bun.serve);
+  return {
+    async waitUntilDraining() {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          entered.promise,
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("The callback listener did not begin draining")), 1000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    restoreFactory() {
+      serve.mockRestore();
+    },
+    async release() {
+      serve.mockRestore();
+      gate.resolve();
+      // The fixture owns these listeners even if an assertion or a negative control fails
+      // before production reaches stop(). Do not leave a callback socket or spy behind.
+      await Promise.all([...stopListeners.map((stop) => stop(true)), stopping]);
+    },
+  };
+}
 
 function fixture(options: { discovery?: boolean; timeoutMs?: number } = {}) {
   const home = mkdtempSync(join(tmpdir(), "glosa-chatgpt-oauth-"));
@@ -650,38 +700,45 @@ test.each(["cancel", "restart"] as const)(
       throw new Error("verification failed after commit");
     };
     f.store.remove = async () => false;
-    const attempt = await f.broker.begin();
-    await f.callback(attempt);
-    expect((await f.terminal(attempt)).status).toBe("failed");
-    expect(ownedBeforeWrite).toBe(true);
-    expect(f.broker.listAccounts()).toEqual([]);
-    expect(f.vault.size).toBe(1);
-    const persisted = readFileSync(f.metadataPath, "utf8");
-    expect(JSON.parse(persisted).pendingCredentialRefs[attempt.accountId]).toHaveLength(1);
-    expect(persisted).not.toContain("private-");
-    if (recovery === "cancel") {
-      await expect(f.broker.cancel(attempt.attemptId)).rejects.toMatchObject({ code: "secure-storage" });
-      f.store.remove = remove;
-      await f.broker.cancel(attempt.attemptId);
-    } else {
-      const restarted = new CodexChatGptOAuthBroker(f.brokerOptions);
-      try {
-        const before = f.counts().reads,
-          requests = f.requests.length;
-        await expect(restarted.begin()).rejects.toMatchObject({ code: "secure-storage" });
-        expect(f.counts().reads).toBe(before);
-        expect(f.requests).toHaveLength(requests);
+    const drain = recovery === "cancel" ? holdCallbackListenerDrain() : undefined;
+    try {
+      const attempt = await f.broker.begin();
+      drain?.restoreFactory();
+      await f.callback(attempt);
+      expect((await f.terminal(attempt)).status).toBe("failed");
+      await drain?.waitUntilDraining();
+      expect(ownedBeforeWrite).toBe(true);
+      expect(f.broker.listAccounts()).toEqual([]);
+      expect(f.vault.size).toBe(1);
+      const persisted = readFileSync(f.metadataPath, "utf8");
+      expect(JSON.parse(persisted).pendingCredentialRefs[attempt.accountId]).toHaveLength(1);
+      expect(persisted).not.toContain("private-");
+      if (recovery === "cancel") {
+        await expect(f.broker.cancel(attempt.attemptId)).rejects.toMatchObject({ code: "secure-storage" });
         f.store.remove = remove;
-        const next = await restarted.begin();
-        expect(f.vault.size).toBe(0);
-        await restarted.cancel(next.attemptId);
-      } finally {
-        await restarted.close();
+        await f.broker.cancel(attempt.attemptId);
+      } else {
+        const restarted = new CodexChatGptOAuthBroker(f.brokerOptions);
+        try {
+          const before = f.counts().reads,
+            requests = f.requests.length;
+          await expect(restarted.begin()).rejects.toMatchObject({ code: "secure-storage" });
+          expect(f.counts().reads).toBe(before);
+          expect(f.requests).toHaveLength(requests);
+          f.store.remove = remove;
+          const next = await restarted.begin();
+          expect(f.vault.size).toBe(0);
+          await restarted.cancel(next.attemptId);
+        } finally {
+          await restarted.close();
+        }
       }
+      expect(f.vault.size).toBe(0);
+      expect(f.broker.listAccounts()).toEqual([]);
+      expect(JSON.parse(readFileSync(f.metadataPath, "utf8")).pendingCredentialRefs).toEqual({});
+    } finally {
+      await drain?.release();
     }
-    expect(f.vault.size).toBe(0);
-    expect(f.broker.listAccounts()).toEqual([]);
-    expect(JSON.parse(readFileSync(f.metadataPath, "utf8")).pendingCredentialRefs).toEqual({});
   },
 );
 

@@ -515,6 +515,10 @@ export class CodexChatGptOAuthBroker implements ManagedOAuthBroker {
       });
       await this.finish(attempt.view.attemptId, "succeeded");
     } catch (error) {
+      // The account lock and credential rollback have unwound. Retire their ownership
+      // before publishing failure: graceful listener drain may remain pending after
+      // status() exposes that result, and Cancel must already retry any vault residue.
+      attempt.exchangeActive = false;
       await this.finish(attempt.view.attemptId, "failed", safeFailure(error));
     }
   }
