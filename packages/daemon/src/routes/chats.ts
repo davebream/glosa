@@ -1,3 +1,4 @@
+import { chatWatchStreams } from "../chats/watch-stream.ts";
 // SPDX-License-Identifier: Apache-2.0
 import { z } from "zod";
 import { ManagedAgentError } from "../agents/interface.ts";
@@ -22,7 +23,7 @@ const nil = () => json({ ok: true });
 
 export function chatRoutes(deps: Dependencies, method: string, path: string): RouteMatch | null {
   const agent = /^\/api\/agents(?:\/(.*))?$/.exec(path);
-  const chat = /^\/w\/([^/]+)\/chats(?:\/(external|events|[a-f0-9-]{36})(?:\/(.*))?)?$/.exec(path);
+  const chat = /^\/w\/([^/]+)\/chats(?:\/(external|events|watch|[a-f0-9-]{36})(?:\/(.*))?)?$/.exec(path);
   if ((!agent && !chat) || !["GET", "POST"].includes(method)) return null;
   const upload = chat?.[3] === "attachments" && method === "POST";
   return {
@@ -57,6 +58,35 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
             return json({ ok: true, instanceId: deps.instanceId });
           }
           if (tail === "status" && method === "GET") return json(service.status());
+          const oauth = /^providers\/([a-z][a-z0-9-]{0,63})\/oauth\/(begin|adopt|[a-f0-9-]{36})(?:\/(cancel))?$/.exec(
+            tail,
+          );
+          if (oauth) {
+            const provider = oauth[1]!,
+              operation = oauth[2]!;
+            if (operation === "begin" && method === "POST") {
+              const result = await service.beginOAuth(provider, await req.json());
+              const signal = combinedSignal(deps.shutdownSignal, authSignal);
+              const cancel = () => {
+                void service.cancelOAuth(provider, result.attemptId).catch(() => {});
+              };
+              if (signal?.aborted) {
+                cancel();
+                throw new ManagedAgentError("login-cancelled", "This sign-in was cancelled.");
+              }
+              signal?.addEventListener("abort", cancel, { once: true });
+              return json(result);
+            }
+            if (operation === "adopt" && method === "POST") return json(service.adoptOAuth(provider, await req.json()));
+            if (operation !== "begin" && operation !== "adopt") {
+              if (oauth[3] === "cancel" && method === "POST")
+                return json(await service.cancelOAuth(provider, operation));
+              if (!oauth[3] && method === "GET") return json(service.oauthStatus(provider, operation));
+            }
+          }
+          const oauthNotice = /^profiles\/([a-f0-9-]{36})\/oauth-notice$/.exec(tail);
+          if (oauthNotice && method === "POST")
+            return json(service.acknowledgeOAuthPlan(oauthNotice[1]!, await req.json()));
           if (tail === "experimental" && method === "POST")
             return json(await service.changeExperimental(await req.json()));
           if (tail === "profiles" && method === "POST") return json(service.createProfile(await req.json()));
@@ -163,6 +193,8 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
           const workspace = chatWorkspace(findWorkspace(deps, decodeURIComponent(chat[1]!)));
           const id = chat[2],
             action = chat[3];
+          if (id === "watch" && method === "POST")
+            return json(chatWatchStreams(service).watch(workspace, await req.json()));
           if (id === "events" && method === "GET") {
             service.list(workspace);
             server?.timeout(req, 0);

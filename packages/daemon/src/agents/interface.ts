@@ -1,9 +1,11 @@
+import type { ManagedOAuthBroker } from "./oauth-interface.ts";
 // SPDX-License-Identifier: Apache-2.0
 // Managed execution is optional and separate from the external-session provider contract.
 
 import type { AgentCommand } from "../chats/references.ts";
 export type AuthState = "unknown" | "authenticated" | "needs_login" | "expired" | "probe_failed" | "identity_mismatch";
 export interface AccountObservation {
+  revocation?: "confirmed" | "unconfirmed" | "not-needed";
   state: AuthState;
   identity?: string;
   label?: string;
@@ -12,6 +14,8 @@ export interface AccountObservation {
   observedAt: string;
 }
 export interface AgentProfile {
+  /** Opaque vault reference; never a token or a native session identity. */
+  authentication?: { mode: "oauth"; credentialRef: string; planNoticeSeen?: boolean };
   id: string;
   provider: string;
   label: string;
@@ -72,7 +76,7 @@ export interface ProfileLaunchSpec {
 export interface TurnSettings {
   model: string;
   effort: string;
-  permissionMode: "default" | "plan";
+  permissionMode: "default" | "plan" | "workspace";
 }
 export interface NativeQuestion {
   id: string;
@@ -91,7 +95,7 @@ export interface NativeDecision {
 }
 export type AgentEvent =
   | { type: "commands_changed" }
-  | { type: "effective_settings"; model?: string; effort?: string }
+  | { type: "effective_settings"; model?: string; effort?: string; permissionMode?: TurnSettings["permissionMode"] }
   | { type: "session"; nativeId: string }
   | { type: "text"; id: string; text: string; reasoning?: boolean }
   | { type: "tool"; id: string; name: string; detail: string; status: "running" | "completed" | "failed" }
@@ -99,7 +103,7 @@ export type AgentEvent =
   | { type: "decision_closed"; id: string }
   | { type: "usage"; value: Record<string, number | string | null> }
   | { type: "completed" }
-  | { type: "failed"; code: string; message: string; outcomeUnknown?: boolean };
+  | { type: "failed"; code: string; message: string; details?: string; outcomeUnknown?: boolean };
 
 export interface AgentInput {
   turnId: string;
@@ -147,6 +151,7 @@ export interface ProcessLauncher {
   }): Promise<OwnedProcess>;
 }
 export interface ManagedAgentAdapter {
+  readonly oauth?: ManagedOAuthBroker;
   readonly id: string;
   readonly name: string;
   readonly authHosts: readonly string[];
@@ -167,6 +172,7 @@ export interface ManagedAgentAdapter {
 
 export type ManagedAgentCode =
   | "auth-required"
+  | "account-auth"
   | "account-busy"
   | "account-changed"
   | "account-disabled"
@@ -215,6 +221,9 @@ export type ManagedAgentCode =
   | "runtime-unqualified"
   | "sdk-unavailable"
   | "glosa-tools-unavailable"
+  | "chat-stream-expired"
+  | "invalid-chat-watch"
+  | "stale-turn"
   | "stale-chat"
   | "stale-decision"
   | "stale-draft"

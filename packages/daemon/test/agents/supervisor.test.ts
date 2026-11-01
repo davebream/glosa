@@ -1,14 +1,149 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, realpathSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ManagedAgentError } from "../../src/agents/interface.ts";
+import { confirmedExit, prepareOwnership, unresolvedOwnership } from "../../src/agents/ownership.ts";
 import { RuntimeSupervisor } from "../../src/agents/supervisor.ts";
 import { activateInstallGuard, captureInstallSnapshot, InstallGuard } from "../../src/lifecycle/install-guard.ts";
-import { prepareOwnership } from "../../src/agents/ownership.ts";
+
+test.each([false, true])(
+  "a refused group signal preserves finalization and persistent refusal=%s retains ownership uncertainty",
+  async (persistent) => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "glosa-guardian-refused-signal-")));
+    const release = join(dir, "release-native");
+    const nonce = randomUUID();
+    const receiptDir = prepareOwnership(dir, nonce);
+    const source = readFileSync(new URL("../../src/agents/guardian.ts", import.meta.url), "utf8");
+    const anchor = "const watchdog = setInterval(() => {";
+    expect(source.split(anchor)).toHaveLength(2);
+    // Exercise the real guardian and PTY group. Only the OS response is controlled: group
+    // signals fail with EPERM; the real native child exits through its separate file barrier.
+    // Persistent refusal also denies the zero-signal probe after exit, so absence of authority
+    // must stay uncertain even though this test can independently observe the real group gone.
+    const injection = `
+const originalKill = process.kill.bind(process);
+let signalRefused = false;
+process.kill = ((pid, signal) => {
+  if (pid < 0 && (signal !== 0 || (${persistent} && signalRefused))) {
+    if (!signalRefused) {
+      signalRefused = true;
+      emit({ op: "signal-refused" });
+    }
+    throw Object.assign(new Error("controlled signal refusal"), { code: "EPERM" });
+  }
+  return originalKill(pid, signal);
+}) as typeof process.kill;
+`;
+    const program = source
+      .replace('"zod"', JSON.stringify(require.resolve("zod")))
+      .replace('"../bus/io.ts"', JSON.stringify(fileURLToPath(new URL("../../src/bus/io.ts", import.meta.url))))
+      .replace(
+        'new URL("./execution-host.ts", import.meta.url)',
+        `new URL(${JSON.stringify(new URL("../../src/agents/execution-host.ts", import.meta.url).href)})`,
+      )
+      .replace(anchor, `${injection}\n${anchor}`);
+    const executable = join(dir, "guardian.ts");
+    writeFileSync(executable, program);
+    const guardian = Bun.spawn([process.execPath, executable], {
+      cwd: dir,
+      env: { PATH: "/usr/bin:/bin", HOME: dir },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const frames: any[] = [];
+    let nativeReady!: () => void, signalRefused!: () => void, ownedPid: number | undefined;
+    const ready = new Promise<void>((resolve) => {
+      nativeReady = resolve;
+    });
+    const refused = new Promise<void>((resolve) => {
+      signalRefused = resolve;
+    });
+    const draining = (async () => {
+      let output = "";
+      for await (const bytes of guardian.stdout) {
+        output += Buffer.from(bytes).toString();
+        let end: number;
+        while ((end = output.indexOf("\n")) !== -1) {
+          const frame = JSON.parse(output.slice(0, end));
+          output = output.slice(end + 1);
+          frames.push(frame);
+          if (frame.op === "started") ownedPid = frame.pid;
+          if (frame.op === "data" && Buffer.from(frame.data, "base64").toString().includes("NATIVE_READY"))
+            nativeReady();
+          if (frame.op === "signal-refused") signalRefused();
+        }
+      }
+    })();
+    const stderr = new Response(guardian.stderr).text();
+    const beforeExit = async (pending: Promise<void>, stage: string) => {
+      const observed = await Promise.race([pending.then(() => true), guardian.exited.then(() => false)]);
+      if (!observed) throw new Error(`guardian exited before ${stage}: ${await stderr}`);
+    };
+    const nativeGroupExited = async () => {
+      if (!ownedPid) return;
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        try {
+          process.kill(-ownedPid, 0);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+        }
+        await Bun.sleep(10);
+      }
+      throw new Error(`owned fixture group ${ownedPid} did not exit; release barrier retained at ${release}`);
+    };
+    try {
+      guardian.stdin.write(
+        `${JSON.stringify({
+          op: "start",
+          id: randomUUID(),
+          nonce,
+          receiptDir,
+          command: process.execPath,
+          args: [
+            "-e",
+            `import {existsSync} from "node:fs"; console.log("NATIVE_READY"); setInterval(() => { if (existsSync(${JSON.stringify(release)})) process.exit(0); }, 10);`,
+          ],
+          cwd: dir,
+          env: { PATH: "/usr/bin:/bin", HOME: dir },
+          terminal: true,
+        })}\n`,
+      );
+      await beforeExit(ready, "native readiness");
+      guardian.stdin.write(`${JSON.stringify({ op: "stop", id: randomUUID() })}\n`);
+      guardian.stdin.end();
+      await beforeExit(refused, "signal refusal");
+      expect(guardian.exitCode).toBeNull();
+      expect(() => readFileSync(join(receiptDir, "exit.json"))).toThrow();
+      writeFileSync(release, "exit");
+      expect(await guardian.exited).toBe(0);
+      await draining;
+      expect(await stderr).toBe("");
+      const receipt = JSON.parse(readFileSync(join(receiptDir, "exit.json"), "utf8"));
+      expect(receipt.nonce).toBe(nonce);
+      expect(receipt.groupEmpty).toBe(!persistent);
+      expect(frames.some((frame) => frame.op === "exit" && frame.groupEmpty === !persistent)).toBe(true);
+      expect(Boolean(confirmedExit(dir, nonce))).toBe(!persistent);
+      expect(unresolvedOwnership(dir).has(nonce)).toBe(persistent);
+      expect(ownedPid).toBeNumber();
+      await nativeGroupExited();
+    } finally {
+      writeFileSync(release, "exit");
+      if (guardian.exitCode === null) guardian.kill("SIGKILL");
+      await guardian.exited;
+      await draining;
+      await stderr;
+      await nativeGroupExited();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+  10_000,
+);
 
 test("guardian stays alive until its pending exit receipt is written after control EOF", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "glosa-guardian-finalization-")));

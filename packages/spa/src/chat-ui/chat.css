@@ -1,0 +1,237 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Managed chat island. Inherit the desk's palettes, reading scale and authored conversation style.
+ * No reset, runtime-injected stylesheet or framework-wide selector enters the writing desk.
+ */
+.glosa-chat-managed > .glosa-chat-island {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  color: var(--ink);
+}
+.glosa-chat-island > div:has(> .glosa-chat-header),
+.glosa-chat-island > div:has(> .glosa-chat-transfer),
+.glosa-chat-island > div:has(> .glosa-chat-footer) {
+  display: contents;
+}
+.glosa-chat-managed .glosa-chat-history {
+  overflow-anchor: none;
+  padding-block-end: 48px;
+}
+.glosa-chat-managed .glosa-chat-assistant-turn {
+  min-width: 0;
+}
+.glosa-chat-managed .glosa-chat-empty {
+  padding-block: 24px;
+}
+.glosa-chat-managed .glosa-chat-status,
+.glosa-chat-managed .glosa-chat-connection-recovery {
+  flex: none;
+  width: min(calc(100% - 2 * var(--chat-gutter)), var(--chat-measure));
+  margin: 0 auto;
+  font: var(--text-sm) / 1.5 var(--font-sans);
+}
+.glosa-chat-managed .glosa-chat-status:not(:empty) {
+  padding-block: 10px;
+}
+.glosa-chat-managed .glosa-chat-status:empty {
+  display: none;
+}
+.glosa-chat-managed .glosa-chat-status[data-error="true"] {
+  color: var(--ink);
+}
+.glosa-chat-managed .glosa-chat-connection-recovery {
+  padding-block-end: 8px;
+}
+.glosa-chat-managed .glosa-chat-turn-result {
+  max-width: var(--chat-measure);
+  margin: -12px auto 24px;
+  font: var(--text-xs) / 1.5 var(--font-sans);
+  color: var(--muted);
+}
+.glosa-chat-managed .glosa-chat-result-label {
+  font-weight: 600;
+}
+.glosa-chat-managed .glosa-chat-turn-result p {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+.glosa-chat-managed .glosa-chat-turn-result[data-status="completed"] {
+  margin-top: -16px;
+}
+.glosa-chat-managed .glosa-chat-turn-failure {
+  color: var(--ink);
+  padding-block: 12px;
+  border-block: 1px solid var(--border-strong);
+}
+.glosa-chat-managed .glosa-chat-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 6px;
+}
+.glosa-chat-managed .glosa-chat-recovery-actions:empty {
+  display: none;
+}
+.glosa-chat-managed .glosa-chat-recovery-actions button {
+  min-height: 30px;
+  font: inherit;
+}
+.glosa-chat-managed .glosa-chat-live {
+  flex-wrap: wrap;
+  row-gap: 3px;
+}
+.glosa-chat-managed .glosa-chat-quiet {
+  flex-basis: 100%;
+  padding-inline-start: 18px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.glosa-chat-managed .glosa-chat-live-time {
+  color: var(--muted);
+}
+.glosa-chat-managed .glosa-chat-earlier {
+  display: block;
+  margin: 0 auto 24px;
+  font-size: var(--text-xs);
+}
+.glosa-chat-managed .glosa-chat-composer {
+  margin-block-start: 2px;
+}
+.glosa-chat-managed .glosa-chat-compose-actions > div:has(> .glosa-chat-controls) {
+  display: contents;
+}
+.glosa-chat-managed .glosa-chat-draft {
+  field-sizing: content;
+  max-height: min(25vh, 15rem);
+  overflow-y: auto;
+}
+.glosa-chat-managed .glosa-chat-retry-source {
+  margin: 0 0 6px;
+  font: var(--text-xs) / 1.5 var(--font-sans);
+  color: var(--muted);
+}
+.glosa-chat-managed .glosa-chat-tray li {
+  padding-block: 4px;
+}
+.glosa-chat-managed .glosa-chat-tray-verbs {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.glosa-chat-managed .glosa-chat-queue-editor {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.glosa-chat-managed .glosa-chat-queue-editor textarea {
+  flex-basis: 100%;
+  width: 100%;
+  min-height: 4em;
+  max-height: 12rem;
+  padding: 8px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  resize: vertical;
+  font: var(--chat-size) / 1.5 var(--font-serif);
+}
+.glosa-chat-managed .glosa-chat-queue-editor button {
+  min-height: 30px;
+  font: var(--text-xs) / 1.5 var(--font-sans);
+}
+.glosa-chat-managed .glosa-chat-sent-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font: var(--text-xs) / 1.5 var(--font-sans);
+}
+.glosa-chat-managed .glosa-chat-decision {
+  /* Inline requests already sit inside the history's responsive gutters, like every reply. */
+  max-width: var(--chat-measure);
+  padding: 16px;
+}
+.glosa-chat-managed .glosa-chat-decisions {
+  max-height: none;
+  overflow: visible;
+  scrollbar-gutter: auto;
+}
+.glosa-chat-managed .glosa-chat-attention {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  width: min(calc(100% - 2 * var(--chat-gutter)), var(--chat-measure));
+  margin: 0 auto;
+  padding-block: 8px;
+  font: var(--text-sm) / 1.5 var(--font-sans);
+}
+.glosa-chat-managed .glosa-chat-attention button {
+  min-height: 30px;
+  font: inherit;
+}
+.glosa-chat-managed .glosa-chat-decision h3:focus-visible {
+  outline: 2px solid var(--hand);
+  outline-offset: 4px;
+}
+.glosa-chat-managed .glosa-chat-decision h3 {
+  font: 600 var(--text-base) / 1.4 var(--font-sans);
+}
+.glosa-chat-managed .glosa-chat-decision legend {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.glosa-chat-managed .glosa-chat-decision [role="alert"] {
+  color: var(--ink);
+  font: var(--text-sm) / 1.5 var(--font-sans);
+}
+.glosa-chat-managed .glosa-chat-load-error {
+  max-width: 40ch;
+  margin: 24px;
+  font: var(--text-sm) / 1.5 var(--font-sans);
+}
+@container (max-width: 460px) {
+  .glosa-chat-managed .glosa-chat-tray li {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .glosa-chat-managed .glosa-chat-tray-verbs {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+  .glosa-chat-managed .glosa-chat-header {
+    gap: 6px;
+    padding-inline: 12px;
+  }
+  .glosa-chat-managed .glosa-chat-activity {
+    max-width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+@media (pointer: coarse) {
+  .glosa-chat-managed button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .glosa-chat-managed .glosa-chat-verb {
+    padding-inline: 4px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glosa-chat-managed *,
+  .glosa-chat-managed *::before,
+  .glosa-chat-managed *::after {
+    scroll-behavior: auto;
+    animation: none;
+    transition: none;
+  }
+}

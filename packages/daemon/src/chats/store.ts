@@ -11,6 +11,7 @@ import {
   ManagedAgentError,
 } from "../agents/interface.ts";
 import { IntentJournal, privateDirectory, putBlob, readBlob } from "./journal.ts";
+import { chatFailureSchema, type ChatFailure } from "./types.ts";
 
 /** The consent text in force (#440). 1 named workspace files, messages and attachments; 2 adds the
  * text of web pages the agent reads in desk browser tabs, including pages the person is signed in
@@ -88,7 +89,11 @@ export const mcpServersSchema = z
     "Server names must be unique",
   );
 const settings = z
-  .object({ model: z.string().max(160), effort: z.string().max(40), permissionMode: z.enum(["default", "plan"]) })
+  .object({
+    model: z.string().max(160),
+    effort: z.string().max(40),
+    permissionMode: z.enum(["default", "plan", "workspace"]),
+  })
   .strict();
 const auth = z
   .object({
@@ -97,6 +102,7 @@ const auth = z
     label: z.string().max(320).optional(),
     plan: z.string().max(160).optional(),
     method: z.string().max(80).optional(),
+    revocation: z.enum(["confirmed", "unconfirmed", "not-needed"]).optional(),
     observedAt: z.iso.datetime(),
   })
   .strict();
@@ -115,6 +121,10 @@ const profileSchema = z
     cleanup: z.enum(["signout", "remove"]).optional(),
     configuration: z
       .object({ mode: z.literal("linked"), path: z.string().min(1).max(4096) })
+      .strict()
+      .optional(),
+    authentication: z
+      .object({ mode: z.literal("oauth"), credentialRef: z.uuid(), planNoticeSeen: z.boolean().optional() })
       .strict()
       .optional(),
     mcpServers: mcpServersSchema.optional(),
@@ -245,6 +255,7 @@ export type TurnStatus = z.infer<typeof turnStatus>;
 const turn = z
   .object({
     id,
+    revision: z.number().int().positive().optional(),
     textHash: hash,
     references: referencesSchema.optional(),
     attachments: z.array(attachment).max(10),
@@ -260,11 +271,14 @@ const turn = z
     at: z.iso.datetime(),
     origin: z.enum(["user", "feedback"]),
     feedbackIds: z.array(z.string().min(1).max(512)).max(8).optional(),
+    retryOf: z.object({ turnId: id, attemptId: id.optional() }).strict().optional(),
   })
   .strict();
 export type ChatTurn = z.infer<typeof turn> & {
   error?: string;
-  effective?: { model?: string; effort?: string };
+  failure?: ChatFailure;
+  attemptId?: string;
+  effective?: { model?: string; effort?: string; permissionMode?: z.infer<typeof settings>["permissionMode"] };
   started?: boolean;
 };
 const decision = z
@@ -372,7 +386,24 @@ export const chatEventSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z
-    .object({ type: z.literal("turn_status"), turnId: id, status: turnStatus, error: z.string().max(500).optional() })
+    .object({
+      type: z.literal("turn_revised"),
+      turnId: id,
+      revision: z.number().int().positive(),
+      textHash: hash,
+      references: referencesSchema,
+      attachments: z.array(attachment).max(10),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("turn_status"),
+      turnId: id,
+      status: turnStatus,
+      error: z.string().max(500).optional(),
+      failure: chatFailureSchema.optional(),
+      attemptId: id.optional(),
+    })
     .strict(),
   z.object({ type: z.literal("content"), content }).strict(),
   z
@@ -381,6 +412,7 @@ export const chatEventSchema = z.discriminatedUnion("type", [
       turnId: id,
       model: z.string().max(160).optional(),
       effort: z.string().max(40).optional(),
+      permissionMode: settings.shape.permissionMode.optional(),
     })
     .strict(),
   z.object({ type: z.literal("decision"), decision }).strict(),
@@ -389,6 +421,8 @@ export const chatEventSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("runtime"),
       runId: id,
+      turnId: id.optional(),
+      attemptId: id.optional(),
       generation: z.number().int().positive(),
       state: z.enum(["prepared", "connected", "stopping", "stopped", "unknown"]),
       nativeId: z.string().max(512).optional(),
@@ -498,10 +532,27 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
       }
       state.turns.push({
         ...event.turn,
+        revision: event.turn.revision ?? 1,
         profileId: event.turn.profileId ?? state.profileId,
         sessionId: event.turn.sessionId ?? state.sessionId,
       });
       break;
+    case "turn_revised": {
+      const target = state.turns.find((item) => item.id === event.turnId);
+      if (
+        !target ||
+        !["accepted", "queued", "held"].includes(target.status) ||
+        event.revision !== (target.revision ?? 1) + 1
+      )
+        throw new Error("only a waiting turn's next revision can be edited");
+      Object.assign(target, {
+        revision: event.revision,
+        textHash: event.textHash,
+        references: event.references,
+        attachments: event.attachments,
+      });
+      break;
+    }
     case "turn_status": {
       const target = state.turns.find((t) => t.id === event.turnId);
       if (!target) throw new Error("missing turn");
@@ -522,6 +573,8 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
       if (event.status === "completed" && target.contextHash === state.handoffHash) state.handoffHash = undefined;
       target.status = event.status;
       target.error = event.error;
+      target.failure = event.failure;
+      if (event.attemptId) target.attemptId = event.attemptId;
       // Whether the message ever went to the agent, replayed from the journal: a message cancelled
       // while it was still waiting was never part of the conversation.
       if (["dispatching", "running", "waiting", "stopping"].includes(event.status)) target.started = true;
@@ -538,7 +591,11 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
     case "effective_settings": {
       const target = state.turns.find((t) => t.id === event.turnId);
       if (!target) throw new Error("missing turn");
-      target.effective = { model: event.model, effort: event.effort };
+      target.effective = {
+        model: event.model,
+        effort: event.effort,
+        ...(event.permissionMode ? { permissionMode: event.permissionMode } : {}),
+      };
       break;
     }
     case "decision":
@@ -560,7 +617,17 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
     }
     case "runtime":
       if (state.runtime && event.generation < state.runtime.generation) throw new Error("stale runtime");
-      state.runtime = { ...event, nativeId: event.nativeId ?? state.runtime?.nativeId };
+      state.runtime = {
+        ...event,
+        nativeId: event.nativeId ?? state.runtime?.nativeId,
+        turnId: event.turnId ?? state.runtime?.turnId,
+        attemptId: event.attemptId ?? state.runtime?.attemptId,
+      };
+      if (event.turnId && event.attemptId) {
+        const turn = state.turns.find((item) => item.id === event.turnId);
+        if (!turn) throw new Error("missing runtime turn");
+        turn.attemptId = event.attemptId;
+      }
       break;
     case "usage":
       state.usage = { ...state.usage, ...event.value };
@@ -575,11 +642,14 @@ function reduceChat(state: ChatState | undefined, event: ChatEvent, seq: number,
 export class ChatLog {
   readonly journal: IntentJournal<ChatEvent>;
   private stateValue?: ChatState;
+  private readonly turnsById = new Map<string, ChatTurn>();
+  private readonly contentById = new Map<string, ChatContent>();
   constructor(readonly root: string) {
     this.journal = new IntentJournal(join(root, "journal.jsonl"), chatEventSchema);
     try {
       for (const event of this.journal.records)
         this.stateValue = reduceChat(this.stateValue, event.data, event.seq, event.at);
+      this.index();
     } catch {
       throw new ManagedAgentError("journal-corrupt", "Chat state cannot be replayed safely.", 503);
     }
@@ -588,8 +658,50 @@ export class ChatLog {
     if (!this.stateValue) throw new ManagedAgentError("chat-not-found", "Chat was not found.", 404);
     return structuredClone(this.stateValue);
   }
+  /** Borrowed read-only projection for daemon policy checks; public snapshots use detached `state`. */
+  get view(): Readonly<ChatState> {
+    if (!this.stateValue) throw new ManagedAgentError("chat-not-found", "Chat was not found.", 404);
+    return this.stateValue;
+  }
+  turn(id: string): Readonly<ChatTurn> | undefined {
+    return this.turnsById.get(id);
+  }
+  private index(): void {
+    this.turnsById.clear();
+    this.contentById.clear();
+    for (const turn of this.stateValue?.turns ?? []) this.turnsById.set(turn.id, turn);
+    for (const content of this.stateValue?.content ?? [])
+      this.contentById.set(`${content.turnId}\0${content.id}`, content);
+  }
+  /** Display appends touch only their indexed parts, never clone the accumulated chat history. */
+  appendMany(events: readonly Extract<ChatEvent, { type: "content" }>[]): void {
+    const state = this.stateValue;
+    if (!state || state.deleted) throw new Error("chat unavailable");
+    const parsed = events.map((event) => chatEventSchema.parse(event) as Extract<ChatEvent, { type: "content" }>);
+    for (const event of parsed) if (!this.turnsById.has(event.content.turnId)) throw new Error("missing content turn");
+    const records = this.journal.appendMany(parsed);
+    // Nothing in the projection or subscriber feed changes until the shared fsync succeeds.
+    for (const record of records) {
+      const content = (record.data as Extract<ChatEvent, { type: "content" }>).content;
+      const key = `${content.turnId}\0${content.id}`;
+      const prior = this.contentById.get(key);
+      if (prior && content.kind !== "tool") prior.text += content.text;
+      else if (prior) Object.assign(prior, content);
+      else {
+        const next = { ...content };
+        state.content.push(next);
+        this.contentById.set(key, next);
+      }
+      state.revision = record.seq;
+      state.updatedAt = record.at;
+    }
+  }
   append(event: ChatEvent, request?: { id: string; input: unknown; result: unknown }): void {
     if (request && this.journal.receipt(request.id, request.input).found) return;
+    if (event.type === "content" && !request) {
+      this.appendMany([event]);
+      return;
+    }
     // Validate semantic replay BEFORE persisting. The writer and reducer must agree.
     const next = reduceChat(
       structuredClone(this.stateValue),
@@ -600,6 +712,7 @@ export class ChatLog {
     const record = this.journal.append(event, request);
     next.updatedAt = record.at;
     this.stateValue = next;
+    this.index();
   }
   text(hashValue?: string): string {
     return hashValue ? readBlob(join(this.root, "blobs"), hashValue).toString("utf8") : "";

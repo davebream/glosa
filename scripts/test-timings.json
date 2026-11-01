@@ -351,6 +351,18 @@
     "packages/providers/openai-transcription/test/provider.test.ts": {
       "seconds": 0.2,
       "reason": "Replacement dictation provider tests: offline SDK multipart/cleanup, atomic config and credential helpers; about 0.1 s locally. Replace with measured CI medians."
+    },
+    "packages/providers/codex/test/oauth.test.ts": {
+      "seconds": 0.4,
+      "reason": "Offline OAuth integration using loopback callback, signed fixture JWTs, fake issuer and secure-store doubles. Initial local estimate; replace with CI medians."
+    },
+    "packages/spa/test/agent-oauth.test.ts": {
+      "seconds": 0.2,
+      "reason": "Offline DOM sign-in state, once-only plan notice and cancellation tests with mocked metadata endpoints; replace initial estimate with CI medians."
+    },
+    "packages/providers/shared-acp/test/transport.test.ts": {
+      "seconds": 0.2,
+      "reason": "ACP SDK in-memory stdio translation and qualification fixtures, no runtime downloads or native calls; replace with CI medians."
     }
   }
 }

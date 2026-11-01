@@ -329,3 +329,46 @@ and guardian as other operations. Sign-in links open only on the person's action
 owns its callback and credentials. No Linux-specific credential import or alternate launcher exists.
 See the implementation contract’s G1–G4 and its
 [Linux qualification procedure](../design/2026-09-23-agent-chat-implementation.md#linux-native-qualification-handoff-433-to-435).
+
+### Managed ACP compatibility proposal, 2026-11-01
+
+ACP is a managed-execution boundary, independent of companion-session delivery and transcript
+normalization. The prepared SDK client does not select either released translator. Retained native
+executors remain selected until all qualification records have concrete evidence. No user preference
+can bypass qualification, and no private vendor fork is part of this migration.
+
+The candidate tuples are ACP SDK 2.2.0, Claude adapter 0.99.1 with Agent SDK 0.3.312, and Codex
+adapter 2.5.0 with native runtime 0.165.0. These are qualification candidates, not installed or
+release-qualified runtime declarations. Existing native candidates remain independently pinned.
+
+Upstream agreement is needed on the following observable semantics. The names below describe
+requirements, not existing ACP method names:
+
+| Capability | Required evidence before cutover |
+|---|---|
+| Attempt authority replacement | Replace the exact MCP configuration and grant, then acknowledge the effective inventory and native generation. Delayed old calls cannot acquire the replacement authority. |
+| Effective configuration | Report actual model, effort, human approval reviewer, filesystem/network policy and enabled tools before accepting a prompt. |
+| Native generation | Report every internal native replacement before accepting subsequent requests or decisions. Retired generations are fenced and ambiguous prompts are never replayed. |
+| Helper suppression | Disable titles, suggestions, follow-ups and other model-backed helpers before creating or recreating a session. Native traces contain only requested turns. |
+| Terminal failure | Preserve structured causes and dispatch certainty. A protocol `end_turn` alone does not establish native success. |
+| Descendant ownership | EOF, cancellation and crashes prove the entire owned tree empty, or explicitly report uncertain ownership and block replacement. |
+
+The Codex AIR failure extension and session-index rename are useful translation mechanisms; they do
+not establish authority replacement or generation fencing. Claude structured `data.details` stays
+separate from its short error title. The existing Claude native executor implements workspace file access
+through explicit ask rules and confined direct file operations; shells, outside paths and network
+require human decisions. Its native permission ordering still needs attended qualification.
+
+Codex workspace access selects a reserved named permission profile, not the legacy `workspaceWrite`
+policy, which permits broad reads. The profile allows the pinned runtime's minimum system reads,
+denies its temporary-directory roots, grants read/write access only to the canonical workspace and
+disables network access. Effective configuration and native thread acknowledgements must match
+before input is submitted, including human approval review. Offline macOS qualification distinguishes
+successful workspace reads/writes from denied private outside files, symlink escapes, home files,
+temporary writes and network access. Linux native qualification remains separate. Existing default
+and plan-only chats retain their policies unless a person explicitly selects workspace access.
+
+The [ACP SDK](https://github.com/agentclientprotocol/typescript-sdk),
+[Claude translator](https://github.com/agentclientprotocol/claude-agent-acp/tree/v0.99.1),
+[Codex translator](https://github.com/agentclientprotocol/codex-acp/tree/v2.5.0) and
+[Claude permission rules](https://code.claude.com/docs/en/permissions) are upstream references.

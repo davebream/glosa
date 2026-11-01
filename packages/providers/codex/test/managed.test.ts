@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent, ProcessLauncher, SessionLaunchSpec } from "../../../daemon/src/agents/interface.ts";
-import { CodexManagedAdapter } from "../src/managed.ts";
+import { CODEX_WORKSPACE_PERMISSION, CodexManagedAdapter } from "../src/managed.ts";
 import nativeConfiguration from "./fixtures/codex-0.156.1-config.json";
 import { codexRuntimeCandidate } from "../src/runtime.ts";
 import { runtimeTarget } from "../../../daemon/src/agents/runtimes.ts";
@@ -58,7 +58,7 @@ const args=process.argv.slice(2), methods=[];
 for(let i=0;i<args.length;i++) if(args[i]==="-c") {
   const entry=args[++i], at=entry.indexOf("="), path=entry.slice(0,at).split(".");
   let target=config; while(path.length>1) {const key=path.shift(); target=target[key]??={};}
-  target[path[0]]=JSON.parse(entry.slice(at+1));
+  target[path[0]]=(Bun.TOML.parse("value="+entry.slice(at+1))).value;
 }
 const descendant=Bun.spawn(["/bin/sleep","60"],{stdin:"ignore",stdout:"ignore",stderr:"ignore"});
 const output=value=>console.log(JSON.stringify(value));
@@ -144,11 +144,14 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
   let config: Record<string, unknown> = {};
   let layers: object[] = structuredClone(nativeConfiguration.layers);
   const sent: Record<string, any>[] = [];
+  const starts: Parameters<ProcessLauncher["spawn"]>[0][] = [];
   let output: (value: object) => void = () => {};
   let stopped = false;
+  let threadOverrides: object = {};
   let mcpStatus: (params: Record<string, unknown>) => Promise<object> = async () => ({ data: [], nextCursor: null });
   const launcher: ProcessLauncher = {
     async spawn(options) {
+      starts.push(options);
       expect(options.env.CODEX_HOME).toBe("/isolated/profile-a");
       if (spec.profile.configuration) {
         expect(options.args).not.toContain('cli_auth_credentials_store="file"');
@@ -170,7 +173,7 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
           const key = path.shift()!;
           target = (target[key] ??= {}) as Record<string, unknown>;
         }
-        target[path[0]!] = JSON.parse(entry.slice(at + 1));
+        target[path[0]!] = (Bun.TOML.parse("value=" + entry.slice(at + 1)) as { value: unknown }).value;
       }
       output = (value) => options.onData("stdout", Buffer.from(`${JSON.stringify(value)}\n`));
       return {
@@ -220,7 +223,25 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
               nextCursor: null,
             };
           if (frame.method === "thread/start" || frame.method === "thread/resume")
-            result = { thread: { id: "thread-a" } };
+            result = {
+              thread: { id: "thread-a" },
+              ...(frame.params.permissions
+                ? {
+                    cwd: spec.cwd,
+                    approvalPolicy: "on-request",
+                    approvalsReviewer: "user",
+                    activePermissionProfile: { id: frame.params.permissions, extends: null },
+                    sandbox: {
+                      type: "workspaceWrite",
+                      writableRoots: [],
+                      networkAccess: false,
+                      excludeTmpdirEnvVar: true,
+                      excludeSlashTmp: true,
+                    },
+                  }
+                : {}),
+              ...threadOverrides,
+            };
           if (frame.method === "mcpServerStatus/list") result = await mcpStatus(frame.params);
           if (frame.method === "skills/list")
             result = {
@@ -254,6 +275,7 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
     launcher,
     spec,
     sent,
+    starts,
     root,
     setConfig: (value: Record<string, unknown>) => {
       config = { ...config, ...value };
@@ -263,6 +285,9 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
     },
     output: (value: object) => output(value),
     stopped: () => stopped,
+    setThreadOverrides: (value: object) => {
+      threadOverrides = value;
+    },
     setMcpStatus: (read: typeof mcpStatus) => {
       mcpStatus = read;
     },
@@ -316,6 +341,23 @@ test("Codex streams one copy, scopes decisions to the active thread, and writes 
   await connection.answer(decisions[0]!.decision.id, "deny");
   await expect(connection.answer(decisions[0]!.decision.id, "allow")).rejects.toThrow("no longer waiting");
   expect(f.sent.filter((frame) => frame.id === 99)).toEqual([{ id: 99, result: { decision: "decline" } }]);
+  f.output({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-a",
+      turn: {
+        status: "failed",
+        error: {
+          message: "Subscription unavailable",
+          additionalDetails: "Subscription unavailable. Bearer hidden-token",
+        },
+      },
+    },
+  });
+  expect(events.find((event) => event.type === "failed")).toMatchObject({
+    code: "native-turn-failed",
+    details: "Subscription unavailable. Bearer [redacted]",
+  });
   await connection.close();
   expect(f.stopped()).toBe(true);
 });
@@ -536,4 +578,273 @@ test("linked Codex preserves native credentials and project tools but refuses a 
   f.setConfig({ mcp_servers: { glosa: { command: "native-glosa" } }, openai_base_url: "https://routing.example.test" });
   await expect(adapter.preflight(f.spec, f.launcher)).rejects.toThrow("Native routing");
   expect(f.sent.filter((frame) => frame.method === "account/read")).toHaveLength(accountReads);
+});
+
+test("Codex workspace policy permits local writes with human outside/network approvals and plan remains read-only", async () => {
+  for (const mode of ["workspace", "plan"] as const) {
+    const f = fixture(),
+      connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, () => {});
+    try {
+      await connection.startTurn({
+        turnId: "turn",
+        text: "Review",
+        settings: { model: "model", effort: "high", permissionMode: mode },
+        attachments: [],
+      });
+      const start = f.sent.find((frame) => frame.method === "thread/start")!.params;
+      const turn = f.sent.find((frame) => frame.method === "turn/start")!.params;
+      expect(start.config.web_search).toBe("disabled");
+      expect(start.approvalsReviewer).toBe("user");
+      expect(turn.approvalsReviewer).toBe("user");
+      expect(start.approvalPolicy).toBe(mode === "workspace" ? "on-request" : "untrusted");
+      expect(turn.approvalPolicy).toBe(start.approvalPolicy);
+      expect(start.sandbox).toBe(mode === "workspace" ? undefined : "read-only");
+      expect(start.permissions).toBe(mode === "workspace" ? CODEX_WORKSPACE_PERMISSION : undefined);
+      expect(turn.permissions).toBe(start.permissions);
+      expect(turn.sandboxPolicy).toEqual(mode === "workspace" ? undefined : { type: "readOnly" });
+    } finally {
+      await connection.close();
+    }
+  }
+});
+
+test.each([
+  { activePermissionProfile: null },
+  { activePermissionProfile: { id: ":workspace" } },
+  { activePermissionProfile: { id: CODEX_WORKSPACE_PERMISSION, extends: ":workspace" } },
+  { approvalsReviewer: "guardian_subagent" },
+  { approvalPolicy: "never" },
+  {
+    sandbox: {
+      type: "workspaceWrite",
+      writableRoots: [],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: true,
+    },
+  },
+])("workspace policy acknowledgement %j blocks input when confinement is not confirmed", async (overrides) => {
+  const f = fixture();
+  f.setThreadOverrides(overrides);
+  const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, () => {});
+  try {
+    await expect(
+      connection.startTurn({
+        turnId: "turn",
+        text: "Review",
+        attachments: [],
+        settings: { model: "model", effort: "high", permissionMode: "workspace" },
+      }),
+    ).rejects.toThrow("did not confirm confined workspace access");
+    expect(f.sent.some((frame) => frame.method === "turn/start")).toBe(false);
+  } finally {
+    await connection.close();
+  }
+});
+
+test("a widened reserved filesystem profile is refused before a workspace thread is created", async () => {
+  const f = fixture();
+  const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, () => {});
+  try {
+    f.setConfig({
+      permissions: {
+        [CODEX_WORKSPACE_PERMISSION]: {
+          filesystem: { ":root": "read", [realpathSync(f.spec.cwd)]: "write" },
+          network: { enabled: false },
+        },
+      },
+    });
+    await expect(
+      connection.prepareTurn!({ model: "model", effort: "high", permissionMode: "workspace" }),
+    ).rejects.toThrow("configuration conflicts");
+    expect(f.sent.some((frame) => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+  } finally {
+    await connection.close();
+  }
+});
+
+function oauthFixture() {
+  const f = fixture();
+  f.spec.profile.authentication = { mode: "oauth", credentialRef: "account-a" };
+  f.spec.profile.auth.identity = "oauth:account-a";
+  f.setLayers([]);
+  const account = {
+    accountId: "account-a",
+    clientId: "client",
+    issuer: "https://auth.openai.com",
+    subject: "subject",
+    label: "Writer",
+    status: "signed-in" as const,
+    planEnabled: true,
+  };
+  let leases = 0;
+  let expiresAt = () => new Date(Date.now() + 3_600_000).toISOString();
+  const broker = {
+    getAccount: () => account,
+    lease: async () => {
+      leases++;
+      return { accessToken: "synthetic-access-token", credentialVersion: "version-a", expiresAt: expiresAt() };
+    },
+  } as unknown as import("../../../daemon/src/agents/oauth-interface.ts").ManagedOAuthBroker;
+  return {
+    ...f,
+    account,
+    adapter: new CodexManagedAdapter({ oauth: broker }),
+    leases: () => leases,
+    setExpiration: (next: typeof expiresAt) => {
+      expiresAt = next;
+    },
+  };
+}
+
+test("OAuth metadata probing never leases credentials or starts native inference and missing plan consent refuses dispatch", async () => {
+  const f = oauthFixture();
+  expect(await f.adapter.probe(f.spec, f.launcher)).toMatchObject({
+    state: "authenticated",
+    identity: "oauth:account-a",
+    plan: "ChatGPT plan",
+  });
+  expect(f.leases()).toBe(0);
+  expect(f.starts).toHaveLength(0);
+  f.account.planEnabled = false;
+  expect((await f.adapter.probe(f.spec, f.launcher)).plan).toBeUndefined();
+  await expect(f.adapter.connect(f.spec, f.launcher, () => {})).rejects.toThrow("does not include ChatGPT plan access");
+  expect(f.leases()).toBe(0);
+  expect(f.starts).toHaveLength(0);
+  f.account.planEnabled = true;
+  f.spec.profile.auth.identity = "oauth:other-account";
+  await expect(f.adapter.connect(f.spec, f.launcher, () => {})).rejects.toThrow("original ChatGPT account");
+  expect(f.leases()).toBe(0);
+  f.spec.profile.configuration = { mode: "linked", path: f.spec.configRoot };
+  await expect(f.adapter.connect(f.spec, f.launcher, () => {})).rejects.toThrow("configuration conflicts");
+  expect(f.starts).toHaveLength(0);
+});
+
+test("OAuth binds only the owned native environment, writes public startup policy and resumes without replay", async () => {
+  const f = oauthFixture();
+  f.spec.nativeId = "thread-a";
+  f.spec.servers = [
+    { id: "local", label: "Local", enabled: true, transport: "stdio", command: "/local/server", args: [] },
+  ];
+  const connection = await f.adapter.connect(f.spec, f.launcher, () => {});
+  try {
+    expect(f.leases()).toBe(1);
+    expect(f.starts[0]!.env.ACCESS_TOKEN).toBe("synthetic-access-token");
+    expect(f.starts[0]!.args.join(" ")).not.toContain("synthetic-access-token");
+    const startup = readFileSync(join(f.spec.configRoot, "config.toml"), "utf8");
+    expect(startup).not.toContain("synthetic-access-token");
+    const config = Bun.TOML.parse(startup) as {
+      model_provider: string;
+      model_providers: Record<string, Record<string, unknown>>;
+      shell_environment_policy: { include_only: string[] };
+    };
+    expect(config.model_provider).toBe("openai_chatgpt_plan");
+    expect(config.model_providers.openai_chatgpt_plan).toEqual({
+      name: "ChatGPT plan",
+      base_url: "https://api.openai.com/v1",
+      env_key: "ACCESS_TOKEN",
+      wire_api: "responses",
+      requires_openai_auth: false,
+      supports_websockets: false,
+      supports_standalone_web_search: false,
+    });
+    expect(config.shell_environment_policy).toMatchObject({
+      inherit: "core",
+      ignore_default_excludes: false,
+      exclude: ["ACCESS_TOKEN", "GLOSA_MANAGED_MCP_GRANT"],
+      set: {},
+    });
+    expect(config.shell_environment_policy.include_only).not.toContain("ACCESS_TOKEN");
+    await connection.prepareTurn!({ model: "model", effort: "high", permissionMode: "workspace" });
+    const resume = f.sent.find((frame) => frame.method === "thread/resume")!;
+    expect(resume.params.modelProvider).toBe("openai_chatgpt_plan");
+    expect(resume.params.threadId).toBe("thread-a");
+    expect(resume.params.config["mcp_servers.glosa-user-local"]).toEqual({
+      command: "/local/server",
+      args: [],
+      env: {},
+      env_vars: [],
+    });
+    expect(f.sent.some((frame) => ["account/read", "thread/start", "turn/start"].includes(frame.method))).toBe(false);
+    expect(JSON.stringify(f.sent)).not.toContain("synthetic-access-token");
+  } finally {
+    await connection.close();
+  }
+});
+
+test("OAuth rejects changed startup routing and credential inheritance policy before launching", async () => {
+  const f = oauthFixture();
+  writeFileSync(join(f.spec.configRoot, "config.toml"), 'model_provider="openai"\n');
+  await expect(f.adapter.connect(f.spec, f.launcher, () => {})).rejects.toThrow("configuration conflicts");
+  expect(f.starts).toHaveLength(0);
+  expect(f.leases()).toBe(0);
+});
+
+test("OAuth credential expiry fences the old process and the next foreground lease resumes without replay", async () => {
+  const f = oauthFixture(),
+    events: AgentEvent[] = [];
+  // A real-time witness is intentional: this observes the expiry deadline that fences a process.
+  f.setExpiration(() => new Date(Date.now() + 100).toISOString());
+  const connection = await f.adapter.connect(f.spec, f.launcher, (event) => events.push(event));
+  try {
+    await connection.prepareTurn!({ model: "model", effort: "high", permissionMode: "workspace" });
+    expect(
+      await waitUntil(() => events.some((event) => event.type === "failed" && event.code === "auth-required")),
+    ).toBe(true);
+    expect(f.stopped()).toBe(true);
+    await expect(
+      connection.startTurn({
+        turnId: "never-replay",
+        text: "Unsent",
+        settings: { model: "model", effort: "high", permissionMode: "workspace" },
+        attachments: [],
+      }),
+    ).rejects.toThrow("stopped");
+    expect(f.sent.some((frame) => frame.method === "turn/start")).toBe(false);
+    expect(f.leases()).toBe(1);
+  } finally {
+    await connection.close();
+  }
+  f.setExpiration(() => new Date(Date.now() + 3_600_000).toISOString());
+  f.spec.nativeId = "thread-a";
+  const resumed = await f.adapter.connect(f.spec, f.launcher, () => {});
+  try {
+    await resumed.prepareTurn!({ model: "model", effort: "high", permissionMode: "workspace" });
+    expect(f.leases()).toBe(2);
+    expect(f.sent.some((frame) => frame.method === "thread/resume" && frame.params.threadId === "thread-a")).toBe(true);
+    expect(f.sent.some((frame) => frame.method === "turn/start")).toBe(false);
+  } finally {
+    await resumed.close();
+  }
+});
+
+test("Codex terminal error categories distinguish authentication and quota without guessing from titles", async () => {
+  for (const [codexErrorInfo, code] of [
+    ["unauthorized", "account-auth"],
+    ["rateLimitExceeded", "quota"],
+    [{ responseStreamConnectionFailed: { httpStatusCode: 401 } }, "account-auth"],
+    ["other", "native-turn-failed"],
+  ] as const) {
+    const f = fixture(),
+      events: AgentEvent[] = [];
+    const connection = await new CodexManagedAdapter().connect(f.spec, f.launcher, (event) => events.push(event));
+    try {
+      await connection.startTurn({
+        turnId: "logical",
+        text: "Review",
+        settings: { model: "model", effort: "high", permissionMode: "workspace" },
+        attachments: [],
+      });
+      f.output({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-a",
+          turn: { status: "failed", error: { codexErrorInfo, message: "Authentication failed: rate limit" } },
+        },
+      });
+      expect(events.find((event) => event.type === "failed")).toMatchObject({ code });
+    } finally {
+      await connection.close();
+    }
+  }
 });

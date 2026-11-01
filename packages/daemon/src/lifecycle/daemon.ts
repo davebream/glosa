@@ -192,7 +192,7 @@ export interface BuildBackendOptions {
   gcThrottleMs?: number;
   providerFactories?: Array<(deps: ProviderFactoryDeps) => AgentProvider>;
   dictationProviderFactories?: Array<(deps: DictationProviderFactoryDeps) => DictationProvider>;
-  managedAgentFactories?: Array<() => ManagedAgentAdapter>;
+  managedAgentFactories?: Array<(context: { stateRoot: string }) => ManagedAgentAdapter>;
   /** Injected by a qualified composition root; absence leaves managed execution unavailable. */
   managedRuntime?: {
     released: boolean;
@@ -243,7 +243,8 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const providerRegistry = new AgentProviderRegistry();
   const dictationRegistry = new DictationProviderRegistry();
   const managedRegistry = new ManagedAgentRegistry();
-  for (const factory of opts.managedAgentFactories ?? []) managedRegistry.register(factory());
+  for (const factory of opts.managedAgentFactories ?? [])
+    managedRegistry.register(factory({ stateRoot: join(home, "agents") }));
   const supervisor = new RuntimeSupervisor(join(home, "agents"));
   const runtimes = new RuntimeCatalog(join(home, "agents"), opts.managedRuntime?.candidates ?? []);
   let managedChats: ManagedChatService | undefined;

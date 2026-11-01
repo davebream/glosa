@@ -630,3 +630,146 @@ test("linked Claude loads enabled native plugins and tracks their authority with
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Claude workspace scope auto-approves confined file operations and asks a human for outside paths, shells and network", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-claude-scope-")));
+  const cwd = join(root, "workspace"),
+    outside = join(root, "outside");
+  mkdirSync(cwd);
+  mkdirSync(outside);
+  const { symlinkSync } = await import("node:fs");
+  symlinkSync(outside, join(cwd, "escape"));
+  symlinkSync(join(outside, "absent"), join(cwd, "dangling"));
+  const events: AgentEvent[] = [];
+  let configured!: Parameters<ClaudeSdk["query"]>[0];
+  let finish!: () => void;
+  const adapter = new ClaudeManagedAdapter(async () => ({
+    query(options) {
+      configured = options;
+      return {
+        supportedModels: async () => [{ value: "model", displayName: "Model" }],
+        accountInfo: async () => ({ email: "writer@example.test", apiProvider: "firstParty", apiKeySource: "none" }),
+        interrupt: async () => {},
+        close() {
+          finish?.();
+        },
+        async *[Symbol.asyncIterator]() {
+          yield { type: "system", subtype: "init", model: "model", permissionMode: "default" };
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+      };
+    },
+  }));
+  const launcher: ProcessLauncher = {
+    async spawn(options) {
+      options.onData(
+        "stdout",
+        Buffer.from(
+          JSON.stringify({
+            loggedIn: true,
+            authMethod: "claude.ai",
+            apiProvider: "firstParty",
+            email: "writer@example.test",
+            orgId: "org",
+          }),
+        ),
+      );
+      return {
+        pid: 1,
+        exited: Promise.resolve({ code: 0, signal: null, groupEmpty: true }),
+        async write() {},
+        async fence() {},
+        async stop() {},
+        resize() {},
+      };
+    },
+  };
+  let connection: Awaited<ReturnType<typeof adapter.connect>> | undefined;
+  try {
+    connection = await adapter.connect(
+      {
+        profile: { auth: { identity: "org:writer@example.test" } },
+        cwd,
+        configRoot: root,
+        env: {},
+        manifest: { executable: "/qualified/claude", sdkModule: "/qualified/sdk" },
+        settings: { model: "model", effort: "high", permissionMode: "workspace" },
+      } as SessionLaunchSpec,
+      launcher,
+      (event) => events.push(event),
+    );
+    expect(configured.options.permissionMode).toBe("default");
+    expect(await waitUntil(() => events.some((event) => event.type === "effective_settings"))).toBe(true);
+    expect(events.find((event) => event.type === "effective_settings")).toMatchObject({ permissionMode: "workspace" });
+    expect(configured.options.settings.permissions).toMatchObject({
+      ask: ["*", "Read", "Edit", "Write", "NotebookEdit", "Bash", "WebFetch", "WebSearch"],
+      defaultMode: "default",
+      disableBypassPermissionsMode: "disable",
+    });
+    const signal = new AbortController().signal;
+    for (const name of ["Read", "Write", "Edit", "NotebookEdit"]) {
+      const input = { [name === "NotebookEdit" ? "notebook_path" : "file_path"]: join(cwd, "new.md") };
+      expect(await configured.options.canUseTool(name, input, { signal, toolUseID: name })).toEqual({
+        behavior: "allow",
+        updatedInput: input,
+      });
+    }
+    expect(events.some((event) => event.type === "decision")).toBe(false);
+    const requests = [
+      ["Read", { file_path: join(outside, "private.md") }],
+      ["Write", { file_path: "../outside/private.md" }],
+      ["Edit", { file_path: "escape/private.md" }],
+      ["Write", { file_path: "dangling/new.md" }],
+      ["Bash", { command: "cat ../outside/private.md" }],
+      ["WebFetch", { url: "https://example.test" }],
+      ["mcp__external__read", { path: "private.md" }],
+    ] as const;
+    for (const [index, [name, input]] of requests.entries()) {
+      const id = `decision-${index}`;
+      const result = configured.options.canUseTool(name, input, { signal, toolUseID: id });
+      expect(events.some((event) => event.type === "decision" && event.decision.id === id)).toBe(true);
+      await connection.answer(id, "deny");
+      expect(await result).toMatchObject({ behavior: "deny" });
+    }
+  } finally {
+    await connection?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Claude native failure details preserve the cause and redact credentials", () => {
+  const events: AgentEvent[] = [];
+  const normalizer = new ClaudeEventNormalizer((event) => events.push(event), ["native-secret"]);
+  normalizer.accept({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["Provider refused native-secret. access_token=hidden Bearer credential"],
+  });
+  expect(events.find((event) => event.type === "failed")).toMatchObject({
+    code: "claude-turn-failed",
+    details: '["Provider refused [redacted]. access_token=[redacted] Bearer [redacted]"]',
+  });
+});
+
+test("Claude structured assistant error categories govern terminal auth and quota state without title guessing", () => {
+  for (const [error, code] of [
+    ["authentication_failed", "account-auth"],
+    ["rate_limit", "quota"],
+    ["unknown", "claude-turn-failed"],
+  ] as const) {
+    const events: AgentEvent[] = [];
+    const normalizer = new ClaudeEventNormalizer((event) => events.push(event));
+    normalizer.accept({
+      type: "assistant",
+      error,
+      message: { id: "one", content: [{ type: "text", text: "Authentication failed: rate limit" }] },
+    });
+    normalizer.accept({ type: "result", subtype: "error_during_execution", is_error: true });
+    expect(events.find((event) => event.type === "failed")).toMatchObject({ code });
+    normalizer.accept({ type: "result", subtype: "error_during_execution", is_error: true });
+    expect(events.filter((event) => event.type === "failed").at(-1)).toMatchObject({ code: "claude-turn-failed" });
+  }
+});

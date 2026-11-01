@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { mountAgentOAuth } from "./agent-oauth.js";
 import { mountDictationSettings } from "./dictation-settings.js";
 import { mountMcpSettings } from "./agent-mcp-settings.js";
 import { appearanceList, CHECK_SVG, paletteList } from "./appearance.js";
@@ -10,7 +11,13 @@ import { createElement as el } from "./viewer-shell.js";
 
 export function mountAgentSettings(
   host,
-  { dataAccess, onChange, appearance, textSize = null, openOutside = undefined },
+  {
+    dataAccess,
+    onChange,
+    appearance,
+    textSize = null,
+    openOutside = /** @type {((url: string) => unknown) | undefined} */ (undefined),
+  },
 ) {
   let disposed = false,
     login,
@@ -374,6 +381,22 @@ export function mountAgentSettings(
     );
     return control;
   };
+  async function continueWithChatGPT(provider, accountId, requestPlanConsent = !accountId) {
+    await login?.destroy();
+    login = await mountAgentOAuth(loginHost, {
+      dataAccess,
+      provider,
+      accountId,
+      requestPlanConsent,
+      openOutside,
+      onFinished: (profile) => {
+        if (profile?.id) selectedAccounts.set(provider, profile.id);
+        void refresh().catch(showError);
+        onChange?.();
+      },
+    });
+    loginHost.scrollIntoView?.({ block: "nearest" });
+  }
   const update = (profile, changes) =>
     dataAccess.updateAgentProfile(profile.id, {
       requestId: crypto.randomUUID(),
@@ -720,6 +743,43 @@ export function mountAgentSettings(
           identity.append(el("dt", { textContent: label }), el("dd", { textContent: value }));
         }
         details.append(identity);
+        if (profile.authentication?.mode === "oauth") {
+          const account = state.oauthAccounts?.[provider.id]?.find(
+            (entry) => entry.accountId === profile.authentication.credentialRef,
+          );
+          details.append(
+            el("p", {
+              textContent: account?.planEnabled
+                ? "Using ChatGPT plan"
+                : account?.status === "signed-in"
+                  ? "Signed in. ChatGPT plan usage is not authorized."
+                  : "Sign in to ChatGPT before using this account.",
+            }),
+            el("a", {
+              href: "https://chatgpt.com/settings/usage",
+              target: "_blank",
+              rel: "noopener noreferrer",
+              textContent: "Manage usage",
+            }),
+          );
+          if (account?.status === "signed-in" && !account.planEnabled && !profile.cleanup)
+            details.append(
+              button(
+                "Enable ChatGPT plan",
+                () => continueWithChatGPT(provider.id, profile.authentication.credentialRef, true),
+                !profile.enabled || !available,
+              ),
+            );
+          if (profile.auth.revocation === "unconfirmed")
+            details.append(
+              el("p", {
+                role: "status",
+                textContent: profile.cleanup
+                  ? "Account use is stopped. Secure credential cleanup is incomplete, and remote sign-out could not be confirmed. Retry account cleanup."
+                  : "Local credentials were cleared. Remote sign-out could not be confirmed. Review connected apps in ChatGPT.",
+              }),
+            );
+        }
         const actions = el("div", { className: "glosa-agent-account-actions" });
         actions.append(
           button(
@@ -746,6 +806,10 @@ export function mountAgentSettings(
           button(
             connected ? "Sign in again" : "Sign in",
             async () => {
+              if (profile.authentication?.mode === "oauth") {
+                await continueWithChatGPT(provider.id, profile.authentication.credentialRef);
+                return;
+              }
               await login?.destroy();
               const { mountAgentLogin } = await import("./agent-login.js");
               login = await mountAgentLogin(loginHost, {
@@ -955,6 +1019,8 @@ export function mountAgentSettings(
             configurationDrafts.delete(provider.id);
           });
       });
+      if (provider.oauth)
+        accountArea.append(button("Continue with ChatGPT", () => continueWithChatGPT(provider.id), !available));
       accountArea.append(form);
       body.append(section);
     }

@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "@assistant-ui/react": "0.15.32",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

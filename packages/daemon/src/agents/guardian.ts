@@ -60,7 +60,10 @@ function signalGroup(signal: NodeJS.Signals): void {
   try {
     process.kill(-group, signal);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
+    // A group can lose its signalable members while exiting: Darwin may refuse the signal
+    // with EPERM until the remaining process records disappear. Refusal is not proof of exit.
+    // Keep the bounded waits/escalation and let groupAlive's ESRCH-only proof decide the receipt.
+    if (!["ESRCH", "EPERM"].includes((e as NodeJS.ErrnoException).code ?? "")) throw e;
   }
 }
 function wait(ms: number): Promise<void> {

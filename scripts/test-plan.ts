@@ -36,6 +36,8 @@ export const LINUX_CORE_FILES = [
   "packages/daemon/test/agents/chat-routes.test.ts",
   "packages/providers/claude-code/test/managed.test.ts",
   "packages/providers/codex/test/managed.test.ts",
+  "packages/providers/codex/test/oauth.test.ts",
+  "packages/providers/shared-acp/test/transport.test.ts",
   "packages/spa/test/chat-pane.test.ts",
   // #432: the Linux package's install kind and recording, its packaging rules, and the install
   // lifetime guard, whose filesystem and clock behaviour is exactly what differs on Linux.

@@ -1,3 +1,4 @@
+import { chatWatchStreams } from "../chats/watch-stream.ts";
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the two listeners' fetch pipelines (A1 §1/§3/§4, A3 §4). Wires together
 // host-check → route lookup → authorizeRequest → contract-version gate → body cap → handler for
@@ -2916,6 +2917,17 @@ async function handleStream(
   const bus = await resolveBus(ctx, resolved.entry);
   return createJournalStreamResponse(resolved.entry, bus, req, server, {
     shutdownSignal: lifecycleSignal(ctx, authSignal),
+    subscribeChatStream: ctx.managedChats
+      ? (send) =>
+          chatWatchStreams(ctx.managedChats!).register(
+            {
+              id: resolved.entry.registration_id,
+              epoch: resolved.entry.first_seen,
+              path: resolved.entry.canonical_path,
+            },
+            send,
+          )
+      : undefined,
     subscribeChats: (listener) => {
       const store = ctx.managedChats?.store;
       const relay = ({ chatId }: { chatId?: string }) => {

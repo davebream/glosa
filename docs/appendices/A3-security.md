@@ -539,3 +539,29 @@ recheck. This follows the existing userspace confinement model; it does not clai
 walk across a concurrently renamed parent directory. A capped listing is admission, not authority:
 each content read repeats current eligibility and ignore checks. No read-only write route exists;
 existing document and direct file mutations retain their narrower membership guards.
+
+
+### Optional public-client OAuth for managed accounts, 2026-11-01
+
+OAuth broker mechanics stay behind the provider interface. Public registration uses a stable random
+host identity with fresh state, nonce and PKCE for every attempt, an exact loopback callback and
+validated issued client ID, signed ID-token identity and direct-use scope. A signed-in identity
+without direct-use scope is not authorized to infer. Equal email addresses do not merge registrations.
+
+Complete token records live only in macOS Keychain or Linux Secret Service. Locked or missing secure
+storage fails visibly. Refresh is serialized per registration and replaces the complete rotated
+record. No background refresh or startup discovery is allowed. Sign-out first fences account use and
+stops owned execution, attempts revocation and clears local secrets; failed remote revocation is
+reported as unconfirmed. Tokens are forbidden in browser persistence, logs, journal entries, process
+arguments and native shell/MCP child environments. OAuth does not alter dictation credentials.
+
+Private metadata tracks staged and retired credential references before vault writes, without token
+bytes. Sign-out cannot report local removal while any tracked record remains. A validated rotated
+credential is committed even if the foreground caller cancels during rotation; cancellation prevents
+leasing it, not preserving it. Authorization generations fence pending callbacks across sign-out.
+Metadata mutation uses an operating-system advisory lock that releases on process exit; a stale
+lock-file pathname alone must not prevent recovery after a crash.
+
+A maintained translator may not authorize an old tool call using a newer turn's grant. Native process
+replacement must invalidate the old attempt and decisions before accepting new work. Missing proof
+blocks cutover and warm reuse; it does not relax those requirements.

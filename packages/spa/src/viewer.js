@@ -815,7 +815,7 @@ export function mountApp(
         id: crypto.randomUUID(),
         provider: chosen.provider,
         profileId: chosen.id,
-        settings: settings ?? { model: model?.id ?? "", effort: model?.efforts[0] ?? "", permissionMode: "default" },
+        settings: settings ?? { model: model?.id ?? "", effort: model?.efforts[0] ?? "", permissionMode: "workspace" },
       });
       if (slug !== currentSlug || unmounted) return;
       await refreshChats();

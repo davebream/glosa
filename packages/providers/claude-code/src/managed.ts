@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-import { readFileSync, realpathSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, realpathSync, lstatSync } from "node:fs";
+import { join, dirname, relative } from "node:path";
 import { homedir } from "node:os";
 import { configurationRevision } from "../../../daemon/src/agents/configuration.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -21,11 +21,31 @@ import {
   type SessionLaunchSpec,
   type TurnSettings,
 } from "../../../daemon/src/agents/interface.ts";
+import { providerEnvironmentSecrets, providerFailureDetails } from "../../shared-acp/src/failures.ts";
+import { ACP_QUALIFICATIONS } from "../../shared-acp/src/qualification.ts";
+import { confinePath } from "../../../daemon/src/security/confine-path.ts";
 import { nativeProbe } from "../../../daemon/src/agents/probe.ts";
 import { managedToolsUnavailable, waitForManagedTools } from "../../../daemon/src/agents/managed-bootstrap.ts";
 
 // Keep the managed grant bridge separate from the native companion integration.
 const MANAGED_MCP_NAME = "glosa-managed";
+
+function confinedDirectFile(cwd: string, path: string): boolean {
+  const rel = path.startsWith("/") ? relative(cwd, path) : path;
+  if (!confinePath(cwd, rel).ok) return false;
+  // A dangling symlink cannot be realpathed yet. Refuse every symlink component,
+  // so creating its previously absent target can never grant an outside write.
+  let current = cwd;
+  for (const part of rel.split("/")) {
+    current = join(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+    }
+  }
+  return true;
+}
 
 // Structural boundary checked against the published 0.3.280 declarations. The optional commercial
 // SDK is loaded only from an explicitly installed/qualified runtime, never imported by core.
@@ -81,7 +101,10 @@ export interface ClaudeSdk {
       settingSources: string[];
       plugins?: { type: "local"; path: string }[];
       strictMcpConfig: boolean;
-      settings: { disableClaudeAiConnectors: boolean };
+      settings: {
+        disableClaudeAiConnectors: boolean;
+        permissions?: { ask: string[]; defaultMode: "default"; disableBypassPermissionsMode: "disable" };
+      };
       persistSession: boolean;
       systemPrompt?: { type: "preset"; preset: "claude_code"; append: string; snapshot: false };
       mcpServers?: Record<
@@ -203,6 +226,7 @@ const statusSchema = z.object({
 export class ClaudeManagedAdapter implements ManagedAgentAdapter {
   readonly id = "claude-code";
   readonly name = "Claude";
+  readonly transportQualification = ACP_QUALIFICATIONS["claude-code"];
   readonly authHosts = ["claude.ai", "claude.com", "platform.claude.com", "console.anthropic.com"];
   constructor(
     private readonly loadSdk: (path: string) => Promise<ClaudeSdk> = async (path) =>
@@ -404,7 +428,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         pathToClaudeCodeExecutable: spec.manifest.executable,
         model: spec.settings.model || undefined,
         effort: spec.settings.effort || undefined,
-        permissionMode: spec.settings.permissionMode,
+        permissionMode: spec.settings.permissionMode === "workspace" ? "default" : spec.settings.permissionMode,
         resume: spec.nativeId,
         includePartialMessages: true,
         persistSession: true,
@@ -423,7 +447,21 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
         ...(spec.profile.configuration ? { plugins: this.nativePlugins(spec.configRoot, spec.cwd) } : {}),
         settingSources: spec.profile.configuration ? ["user", "project", "local"] : [],
         strictMcpConfig: !spec.profile.configuration,
-        settings: { disableClaudeAiConnectors: true },
+        settings: {
+          disableClaudeAiConnectors: true,
+          ...(spec.settings.permissionMode === "workspace"
+            ? {
+                permissions: {
+                  // Ask precedes allow rules/modes, including native read-only shell auto-approval.
+                  // The wildcard covers newly introduced and MCP tools; named rules also document
+                  // the critical native surface. Only confined direct file operations auto-approve.
+                  ask: ["*", "Read", "Edit", "Write", "NotebookEdit", "Bash", "WebFetch", "WebSearch"],
+                  defaultMode: "default" as const,
+                  disableBypassPermissionsMode: "disable" as const,
+                },
+              }
+            : {}),
+        },
         mcpServers: {
           ...Object.fromEntries(
             (spec.servers ?? []).map((server) => [
@@ -449,6 +487,18 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
             if (closed || permission.signal.aborted) {
               resolve({ behavior: "deny", message: "The run stopped." });
               return;
+            }
+            if (
+              spec.settings.permissionMode === "workspace" &&
+              ["Read", "Edit", "Write", "NotebookEdit"].includes(name)
+            ) {
+              const path = name === "NotebookEdit" ? toolInput.notebook_path : toolInput.file_path;
+              if (typeof path === "string" && path.length <= 4096) {
+                if (confinedDirectFile(spec.cwd, path)) {
+                  resolve({ behavior: "allow", updatedInput: toolInput });
+                  return;
+                }
+              }
             }
             const id = permission.toolUseID || randomUUID();
             const deny = () => {
@@ -521,7 +571,7 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
           "Claude did not report the selected subscription account. Reconnect the account.",
         );
       }
-      const normalize = new ClaudeEventNormalizer(onEvent);
+      const normalize = new ClaudeEventNormalizer(onEvent, providerEnvironmentSecrets(nativeSpec.env));
       let commandList: ClaudeCommand[] | undefined;
       const commands = async (forceReload = false) => {
         if (forceReload || !commandList) commandList = (await query.supportedCommands?.()) ?? [];
@@ -541,6 +591,8 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
       };
       let prepared: string | undefined;
       const prepareTurn = async (settings: TurnSettings) => {
+        if (settings.permissionMode !== spec.settings.permissionMode)
+          throw new ManagedAgentError("run-fenced", "Permission changes require a fresh native runtime.");
         if (active || closed) throw new ManagedAgentError("turn-active", "This runtime already accepted a turn.");
         if (spec.mcp && !query.mcpServerStatus) throw managedToolsUnavailable();
         if (spec.mcp)
@@ -571,13 +623,28 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
               subtype?: string;
               model?: string;
               commands?: ClaudeCommand[];
+              permissionMode?: string;
             };
             if (init.type === "system" && init.subtype === "commands_changed") {
               commandList = init.commands;
               onEvent({ type: "commands_changed" });
             }
-            if (init.type === "system" && init.subtype === "init" && typeof init.model === "string")
-              onEvent({ type: "effective_settings", model: init.model });
+            if (init.type === "system" && init.subtype === "init" && typeof init.model === "string") {
+              if (spec.settings.permissionMode === "workspace" && init.permissionMode !== "default") {
+                closed = true;
+                input.close();
+                query.close();
+                onEvent({
+                  type: "failed",
+                  code: "native-policy-mismatch",
+                  message:
+                    "Claude did not confirm the configured workspace approval policy. The runtime stopped; the message was not resent.",
+                  outcomeUnknown: active,
+                });
+                return;
+              }
+              onEvent({ type: "effective_settings", model: init.model, permissionMode: spec.settings.permissionMode });
+            }
             normalize.accept(message);
           }
           if (!closed)
@@ -587,11 +654,12 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
               message: "Claude ended without confirming another result.",
               outcomeUnknown: true,
             });
-        } catch {
+        } catch (error) {
           if (!closed)
             onEvent({
               type: "failed",
               code: "claude-disconnected",
+              details: providerFailureDetails(error, providerEnvironmentSecrets(nativeSpec.env)),
               outcomeUnknown: true,
               message: "Claude disconnected. The turn was not resent.",
             });
@@ -702,13 +770,17 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
 /** Normalize SDK events into structured data; never HTML or ANSI scraping. */
 export class ClaudeEventNormalizer {
   private emittedText = false;
+  private nativeFailure?: "account-auth" | "quota";
   private readonly messageIds = new Map<string, string>();
   private readonly streamed = new Set<string>();
   private readonly completedBlocks = new Map<string, number>();
   private readonly activeBlocks = new Map<string, number>();
   private readonly tools = new Map<string, string>();
   private readonly emit: (event: AgentEvent) => void;
-  constructor(emit: (event: AgentEvent) => void) {
+  constructor(
+    emit: (event: AgentEvent) => void,
+    private readonly secrets: readonly string[] = [],
+  ) {
     this.emit = (event) => {
       if (event.type === "text" && !event.reasoning && event.text) this.emittedText = true;
       emit(event);
@@ -777,6 +849,17 @@ export class ClaudeEventNormalizer {
       }
     }
     if (value.type === "assistant") {
+      if (
+        [
+          "authentication_failed",
+          "oauth_org_not_allowed",
+          "account_on_hold",
+          "verification_required",
+          "cloud_credential_error",
+        ].includes(String(value.error))
+      )
+        this.nativeFailure = "account-auth";
+      else if (["billing_error", "rate_limit"].includes(String(value.error))) this.nativeFailure = "quota";
       const message = value.message as {
         id?: string;
         content?: { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: unknown }[];
@@ -843,10 +926,12 @@ export class ClaudeEventNormalizer {
           ? { type: "completed" }
           : {
               type: "failed",
-              code: "claude-turn-failed",
+              code: this.nativeFailure ?? "claude-turn-failed",
               message: "Claude could not complete this turn. Review the transcript before trying again.",
+              details: providerFailureDetails(value, this.secrets),
             },
       );
+      this.nativeFailure = undefined;
     }
   }
 }

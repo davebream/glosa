@@ -145,19 +145,35 @@ export class IntentJournal<T> {
 
   append(data: T, request?: { id: string; input: unknown; result: unknown }): JournalRecord<T> {
     if (this.failed) throw new ManagedAgentError("journal-unavailable", "Managed state is unavailable.", 503);
-    const validated = this.schema.parse(data);
     if (request && this.receipt(request.id, request.input).found) return this.receipts.get(request.id)!;
-    const record: JournalRecord<T> = {
+    return this.commit([{ data, request }])[0]!;
+  }
+
+  /** One durability barrier for ordered display records. A crash can recover any complete prefix. */
+  appendMany(data: readonly T[]): JournalRecord<T>[] {
+    return this.commit(data.map((value) => ({ data: value })));
+  }
+
+  private commit(
+    entries: readonly { data: T; request?: { id: string; input: unknown; result: unknown } }[],
+  ): JournalRecord<T>[] {
+    if (this.failed) throw new ManagedAgentError("journal-unavailable", "Managed state is unavailable.", 503);
+    if (!entries.length) return [];
+    const records: JournalRecord<T>[] = entries.map(({ data, request }, index) => ({
       schema: 1,
-      seq: this.revision + 1,
+      seq: this.revision + index + 1,
       eventId: randomUUID(),
       at: new Date().toISOString(),
-      data: validated,
+      data: this.schema.parse(data),
       ...(request ? { requestId: request.id, digest: digest(request.input), result: request.result } : {}),
-    };
-    const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
-    if (bytes.length > MAX_RECORD)
-      throw new ManagedAgentError("event-too-large", "Managed event exceeds its size limit.", 413);
+    }));
+    const chunks = records.map((record) => {
+      const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
+      if (bytes.length >= MAX_RECORD)
+        throw new ManagedAgentError("event-too-large", "Managed event exceeds its size limit.", 413);
+      return bytes;
+    });
+    const bytes = Buffer.concat(chunks);
     if (this.fd === undefined) {
       privateDirectory(dirname(this.path));
       const existed = existsSync(this.path);
@@ -189,18 +205,22 @@ export class IntentJournal<T> {
       }
       throw new ManagedAgentError("storage-unavailable", "Could not persist managed state. Execution is stopped.", 503);
     }
-    this.records.push(record);
-    if (request) this.receipts.set(request.id, record);
+    for (const record of records) {
+      this.records.push(record);
+      if (record.requestId) this.receipts.set(record.requestId, record);
+    }
     queueMicrotask(() => {
-      for (const listener of this.listeners) {
-        try {
-          listener(record);
-        } catch {
-          /* a disconnected subscriber never reverses committed state */
+      for (const record of records) {
+        for (const listener of this.listeners) {
+          try {
+            listener(record);
+          } catch {
+            /* a disconnected subscriber never reverses committed state */
+          }
         }
       }
     });
-    return record;
+    return records;
   }
 
   close(): void {

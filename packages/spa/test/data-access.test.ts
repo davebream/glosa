@@ -740,12 +740,16 @@ describe("openStream — reconnect + Last-Event-ID + onReconnect", () => {
   });
 });
 
-test("workspace, sidebar and eight chat panes share one stream and release it after the last subscriber", async () => {
+test("eight panes share one stream; ten changes request zero unrelated snapshots and gaps resync only one chat", async () => {
   let controller: ReadableStreamDefaultController<Uint8Array>;
-  let streamCount = 0,
-    signal: AbortSignal | undefined,
-    revision = 1;
+  let streamCount = 0;
+  let signal: AbortSignal | undefined;
   const reads: string[] = [];
+  const watches: { revision: number; chats: { id: string; cursor?: number }[] }[] = [];
+  const encode = (event: string, data: unknown) =>
+    new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const changed = Promise.withResolvers<void>();
+  const resynced = Promise.withResolvers<void>();
   const da = createDataAccess({
     storage: fakeStorage(),
     fetchFn: async (path: string, init: RequestInit) => {
@@ -758,45 +762,66 @@ test("workspace, sidebar and eight chat panes share one stream and release it af
               controller = value;
             },
           }),
-          { headers: { "Content-Type": "text/event-stream" } },
         );
       }
+      if (path.endsWith("/watch")) {
+        const input = JSON.parse(init.body as string);
+        watches.push(input);
+        expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+        for (const chat of input.chats)
+          if (chat.cursor === undefined)
+            controller.enqueue(encode("chat_snapshot", { chatId: chat.id, snapshot: { id: chat.id, revision: 13 } }));
+        return jsonResponse(200, { revision: input.revision });
+      }
       reads.push(path);
-      return jsonResponse(200, { revision, id: path.split("/").pop() });
+      return jsonResponse(200, { revision: 1, id: path.split("/").pop() });
     },
   });
   const stopWorkspace = da.openStream("ws");
-  let listChanges = 0;
-  const stopList = da.openChatsStream("ws", {
-    onEvent: () => {
-      listChanges++;
-    },
-  });
+  const stopList = da.openChatsStream("ws");
   const initial = Array.from({ length: 8 }, () => Promise.withResolvers<void>());
-  const updated = Array.from({ length: 8 }, () => Promise.withResolvers<void>());
+  const records: number[] = [];
   const stops = initial.map((ready, index) =>
     da.openChatStream("ws", `chat-${index}`, {
       onEvent(frame) {
-        expect(frame.event).toBe("chat_snapshot");
-        const data = frame.data as { revision: number };
-        if (data.revision === 1) ready.resolve();
-        else updated[index]!.resolve();
+        const data = frame.data as { revision: number; seq: number };
+        if (frame.event === "chat_snapshot") {
+          if (data.revision === 1) ready.resolve();
+          if (data.revision === 13) {
+            expect(index).toBe(0);
+            resynced.resolve();
+          }
+        } else {
+          expect(index).toBe(0);
+          records.push(data.seq);
+          if (data.seq === 11) changed.resolve();
+        }
       },
     }),
   );
   try {
-    await Promise.all(initial.map((value) => value.promise));
-    expect(streamCount).toBe(1);
+    await Promise.all(initial.map((x) => x.promise));
+    controller!.enqueue(encode("chat_stream_ready", { streamId: "fixture-stream", version: 1 }));
+    for (let seq = 2; seq <= 11; seq++)
+      controller!.enqueue(encode("chat_event", { chatId: "chat-0", record: { seq, data: { type: "content" } } }));
+    controller!.enqueue(encode("chat_event", { chatId: "chat-0", record: { seq: 10, data: { type: "content" } } }));
+    controller!.enqueue(encode("chats_changed", { slug: "ws" }));
+    await changed.promise;
+    expect(records).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(reads).toHaveLength(8);
+    expect(streamCount).toBe(1);
+    controller!.enqueue(encode("chat_event", { chatId: "chat-0", record: { seq: 13, data: { type: "content" } } }));
+    await resynced.promise;
+    expect(reads).toHaveLength(8);
+    expect(
+      watches
+        .at(-1)!
+        .chats.filter((x) => x.cursor === undefined)
+        .map((x) => x.id),
+    ).toEqual(["chat-0"]);
     stopWorkspace();
     stopList();
     expect(signal?.aborted).toBe(false);
-    revision = 2;
-    controller!.enqueue(new TextEncoder().encode("event: chats_changed\ndata: {}\n\n"));
-    await Promise.all(updated.map((value) => value.promise));
-    expect(reads).toHaveLength(16);
-    expect(listChanges).toBe(0);
-    expect(streamCount).toBe(1);
   } finally {
     stopWorkspace();
     stopList();
@@ -805,43 +830,215 @@ test("workspace, sidebar and eight chat panes share one stream and release it af
   expect(signal?.aborted).toBe(true);
 });
 
-test("a failed final chat snapshot retries without another stream event or sending any turn", async () => {
+test("an unavailable chat leaves the shared stream and other watched chats active until explicit refresh", async () => {
   let controller: ReadableStreamDefaultController<Uint8Array>;
-  let reads = 0;
-  const first = Promise.withResolvers<void>(),
-    recovered = Promise.withResolvers<void>();
+  const watched: string[][] = [];
+  const states: string[] = [];
+  const initial = Promise.withResolvers<void>(),
+    removed = Promise.withResolvers<void>();
+  let unavailable = false;
   const da = createDataAccess({
     storage: fakeStorage(),
-    fetchFn: async (path: string, init: RequestInit) => {
-      expect(init.method ?? "GET").toBe("GET");
+    fetchFn: async (path, init) => {
       if (path.endsWith("/stream"))
         return new Response(
-          new ReadableStream<Uint8Array>({
+          new ReadableStream({
             start(value) {
               controller = value;
             },
           }),
         );
+      if (path.endsWith("/watch")) {
+        const input = JSON.parse(init.body as string);
+        watched.push(input.chats.map((chat: { id: string }) => chat.id));
+        if (unavailable && input.chats.length === 1) removed.resolve();
+        return jsonResponse(200, { revision: input.revision });
+      }
+      return jsonResponse(200, { revision: 1 });
+    },
+  });
+  const stopOther = da.openChatStream("ws", "other");
+  const stop = da.openChatStream("ws", "gone", {
+    onEvent(frame) {
+      if (frame.event === "chat_snapshot") initial.resolve();
+      if (frame.event === "chat_unavailable") unavailable = true;
+    },
+    onStatus(status) {
+      states.push(status);
+    },
+  });
+  try {
+    await initial.promise;
+    controller!.enqueue(
+      new TextEncoder().encode('event: chat_stream_ready\ndata: {"streamId":"fixture","version":1}\n\n'),
+    );
+    controller!.enqueue(new TextEncoder().encode('event: chat_unavailable\ndata: {"chatId":"gone"}\n\n'));
+    await removed.promise;
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(watched.at(-1)).toEqual(["other"]);
+    expect(states.at(-1)).toBe("down");
+    await da.getChat("ws", "gone");
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(watched.at(-1)).toEqual(["other", "gone"]);
+  } finally {
+    stop();
+    stopOther();
+  }
+});
+
+test("a quiet successful watch retry restores connection status without refreshing history", async () => {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let watches = 0,
+    reads = 0;
+  const ready = Promise.withResolvers<void>(),
+    recovered = Promise.withResolvers<void>();
+  const states: string[] = [];
+  const da = createDataAccess({
+    storage: fakeStorage(),
+    fetchFn: async (path, init) => {
+      if (path.endsWith("/stream"))
+        return new Response(
+          new ReadableStream({
+            start(value) {
+              controller = value;
+            },
+          }),
+        );
+      if (path.endsWith("/watch")) {
+        watches++;
+        expect(init.method).toBe("POST");
+        return watches === 1 ? jsonResponse(503, { title: "temporary" }) : jsonResponse(200, { revision: watches });
+      }
       reads++;
-      if (reads === 2) return jsonResponse(503, { title: "temporary failure" });
-      return jsonResponse(200, { revision: reads === 1 ? 1 : 2 });
+      return jsonResponse(200, { revision: 1 });
     },
   });
   const stop = da.openChatStream("ws", "chat", {
+    onEvent: () => ready.resolve(),
+    onStatus(state) {
+      states.push(state);
+      if (state === "up" && states.includes("down")) recovered.resolve();
+    },
+  });
+  try {
+    await ready.promise;
+    controller!.enqueue(
+      new TextEncoder().encode('event: chat_stream_ready\ndata: {"streamId":"connection","version":1}\n\n'),
+    );
+    await recovered.promise;
+    expect(watches).toBe(2);
+    expect(reads).toBe(1);
+    expect(states.slice(-2)).toEqual(["down", "up"]);
+  } finally {
+    stop();
+  }
+});
+
+test("an oversized snapshot reference fetches only its affected chat and resumes its cursor", async () => {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  const reads: string[] = [];
+  let revision = 1;
+  const ready = Promise.withResolvers<void>(),
+    recovered = Promise.withResolvers<void>();
+  const da = createDataAccess({
+    storage: fakeStorage(),
+    fetchFn: async (path, init) => {
+      expect(init.method ?? "GET").toBe("GET");
+      if (path.endsWith("/stream"))
+        return new Response(
+          new ReadableStream({
+            start(value) {
+              controller = value;
+            },
+          }),
+        );
+      reads.push(path);
+      return jsonResponse(200, { id: path.split("/").pop(), revision });
+    },
+  });
+  const stopOther = da.openChatStream("ws", "other");
+  const stop = da.openChatStream("ws", "large", {
     onEvent(frame) {
-      if ((frame.data as { revision: number }).revision === 1) first.resolve();
+      if ((frame.data as { revision: number }).revision === 1) ready.resolve();
       else recovered.resolve();
     },
   });
   try {
-    await first.promise;
-    controller!.enqueue(new TextEncoder().encode("event: chats_changed\ndata: {}\n\n"));
-    // The one real backoff witness: the stream remains quiet after this final change.
+    await ready.promise;
+    revision = 2;
+    controller!.enqueue(
+      new TextEncoder().encode('event: chat_snapshot_ref\ndata: {"chatId":"large","revision":2}\n\n'),
+    );
     await recovered.promise;
-    expect(reads).toBe(3);
+    expect(reads.filter((path) => path.endsWith("/other"))).toHaveLength(1);
+    expect(reads.filter((path) => path.endsWith("/large"))).toHaveLength(2);
+  } finally {
+    stop();
+    stopOther();
+  }
+});
+
+test("a failed initial snapshot retries without another event or submitting a turn", async () => {
+  let reads = 0;
+  const recovered = Promise.withResolvers<void>();
+  const da = createDataAccess({
+    storage: fakeStorage(),
+    fetchFn: async (path, init) => {
+      expect(init.method ?? "GET").toBe("GET");
+      if (path.endsWith("/stream")) return new Response(new ReadableStream());
+      reads++;
+      if (reads === 1) return jsonResponse(503, { title: "temporary failure" });
+      return jsonResponse(200, { revision: 1 });
+    },
+  });
+  const stop = da.openChatStream("ws", "chat", { onEvent: () => recovered.resolve() });
+  try {
+    await recovered.promise;
+    expect(reads).toBe(2);
   } finally {
     stop();
   }
+});
+
+test("draft recovery is installation and registration scoped, preserves exact intents and never resubmits on read", async () => {
+  const storage = fakeStorage();
+  const requests: string[] = [];
+  let epoch = "first";
+  const make = () =>
+    createDataAccess({
+      storage,
+      expectedInstallId: "install-a",
+      fetchFn: async (path, init) => {
+        expect(init.method ?? "GET").toBe("GET");
+        requests.push(path);
+        return jsonResponse(200, { workspaceId: "workspace", workspaceEpoch: epoch });
+      },
+    });
+  const record = {
+    version: 1,
+    draft: { text: "unsaved draft" },
+    outbox: [{ id: "same-request", intent: { requestId: "same-request", text: "exact bytes" } }],
+  };
+  const da = make();
+  await da.writeChatRecovery("ws", "chat", record);
+  expect((await make().readChatRecovery("ws", "chat"))?.outbox).toEqual(record.outbox);
+  epoch = "replacement";
+  expect(await make().readChatRecovery("ws", "chat")).toBeNull();
+  expect(requests).toHaveLength(3);
+  const unavailable = createDataAccess({
+    expectedInstallId: "install-a",
+    storage: {
+      getItem() {
+        return null;
+      },
+      setItem() {
+        throw new Error("quota");
+      },
+      removeItem() {},
+    },
+    fetchFn: async () => jsonResponse(200, { workspaceId: "workspace", workspaceEpoch: epoch }),
+  });
+  await expect(unavailable.writeChatRecovery("ws", "chat", record)).rejects.toThrow("quota");
 });
 
 describe("a daemon that changes under the page (#432, R-L6)", () => {

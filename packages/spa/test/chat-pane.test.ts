@@ -1,19 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { composerToken, editReferences, createComposerPicker } from "../src/composer-picker.js";
 import MarkdownIt from "markdown-it";
-import { createSafeChatRenderer } from "../src/chat-markdown.js";
-import { createChatPane, applyChatEvent } from "../src/chat-pane.js";
-import { createChatLogPane } from "../src/chat-log-pane.js";
 import { modelChoices, modelPresentation } from "../src/agent-ui.js";
+import { createChatLogPane } from "../src/chat-log-pane.js";
+import { createSafeChatRenderer } from "../src/chat-markdown.js";
+import { applyChatEvent, createChatPane } from "../src/chat-pane.js";
+import { createChatStore } from "../src/chat-store.js";
+import { composerToken, createComposerPicker, editReferences } from "../src/composer-picker.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
+
 let dom: DomEnv;
+const mountedPanes = new Set<{ destroy(): void }>();
 beforeEach(() => {
   dom = installDom();
 });
-afterEach(() => dom.teardown());
+afterEach(() => {
+  for (const pane of mountedPanes) pane.destroy();
+  mountedPanes.clear();
+  dom.teardown();
+});
 const flush = async () => {
-  for (let i = 0; i < 30; i++) await Promise.resolve();
+  // assistant-ui publishes its external-store projection through React scheduled effects.
+  // Yield event-loop tasks, not a timing assertion or a layout simulation.
+  for (let turn = 0; turn < 3; turn++) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  }
 };
 
 test("model labels retain provider-reported versions and never infer a version from an alias or context size", () => {
@@ -139,7 +151,7 @@ test("subscription choices stay on the chat, preserve its draft and recover from
   expect(models.hidden).toBe(false);
   expect(accounts.hidden).toBe(true);
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   expect(account.textContent).toBe("Second subscription");
   account.click();
   profileButton(f.host, "c").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
@@ -156,7 +168,7 @@ test("subscription choices stay on the chat, preserve its draft and recover from
   expect(f.host.querySelector(".glosa-model-picker-trigger")!.textContent).toBe("Choose model");
   f.state.runtime = { state: "unknown" };
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   expect(account.disabled).toBe(true);
   expect(profileButton(f.host, "a").disabled).toBe(true);
   f.pane.destroy();
@@ -168,6 +180,7 @@ test("an unresolved send remains retryable after the selected account is disable
   const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
   draft.value = "Preserve this request";
   draft.dispatchEvent(new Event("input", { bubbles: true }));
+  await flush();
   const send = f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement;
   send.click();
   await flush();
@@ -197,8 +210,12 @@ test("with no model list yet, the first send asks the agent for its models and t
   f.state.settings.model = "";
   f.state.revision++;
   const calls: string[] = [];
+  let finishDiscovery!: () => void;
   f.dataAccess.discoverAgentModels = async (profileId: string) => {
     calls.push(`discover:${profileId}`);
+    await new Promise<void>((resolve) => {
+      finishDiscovery = resolve;
+    });
     f.catalog.capabilities.a.models = [{ id: "found", name: "Found", efforts: ["medium"] }];
   };
   f.dataAccess.changeChat = async (_s: string, _i: string, input: any) => {
@@ -222,12 +239,15 @@ test("with no model list yet, the first send asks the agent for its models and t
   const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
   draft.value = "First words";
   draft.dispatchEvent(new Event("input", { bubbles: true }));
+  await flush();
   const send = f.host.querySelector(".glosa-chat-send") as HTMLButtonElement;
   expect(send.disabled).toBe(false);
   draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
   expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("Checking which models");
   // The words stay in the composer until the agent has answered.
   expect(draft.value).toBe("First words");
+  finishDiscovery();
   await flush();
   await flush();
   expect(calls).toEqual(["discover:a", "settings:found:medium"]);
@@ -378,6 +398,7 @@ function fixture({ models, ...options }: { sourceChatId?: string; models?: any[]
     onNewChat: (...args: any[]) => newChats.push(args),
     onSettings() {},
   });
+  mountedPanes.add(pane);
   return {
     state,
     host,
@@ -389,8 +410,14 @@ function fixture({ models, ...options }: { sourceChatId?: string; models?: any[]
     catalog,
     dataAccess,
     status: (value: string) => stream.onStatus(value),
-    snapshot: () => stream.onEvent({ event: "chat_snapshot", data: structuredClone(state) }),
-    event: (data: unknown) => stream.onEvent({ event: "chat_event", data }),
+    snapshot: async () => {
+      stream.onEvent({ event: "chat_snapshot", data: structuredClone(state) });
+      await flush();
+    },
+    event: async (data: unknown) => {
+      stream.onEvent({ event: "chat_event", data });
+      await flush();
+    },
   };
 }
 
@@ -410,7 +437,7 @@ test("usage separates current session totals from account limits without inventi
     quotaAsOf: "2026-09-24T10:01:00Z",
   };
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   // Usage is the chat's bookkeeping: it opens from the chat menu and is never a row in the thread.
   expect(f.host.querySelector(".glosa-chat-history")!.textContent).not.toContain("Token usage");
   const action = f.host.querySelector('[data-chat-action="usage"]') as HTMLButtonElement;
@@ -463,7 +490,7 @@ test("a turn names its model only when it ran on something else, and shows its r
     { id: "a1", turnId: "same", kind: "text", role: "assistant", text: "Done." },
   ];
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   const summaries = [...f.host.querySelectorAll(".glosa-chat-history summary")].map((node) => node.textContent);
   expect(summaries).toEqual([
     "Reasoning summary",
@@ -623,11 +650,13 @@ test("a turn at work shows a live line under its last row and it goes when the t
   const at = new Date(Date.now() - 65_000).toISOString();
   f.state.turns = [{ id: "t", text: "Review it", status: "running", at, settings }];
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   const live = () => f.host.querySelector(".glosa-chat-live");
   // Nothing has arrived yet: the thread itself says the agent is at work, and for how long.
   expect(live()!.textContent).toBe("Thinking1m 05s");
-  expect(live()!.previousElementSibling!.getAttribute("data-kind")).toBe("human");
+  expect(live()!.closest(".glosa-chat-assistant-turn")!.previousElementSibling!.getAttribute("data-kind")).toBe(
+    "human",
+  );
   expect(history.getAttribute("aria-busy")).toBe("true");
   (f.state.content as unknown[]) = [
     {
@@ -641,7 +670,7 @@ test("a turn at work shows a live line under its last row and it goes when the t
     },
   ];
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   expect(live()!.textContent).toStartWith("Reading outline.md");
   const steps = f.host.querySelector(".glosa-chat-steps") as HTMLDetailsElement;
   expect(steps.open).toBe(false);
@@ -653,7 +682,7 @@ test("a turn at work shows a live line under its last row and it goes when the t
   ];
   f.state.turns[0].status = "completed";
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   expect(live()).toBeNull();
   expect(history.getAttribute("aria-busy")).toBe("false");
   expect(steps.querySelector(":scope > summary")!.textContent).toBe("1 step · 1 failed");
@@ -688,12 +717,12 @@ test("a finished turn's live line goes, and the next message sends, where the en
     const settings = { model: "model", effort: "high", permissionMode: "default" };
     f.state.turns = [{ id: "t", text: "hey", status: "running", at: new Date().toISOString(), settings }];
     f.state.revision++;
-    f.snapshot();
+    await f.snapshot();
     expect(f.host.querySelector(".glosa-chat-live")).not.toBeNull();
     (f.state.content as unknown[]) = [{ id: "a1", turnId: "t", kind: "text", role: "assistant", text: "Hello." }];
     f.state.turns[0].status = "completed";
     f.state.revision++;
-    f.snapshot();
+    await f.snapshot();
     expect(f.host.querySelector(".glosa-chat-live")).toBeNull();
     expect(targets.size).toBeGreaterThan(0);
     const draft = f.host.querySelector("textarea")!;
@@ -719,11 +748,12 @@ function accepting(f: ReturnType<typeof fixture>) {
     f.state.revision++;
   };
 }
-function type(f: ReturnType<typeof fixture>, text: string) {
+async function type(f: ReturnType<typeof fixture>, text: string) {
   const draft = f.host.querySelector("textarea")!;
   draft.value = text;
   draft.dispatchEvent(new Event("input", { bubbles: true }));
   draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
   return draft;
 }
 
@@ -733,8 +763,8 @@ test("sending never locks the composer: messages line up in the tray behind the 
   await f.pane.ready;
   f.state.turns = [{ id: "t", text: "First", status: "running", at: new Date().toISOString() }];
   f.state.revision++;
-  f.snapshot();
-  const draft = type(f, "Second");
+  await f.snapshot();
+  const draft = await type(f, "Second");
   // The words leave the composer on Enter, before the daemon has answered, and it is free again.
   expect(draft.value).toBe("");
   expect(draft.disabled).toBe(false);
@@ -743,9 +773,9 @@ test("sending never locks the composer: messages line up in the tray behind the 
   expect(send.textContent).toBe("Queue");
   expect(send.getAttribute("aria-label")).toBe("Queue message");
   expect(f.host.querySelector(".glosa-chat-key-hint")!.textContent).toBe("Enter to queue · Shift Enter for a new line");
-  expect(send.disabled).toBe(false);
-  expect(f.host.querySelector(".glosa-chat-tray")!.textContent).toBe("SendingSecond");
-  type(f, "Third");
+  expect(send.disabled).toBe(true);
+  expect(f.host.querySelector(".glosa-chat-tray")!.textContent).toBe("NextSecondEditRemoveSend now");
+  await type(f, "Third");
   await flush();
   expect(f.sends.map((sent) => sent.text)).toEqual(["Second", "Third"]);
   expect([...f.host.querySelectorAll(".glosa-chat-tray li")].map((row) => row.textContent)).toEqual([
@@ -755,11 +785,11 @@ test("sending never locks the composer: messages line up in the tray behind the 
   expect(f.host.querySelector(".glosa-chat-composer [role=status]")!.textContent).toBe("2 messages waiting");
   // Neither is in the thread: a message joins the conversation when its turn starts.
   expect(f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')).toHaveLength(1);
-  for (const text of ["4", "5", "6"]) type(f, text);
+  for (const text of ["4", "5", "6"]) await type(f, text);
   await flush();
   expect(f.sends).toHaveLength(5);
   // A sixth has nowhere to wait: it stays in the composer, and the pane says why.
-  expect(type(f, "One too many").value).toBe("One too many");
+  expect((await type(f, "One too many")).value).toBe("One too many");
   await flush();
   expect(f.sends).toHaveLength(5);
   expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("Five messages are already waiting");
@@ -778,7 +808,7 @@ test("a message sent with nothing ahead of it is in the thread at once and says 
     return taken(...args);
   };
   await f.pane.ready;
-  type(f, "hey");
+  await type(f, "hey");
   await flush();
   const live = () => f.host.querySelector(".glosa-chat-live");
   const bubbles = () => f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]');
@@ -789,10 +819,10 @@ test("a message sent with nothing ahead of it is in the thread at once and says 
   expect(f.host.querySelector(".glosa-chat-history")!.getAttribute("aria-busy")).toBe("true");
   // While the daemon has not answered, a redraw still leaves the composer and its button free.
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   // A second message would go behind the one on its way, and the button says so.
   const send = f.host.querySelector(".glosa-chat-send") as HTMLButtonElement;
-  expect([send.disabled, send.textContent, send.dataset.mode]).toEqual([false, "Queue", "queue"]);
+  expect([send.disabled, send.textContent, send.dataset.mode]).toEqual([true, "Queue", "queue"]);
   expect(f.host.querySelector("textarea")!.value).toBe("");
   answer();
   await flush();
@@ -823,20 +853,40 @@ test("a waiting message can be edited or sent now, and Stop ends only the reply 
     calls.push(`now:${turnId}`);
   };
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   const rows = () => [...f.host.querySelectorAll(".glosa-chat-tray li")] as HTMLElement[];
   (rows()[1]!.querySelector('[aria-label="Send this message now"]') as HTMLButtonElement).click();
   await flush();
   expect(calls).toEqual(["now:b"]);
-  // Edit takes the message out of the queue and back into the composer.
+  // Editing preserves the queue position and the independent unsent draft.
+  f.dataAccess.editQueuedChatTurn = async (_s: string, _id: string, input: any) => {
+    calls.push(`edit:${input.turnId}:${input.expectedRevision}`);
+    f.state.turns.find((turn) => turn.id === input.turnId)!.text = input.text;
+    f.state.revision++;
+  };
+  const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+  draft.value = "My next draft";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
   (rows()[0]!.querySelector('[aria-label="Edit waiting message"]') as HTMLButtonElement).click();
   await flush();
-  expect(calls).toEqual(["now:b", "stop:a"]);
-  expect(f.host.querySelector("textarea")!.value).toBe("Second");
-  expect(rows().map((row) => row.querySelector(".glosa-chat-tray-words")!.textContent)).toEqual(["Third"]);
+  expect(calls).toEqual(["now:b"]);
+  const editor = rows()[0]!.querySelector('textarea[aria-label="Edit waiting message"]') as HTMLTextAreaElement;
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
+  setter.call(editor, "Second revised");
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
+  editor.dispatchEvent(new Event("change", { bubbles: true }));
+  await flush();
+  [...rows()[0]!.querySelectorAll("button")].find((button) => button.textContent === "Save message")!.click();
+  await flush();
+  expect(calls).toEqual(["now:b", "edit:a:1"]);
+  expect(draft.value).toBe("My next draft");
+  expect(rows().map((row) => row.querySelector(".glosa-chat-tray-words")!.textContent)).toEqual([
+    "Second revised",
+    "Third",
+  ]);
   (f.host.querySelector(".glosa-chat-stop") as HTMLButtonElement).click();
   await flush();
-  expect(calls).toEqual(["now:b", "stop:a", "stop:active"]);
+  expect(calls).toEqual(["now:b", "edit:a:1", "stop:active"]);
   f.pane.destroy();
 });
 
@@ -846,10 +896,10 @@ test("a reply stopped in another window keeps its message in the thread here", a
   // This window learned of the turn while it still waited, and hears the rest as status events only.
   f.state.turns = [{ id: "t", text: "Review it", status: "queued", at: new Date().toISOString() }];
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   let seq = f.state.revision;
   for (const status of ["dispatching", "running", "stopping", "cancelled"])
-    f.event({ seq: ++seq, data: { type: "turn_status", turnId: "t", status } });
+    await f.event({ seq: ++seq, data: { type: "turn_status", turnId: "t", status } });
   const bubble = f.host.querySelector('.glosa-chat-message[data-kind="human"] .glosa-chat-text');
   expect(bubble?.textContent).toBe("Review it");
   expect(f.host.querySelector(".glosa-chat-turn-state")!.textContent).toBe("CancelledUse as draft");
@@ -862,7 +912,7 @@ test("after a draft conflict, Retry sends the waiting messages on the draft as i
   await f.pane.ready;
   f.state.turns = [{ id: "t", text: "First", status: "running", started: true, at: new Date().toISOString() }];
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   const draft = f.host.querySelector("textarea")!;
   draft.value = "Second";
   draft.dispatchEvent(new Event("input", { bubbles: true }));
@@ -870,7 +920,7 @@ test("after a draft conflict, Retry sends the waiting messages on the draft as i
   f.state.draft = "Other window";
   f.state.draftRevision = 3;
   draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  type(f, "Third");
+  await type(f, "Third");
   await flush();
   expect(f.sends).toHaveLength(0);
   expect([...f.host.querySelectorAll(".glosa-chat-tray-state")].map((node) => node.textContent)).toEqual([
@@ -931,7 +981,7 @@ test("uploads block sending and keep successful attachments when a later file fa
       : Promise.reject(new Error("Second file is not supported"));
   const input = f.host.querySelector('[aria-label="Attach files"]') as HTMLInputElement;
   Object.defineProperty(input, "files", { value: [new File(["brief"], "brief.md"), new File(["bad"], "bad.bin")] });
-  input.dispatchEvent(new Event("change"));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
   const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
   draft.value = "Read my attachment";
   draft.dispatchEvent(new Event("input", { bubbles: true }));
@@ -963,7 +1013,7 @@ test("a queued message can be cancelled without stopping the current turn", asyn
     f.state.turns.find((t) => t.id === turnId)!.status = "cancelled";
   };
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   // The waiting message is a row at the top of the composer, not a bubble in the thread, and the
   // composer stays free for the next one.
   const humans = () => [...f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')];
@@ -972,7 +1022,7 @@ test("a queued message can be cancelled without stopping the current turn", asyn
   expect(tray.hidden).toBe(false);
   expect(tray.textContent).toBe("NextSecondEditRemoveSend now");
   expect(f.host.querySelector(".glosa-chat-composer [role=status]")!.textContent).toBe("1 message waiting");
-  expect((f.host.querySelector('[aria-label="Queue message"]') as HTMLButtonElement).disabled).toBe(false);
+  expect((f.host.querySelector('[aria-label="Queue message"]') as HTMLButtonElement).disabled).toBe(true);
   (tray.querySelector('[aria-label="Remove waiting message"]') as HTMLButtonElement).click();
   await flush();
   expect(stopped).toEqual(["next"]);
@@ -995,7 +1045,7 @@ test("uncertain native cleanup retains Retry stop after the turn has ended", asy
     f.state.runtime = { state: "stopped" };
   };
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   const stop = [...f.host.querySelectorAll("button")].find((b) => b.textContent === "Retry stop")!;
   expect(stop.hidden).toBe(false);
   stop.click();
@@ -1016,7 +1066,7 @@ test("held messages require Continue and cancelled messages can restore a draft 
     f.state.turns[0].status = "running";
     f.state.revision++;
   };
-  f.snapshot();
+  await f.snapshot();
   expect(resumed).toHaveLength(0);
   expect(f.host.querySelector(".glosa-chat-tray")!.textContent).toBe("HeldReview this againContinueEditRemove");
   [...f.host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === "Continue held message")!.click();
@@ -1026,7 +1076,7 @@ test("held messages require Continue and cancelled messages can restore a draft 
   f.state.turns[0].started = true;
   f.state.turns[0].status = "cancelled";
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   [...f.host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === "Use message as draft")!.click();
   await flush();
   expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("Review this again");
@@ -1046,7 +1096,7 @@ test("closing during an upload requires an explicit choice and keeping the tab p
     });
   const input = f.host.querySelector('[aria-label="Attach files"]') as HTMLInputElement;
   Object.defineProperty(input, "files", { value: [new File(["brief"], "brief.md")] });
-  input.dispatchEvent(new Event("change"));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
   const closing = f.pane.confirmClose();
   await flush();
   const dialog = document.querySelector("dialog")!;
@@ -1083,7 +1133,7 @@ test("another browser's draft does not overwrite or authorize overwriting an uns
   draft.dispatchEvent(new Event("input", { bubbles: true }));
   f.state.draft = "Other browser";
   f.state.draftRevision = 1;
-  f.snapshot();
+  await f.snapshot();
   expect(draft.value).toBe("My local draft");
   (f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).click();
   await flush();
@@ -1099,6 +1149,7 @@ test("ambiguous send retries its original durable request and does not duplicate
   const draft = f.host.querySelector("textarea")!;
   draft.value = "Please review";
   draft.dispatchEvent(new Event("input", { bubbles: true }));
+  await flush();
   const send = f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement;
   send.click();
   await flush();
@@ -1163,16 +1214,19 @@ test("streamed snapshots keep model option nodes and recovery clears only its ow
   const choice = modelButton(f.host, "model");
   choice.focus();
   f.state.revision++;
-  f.snapshot();
+  await f.snapshot();
   expect(modelButton(f.host, "model")).toBe(choice);
   expect(document.activeElement).toBe(choice);
   f.status("down");
+  await flush();
   expect(f.host.textContent).toContain("Reconnecting");
   f.status("up");
+  await flush();
   expect(f.host.textContent).not.toContain("Reconnecting");
   const notice = f.host.querySelector(".glosa-chat-status")!;
   notice.textContent = "Draft changed in another browser";
   f.status("up");
+  await flush();
   expect(notice.textContent).toBe("Draft changed in another browser");
   f.pane.destroy();
 });
@@ -1765,4 +1819,384 @@ test("the protocol log shows the journal as written, filters by kind, follows th
   expect((host.querySelector(".glosa-chat-log-scroll > button") as HTMLButtonElement).hidden).toBe(true);
   pane.destroy();
   expect(host.children).toHaveLength(0);
+});
+
+test("recovery storage finishes before a submitted message leaves the composer or reaches the daemon", async () => {
+  const f = fixture();
+  let release!: () => void;
+  let attempted = false;
+  f.dataAccess.writeChatRecovery = async (_slug: string, _id: string, value: any) => {
+    if (value.outbox.length && !attempted) {
+      attempted = true;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    }
+  };
+  await f.pane.ready;
+  const draft = f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement;
+  draft.value = "Keep these exact words";
+  draft.dispatchEvent(new Event("input", { bubbles: true }));
+  draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
+  expect(attempted).toBe(true);
+  expect(draft.value).toBe("Keep these exact words");
+  expect(f.saves).toHaveLength(0);
+  expect(f.sends).toHaveLength(0);
+  release();
+  await flush();
+  expect(draft.value).toBe("");
+  expect(f.sends[0].text).toBe("Keep these exact words");
+});
+
+test("a recovery storage refusal keeps text and attachments editable and does not send", async () => {
+  const f = fixture();
+  const attachment = { name: "brief.md", mime: "text/markdown", hash: "a".repeat(64), size: 5 };
+  f.state.draft = "Do not lose this";
+  f.state.draftAttachments = [attachment];
+  f.dataAccess.writeChatRecovery = async () => {
+    throw new Error("Recovery storage is unavailable");
+  };
+  await f.pane.ready;
+  (f.host.querySelector('[aria-label="Send message"]') as HTMLButtonElement).click();
+  await flush();
+  expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("Do not lose this");
+  expect(f.host.querySelector('[aria-label="Remove brief.md"]')).not.toBeNull();
+  expect(f.sends).toHaveLength(0);
+  expect(f.saves).toHaveLength(0);
+  expect(f.host.querySelector(".glosa-chat-status")!.textContent).toContain("storage is unavailable");
+});
+
+test("reopening restores an ambiguous send and draft without posting until the person retries the exact receipt", async () => {
+  const f = fixture();
+  const intent = {
+    requestId: "request-original",
+    turnId: "turn-original",
+    configRevision: 1,
+    draftRevision: 0,
+    text: "Original request",
+    references: [],
+    attachments: [],
+  };
+  f.dataAccess.readChatRecovery = async () => ({
+    version: 1,
+    draft: { text: "New unsent draft", attachments: [], references: [], baseRevision: 0, dirty: true },
+    outbox: [
+      {
+        id: "turn-original",
+        text: "Original request",
+        references: [],
+        attachments: [],
+        state: "sending",
+        intent,
+        unsaved: false,
+      },
+    ],
+  });
+  f.dataAccess.writeChatRecovery = async () => {};
+  await f.pane.ready;
+  await flush();
+  expect(f.sends).toHaveLength(0);
+  expect(f.saves).toHaveLength(0);
+  expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("New unsent draft");
+  expect(f.host.querySelector(".glosa-chat-tray")!.textContent).toContain("Original request");
+  (f.host.querySelector('[aria-label="Retry sending message"]') as HTMLButtonElement).click();
+  await flush();
+  expect(f.sends).toEqual([intent]);
+});
+
+test("a recovered message already acknowledged by the journal is reconciled without restoring its consumed draft", async () => {
+  const f = fixture();
+  f.state.turns.push({ id: "known", text: "Already accepted", status: "completed" });
+  f.dataAccess.readChatRecovery = async () => ({
+    version: 1,
+    draft: { text: "Already accepted", attachments: [], references: [], baseRevision: 0, dirty: true },
+    outbox: [
+      {
+        id: "known",
+        text: "Already accepted",
+        references: [],
+        attachments: [],
+        state: "sending",
+        intent: { requestId: "known-request", turnId: "known" },
+        unsaved: false,
+      },
+    ],
+  });
+  await f.pane.ready;
+  await flush();
+  expect(f.sends).toHaveLength(0);
+  expect(f.saves).toHaveLength(0);
+  expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("");
+  expect(f.host.querySelectorAll(".glosa-chat-tray li")).toHaveLength(0);
+  expect(f.host.querySelectorAll('.glosa-chat-message[data-kind="human"]')).toHaveLength(1);
+});
+
+test("a streamed acknowledgement before the HTTP response cannot remove the following local message", async () => {
+  const f = fixture();
+  let answer!: () => void;
+  f.dataAccess.sendChatTurn = async (_slug: string, _id: string, input: any) => {
+    f.sends.push(input);
+    f.state.turns.push({ id: input.turnId, text: input.text, status: "queued", at: new Date().toISOString() });
+    f.state.draft = "";
+    f.state.draftRevision++;
+    f.state.revision++;
+    if (f.sends.length === 1)
+      await new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+  };
+  await f.pane.ready;
+  await type(f, "First request");
+  await type(f, "Second request");
+  expect(f.sends.map((input) => input.text)).toEqual(["First request"]);
+  await f.snapshot();
+  expect(f.host.querySelector(".glosa-chat-tray")!.textContent).toContain("Second request");
+  answer();
+  await flush();
+  expect(f.sends.map((input) => input.text)).toEqual(["First request", "Second request"]);
+  expect(f.state.turns.map((turn) => turn.text)).toEqual(["First request", "Second request"]);
+});
+
+test("decision retries retain their original generation and choice while a new generation gets a new receipt", async () => {
+  const f = fixture();
+  const posts: any[] = [];
+  f.dataAccess.answerChatDecision = async (_slug: string, _id: string, input: any) => {
+    posts.push(input);
+    throw new Error("Response lost");
+  };
+  const store = createChatStore(f.dataAccess, "ws", "decision-store");
+  try {
+    await store.ready;
+    const decision = { id: "permission", generation: "first" };
+    await store.answerDecision(decision, "allow", "Scoped response").catch(() => {});
+    await store.answerDecision(decision, "deny", "Changed response").catch(() => {});
+    expect(posts[1]).toEqual(posts[0]);
+    await store.answerDecision({ ...decision, generation: "second" }, "deny", "New request").catch(() => {});
+    expect(posts[2].generation).toBe("second");
+    expect(posts[2].choice).toBe("deny");
+    expect(posts[2].requestId).not.toBe(posts[0].requestId);
+  } finally {
+    await store.dispose();
+  }
+});
+
+test("a saved composer survives the next unrelated journal event with its text, references and attachments", async () => {
+  const f = fixture();
+  f.state.turns.push({ id: "active", text: "An earlier request", status: "running" });
+  f.dataAccess.uploadChatAttachment = async () => ({
+    name: "outline.md",
+    mime: "text/markdown",
+    size: 2,
+    hash: "a".repeat(64),
+  });
+  const store = createChatStore(f.dataAccess, "ws", "saved-draft-store");
+  try {
+    await store.ready;
+    const reference = { start: 5, end: 16, kind: "file", id: "outline.md" };
+    store.setDraft("Read @outline.md before continuing", [reference]);
+    await store.attach([new File(["ok"], "outline.md")]);
+    expect(store.getSnapshot().draft.dirty).toBe(false);
+    await f.event({ seq: 2, data: { type: "turn_status", turnId: "active", status: "completed" } });
+    expect(store.getSnapshot().draft.text).toBe("Read @outline.md before continuing");
+    expect(store.getSnapshot().draft.references).toEqual([reference]);
+    expect(store.getSnapshot().draft.attachments.map((item: any) => item.name)).toEqual(["outline.md"]);
+  } finally {
+    await store.dispose();
+  }
+});
+
+test("an explicit executed-turn retry survives draft recovery and a lost acknowledgement with one new linked intent", async () => {
+  const f = fixture();
+  const prior = { id: "previous-turn", attemptId: "previous-attempt", text: "Review the opening", status: "failed" };
+  f.state.turns.push(prior);
+  let recovery: any;
+  f.dataAccess.writeChatRecovery = async (_slug: string, _id: string, value: any) => {
+    recovery = structuredClone(value);
+  };
+  f.dataAccess.readChatRecovery = async () => structuredClone(recovery);
+  let store = createChatStore(f.dataAccess, "ws", "linked-retry");
+  try {
+    await store.ready;
+    await store.retryTurn(prior);
+    expect(recovery.draft.retryOfTurnId).toBe(prior.id);
+    await store.dispose();
+    store = createChatStore(f.dataAccess, "ws", "linked-retry");
+    await store.ready;
+    expect(store.getSnapshot().draft.retryOfTurnId).toBe(prior.id);
+    expect(f.sends).toHaveLength(0);
+    await store.submit();
+    expect(f.sends[0].retryOfTurnId).toBe(prior.id);
+    expect(f.sends[0].turnId).not.toBe(prior.id);
+    expect(store.getSnapshot().draft.retryOfTurnId).toBeNull();
+    await store.retryOutbox();
+    expect(f.sends[1]).toEqual(f.sends[0]);
+    await store.replaceDraft({ text: "An unrelated request" });
+    expect(store.getSnapshot().draft.retryOfTurnId).toBeNull();
+    await store.retryTurn(prior);
+    store.setDraft("");
+    expect(store.getSnapshot().draft.retryOfTurnId).toBeNull();
+  } finally {
+    await store.dispose();
+  }
+});
+
+test("a token delta preserves settled message objects and excludes unhydrated historical metadata", async () => {
+  const f = fixture();
+  f.state.turns = Array.from({ length: 2000 }, (_, index) => ({ id: `old-${index}`, status: "completed" }));
+  f.state.turns.push(
+    { id: "settled", text: "Previous question", status: "completed" },
+    { id: "active", text: "Current question", status: "running" },
+  );
+  (f.state.content as any[]) = [
+    { id: "past", turnId: "settled", kind: "text", text: "Previous reply" },
+    { id: "live", turnId: "active", kind: "text", text: "A" },
+  ];
+  const store = createChatStore(f.dataAccess, "ws", "projection-store");
+  try {
+    await store.ready;
+    const { projectChatMessages } = await import("../src/chat-runtime.js");
+    const cache = new Map();
+    const first = projectChatMessages(store.getSnapshot(), cache);
+    expect(first).toHaveLength(4);
+    const old = store.getSnapshot().chat;
+    const next = { ...old, content: [old.content[0], { ...old.content[1], text: "AB" }] };
+    const second = projectChatMessages({ ...store.getSnapshot(), chat: next }, cache);
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).toBe(first[1]);
+    expect(second[3]).not.toBe(first[3]);
+    expect(second[3]!.content).toEqual([{ type: "text", text: "AB" }]);
+  } finally {
+    await store.dispose();
+  }
+});
+
+test("journal acknowledgement remains authoritative when the original send HTTP response is lost", async () => {
+  const f = fixture();
+  let loseResponse!: () => void;
+  f.dataAccess.sendChatTurn = async (_slug: string, _id: string, input: any) => {
+    f.sends.push(input);
+    f.state.turns.push({ id: input.turnId, text: input.text, status: "queued", at: new Date().toISOString() });
+    f.state.draft = "";
+    f.state.draftRevision++;
+    f.state.revision++;
+    if (f.sends.length === 1) {
+      await new Promise<void>((resolve) => {
+        loseResponse = resolve;
+      });
+      throw new Error("HTTP response lost after acceptance");
+    }
+  };
+  await f.pane.ready;
+  await type(f, "Accepted first");
+  await type(f, "Keep following message");
+  await f.snapshot();
+  loseResponse();
+  await flush();
+  expect(f.sends.map((input) => input.text)).toEqual(["Accepted first", "Keep following message"]);
+  expect(f.host.querySelector(".glosa-chat-status")!.textContent).not.toContain("HTTP response lost");
+  expect(f.host.querySelectorAll('.glosa-chat-tray li[data-kind="failed"]')).toHaveLength(0);
+});
+
+test("opening recovered work with an empty model catalog never starts model discovery", async () => {
+  const f = fixture({ models: [] });
+  const calls: string[] = [];
+  f.dataAccess.readChatRecovery = async () => ({
+    version: 1,
+    draft: { text: "Recovered prompt", dirty: true, baseRevision: 0, attachments: [], references: [] },
+    outbox: [],
+  });
+  f.dataAccess.discoverAgentModels = async () => {
+    calls.push("discover");
+  };
+  await f.pane.ready;
+  await flush();
+  expect(calls).toEqual([]);
+  expect(f.sends).toHaveLength(0);
+  expect(f.saves).toHaveLength(0);
+  expect((f.host.querySelector('[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("Recovered prompt");
+});
+
+test("hydrated journal changes project draft consumption, queued revision and attempt identity without a snapshot", () => {
+  const state: any = {
+    revision: 1,
+    configRevision: 1,
+    title: "New chat",
+    draftRevision: 0,
+    draft: "",
+    turns: [],
+    content: [],
+    decisions: [],
+  };
+  expect(
+    applyChatEvent(state, {
+      seq: 2,
+      data: { type: "draft", revision: 1, text: "Original", textHash: "hash", attachments: [], references: [] },
+    }),
+  ).toBe(state);
+  expect(state.draft).toBe("Original");
+  applyChatEvent(state, {
+    seq: 3,
+    data: {
+      type: "turn",
+      turn: { id: "turn", text: "Original", status: "queued" },
+      consumedDraftRevision: 1,
+      title: "Original",
+    },
+  });
+  expect([state.draft, state.draftRevision, state.title]).toEqual(["", 2, "Original"]);
+  applyChatEvent(state, {
+    seq: 4,
+    data: { type: "turn_revised", turnId: "turn", revision: 2, text: "Revised", attachments: [], references: [] },
+  });
+  expect(state.turns[0]).toMatchObject({ text: "Revised", revision: 2 });
+  applyChatEvent(state, {
+    seq: 5,
+    data: { type: "turn_status", turnId: "turn", status: "running", attemptId: "attempt" },
+  });
+  expect(state.turns[0]).toMatchObject({ status: "running", started: true, attemptId: "attempt" });
+  applyChatEvent(state, { seq: 6, data: { type: "changed", pinned: true } });
+  expect([state.pinned, state.configRevision]).toEqual([true, 2]);
+});
+
+test("Retry after an initial chat read failure creates a fresh read and restores the usable composer", async () => {
+  const f = fixture();
+  const read = f.dataAccess.getChat;
+  let calls = 0;
+  f.dataAccess.getChat = async (...args: any[]) => {
+    if (++calls === 1) throw new Error("Daemon temporarily unavailable");
+    return read(...args);
+  };
+  await f.pane.ready;
+  expect(f.host.textContent).toContain("Daemon temporarily unavailable");
+  [...f.host.querySelectorAll("button")].find((button) => button.textContent === "Retry")!.click();
+  await f.pane.ready;
+  expect(calls).toBe(2);
+  expect(f.host.querySelector('[aria-label="Message"]')).not.toBeNull();
+  expect(f.sends).toHaveLength(0);
+});
+
+test("closing while recovery is being read never opens a later stream or starts model discovery", async () => {
+  const f = fixture({ models: [] });
+  let finish!: () => void;
+  let streams = 0;
+  let discoveries = 0;
+  f.dataAccess.readChatRecovery = () =>
+    new Promise<null>((resolve) => {
+      finish = () => resolve(null);
+    });
+  f.dataAccess.openChatStream = () => {
+    streams++;
+    return () => {};
+  };
+  f.dataAccess.discoverAgentModels = async () => {
+    discoveries++;
+  };
+  await flush();
+  f.pane.destroy();
+  finish();
+  await f.pane.ready;
+  expect(streams).toBe(0);
+  expect(discoveries).toBe(0);
+  expect(f.host.children).toHaveLength(0);
 });

@@ -25,12 +25,14 @@ import { managedToolsUnavailable, managedWorkflowInstructions } from "../agents/
 import { nativeProbe } from "../agents/probe.ts";
 import { RUNTIME_INSTALL_TIMEOUT_MS, runtimeTarget } from "../agents/runtimes.ts";
 import { digest, privateDirectory, readBlob } from "./journal.ts";
+import { chatFailure, type ChatFailurePhase } from "./types.ts";
 import {
   AgentStore,
   CONSENT_DISCLOSURE,
   EXPERIMENTAL_DISCLOSURE,
   type Attachment,
   type ChatLog,
+  type ChatEvent,
   type ChatState,
   type ChatTurn,
   mcpServersSchema,
@@ -83,6 +85,10 @@ interface LiveRun {
   releaseSession?: () => Promise<void>;
   reservations?: Set<string>;
   decisionTimers?: Map<string, ReturnType<typeof setTimeout>>;
+  phase: ChatFailurePhase;
+  display?: Extract<ChatEvent, { type: "content" }>[];
+  displayBytes?: number;
+  displayTimer?: ReturnType<typeof setTimeout>;
 }
 interface LoginOperation {
   workspace?: ChatWorkspace;
@@ -103,6 +109,8 @@ const terminalStates = new Set(["completed", "cancelled", "failed", "outcome_unk
 const waitingStates = new Set(["accepted", "queued", "held"]);
 /** How many of a chat's messages may wait behind the one at work (A5). */
 const MAX_WAITING_TURNS = 5;
+const DISPLAY_BATCH_BYTES = 16 * 1024;
+const DISPLAY_BATCH_MS = 20;
 // Only the asynchronous call chain of native interrupt may write after the run fence.
 // Other queued writes retain their original context and remain rejected.
 const cancellationContext = new AsyncLocalStorage<LiveRun>();
@@ -126,7 +134,7 @@ const settingsSchema = z
   .object({
     model: z.string().max(160),
     effort: z.string().max(40),
-    permissionMode: z.enum(["default", "plan"]),
+    permissionMode: z.enum(["default", "plan", "workspace"]),
   })
   .strict();
 const attachmentSchema = z
@@ -165,6 +173,7 @@ export const sendTurnSchema = z
     references: referencesSchema.default([]),
     attachments: z.array(attachmentSchema).max(10).default([]),
     origin: z.enum(["user", "feedback"]).default("user"),
+    retryOfTurnId: z.uuid().optional(),
   })
   .strict();
 export const changeChatSchema = z
@@ -184,6 +193,17 @@ export const draftSchema = z
     requestId: z.uuid(),
     revision: z.number().int().nonnegative(),
     text: z.string().max(64 * 1024),
+    references: referencesSchema.default([]),
+    attachments: z.array(attachmentSchema).max(10).default([]),
+  })
+  .strict();
+
+export const editQueuedTurnSchema = z
+  .object({
+    requestId: z.uuid(),
+    turnId: z.uuid(),
+    expectedRevision: z.number().int().positive(),
+    text: sendTurnSchema.shape.text,
     references: referencesSchema.default([]),
     attachments: z.array(attachmentSchema).max(10).default([]),
   })
@@ -473,6 +493,11 @@ export class ManagedChatService {
             turnId: turn.id,
             status: "outcome_unknown",
             error: "The previous run ended without a confirmed outcome. It was not resent.",
+            failure: chatFailure("The previous run ended without a confirmed outcome. It was not resent.", {
+              code: "native-disconnected",
+              phase: "running",
+              dispatchCertainty: "unknown",
+            }),
           });
       }
       for (const decision of state.decisions)
@@ -487,6 +512,7 @@ export class ManagedChatService {
     const providers = this.options.registry.list().map((provider) => ({
       id: provider.id,
       name: provider.name,
+      oauth: !!provider.oauth,
       configurationPath: provider.defaultConfiguration?.(),
       ...(this.options.runtimeStatus?.(provider.id) ?? {
         installed: !!this.options.manifest(provider.id),
@@ -513,6 +539,12 @@ export class ManagedChatService {
         ]),
       ),
       profiles: this.store.listProfiles(),
+      oauthAccounts: Object.fromEntries(
+        this.options.registry
+          .list()
+          .filter((provider) => provider.oauth)
+          .map((provider) => [provider.id, provider.oauth!.listAccounts()]),
+      ),
       capabilities: Object.fromEntries(
         this.store.listProfiles().flatMap((profile) => {
           const cached = this.modelCatalog.get(profile.id);
@@ -705,7 +737,7 @@ export class ManagedChatService {
   chat(workspace: ChatWorkspace, chatId: string): ChatLog {
     this.validateWorkspace(workspace);
     const log = this.store.chat(chatId);
-    const state = log.state;
+    const state = log.view;
     if (state.deleted || state.workspaceId !== workspace.id || state.workspaceEpoch !== workspace.epoch)
       throw new ManagedAgentError("chat-not-found", "Chat was not found.", 404);
     return log;
@@ -792,32 +824,209 @@ export class ManagedChatService {
   }
   snapshot(workspace: ChatWorkspace, chatId: string, before?: string, all = false) {
     const log = this.chat(workspace, chatId);
-    const state = log.state;
+    const state = log.view;
     // Stable logical-message cursors; text deltas do not move a cursor. A missing cursor
     // fails visibly instead of silently showing a different page after deletion/recovery.
+    const contentByTurn = new Map<string, typeof state.content>();
+    for (const content of state.content) {
+      const entries = contentByTurn.get(content.turnId);
+      if (entries) entries.push(content);
+      else contentByTurn.set(content.turnId, [content]);
+    }
     const messages = state.turns.flatMap((turn) => [
       { key: `user:${turn.id}`, turnId: turn.id, isUser: true },
-      ...state.content
-        .filter((item) => item.turnId === turn.id)
-        .map((item) => ({ key: `content:${turn.id}:${item.id}`, turnId: turn.id, isUser: false })),
+      ...(contentByTurn.get(turn.id) ?? []).map((item) => ({
+        key: `content:${turn.id}:${item.id}`,
+        turnId: turn.id,
+        isUser: false,
+      })),
     ]);
     const end = before ? messages.findIndex((item) => item.key === before) : messages.length;
     if (end < 0) throw new ManagedAgentError("stale-chat", "This history page changed. Return to recent messages.");
     const start = all ? 0 : Math.max(0, end - 100),
       selected = messages.slice(start, end);
     const users = new Set(selected.filter((item) => item.isUser).map((item) => item.turnId));
+    const active = new Set(
+      state.turns
+        .filter((turn) => ["dispatching", "running", "waiting", "stopping"].includes(turn.status))
+        .map((turn) => turn.id),
+    );
+    for (const turn of state.turns) if (active.has(turn.id) || waitingStates.has(turn.status)) users.add(turn.id);
+    const visibleTurns = new Set([...selected.map((message) => message.turnId), ...users]);
     const contentIds = new Set(selected.filter((item) => !item.isUser).map((item) => item.key));
-    return {
+    return structuredClone({
       ...state,
       draft: log.text(state.draftHash),
-      turns: state.turns.map((turn) => ({ ...turn, ...(users.has(turn.id) ? { text: log.text(turn.textHash) } : {}) })),
+      turns: state.turns
+        .filter((turn) => visibleTurns.has(turn.id))
+        .map((turn) => ({ ...turn, ...(users.has(turn.id) ? { text: log.text(turn.textHash) } : {}) })),
       content: state.content
-        .filter((item) => contentIds.has(`content:${item.turnId}:${item.id}`))
+        .filter((item) => active.has(item.turnId) || contentIds.has(`content:${item.turnId}:${item.id}`))
         .map((item) =>
           all ? item : { ...item, text: item.text.slice(0, 131072), truncated: item.text.length > 131072 },
         ),
+      decisions: state.decisions.filter((decision) => visibleTurns.has(decision.turnId)),
       page: { first: selected[0]?.key, hasEarlier: start > 0, hasLater: end < messages.length, total: messages.length },
+    });
+  }
+
+  private oauthBroker(provider: string) {
+    if (this.closed || this.quiescing) throw new ManagedAgentError("managed-stopping", "Managed agents are stopping.");
+    const broker = this.options.registry.get(provider).oauth;
+    if (!broker)
+      throw new ManagedAgentError("provider-unavailable", "This provider does not support browser sign-in.", 422);
+    return broker;
+  }
+  private async oauthOperation<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof ManagedAgentError) throw error;
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "unknown";
+      const messages: Record<string, string> = {
+        "secure-storage": "Secure credential storage is unavailable. Unlock your system wallet and retry.",
+        "identity-mismatch":
+          "This sign-in belongs to a different account. Choose the original account or add a separate account.",
+        network: "The sign-in service could not be reached. Retry when ready.",
+        busy: "An account operation is already in progress. Retry after it finishes.",
+        "not-found": "This sign-in attempt is no longer available. Start sign-in again.",
+        "reauth-required": "Sign in again before continuing.",
+        "plan-disabled": "This account is signed in but has not authorized plan usage.",
+      };
+      throw new ManagedAgentError(
+        "account-auth",
+        messages[code] ?? "The sign-in response could not be verified. Start sign-in again.",
+        422,
+      );
+    }
+  }
+  async beginOAuth(provider: string, raw: unknown) {
+    const input = z
+      .object({ accountId: z.uuid().optional(), requestPlanConsent: z.boolean().optional() })
+      .strict()
+      .parse(raw);
+    this.oauthBroker(provider);
+    if (!this.providerAvailable(provider))
+      throw new ManagedAgentError(
+        "managed-unavailable",
+        "Enable this provider's experimental chats before signing in.",
+        503,
+      );
+    if (input.accountId) {
+      const profile = this.store
+        .listProfiles()
+        .find((profile) => profile.provider === provider && profile.authentication?.credentialRef === input.accountId);
+      if (!profile)
+        throw new ManagedAgentError("account-auth", "Choose an existing account or start a new sign-in.", 422);
+      this.store.saveProfiles([
+        {
+          ...profile,
+          epoch: profile.epoch + 1,
+          revision: profile.revision + 1,
+          auth: { ...profile.auth, state: "needs_login" },
+        },
+      ]);
+      await this.stopProfile(profile.id);
+      if ([...this.runs.values()].some((run) => run.profileId === profile.id) || this.options.ownershipUnknown?.())
+        throw new ManagedAgentError(
+          "ownership-unknown",
+          "Sign-in is waiting for the previous account's processes to stop.",
+        );
+    }
+    if (!this.providerAvailable(provider))
+      throw new ManagedAgentError(
+        "managed-unavailable",
+        "Enable this provider's experimental chats before signing in.",
+        503,
+      );
+    return this.oauthOperation(() => this.oauthBroker(provider).begin(input));
+  }
+  oauthStatus(provider: string, attemptId: string) {
+    z.uuid().parse(attemptId);
+    return this.oauthBroker(provider).status(attemptId);
+  }
+  async cancelOAuth(provider: string, attemptId: string) {
+    z.uuid().parse(attemptId);
+    // Cancellation remains allowed while the daemon is quiescing.
+    const broker = this.options.registry.get(provider).oauth;
+    if (!broker) throw new ManagedAgentError("provider-unavailable", "Browser sign-in is unavailable.");
+    const result = await this.oauthOperation(() => broker.cancel(attemptId));
+    const account = broker.getAccount(result.accountId);
+    const profile = this.store
+      .listProfiles()
+      .find((profile) => profile.provider === provider && profile.authentication?.credentialRef === result.accountId);
+    if (
+      account?.status === "signed-in" &&
+      profile?.enabled &&
+      !profile.cleanup &&
+      profile.auth.identity === `oauth:${account.accountId}`
+    )
+      this.store.saveProfiles([
+        {
+          ...profile,
+          revision: profile.revision + 1,
+          auth: { ...profile.auth, state: "authenticated", observedAt: new Date().toISOString() },
+        },
+      ]);
+    return result;
+  }
+  adoptOAuth(provider: string, raw: unknown): AgentProfile {
+    const input = z.object({ requestId: z.uuid(), attemptId: z.uuid() }).strict().parse(raw);
+    const operation = { op: "adopt-oauth", provider, ...input };
+    const receipt = this.store.control.receipt(input.requestId, operation);
+    if (receipt.found) return this.store.profile((receipt.result as { profileId: string }).profileId);
+    const broker = this.oauthBroker(provider);
+    const attempt = broker.status(input.attemptId);
+    const account = attempt.status === "succeeded" ? broker.getAccount(attempt.accountId) : undefined;
+    if (!account || account.status !== "signed-in")
+      throw new ManagedAgentError("account-auth", "Complete sign-in before adding this account.", 422);
+    const existing = this.store
+      .listProfiles()
+      .find((profile) => profile.provider === provider && profile.authentication?.credentialRef === account.accountId);
+    if (existing?.cleanup)
+      throw new ManagedAgentError("account-changed", "Finish account cleanup before signing in again.");
+    if (!existing && this.store.listProfiles().length >= 32)
+      throw new ManagedAgentError("profile-capacity", "At most 32 agent accounts can be configured.");
+    const base = existing ?? newProfile(provider, account.label.slice(0, 80) || "Account");
+    const profile: AgentProfile = {
+      ...base,
+      revision: existing ? existing.revision + 1 : base.revision,
+      epoch: existing ? existing.epoch + 1 : base.epoch,
+      identityRevision: existing?.identityRevision || 1,
+      authentication: {
+        mode: "oauth",
+        credentialRef: account.accountId,
+        ...(existing?.authentication?.planNoticeSeen ? { planNoticeSeen: true } : {}),
+      },
+      auth: {
+        state: "authenticated",
+        identity: `oauth:${account.accountId}`,
+        label: account.email ?? account.label,
+        ...(account.planEnabled ? { plan: account.planLabel ?? "Connected plan" } : {}),
+        method: "OAuth",
+        observedAt: new Date().toISOString(),
+      },
     };
+    this.store.saveProfiles([profile], { id: input.requestId, input: operation, result: { profileId: profile.id } });
+    this.modelCatalog.delete(profile.id);
+    // No pump: signing in never replays queued or uncertain work.
+    return profile;
+  }
+  acknowledgeOAuthPlan(profileId: string, raw: unknown): AgentProfile {
+    const input = z.object({ requestId: z.uuid() }).strict().parse(raw);
+    const operation = { op: "oauth-plan-notice", profileId, ...input };
+    const receipt = this.store.control.receipt(input.requestId, operation);
+    const profile = this.store.profile(profileId);
+    if (receipt.found) return profile;
+    if (!profile.authentication)
+      throw new ManagedAgentError("account-auth", "This account does not use browser sign-in.");
+    const next = {
+      ...profile,
+      revision: profile.revision + 1,
+      authentication: { ...profile.authentication, planNoticeSeen: true },
+    };
+    this.store.saveProfiles([next], { id: input.requestId, input: operation, result: { profileId } });
+    return next;
   }
 
   createProfile(raw: unknown): AgentProfile {
@@ -942,7 +1151,27 @@ export class ManagedChatService {
       adapter = this.options.registry.get(profile.provider);
     const base = join(this.store.root, "profiles", profileId),
       native = join(base, "native");
-    if (!profile.configuration && existsSync(native)) {
+    if (profile.authentication?.mode === "oauth") {
+      if (!adapter.oauth)
+        throw new ManagedAgentError("provider-unavailable", "Account cleanup needs its sign-in provider.");
+      const result = await this.oauthOperation(() => adapter.oauth!.signOut(profile.authentication!.credentialRef));
+      const latest = this.store.profile(profileId);
+      this.store.saveProfiles([
+        {
+          ...latest,
+          revision: latest.revision + 1,
+          auth: {
+            ...latest.auth,
+            revocation: latest.auth.revocation === "confirmed" ? "confirmed" : result.revocation,
+          },
+        },
+      ]);
+      if (!result.localCleared)
+        throw new ManagedAgentError(
+          "account-auth",
+          "Account use is stopped, but secure credentials could not be removed. Unlock your system wallet and retry cleanup.",
+        );
+    } else if (!profile.configuration && existsSync(native)) {
       const manifest = this.options.manifest(profile.provider);
       if (!manifest || !this.runtimeAdmitted(profile.provider, manifest, true))
         throw new ManagedAgentError(
@@ -1194,6 +1423,8 @@ export class ManagedChatService {
     serverId?: string,
   ): Promise<{ id: string; secret: string; authHosts: readonly string[] }> {
     if (this.management) throw new ManagedAgentError("management-busy", "Finish the current account operation first.");
+    if (this.store.profile(profileId).authentication?.mode === "oauth")
+      throw new ManagedAgentError("account-auth", "Continue with browser sign-in in account settings.", 422);
     const spec = this.launchSpec(profileId);
     const adapter = this.options.registry.get(spec.profile.provider);
     if (spec.profile.configuration)
@@ -1596,6 +1827,44 @@ export class ManagedChatService {
       throw new ManagedAgentError("invalid-answer", "Use Send feedback to select pending entries.", 422);
     return this.acceptTurn(workspace, chatId, parsed);
   }
+  editQueuedTurn(workspace: ChatWorkspace, chatId: string, raw: unknown): { turnId: string; revision: number } {
+    const input = editQueuedTurnSchema.parse(raw),
+      log = this.chat(workspace, chatId),
+      request = { op: "edit-queued-turn", ...input };
+    const receipt = log.journal.receipt(input.requestId, request);
+    if (receipt.found) return receipt.result as { turnId: string; revision: number };
+    const turn = log.turn(input.turnId);
+    if (!turn || !waitingStates.has(turn.status))
+      throw new ManagedAgentError("turn-not-waiting", "Only a waiting message can be edited.");
+    if ((turn.revision ?? 1) !== input.expectedRevision)
+      throw new ManagedAgentError("stale-turn", "This message changed in another tab. Your edits have been kept.");
+    validateReferences(input.text, input.references);
+    this.attachments(log, input.attachments);
+    if (
+      turn.contextHash &&
+      readBlob(join(log.root, "blobs"), turn.contextHash).length +
+        input.attachments.reduce((sum, attachment) => sum + attachment.size, 0) >
+        20 * 1024 * 1024
+    )
+      throw new ManagedAgentError(
+        "attachments-too-large",
+        "Conversation history and attachments exceed 20 MiB in total.",
+        413,
+      );
+    const result = { turnId: turn.id, revision: input.expectedRevision + 1 };
+    log.append(
+      {
+        type: "turn_revised",
+        turnId: turn.id,
+        revision: result.revision,
+        textHash: log.blob(Buffer.from(input.text)),
+        references: input.references,
+        attachments: input.attachments,
+      },
+      { id: input.requestId, input: request, result },
+    );
+    return result;
+  }
   private acceptTurn(
     workspace: ChatWorkspace,
     chatId: string,
@@ -1610,6 +1879,15 @@ export class ManagedChatService {
     if (receipt.found) return receipt.result as { turnId: string };
     const state = log.state,
       profile = this.eligible(state);
+    const retrySource = input.retryOfTurnId ? log.turn(input.retryOfTurnId) : undefined;
+    if (
+      input.retryOfTurnId &&
+      (!retrySource ||
+        !terminalStates.has(retrySource.status) ||
+        retrySource.status === "outcome_unknown" ||
+        retrySource.failure?.dispatchCertainty === "unknown")
+    )
+      throw new ManagedAgentError("invalid-answer", "Only a resolved turn in this chat can be retried.", 422);
     if (!state.settings.model) throw new ManagedAgentError("unsupported-model", "Choose a model before sending.", 422);
     if (state.configRevision !== input.configRevision || state.draftRevision !== input.draftRevision)
       throw new ManagedAgentError("stale-chat", "Chat settings or the draft changed. Refresh before sending.");
@@ -1630,6 +1908,7 @@ export class ManagedChatService {
       );
     const turn: ChatTurn = {
       id: input.turnId,
+      revision: 1,
       textHash: log.blob(Buffer.from(input.text)),
       references: input.references,
       attachments: input.attachments,
@@ -1643,6 +1922,11 @@ export class ManagedChatService {
       status: "accepted",
       at: new Date().toISOString(),
       origin: input.origin,
+      ...(retrySource
+        ? {
+            retryOf: { turnId: retrySource.id, ...(retrySource.attemptId ? { attemptId: retrySource.attemptId } : {}) },
+          }
+        : {}),
       mcpDigest: this.mcpDigest(profile.id, workspace),
       ...(feedbackIds ? { feedbackIds } : {}),
     };
@@ -1773,6 +2057,7 @@ export class ManagedChatService {
             fenced: false,
             dispatched: false,
             finishing: false,
+            phase: "connecting",
           };
           this.runs.set(chatId, run);
           void this.dispatch(log, turn, run)
@@ -1799,7 +2084,7 @@ export class ManagedChatService {
               if (error instanceof ManagedAgentError && error.code === "stale-reference" && !run.dispatched) {
                 log.append({ type: "turn_status", turnId: turn.id, status: "held", error: error.message });
                 await this.finishRun(log, run);
-              } else await this.failedRun(log, run, error instanceof ManagedAgentError ? error.message : undefined);
+              } else await this.failedRun(log, run, error);
               if (authFailure) await this.stopProfile(run.profileId);
             })
             .catch(() => {
@@ -1908,12 +2193,19 @@ export class ManagedChatService {
   private admit(log: ChatLog, turn: ChatTurn, run: LiveRun): void {
     if (run.fenced || this.runs.get(run.chatId) !== run)
       throw new ManagedAgentError("run-fenced", "This run was stopped.");
-    this.eligible(log.state, turn);
+    this.eligible(log.view, turn);
   }
   private async dispatch(log: ChatLog, turn: ChatTurn, run: LiveRun): Promise<void> {
     const state = log.state,
       spec = this.launchSpec(run.profileId);
-    log.append({ type: "runtime", runId: run.runId, generation: run.generation, state: "prepared" });
+    log.append({
+      type: "runtime",
+      runId: run.runId,
+      attemptId: run.runId,
+      turnId: turn.id,
+      generation: run.generation,
+      state: "prepared",
+    });
     if (this.mcpOrigin && this.options.tools) run.grant = randomUUID() + randomUUID();
     const connecting = this.options.registry.get(state.provider).connect(
       {
@@ -1944,8 +2236,8 @@ export class ManagedChatService {
       (event) => {
         try {
           this.event(log, run, event);
-        } catch {
-          void this.failedRun(log, run).catch(() => {
+        } catch (error) {
+          void this.failedRun(log, run, error).catch(() => {
             run.fenced = true;
           });
         }
@@ -1964,6 +2256,7 @@ export class ManagedChatService {
       return;
     }
     this.admit(log, turn, run);
+    run.phase = "preparing";
     this.rememberCapabilities(run.profileId, spec, connection.capabilities);
     this.rememberCommands(log, run);
     const binding = Promise.resolve(this.options.bindSession?.(log.state)).then((release) => {
@@ -1989,35 +2282,45 @@ export class ManagedChatService {
         await bounded(preparing, 25_000);
       } catch (error) {
         if (error instanceof ManagedAgentError) throw error;
-        throw managedToolsUnavailable();
+        throw Object.assign(managedToolsUnavailable(), { cause: error });
       } finally {
         run.starting.delete(preparing);
       }
       this.admit(log, turn, run);
     }
-    let text = log.text(turn.textHash);
-    const references = turn.references ?? [];
-    validateReferences(text, references);
-    const selected = references.find((ref) => ref.kind === "command");
-    if (
-      selected &&
-      !(await connection.commands?.(true))?.some(
-        (entry) => entry.id === selected.id && `/${entry.name}` === selected.text,
-      )
-    )
-      throw new ManagedAgentError(
-        "stale-reference",
-        "The selected command is no longer available. Restore this message and select it again.",
-      );
-    for (const ref of [...references].sort((a, b) => b.start - a.start)) {
-      if (ref.kind !== "file") continue;
-      const confined = confinePath(state.workspacePath, ref.id);
-      if (!confined.ok || !existsSync(confined.realPath))
+    let text: string;
+    let selected: NonNullable<ChatTurn["references"]>[number] | undefined;
+    for (;;) {
+      // A waiting message can be edited during native startup. Do not dispatch the stale copy
+      // chosen by the queue before the asynchronous handshake or command validation.
+      turn = log.turn(turn.id)!;
+      this.admit(log, turn, run);
+      if (!connection.capabilities.images && turn.attachments.some((item) => item.mime.startsWith("image/")))
+        throw new ManagedAgentError("unsupported-images", "This agent runtime does not support image attachments.");
+      const revision = turn.revision ?? 1;
+      text = log.text(turn.textHash);
+      const references = turn.references ?? [];
+      validateReferences(text, references);
+      selected = references.find((ref) => ref.kind === "command");
+      const commands = selected ? await connection.commands?.(true) : undefined;
+      this.admit(log, turn, run);
+      if ((log.turn(turn.id)?.revision ?? 1) !== revision) continue;
+      if (selected && !commands?.some((entry) => entry.id === selected!.id && `/${entry.name}` === selected!.text))
         throw new ManagedAgentError(
           "stale-reference",
-          "A referenced file is no longer available. Restore this message and select it again.",
+          "The selected command is no longer available. Restore this message and select it again.",
         );
-      text = text.slice(0, ref.start) + JSON.stringify(ref.id) + text.slice(ref.end);
+      for (const ref of [...references].sort((a, b) => b.start - a.start)) {
+        if (ref.kind !== "file") continue;
+        const confined = confinePath(state.workspacePath, ref.id);
+        if (!confined.ok || !existsSync(confined.realPath))
+          throw new ManagedAgentError(
+            "stale-reference",
+            "A referenced file is no longer available. Restore this message and select it again.",
+          );
+        text = text.slice(0, ref.start) + JSON.stringify(ref.id) + text.slice(ref.end);
+      }
+      break;
     }
     const input: AgentInput = {
       turnId: turn.id,
@@ -2042,20 +2345,54 @@ export class ManagedChatService {
       ],
     };
     log.append({ type: "runtime", runId: run.runId, generation: run.generation, state: "connected" });
-    log.append({ type: "turn_status", turnId: turn.id, status: "dispatching" });
+    log.append({ type: "turn_status", turnId: turn.id, status: "dispatching", attemptId: run.runId });
+    run.phase = "dispatching";
     run.dispatched = true;
     await connection.startTurn(input);
-    if (!run.fenced && log.state.turns.find((item) => item.id === turn.id)?.status === "dispatching")
+    if (!run.fenced && log.turn(turn.id)?.status === "dispatching") {
       log.append({ type: "turn_status", turnId: turn.id, status: "running" });
+      run.phase = "running";
+    }
+  }
+  private flushDisplay(log: ChatLog, run: LiveRun): void {
+    clearTimeout(run.displayTimer);
+    run.displayTimer = undefined;
+    const events = run.display;
+    run.display = undefined;
+    run.displayBytes = 0;
+    if (events?.length) log.appendMany(events);
+  }
+  private queueDisplay(log: ChatLog, run: LiveRun, content: Extract<ChatEvent, { type: "content" }>["content"]): void {
+    const bytes = Buffer.byteLength(content.text);
+    if ((run.displayBytes ?? 0) + bytes > DISPLAY_BATCH_BYTES) this.flushDisplay(log, run);
+    const display = (run.display ??= []);
+    const prior = display.at(-1)?.content;
+    if (prior?.id === content.id && prior.kind === content.kind && prior.turnId === content.turnId)
+      prior.text += content.text;
+    else display.push({ type: "content", content });
+    run.displayBytes = (run.displayBytes ?? 0) + bytes;
+    if (run.displayBytes >= DISPLAY_BATCH_BYTES || display.length >= 128) this.flushDisplay(log, run);
+    else if (!run.displayTimer)
+      run.displayTimer = setTimeout(() => {
+        try {
+          this.flushDisplay(log, run);
+        } catch (error) {
+          void this.failedRun(log, run, error).catch(() => {
+            run.fenced = true;
+          });
+        }
+      }, DISPLAY_BATCH_MS);
   }
   private event(log: ChatLog, run: LiveRun, event: AgentEvent): void {
     if (run.fenced || run.finishing || this.runs.get(run.chatId) !== run) return;
+    // Decisions and lifecycle changes are barriers: all earlier display bytes are durable first.
+    if (event.type !== "text") this.flushDisplay(log, run);
     if (event.type === "commands_changed") {
-      this.staleCatalogs.add(this.commandScope(log.state));
+      this.staleCatalogs.add(this.commandScope(log.view));
       return;
     }
-    const state = log.state,
-      turn = state.turns.find((item) => item.id === run.turnId)!;
+    const state = log.view,
+      turn = log.turn(run.turnId)!;
     if (event.type === "session") {
       log.append({
         type: "runtime",
@@ -2068,7 +2405,13 @@ export class ManagedChatService {
     }
     if (terminalStates.has(turn.status)) return;
     if (event.type === "effective_settings") {
-      log.append({ type: "effective_settings", turnId: turn.id, model: event.model, effort: event.effort });
+      log.append({
+        type: "effective_settings",
+        turnId: turn.id,
+        model: event.model,
+        effort: event.effort,
+        ...(event.permissionMode ? { permissionMode: event.permissionMode } : {}),
+      });
       return;
     }
     if (event.type === "decision_closed") {
@@ -2079,23 +2422,22 @@ export class ManagedChatService {
         run.decisionTimers?.delete(decision.id);
         if (
           turn.status === "waiting" &&
-          !log.state.decisions.some((item) => ["pending", "reserved"].includes(item.status))
-        )
+          !log.view.decisions.some((item) => ["pending", "reserved"].includes(item.status))
+        ) {
           log.append({ type: "turn_status", turnId: turn.id, status: "running" });
+          run.phase = "running";
+        }
       }
       return;
     }
     if (event.type === "text") {
       for (let offset = 0; offset < event.text.length; offset += 4096)
-        log.append({
-          type: "content",
-          content: {
-            id: event.id,
-            turnId: run.turnId,
-            role: "assistant",
-            kind: event.reasoning ? "reasoning" : "text",
-            text: event.text.slice(offset, offset + 4096),
-          },
+        this.queueDisplay(log, run, {
+          id: event.id,
+          turnId: run.turnId,
+          role: "assistant",
+          kind: event.reasoning ? "reasoning" : "text",
+          text: event.text.slice(offset, offset + 4096),
         });
     } else if (event.type === "tool")
       log.append({
@@ -2141,10 +2483,37 @@ export class ManagedChatService {
         }, 10 * 60_000),
       );
       if (turn.status !== "waiting") log.append({ type: "turn_status", turnId: run.turnId, status: "waiting" });
+      run.phase = "waiting";
     } else if (event.type === "completed" || event.type === "failed") {
+      const failure = !run.dispatched
+        ? chatFailure(
+            Object.assign(
+              new Error("The agent disconnected during startup. Your message was not sent. Send it again to retry."),
+              {
+                ...(event.type === "failed"
+                  ? { cause: new Error(event.message), data: { details: event.details } }
+                  : {}),
+              },
+            ),
+            {
+              code: event.type === "failed" ? event.code : "native-disconnected",
+              phase: run.phase,
+              dispatchCertainty: "unsent",
+              secrets: run.grant ? [run.grant] : [],
+            },
+          )
+        : event.type === "failed"
+          ? chatFailure(Object.assign(new Error(event.message), { data: { details: event.details } }), {
+              code: event.code,
+              phase: run.phase,
+              dispatchCertainty: event.outcomeUnknown ? "unknown" : "confirmed_terminal",
+              secrets: run.grant ? [run.grant] : [],
+            })
+          : undefined;
       log.append({
         type: "turn_status",
         turnId: run.turnId,
+        attemptId: run.runId,
         status: !run.dispatched
           ? "failed"
           : event.type === "completed"
@@ -2152,11 +2521,7 @@ export class ManagedChatService {
             : event.outcomeUnknown
               ? "outcome_unknown"
               : "failed",
-        ...(!run.dispatched
-          ? { error: "The agent disconnected during startup. Your message was not sent. Send it again to retry." }
-          : event.type === "failed"
-            ? { error: event.message.slice(0, 500) }
-            : {}),
+        ...(failure ? { error: failure.title, failure } : {}),
       });
       void this.finishRun(log, run).catch(() => {
         run.fenced = true;
@@ -2231,20 +2596,30 @@ export class ManagedChatService {
     )
       log.append({ type: "turn_status", turnId: run.turnId, status: "running" });
   }
-  private async failedRun(log: ChatLog, run: LiveRun, reason?: string): Promise<void> {
+  private async failedRun(log: ChatLog, run: LiveRun, reason?: unknown): Promise<void> {
     if (run.finishing) {
       await run.finishingPromise;
       return;
     }
-    const turn = log.state.turns.find((item) => item.id === run.turnId);
     try {
-      if (turn && !terminalStates.has(turn.status))
+      this.flushDisplay(log, run);
+      const turn = log.turn(run.turnId);
+      if (turn && !terminalStates.has(turn.status)) {
+        const failure = chatFailure(reason, {
+          phase: run.phase,
+          dispatchCertainty: run.dispatched ? "unknown" : "unsent",
+          fallback: "The agent connection failed. No input was resent.",
+          secrets: run.grant ? [run.grant] : [],
+        });
         log.append({
           type: "turn_status",
           turnId: turn.id,
+          attemptId: run.runId,
           status: run.dispatched ? "outcome_unknown" : "failed",
-          error: reason ?? "The agent connection failed. No input was resent.",
+          error: failure.title,
+          failure,
         });
+      }
     } finally {
       await this.finishRun(log, run);
     }
@@ -2262,6 +2637,8 @@ export class ManagedChatService {
     run.finishing = true;
     run.fenced = true;
     run.grant = undefined;
+    clearTimeout(run.displayTimer);
+    run.displayTimer = undefined;
     for (const timer of run.decisionTimers?.values() ?? []) clearTimeout(timer);
     run.decisionTimers?.clear();
     await Promise.allSettled([...run.processes].map((child) => child.fence()));
@@ -2294,20 +2671,55 @@ export class ManagedChatService {
         type: "turn_status",
         turnId: run.turnId,
         status: stopped ? "cancelled" : "outcome_unknown",
-        ...(stopped ? {} : { error: "The run could not be confirmed stopped. New execution remains blocked." }),
+        attemptId: run.runId,
+        ...(stopped
+          ? {}
+          : {
+              error: "The run could not be confirmed stopped. New execution remains blocked.",
+              failure: chatFailure("The run could not be confirmed stopped. New execution remains blocked.", {
+                code: "ownership-unknown",
+                phase: "stopping",
+                dispatchCertainty: "unknown",
+              }),
+            }),
       });
     // A reply stopped by Send now was ended by the person to let their own queue move on, so the
     // queue is not held; nor is it after a reply that failed on its own, since the next message is
     // still the person's instruction (2026-10-04). A stop by the person, an uncertain outcome, or a
     // stop that could not be confirmed still holds everything behind it for review.
-    if (finished?.status !== "completed" && !((finished?.status === "failed" || run.sendNow) && stopped))
+    const needsAuthentication = finished?.failure?.category === "authentication";
+    if (needsAuthentication) {
+      const profile = this.store.profile(run.profileId);
+      this.store.saveProfiles([
+        {
+          ...profile,
+          revision: profile.revision + 1,
+          auth: {
+            ...profile.auth,
+            state:
+              profile.auth.state === "identity_mismatch"
+                ? "identity_mismatch"
+                : profile.auth.state === "expired"
+                  ? "expired"
+                  : "needs_login",
+            observedAt: new Date().toISOString(),
+          },
+        },
+      ]);
+    }
+    if (
+      needsAuthentication ||
+      (finished?.status !== "completed" && !((finished?.status === "failed" || run.sendNow) && stopped))
+    )
       for (const queued of log.state.turns) {
         if (["accepted", "queued"].includes(queued.status))
           log.append({
             type: "turn_status",
             turnId: queued.id,
             status: "held",
-            error: "The previous turn did not complete. Continue explicitly after reviewing its outcome.",
+            error: needsAuthentication
+              ? "Sign in again, then continue this queued message explicitly."
+              : "The previous turn did not complete. Continue explicitly after reviewing its outcome.",
           });
       }
     if (stopped) {
@@ -2347,6 +2759,14 @@ export class ManagedChatService {
   async stop(workspace: ChatWorkspace, chatId: string, turnId?: string): Promise<void> {
     const log = this.chat(workspace, chatId),
       run = this.runs.get(chatId);
+    if (run) {
+      try {
+        this.flushDisplay(log, run);
+      } catch (error) {
+        await this.failedRun(log, run, error);
+        throw error;
+      }
+    }
     for (const turn of log.state.turns)
       if ((!turnId || turn.id === turnId) && !terminalStates.has(turn.status) && turn.status !== "stopping")
         log.append({
@@ -2358,6 +2778,7 @@ export class ManagedChatService {
               : "cancelled",
         });
     if (run && (!turnId || run.turnId === turnId)) {
+      run.phase = "stopping";
       run.fenced = true;
       run.grant = undefined;
       run.cancelling = true;
@@ -2405,6 +2826,13 @@ export class ManagedChatService {
         if (["accepted", "queued"].includes(turn.status))
           log.append({ type: "turn_status", turnId: turn.id, status: "held", error: "Account access was changed." });
       if (run) {
+        try {
+          this.flushDisplay(log, run);
+        } catch (error) {
+          operations.push(this.failedRun(log, run, error));
+          continue;
+        }
+        run.phase = "stopping";
         const turn = log.state.turns.find((item) => item.id === run.turnId);
         if (turn && !terminalStates.has(turn.status) && turn.status !== "stopping" && turn.status !== "held")
           log.append({
@@ -2472,6 +2900,7 @@ export class ManagedChatService {
     await Promise.all([...this.runs.values()].map((run) => this.failedRun(this.store.chat(run.chatId), run)));
     if (this.management) await this.stopLogin(this.management);
     await Promise.allSettled([...this.cleanups.values()]);
+    await Promise.allSettled(this.options.registry.list().map((adapter) => adapter.oauth?.close()));
     this.store.close();
   }
 }
