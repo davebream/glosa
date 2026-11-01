@@ -99,36 +99,41 @@ describe("repository quality gates", () => {
     }
   });
   test("minimatch exception disappears for changed bytes, vulnerable or unknown copies, and lock drift", () => {
+    const source = realpathSync(join(root, "node_modules/minimatch"));
+    const rootLock = Bun.JSON5.parse(readFileSync(join(root, "bun.lock"), "utf8")) as {
+      packages: Record<string, unknown>;
+    };
+    const fixtureLock = JSON.stringify({ packages: { minimatch: rootLock.packages.minimatch } });
     const directory = mkdtempSync(join(tmpdir(), "glosa-minimatch-record-"));
     const output = join(directory, ".context/security/osv-scanner.toml");
+    const layouts = [
+      [".", ["minimatch"]],
+      ["packages/shell", ["minimatch", "@electron/asar/node_modules/minimatch", "filelist/node_modules/minimatch"]],
+    ] as const;
+    function install(project: string, path: string): void {
+      const target = join(directory, project, "node_modules", path);
+      mkdirSync(join(target, ".."), { recursive: true });
+      cpSync(source, target, { recursive: true });
+    }
     try {
-      for (const project of [".", "packages/shell"]) {
+      // Root test jobs do not install the desktop tree. Exercise its layout using the
+      // root's reviewed bytes; the security job verifies both complete real installations.
+      for (const [project, paths] of layouts) {
         const target = join(directory, project);
         mkdirSync(target, { recursive: true });
-        cpSync(join(root, project, "bun.lock"), join(target, "bun.lock"));
-        for (const path of project === "."
-          ? ["minimatch"]
-          : ["minimatch", "@electron/asar/node_modules/minimatch", "filelist/node_modules/minimatch"]) {
-          const copy = join(target, "node_modules", path);
-          mkdirSync(join(copy, ".."), { recursive: true });
-          cpSync(realpathSync(join(root, project, "node_modules", path)), copy, { recursive: true });
-        }
+        writeFileSync(join(target, "bun.lock"), fixtureLock);
+        for (const path of paths) install(project, path);
       }
       writeVerifiedSecurityConfig(directory);
       const record = Bun.TOML.parse(readFileSync(output, "utf8")) as { IgnoredVulns: Array<{ id: string }> };
       expect(record.IgnoredVulns).toHaveLength(1);
       expect(record.IgnoredVulns[0]?.id).toBe("GHSA-g3hv-75wg-m249");
-      for (const project of [".", "packages/shell"]) {
+      for (const [project, paths] of layouts) {
         for (const file of [
           "node_modules/minimatch/dist/commonjs/index.js",
           "node_modules/minimatch/dist/esm/index.js",
           "node_modules/minimatch/dist/commonjs/package.json",
-          ...(project === "packages/shell"
-            ? [
-                "node_modules/@electron/asar/node_modules/minimatch/minimatch.js",
-                "node_modules/filelist/node_modules/minimatch/minimatch.js",
-              ]
-            : []),
+          ...paths.slice(1).map((path) => `node_modules/${path}/dist/commonjs/index.js`),
         ]) {
           const path = join(directory, project, file);
           const original = readFileSync(path);
@@ -163,21 +168,33 @@ describe("repository quality gates", () => {
           "consumer/node_modules/minimatch-alias",
           ".bun/fixture/node_modules/minimatch",
         ]) {
-          const target = join(directory, project, "node_modules", copy);
-          mkdirSync(join(target, ".."), { recursive: true });
-          cpSync(join(root, "node_modules/minimatch"), target, { recursive: true });
-          const manifestPath = join(target, "package.json");
-          const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-          manifest.version = "9.0.9";
-          writeFileSync(manifestPath, JSON.stringify(manifest));
-          try {
-            expect(() => writeVerifiedSecurityConfig(directory)).toThrow("unreviewed installed minimatch 9.0.9");
-            expect(existsSync(output)).toBe(false);
-          } finally {
-            rmSync(target, { recursive: true, force: true });
+          for (const version of ["9.0.9", "99.0.0"]) {
+            const target = join(directory, project, "node_modules", copy);
+            mkdirSync(join(target, ".."), { recursive: true });
+            cpSync(source, target, { recursive: true });
+            const manifestPath = join(target, "package.json");
+            const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+            manifest.version = version;
+            writeFileSync(manifestPath, JSON.stringify(manifest));
+            try {
+              expect(() => writeVerifiedSecurityConfig(directory)).toThrow(`unreviewed installed minimatch ${version}`);
+              expect(existsSync(output)).toBe(false);
+            } finally {
+              rmSync(target, { recursive: true, force: true });
+            }
+            writeVerifiedSecurityConfig(directory);
           }
-          writeVerifiedSecurityConfig(directory);
         }
+        for (const path of paths) rmSync(join(directory, project, "node_modules", path), { recursive: true });
+        try {
+          expect(() => writeVerifiedSecurityConfig(directory)).toThrow(
+            "installed minimatch versions do not match lock",
+          );
+          expect(existsSync(output)).toBe(false);
+        } finally {
+          for (const path of paths) install(project, path);
+        }
+        writeVerifiedSecurityConfig(directory);
       }
     } finally {
       rmSync(directory, { recursive: true, force: true });
