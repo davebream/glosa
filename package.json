@@ -107,7 +107,7 @@
     "ignore": "7.0.10",
     "image-size": "2.0.4",
     "markdown-it": "^14.3.3",
-    "openai": "7.26.0",
+    "openai": "7.45.1",
     "openid-client": "6.8.8",
     "picomatch": "^4.0.7",
     "zod": "^4.6.6"
