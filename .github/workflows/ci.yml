@@ -437,7 +437,7 @@ jobs:
       - name: Verify installed dependency policy before recording scoped advisory exclusions
         run: bun run scripts/security-dependency-policy.ts
       - name: Scan bun.lock for known vulnerabilities
-        uses: google/osv-scanner-action/osv-scanner-action@8ac9e5ce44cc7178e0e04229a91bdcc003166e57 # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@d3c1414ded37de590f207572e37a7d180f1d0ef7 # v2.3.8
         with:
           scan-args: |-
             --config=.context/security/osv-scanner.toml
